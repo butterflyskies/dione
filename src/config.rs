@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
+use std::io::Read as _;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use regex::RegexSet;
@@ -329,18 +330,21 @@ pub fn resolve_token(config: &Config) -> Option<String> {
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
 fn try_load_config(config_path: &Utf8Path) -> Result<Config, ConfigError> {
-    let std_path = config_path.as_std_path();
-    if !std_path.exists() {
-        return Err(ConfigError::NotFound {
-            path: config_path.to_owned(),
-        });
-    }
+    let mut file = match File::open(config_path.as_std_path()) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(ConfigError::NotFound {
+                path: config_path.to_owned(),
+            });
+        }
+        Err(e) => return Err(ConfigError::Io(e)),
+    };
 
-    let file = File::open(std_path)?;
-    // Best-effort lock — if another process is writing, proceed without locking.
-    let _lock_guard = file.try_lock().ok();
+    // Best-effort shared lock — if another process holds an exclusive lock, skip.
+    let _ = file.try_lock();
 
-    let contents = fs::read_to_string(std_path)?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
     let config: Config = toml::from_str(&contents)?;
     Ok(config)
 }
