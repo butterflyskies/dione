@@ -185,10 +185,11 @@ impl AccessQueue {
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 fn try_load_queue(path: &Utf8Path) -> io::Result<BTreeMap<u64, AccessRequest>> {
-    if !path.as_std_path().exists() {
-        return Ok(BTreeMap::new());
-    }
-    let bytes = std::fs::read(path.as_std_path())?;
+    let bytes = match std::fs::read(path.as_std_path()) {
+        Ok(b) => b,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(e) => return Err(e),
+    };
     serde_json::from_slice(&bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 

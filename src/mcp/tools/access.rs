@@ -92,11 +92,11 @@ async fn add_to_allow_from(
     let config_path = state_dir.join("config.toml");
     let user_id_str = user_id.to_string();
 
-    // Read current config (if any).
-    let contents = if config_path.as_std_path().exists() {
-        tokio::fs::read_to_string(&config_path).await?
-    } else {
-        String::new()
+    // Read current config (if any). Missing file → start fresh.
+    let contents = match tokio::fs::read_to_string(&config_path).await {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.into()),
     };
 
     let mut doc: DocumentMut = contents.parse()?;
