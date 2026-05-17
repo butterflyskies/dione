@@ -53,7 +53,7 @@ pub async fn send_typing(ctx: &BotStateCtx, channel_id: u64) -> Value {
     let config = crate::config::load_config(&ctx.state_dir);
     let allowed = {
         let state = ctx.state.read().await;
-        OutboundGate::check_channel(&config, channel_id, &state.dm_channel_map)
+        OutboundGate::check_channel(&config, channel_id, &state.dm_channel_ids)
     };
     if !allowed {
         return json!({ "error": "channel not in allowlist" });

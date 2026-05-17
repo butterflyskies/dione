@@ -22,7 +22,7 @@ pub struct ManagementCtx {
 async fn check_outbound(ctx: &ManagementCtx, channel_id: u64) -> Result<(), Value> {
     let config = crate::config::load_config(&ctx.state_dir);
     let state = ctx.state.read().await;
-    if !OutboundGate::check_channel(&config, channel_id, &state.dm_channel_map) {
+    if !OutboundGate::check_channel(&config, channel_id, &state.dm_channel_ids) {
         return Err(json!({ "error": "channel not in allowlist" }));
     }
     Ok(())

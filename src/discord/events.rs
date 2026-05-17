@@ -95,7 +95,7 @@ impl EventHandler for Handler {
                     // Record DM channel mapping.
                     {
                         let mut state = self.state.write().await;
-                        state.dm_channel_map.insert(sender_id, channel_id);
+                        state.record_dm_channel(sender_id, channel_id);
                     }
 
                     let event = build_message_event(&msg);

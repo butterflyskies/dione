@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -18,6 +18,8 @@ pub struct SharedState {
     pub recent_sent_ids: BTreeSet<u64>,
     /// Maps Discord user IDs to their DM channel IDs.
     pub dm_channel_map: HashMap<u64, u64>,
+    /// Reverse index: set of all known DM channel IDs for O(1) outbound gate checks.
+    pub dm_channel_ids: HashSet<u64>,
     /// Pending permission relay requests keyed by Discord message ID.
     pub pending_permissions: BTreeMap<u64, PendingPermission>,
 }
@@ -39,8 +41,15 @@ impl SharedState {
         Self {
             recent_sent_ids: BTreeSet::new(),
             dm_channel_map: HashMap::new(),
+            dm_channel_ids: HashSet::new(),
             pending_permissions: BTreeMap::new(),
         }
+    }
+
+    /// Records a DM channel mapping and updates the reverse index.
+    pub fn record_dm_channel(&mut self, user_id: u64, channel_id: u64) {
+        self.dm_channel_map.insert(user_id, channel_id);
+        self.dm_channel_ids.insert(channel_id);
     }
 
     /// Records a sent message ID and auto-prunes if the set exceeds `cap`.

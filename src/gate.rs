@@ -85,20 +85,18 @@ impl InboundGate {
 pub struct OutboundGate;
 
 impl OutboundGate {
-    /// Returns `true` if the bot may send to `channel_id`.
-    ///
-    /// Config is loaded fresh on every call (hot-reload per R-38).
+    /// Returns `true` if the bot may send to `channel_id`. O(1).
     pub fn check_channel(
         config: &LoadedConfig,
         channel_id: u64,
-        dm_channel_map: &std::collections::HashMap<u64, u64>,
+        dm_channel_ids: &std::collections::HashSet<u64>,
     ) -> bool {
-        // Allow if it's an established DM channel.
-        if dm_channel_map.values().any(|&c| c == channel_id) {
+        // O(1) check: is this an established DM channel?
+        if dm_channel_ids.contains(&channel_id) {
             return true;
         }
 
-        // Allow if it's an opted-in guild channel (O(n) over small channel list).
+        // O(1) check: is this an opted-in guild channel?
         config.channel_policy(channel_id).is_some()
     }
 
@@ -218,7 +216,7 @@ pub fn sanitize_filename(name: &str) -> String {
 mod tests {
     use super::*;
     use crate::config::{AccessConfig, ChannelConfig, Config, DmPolicy, MentionConfig};
-    use std::collections::HashMap;
+    use std::collections::HashSet;
 
     fn base_config() -> Config {
         Config {
@@ -324,24 +322,20 @@ mod tests {
 
     // ── Outbound gate tests ───────────────────────────────────────────────────
 
-    fn make_dm_map(user_id: u64, channel_id: u64) -> HashMap<u64, u64> {
-        let mut m = HashMap::new();
-        m.insert(user_id, channel_id);
-        m
+    fn dm_ids(ids: &[u64]) -> HashSet<u64> {
+        ids.iter().copied().collect()
     }
 
     #[test]
     fn test_outbound_allowed_dm() {
         let config = loaded(base_config());
-        let dm_map = make_dm_map(100, 600);
-        assert!(OutboundGate::check_channel(&config, 600, &dm_map));
+        assert!(OutboundGate::check_channel(&config, 600, &dm_ids(&[600])));
     }
 
     #[test]
     fn test_outbound_rejected_channel() {
         let config = loaded(base_config());
-        let dm_map = HashMap::new();
-        assert!(!OutboundGate::check_channel(&config, 9999, &dm_map));
+        assert!(!OutboundGate::check_channel(&config, 9999, &dm_ids(&[])));
     }
 
     // ── File send tests ───────────────────────────────────────────────────────
@@ -449,23 +443,19 @@ mod tests {
     #[test]
     fn test_outbound_allows_dm_channel_in_map() {
         let config = loaded(base_config());
-        // Channel 800 is an established DM channel for user 200.
-        let dm_map = make_dm_map(200, 800);
         assert!(
-            OutboundGate::check_channel(&config, 800, &dm_map),
-            "DM channel present in dm_channel_map must be allowed"
+            OutboundGate::check_channel(&config, 800, &dm_ids(&[800])),
+            "DM channel present in dm_channel_ids must be allowed"
         );
     }
 
-    // TC-11: Outbound to a channel that is NOT in the DM map AND NOT in config → reject.
+    // TC-11: Outbound to a channel that is NOT in the DM set AND NOT in config → reject.
     #[test]
     fn test_outbound_rejects_channel_not_in_map_nor_config() {
         let config = loaded(base_config());
-        // Channel 9999 is neither in config (only 500 is) nor in the DM map.
-        let dm_map = make_dm_map(100, 600); // 600 is in map, but we're asking about 9999
         assert!(
-            !OutboundGate::check_channel(&config, 9999, &dm_map),
-            "channel absent from both dm_channel_map and config must be rejected"
+            !OutboundGate::check_channel(&config, 9999, &dm_ids(&[600])),
+            "channel absent from both dm_channel_ids and config must be rejected"
         );
     }
 
@@ -473,9 +463,8 @@ mod tests {
     #[test]
     fn test_outbound_allows_opted_in_guild_channel() {
         let config = loaded(base_config()); // channel 500 is in config
-        let dm_map = HashMap::new();
         assert!(
-            OutboundGate::check_channel(&config, 500, &dm_map),
+            OutboundGate::check_channel(&config, 500, &dm_ids(&[])),
             "opted-in guild channel from config must be allowed for outbound"
         );
     }

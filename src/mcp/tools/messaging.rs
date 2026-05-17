@@ -23,7 +23,7 @@ pub struct MessagingCtx {
 async fn check_outbound(ctx: &MessagingCtx, channel_id: u64) -> Result<(), Value> {
     let config = load_config(&ctx.state_dir);
     let state = ctx.state.read().await;
-    if !OutboundGate::check_channel(&config, channel_id, &state.dm_channel_map) {
+    if !OutboundGate::check_channel(&config, channel_id, &state.dm_channel_ids) {
         return Err(
             json!({ "error": format!("channel {channel_id} is not a permitted outbound target") }),
         );
