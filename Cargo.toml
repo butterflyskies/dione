@@ -1,11 +1,14 @@
 [package]
 name = "dione"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 description = "Discord MCP channel server for Claude Code"
 repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["discord", "mcp", "claude-code", "bot", "channel"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "http", "rustls_backend", "cache"] }
