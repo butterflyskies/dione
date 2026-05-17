@@ -116,7 +116,7 @@ pub async fn react(ctx: &MessagingCtx, channel_id: u64, message_id: u64, emoji: 
         return e;
     }
 
-    let reaction = serenity::model::channel::ReactionType::Unicode(emoji.to_string());
+    let reaction = parse_reaction_type(emoji);
     match ctx
         .http
         .create_reaction(
@@ -224,9 +224,16 @@ pub async fn download_attachment(ctx: &MessagingCtx, channel_id: u64, message_id
 
     let mut saved_paths: Vec<String> = Vec::new();
 
-    for attachment in &msg.attachments {
+    for (idx, attachment) in msg.attachments.iter().enumerate() {
         let safe_name = crate::gate::sanitize_filename(&attachment.filename);
-        let dest = inbox_dir.join(&safe_name);
+        let dest = {
+            let candidate = inbox_dir.join(&safe_name);
+            if candidate.exists() {
+                inbox_dir.join(format!("{idx}-{safe_name}"))
+            } else {
+                candidate
+            }
+        };
 
         // Download attachment bytes.
         match download_url(&attachment.url).await {
@@ -248,6 +255,35 @@ pub async fn download_attachment(ctx: &MessagingCtx, channel_id: u64, message_id
     }
 
     json!({ "saved": saved_paths })
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Parses an emoji string into the appropriate serenity ReactionType.
+/// Handles both Unicode emoji ("👍") and custom Discord emoji ("<:name:id>" or "<a:name:id>").
+fn parse_reaction_type(emoji: &str) -> serenity::model::channel::ReactionType {
+    use serenity::model::channel::ReactionType;
+    use serenity::model::id::EmojiId;
+
+    // Custom emoji: <:name:id> or <a:name:id>
+    let trimmed = emoji.trim();
+    if trimmed.starts_with('<') && trimmed.ends_with('>') {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        let parts: Vec<&str> = inner.split(':').collect();
+        if parts.len() == 3 {
+            let animated = parts[0] == "a";
+            let name = parts[1].to_string();
+            if let Ok(id) = parts[2].parse::<u64>() {
+                return ReactionType::Custom {
+                    animated,
+                    id: EmojiId::new(id),
+                    name: Some(name),
+                };
+            }
+        }
+    }
+
+    ReactionType::Unicode(emoji.to_string())
 }
 
 const MAX_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;
