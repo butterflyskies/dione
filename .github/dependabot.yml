@@ -1,0 +1,35 @@
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: friday
+    commit-message:
+      prefix: "chore(deps):"
+    labels:
+      - dependencies
+    open-pull-requests-limit: 5
+    groups:
+      rust-dependencies:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: friday
+    commit-message:
+      prefix: "chore(ci):"
+    labels:
+      - ci
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        update-types:
+          - major
+          - minor
+          - patch

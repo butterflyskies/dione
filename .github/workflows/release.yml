@@ -1,0 +1,122 @@
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+*']
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag_name: ${{ github.ref_name }}
+      is_prerelease: ${{ contains(github.ref_name, '-') }}
+    steps:
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          prerelease_flag=""
+          if [[ "$TAG_NAME" == *-* ]]; then
+            prerelease_flag="--prerelease"
+          fi
+          gh release create "$TAG_NAME" --draft $prerelease_flag \
+            --title "$TAG_NAME" \
+            --repo "${{ github.repository }}"
+
+  publish-binaries:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: universal-apple-darwin
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.create-release.outputs.tag_name }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target == 'universal-apple-darwin' && 'aarch64-apple-darwin,x86_64-apple-darwin' || matrix.target }}
+      - name: Install cargo-auditable
+        run: cargo install cargo-auditable@0.7.4 --locked
+      - name: Build
+        run: |
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-gnu)
+              cargo auditable build --release --target x86_64-unknown-linux-gnu
+              cp target/x86_64-unknown-linux-gnu/release/dione dione
+              ;;
+            universal-apple-darwin)
+              cargo auditable build --release --target aarch64-apple-darwin --target x86_64-apple-darwin
+              lipo -create -output dione \
+                target/aarch64-apple-darwin/release/dione \
+                target/x86_64-apple-darwin/release/dione
+              ;;
+          esac
+      - name: Package and upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ needs.create-release.outputs.tag_name }}
+        run: |
+          archive="dione-${TAG_NAME}-${{ matrix.target }}"
+          mkdir "${archive}"
+          mv dione "${archive}/"
+          tar czf "${archive}.tar.gz" "${archive}"
+          shasum -a 256 "${archive}.tar.gz" > "${archive}.tar.gz.sha256"
+          gh release upload "${TAG_NAME}" "${archive}.tar.gz" "${archive}.tar.gz.sha256" \
+            --repo "${{ github.repository }}"
+
+  publish-crate:
+    needs: create-release
+    if: ${{ needs.create-release.outputs.is_prerelease != 'true' }}
+    uses: ./.github/workflows/publish-crate.yml
+    with:
+      tag: ${{ needs.create-release.outputs.tag_name }}
+    permissions:
+      id-token: write
+      contents: read
+
+  publish-release:
+    needs: [create-release, publish-binaries, publish-crate]
+    if: ${{ always() && needs.create-release.result == 'success' && needs.publish-binaries.result == 'success' && (needs.publish-crate.result == 'skipped' || needs.publish-crate.result == 'success') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ needs.create-release.outputs.tag_name }}
+        run: |
+          gh release edit "$TAG_NAME" \
+            --draft=false \
+            --repo "${{ github.repository }}"
+
+  update-release-notes:
+    needs: [create-release, publish-release]
+    if: ${{ needs.create-release.outputs.is_prerelease != 'true' }}
+    uses: ./.github/workflows/update-release-notes.yml
+    with:
+      tag: ${{ needs.create-release.outputs.tag_name }}
+    permissions:
+      contents: write
