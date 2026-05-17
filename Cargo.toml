@@ -2,5 +2,34 @@
 name = "dione"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+description = "Discord MCP channel server for Claude Code"
+repository = "https://github.com/butterflyskies/dione"
 
 [dependencies]
+serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "http", "rustls_backend", "cache"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "fs", "io-util", "io-std", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+toml_edit = "0.22"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+color-eyre = "0.6"
+regex = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+camino = { version = "1", features = ["serde1"] }
+
+[dev-dependencies]
+insta = { version = "1", features = ["json", "redactions"] }
+test-case = "3"
+pretty_assertions = "1"
+tempfile = "3"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1

@@ -1,0 +1,13 @@
+---
+source: tests/mcp_protocol.rs
+expression: notif
+---
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/channel",
+  "params": {
+    "granted": true,
+    "request_id": "snap-req-42",
+    "type": "permission_response"
+  }
+}

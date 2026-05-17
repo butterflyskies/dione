@@ -1,0 +1,16 @@
+---
+source: tests/mcp_protocol.rs
+expression: notif
+---
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/channel",
+  "params": {
+    "chat_id": "1001",
+    "emoji": "🎉",
+    "message_id": "2001",
+    "type": "reaction",
+    "user": "reactor",
+    "user_id": "3001"
+  }
+}

@@ -1,0 +1,47 @@
+# cargo-deny configuration
+# https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+targets = []
+all-features = true
+
+# --- Advisories -----------------------------------------------------------
+[advisories]
+ignore = [
+    { id = "RUSTSEC-2026-0049", reason = "rustls-webpki 0.102: transitive via serenity → tokio-tungstenite 0.21 → rustls 0.22" },
+    { id = "RUSTSEC-2026-0098", reason = "rustls-webpki 0.102: transitive via serenity → tokio-tungstenite 0.21 → rustls 0.22" },
+    { id = "RUSTSEC-2026-0099", reason = "rustls-webpki 0.102: transitive via serenity → tokio-tungstenite 0.21 → rustls 0.22" },
+    { id = "RUSTSEC-2026-0104", reason = "rustls-webpki 0.102: transitive via serenity → tokio-tungstenite 0.21 → rustls 0.22" },
+]
+
+# --- Licenses -------------------------------------------------------------
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "BSL-1.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.8
+exceptions = [
+    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots" },
+]
+
+# --- Bans ------------------------------------------------------------------
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+
+# --- Sources ---------------------------------------------------------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
