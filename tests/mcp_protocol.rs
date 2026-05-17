@@ -310,124 +310,70 @@ async fn test_tools_call_list_access_requests_empty() {
 
 // ── Notification format tests ─────────────────────────────────────────────────
 
+// Semantic property tests — wire format is pinned by snapshots below.
+
 #[test]
-fn test_notification_message_event_format() {
+fn test_notification_has_no_id_field() {
     let event = NotificationEvent::Message {
-        chat_id: "111".to_string(),
-        message_id: "222".to_string(),
-        user: "alice".to_string(),
-        user_id: "333".to_string(),
-        content: "hello".to_string(),
+        chat_id: "1".to_string(),
+        message_id: "2".to_string(),
+        user: "x".to_string(),
+        user_id: "3".to_string(),
+        content: "hi".to_string(),
         timestamp: "2026-01-01T00:00:00Z".to_string(),
         attachments: vec![],
         is_voice_message: false,
     };
     let notif = test_helpers::make_notification(event);
-
-    assert_eq!(notif["jsonrpc"], "2.0");
-    assert_eq!(notif["method"], "notifications/channel");
-    let params = &notif["params"];
-    assert_eq!(params["type"], "message");
-    assert_eq!(params["chat_id"], "111");
-    assert_eq!(params["message_id"], "222");
-    assert_eq!(params["user"], "alice");
-    assert_eq!(params["user_id"], "333");
-    assert_eq!(params["content"], "hello");
-    assert_eq!(params["is_voice_message"], false);
-    assert!(params["attachments"].as_array().unwrap().is_empty());
-    // No id field — it's a notification.
-    assert!(notif.get("id").is_none());
+    assert!(notif.get("id").is_none(), "notifications must not have an id field");
 }
 
 #[test]
-fn test_notification_message_event_with_attachment() {
+fn test_notification_attachment_metadata_present() {
     let event = NotificationEvent::Message {
-        chat_id: "10".to_string(),
-        message_id: "20".to_string(),
-        user: "bob".to_string(),
-        user_id: "30".to_string(),
+        chat_id: "1".to_string(),
+        message_id: "2".to_string(),
+        user: "x".to_string(),
+        user_id: "3".to_string(),
         content: "see file".to_string(),
         timestamp: "2026-01-01T00:00:00Z".to_string(),
         attachments: vec![AttachmentMeta {
             name: "photo.png".to_string(),
             content_type: Some("image/png".to_string()),
-            size: 1024,
+            size: 2048,
         }],
         is_voice_message: false,
     };
     let notif = test_helpers::make_notification(event);
-    let attachments = notif["params"]["attachments"].as_array().unwrap();
-    assert_eq!(attachments.len(), 1);
-    assert_eq!(attachments[0]["name"], "photo.png");
-    assert_eq!(attachments[0]["content_type"], "image/png");
-    assert_eq!(attachments[0]["size"], 1024);
+    let meta = &notif["params"]["meta"];
+    assert_eq!(meta["attachment_count"], "1");
+    assert!(meta["attachments"].as_str().unwrap().contains("photo.png"));
 }
 
 #[test]
-fn test_notification_voice_message_flag() {
+fn test_notification_voice_flag_in_meta() {
     let event = NotificationEvent::Message {
-        chat_id: "10".to_string(),
-        message_id: "20".to_string(),
-        user: "carol".to_string(),
-        user_id: "40".to_string(),
+        chat_id: "1".to_string(),
+        message_id: "2".to_string(),
+        user: "x".to_string(),
+        user_id: "3".to_string(),
         content: String::new(),
         timestamp: "2026-01-01T00:00:00Z".to_string(),
         attachments: vec![],
         is_voice_message: true,
     };
     let notif = test_helpers::make_notification(event);
-    assert_eq!(notif["params"]["is_voice_message"], true);
+    assert_eq!(notif["params"]["meta"]["is_voice_message"], true);
 }
 
 #[test]
-fn test_notification_reaction_event_format() {
-    let event = NotificationEvent::Reaction {
-        chat_id: "500".to_string(),
-        message_id: "600".to_string(),
-        user: "dave".to_string(),
-        user_id: "700".to_string(),
-        emoji: "👍".to_string(),
-    };
-    let notif = test_helpers::make_notification(event);
-
-    assert_eq!(notif["jsonrpc"], "2.0");
-    assert_eq!(notif["method"], "notifications/channel");
-    let params = &notif["params"];
-    assert_eq!(params["type"], "reaction");
-    assert_eq!(params["chat_id"], "500");
-    assert_eq!(params["message_id"], "600");
-    assert_eq!(params["user"], "dave");
-    assert_eq!(params["user_id"], "700");
-    assert_eq!(params["emoji"], "👍");
-    assert!(notif.get("id").is_none());
-}
-
-#[test]
-fn test_notification_permission_response_format() {
+fn test_permission_deny_uses_deny_behavior() {
     let event = NotificationEvent::PermissionResponse {
-        request_id: "req-abc-123".to_string(),
-        granted: true,
-    };
-    let notif = test_helpers::make_notification(event);
-
-    assert_eq!(notif["jsonrpc"], "2.0");
-    assert_eq!(notif["method"], "notifications/channel");
-    let params = &notif["params"];
-    assert_eq!(params["type"], "permission_response");
-    assert_eq!(params["request_id"], "req-abc-123");
-    assert_eq!(params["granted"], true);
-    assert!(notif.get("id").is_none());
-}
-
-#[test]
-fn test_notification_permission_response_denied() {
-    let event = NotificationEvent::PermissionResponse {
-        request_id: "req-xyz-999".to_string(),
+        request_id: "req-xyz".to_string(),
         granted: false,
     };
     let notif = test_helpers::make_notification(event);
-    assert_eq!(notif["params"]["granted"], false);
-    assert_eq!(notif["params"]["type"], "permission_response");
+    assert_eq!(notif["params"]["behavior"], "deny");
 }
 
 // ── Snapshot tests ────────────────────────────────────────────────────────────

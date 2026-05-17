@@ -193,7 +193,11 @@ fn initialize_response() -> Value {
     json!({
         "protocolVersion": "2024-11-05",
         "capabilities": {
-            "tools": {}
+            "tools": {},
+            "experimental": {
+                "claude/channel": {},
+                "claude/channel/permission": {},
+            }
         },
         "serverInfo": {
             "name": "dione",
@@ -640,23 +644,34 @@ fn event_to_notification(event: NotificationEvent) -> Value {
             attachments,
             is_voice_message,
         } => {
+            let mut meta = json!({
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "user": user,
+                "user_id": user_id,
+                "ts": timestamp,
+            });
+            if is_voice_message {
+                meta["is_voice_message"] = json!(true);
+            }
+            if !attachments.is_empty() {
+                meta["attachment_count"] = json!(attachments.len().to_string());
+                let att_desc: Vec<String> = attachments
+                    .iter()
+                    .map(|a| {
+                        let ct = a.content_type.as_deref().unwrap_or("unknown");
+                        let kb = a.size / 1024;
+                        format!("{} ({ct}, {kb}KB)", a.name)
+                    })
+                    .collect();
+                meta["attachments"] = json!(att_desc.join("; "));
+            }
             json!({
                 "jsonrpc": "2.0",
-                "method": "notifications/channel",
+                "method": "notifications/claude/channel",
                 "params": {
-                    "type": "message",
-                    "chat_id": chat_id,
-                    "message_id": message_id,
-                    "user": user,
-                    "user_id": user_id,
                     "content": content,
-                    "timestamp": timestamp,
-                    "is_voice_message": is_voice_message,
-                    "attachments": attachments.iter().map(|a| json!({
-                        "name": a.name,
-                        "content_type": a.content_type,
-                        "size": a.size,
-                    })).collect::<Vec<_>>(),
+                    "meta": meta,
                 }
             })
         }
@@ -669,14 +684,17 @@ fn event_to_notification(event: NotificationEvent) -> Value {
         } => {
             json!({
                 "jsonrpc": "2.0",
-                "method": "notifications/channel",
+                "method": "notifications/claude/channel",
                 "params": {
-                    "type": "reaction",
-                    "chat_id": chat_id,
-                    "message_id": message_id,
-                    "user": user,
-                    "user_id": user_id,
-                    "emoji": emoji,
+                    "content": format!("reacted with {emoji}"),
+                    "meta": {
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        "user": user,
+                        "user_id": user_id,
+                        "type": "reaction",
+                        "emoji": emoji,
+                    },
                 }
             })
         }
@@ -684,13 +702,13 @@ fn event_to_notification(event: NotificationEvent) -> Value {
             request_id,
             granted,
         } => {
+            let behavior = if granted { "allow" } else { "deny" };
             json!({
                 "jsonrpc": "2.0",
-                "method": "notifications/channel",
+                "method": "notifications/claude/channel/permission",
                 "params": {
-                    "type": "permission_response",
                     "request_id": request_id,
-                    "granted": granted,
+                    "behavior": behavior,
                 }
             })
         }

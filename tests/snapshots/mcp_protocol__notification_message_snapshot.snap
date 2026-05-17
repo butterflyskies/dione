@@ -1,19 +1,19 @@
 ---
 source: tests/mcp_protocol.rs
+assertion_line: 443
 expression: notif
 ---
 {
   "jsonrpc": "2.0",
-  "method": "notifications/channel",
+  "method": "notifications/claude/channel",
   "params": {
-    "attachments": [],
-    "chat_id": "1000",
     "content": "snapshot content",
-    "is_voice_message": false,
-    "message_id": "2000",
-    "timestamp": "2026-01-01T00:00:00+00:00",
-    "type": "message",
-    "user": "snapuser",
-    "user_id": "3000"
+    "meta": {
+      "chat_id": "1000",
+      "message_id": "2000",
+      "ts": "2026-01-01T00:00:00+00:00",
+      "user": "snapuser",
+      "user_id": "3000"
+    }
   }
 }
