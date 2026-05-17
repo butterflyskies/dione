@@ -325,7 +325,10 @@ fn test_notification_has_no_id_field() {
         is_voice_message: false,
     };
     let notif = test_helpers::make_notification(event);
-    assert!(notif.get("id").is_none(), "notifications must not have an id field");
+    assert!(
+        notif.get("id").is_none(),
+        "notifications must not have an id field"
+    );
 }
 
 #[test]

@@ -58,7 +58,6 @@ pub async fn send_permission_request(
     let row = CreateActionRow::Buttons(vec![allow_button, deny_button]);
 
     for &admin_id in &config.admin_ids {
-
         let dm_body = serde_json::json!({ "recipient_id": admin_id.to_string() });
         let channel = match http.create_private_channel(&dm_body).await {
             Ok(c) => c,

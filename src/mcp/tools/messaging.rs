@@ -258,12 +258,18 @@ async fn download_url(url: &str) -> Result<Vec<u8>, Box<dyn std::error::Error + 
     if let Some(len) = resp.content_length()
         && len > MAX_ATTACHMENT_BYTES
     {
-        return Err(format!("attachment too large: {len} bytes (max {MAX_ATTACHMENT_BYTES})").into());
+        return Err(
+            format!("attachment too large: {len} bytes (max {MAX_ATTACHMENT_BYTES})").into(),
+        );
     }
 
     let bytes = resp.bytes().await?;
     if bytes.len() as u64 > MAX_ATTACHMENT_BYTES {
-        return Err(format!("attachment too large: {} bytes (max {MAX_ATTACHMENT_BYTES})", bytes.len()).into());
+        return Err(format!(
+            "attachment too large: {} bytes (max {MAX_ATTACHMENT_BYTES})",
+            bytes.len()
+        )
+        .into());
     }
 
     Ok(bytes.to_vec())
