@@ -298,6 +298,7 @@ dependencies = [
  "insta",
  "pretty_assertions",
  "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "serenity",

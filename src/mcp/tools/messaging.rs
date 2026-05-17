@@ -229,7 +229,7 @@ pub async fn download_attachment(ctx: &MessagingCtx, channel_id: u64, message_id
         let dest = inbox_dir.join(&safe_name);
 
         // Download attachment bytes.
-        match reqwest_get(&attachment.url).await {
+        match download_url(&attachment.url).await {
             Ok(bytes) => {
                 if let Err(e) = tokio::fs::write(&dest, &bytes).await {
                     tracing::warn!(
@@ -250,55 +250,23 @@ pub async fn download_attachment(ctx: &MessagingCtx, channel_id: u64, message_id
     json!({ "saved": saved_paths })
 }
 
-/// Downloads bytes from a URL using tokio (no reqwest dep — use serenity's internal client or
-/// the standard library via blocking). Since we don't have reqwest in Cargo.toml we use
-/// tokio + std to do a simple HTTP GET.
-async fn reqwest_get(url: &str) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    // Use serenity's built-in HTTP client strategy: spawn_blocking with ureq-style approach.
-    // Since we only have tokio in scope, use the standard approach of connecting manually.
-    // Instead, use tokio::net + HTTP/1.1 or just spawn_blocking with a sync call.
-    // Simplest: use hyper via tokio (already pulled in transitively by serenity/rustls).
-    // Best approach for an already-compiled binary: use std::process or a simple async GET.
+const MAX_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;
 
-    // We'll do this properly by using tokio's async TCP + manual HTTP/1.1 for simple cases.
-    // But given the constraint set (no reqwest), the pragmatic move is to fetch via
-    // the OS curl/wget command or use tokio::process. Actually, since serenity uses
-    // reqwest internally (it's listed in serenity's deps), we can count on it being
-    // available in the linker even if not in our Cargo.toml.
-    //
-    // The safest approach with the given dependencies: use std::process::Command in
-    // spawn_blocking.
+async fn download_url(url: &str) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    let resp = reqwest::get(url).await?.error_for_status()?;
 
-    let url = url.to_string();
-    let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
-        // 25 MB download limit (25 * 1024 * 1024).
-        let output = std::process::Command::new("curl")
-            .args([
-                "-sSL",
-                "--max-time",
-                "30",
-                "--max-filesize",
-                "26214400",
-                "-o",
-                "-",
-                &url,
-            ])
-            .output()
-            .map_err(|e| e.to_string())?;
-        if output.status.success() {
-            Ok(output.stdout)
-        } else {
-            Err(format!(
-                "curl failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ))
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e: String| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    if let Some(len) = resp.content_length()
+        && len > MAX_ATTACHMENT_BYTES
+    {
+        return Err(format!("attachment too large: {len} bytes (max {MAX_ATTACHMENT_BYTES})").into());
+    }
 
-    Ok(bytes)
+    let bytes = resp.bytes().await?;
+    if bytes.len() as u64 > MAX_ATTACHMENT_BYTES {
+        return Err(format!("attachment too large: {} bytes (max {MAX_ATTACHMENT_BYTES})", bytes.len()).into());
+    }
+
+    Ok(bytes.to_vec())
 }
 
 // ── get_message ───────────────────────────────────────────────────────────────

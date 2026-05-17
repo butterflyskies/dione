@@ -22,6 +22,7 @@ color-eyre = "0.6"
 regex = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 camino = { version = "1", features = ["serde1"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 [dev-dependencies]
 insta = { version = "1", features = ["json", "redactions"] }
