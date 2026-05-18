@@ -225,7 +225,7 @@ async fn dispatch(server: &DioneServer, method: &str, params: Value) -> Result<V
     }
 }
 
-// ── I/O helper ────────────────────────────────────────────────────────────────
+// ── I/O helpers ───────────────────────────────────────────────────────────────
 
 async fn write_line(stdout: &Arc<Mutex<tokio::io::Stdout>>, value: &Value) {
     let mut line = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string());
