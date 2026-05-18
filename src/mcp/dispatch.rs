@@ -6,6 +6,7 @@ use crate::mcp::server::DioneServer;
 use crate::mcp::tools::{
     access::{approve_access, deny_access, list_access_requests},
     bot_state::send_typing,
+    diagnostics::{get_version, set_stderr_level, set_trace_level},
     introspection::{
         get_channel, get_member, get_user, list_channels, list_emojis, list_guilds, list_roles,
     },
@@ -168,6 +169,25 @@ pub(crate) async fn call_tool(
             let ctx = server.bot_state_ctx();
             let channel_id = parse_id(&args, "channel_id")?;
             send_typing(&ctx, channel_id).await
+        }
+
+        // Diagnostics
+        "get_version" => get_version().await,
+        "set_trace_level" => {
+            let ctx = server.diagnostics_ctx();
+            let filter = args
+                .get("filter")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing filter".to_string())?;
+            set_trace_level(&ctx, filter).await
+        }
+        "set_stderr_level" => {
+            let ctx = server.diagnostics_ctx();
+            let filter = args
+                .get("filter")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing filter".to_string())?;
+            set_stderr_level(&ctx, filter).await
         }
 
         unknown => return Err(format!("unknown tool: {unknown}")),

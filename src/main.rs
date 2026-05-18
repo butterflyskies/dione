@@ -2,26 +2,57 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
+use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr};
 use tokio::sync::{RwLock, mpsc};
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::reload;
 
 use dione::discord::events::{Handler, NotificationEvent};
 use dione::mcp::server::DioneServer;
 use dione::state::SharedState;
+use dione::tracing_channel::{TraceLevelController, TracingChannelLayer};
+
+/// Discord MCP channel server for Claude Code.
+#[derive(Parser)]
+#[command(version, about)]
+struct Cli {
+    /// Tracing filter level (e.g. "info", "debug", "dione=debug,serenity=warn")
+    #[arg(long, default_value = "dione=info")]
+    log_level: String,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
 
-    // Logging must go to stderr — stdout is reserved for MCP transport.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("dione=info".parse().wrap_err("invalid directive")?),
-        )
+    let cli = Cli::parse();
+
+    // Build a reloadable EnvFilter so trace level can be changed at runtime via MCP tool.
+    // Respect RUST_LOG if set, otherwise use the CLI flag.
+    let stderr_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::try_new(&cli.log_level).expect("--log-level validated by clap")
+    });
+    let (stderr_filter_layer, stderr_reload_handle) = reload::Layer::new(stderr_filter);
+
+    // Stderr logging layer — stdout is reserved for MCP transport.
+    let stderr_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
+        .with_filter(stderr_filter_layer);
+
+    // Channel-forwarding layer — starts disabled (off). When set_trace_level is called,
+    // events above the threshold are forwarded as channel notifications with type="trace".
+    let (channel_layer, channel_event_rx) = TracingChannelLayer::new();
+    let channel_filter =
+        EnvFilter::try_new("off").wrap_err("failed to build initial channel filter")?;
+    let (channel_filter_layer, channel_reload_handle) = reload::Layer::new(channel_filter);
+
+    tracing_subscriber::registry()
+        .with(stderr_layer)
+        .with(channel_layer.with_filter(channel_filter_layer))
         .init();
 
     let state_dir = dione::config::state_dir();
@@ -54,7 +85,7 @@ async fn main() -> Result<()> {
     let handler = Handler {
         state: state.clone(),
         queue: queue.clone(),
-        tx: event_tx,
+        tx: event_tx.clone(),
         state_dir: state_dir.clone(),
         bot_user_id: AtomicU64::new(0),
     };
@@ -66,6 +97,7 @@ async fn main() -> Result<()> {
     let http = discord_client.http.clone();
 
     // Build MCP server.
+    let trace_controller = TraceLevelController::new(stderr_reload_handle, channel_reload_handle);
     let server = DioneServer {
         state: state.clone(),
         queue: queue.clone(),
@@ -73,10 +105,21 @@ async fn main() -> Result<()> {
         state_dir: state_dir.clone(),
         notification_tx: notif_tx,
         discord_cmd_tx: None,
+        trace_controller,
     };
 
-    // Spawn background pruning task (R-39).
-    // Runs every 60 seconds; prunes stale permissions and expired queue entries.
+    // Spawn the tracing-channel forwarder: converts tracing events into NotificationEvents.
+    let trace_event_tx = event_tx.clone();
+    tokio::spawn(async move {
+        let mut rx = channel_event_rx;
+        while let Some(trace_event) = rx.recv().await {
+            if trace_event_tx.send(trace_event).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Spawn background pruning task.
     let prune_state = state.clone();
     let prune_queue = queue.clone();
     let prune_expiry = Duration::from_secs(config.access_requests.expiry_seconds);

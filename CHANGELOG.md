@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-17
+
+### Added
+- CLI argument parsing with clap (`--version`, `--log-level`)
+- Runtime trace-level control via MCP tools:
+  - `set_trace_level` — controls channel-forwarding filter; matching trace
+    events are sent as channel notifications with `type="trace"` metadata
+  - `set_stderr_level` — controls stderr logging filter
+  - `get_version` — returns dione version at runtime
+- Tracing channel layer: a custom tracing `Layer` that forwards events as
+  MCP channel notifications, differentiated from Discord events via
+  `type="trace"` in notification metadata
+
+### Fixed
+- Permission relay: handle inbound `notifications/claude/channel/permission_request`
+  from Claude Code (was falling through to "unknown method" — permission DMs
+  were never sent to admins)
+
 ## [0.2.0] - 2026-05-17
 
 ### Fixed

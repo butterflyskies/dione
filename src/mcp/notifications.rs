@@ -85,5 +85,29 @@ pub(crate) fn event_to_notification(event: NotificationEvent) -> Value {
                 }
             })
         }
+        NotificationEvent::Trace {
+            level,
+            target,
+            message,
+            fields,
+        } => {
+            let mut content = message;
+            if !fields.is_empty() {
+                let kvs: Vec<String> = fields.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                content = format!("{content} {{ {} }}", kvs.join(", "));
+            }
+            json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/claude/channel",
+                "params": {
+                    "content": content,
+                    "meta": {
+                        "type": "trace",
+                        "level": level,
+                        "target": target,
+                    },
+                }
+            })
+        }
     }
 }

@@ -11,6 +11,7 @@ use dione::discord::events::{AttachmentMeta, NotificationEvent};
 use dione::mcp::server::{DioneServer, test_helpers};
 use dione::queue::AccessQueue;
 use dione::state::new_state;
+use dione::tracing_channel::TraceLevelController;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::{Mutex, mpsc};
@@ -35,6 +36,7 @@ fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
         state_dir: state_dir.clone(),
         notification_tx: tx,
         discord_cmd_tx: None,
+        trace_controller: TraceLevelController::noop(),
     }
 }
 
@@ -434,4 +436,174 @@ fn test_notification_permission_response_snapshot() {
     };
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
+}
+
+// ── Trace notification tests ─────────────────────────────────────────────────
+
+#[test]
+fn test_trace_notification_format() {
+    let event = NotificationEvent::Trace {
+        level: "DEBUG".to_string(),
+        target: "dione::discord::events".to_string(),
+        message: "reaction_add fired".to_string(),
+        fields: vec![
+            ("message_id".to_string(), "12345".to_string()),
+            ("cached".to_string(), "None".to_string()),
+        ],
+    };
+    let notif = test_helpers::make_notification(event);
+    assert_eq!(notif["method"], "notifications/claude/channel");
+    assert_eq!(notif["params"]["meta"]["type"], "trace");
+    assert_eq!(notif["params"]["meta"]["level"], "DEBUG");
+    assert_eq!(notif["params"]["meta"]["target"], "dione::discord::events");
+    let content = notif["params"]["content"].as_str().unwrap();
+    assert!(content.contains("reaction_add fired"));
+    assert!(content.contains("message_id=12345"));
+    assert!(content.contains("cached=None"));
+}
+
+#[test]
+fn test_trace_notification_no_fields() {
+    let event = NotificationEvent::Trace {
+        level: "INFO".to_string(),
+        target: "dione".to_string(),
+        message: "dione starting".to_string(),
+        fields: vec![],
+    };
+    let notif = test_helpers::make_notification(event);
+    assert_eq!(notif["params"]["content"], "dione starting");
+    assert_eq!(notif["params"]["meta"]["type"], "trace");
+}
+
+#[test]
+fn test_trace_notification_snapshot() {
+    let event = NotificationEvent::Trace {
+        level: "WARN".to_string(),
+        target: "dione::mcp".to_string(),
+        message: "something happened".to_string(),
+        fields: vec![("key".to_string(), "value".to_string())],
+    };
+    let notif = test_helpers::make_notification(event);
+    insta::assert_json_snapshot!(notif);
+}
+
+// ── Diagnostics tool tests ───────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_get_version_returns_current_version() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "get_version", "arguments": {} }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(parsed["name"], "dione");
+    assert_eq!(parsed["version"], env!("CARGO_PKG_VERSION"));
+}
+
+#[tokio::test]
+async fn test_set_trace_level_accepts_valid_filter() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "set_trace_level", "arguments": { "filter": "dione=debug" } }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["channel_filter"], "dione=debug");
+}
+
+#[tokio::test]
+async fn test_set_trace_level_rejects_invalid_filter() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "set_trace_level", "arguments": { "filter": "not a valid:::filter[[[" } }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert!(parsed.get("error").is_some());
+}
+
+#[tokio::test]
+async fn test_set_stderr_level_accepts_valid_filter() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "set_stderr_level", "arguments": { "filter": "dione=warn" } }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["stderr_filter"], "dione=warn");
+}
+
+#[tokio::test]
+async fn test_set_trace_level_missing_filter_param() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "set_trace_level", "arguments": {} }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    assert!(resp["error"].is_object());
+}
+
+// ── Permission request handler tests ─────────────────────────────────────────
+
+#[tokio::test]
+async fn test_permission_request_empty_id_is_ignored() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+    let req = json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/claude/channel/permission_request",
+        "params": {
+            "request_id": "",
+            "tool_name": "Bash",
+            "description": "run ls",
+            "input_preview": "{\"command\":\"ls\"}"
+        }
+    });
+    // Notifications return None (no response). The key test is it doesn't panic.
+    let resp = test_helpers::dispatch_request(&server, req).await;
+    assert!(resp.is_none());
+}
+
+#[tokio::test]
+async fn test_permission_request_missing_id_is_ignored() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+    let req = json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/claude/channel/permission_request",
+        "params": {
+            "tool_name": "Write",
+            "description": "write file",
+            "input_preview": "{}"
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await;
+    assert!(resp.is_none());
 }

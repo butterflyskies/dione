@@ -184,6 +184,24 @@ pub(crate) fn tools_list() -> Value {
                     "channel_id": { "type": "string" }
                 }
             })),
+            tool("get_version", "Get dione version information", json!({
+                "type": "object",
+                "properties": {}
+            })),
+            tool("set_trace_level", "Set the channel-forwarding trace filter (events matching this filter are sent as channel notifications with type=\"trace\")", json!({
+                "type": "object",
+                "required": ["filter"],
+                "properties": {
+                    "filter": { "type": "string", "description": "tracing EnvFilter string, e.g. \"dione=debug\", \"dione::discord::events=trace\", or \"off\" to disable" }
+                }
+            })),
+            tool("set_stderr_level", "Set the stderr logging trace filter", json!({
+                "type": "object",
+                "required": ["filter"],
+                "properties": {
+                    "filter": { "type": "string", "description": "tracing EnvFilter string, e.g. \"dione=debug\", \"dione::discord::events=trace\"" }
+                }
+            })),
         ]
     })
 }

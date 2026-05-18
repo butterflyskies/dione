@@ -46,6 +46,12 @@ pub enum NotificationEvent {
         request_id: String,
         granted: bool,
     },
+    Trace {
+        level: String,
+        target: String,
+        message: String,
+        fields: Vec<(String, String)>,
+    },
 }
 
 // ── Handler struct ────────────────────────────────────────────────────────────
