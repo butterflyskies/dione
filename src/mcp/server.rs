@@ -27,10 +27,12 @@ use crate::mcp::protocol::{initialize_response, tools_list};
 use crate::mcp::tools::{
     access::AccessCtx,
     bot_state::{BotStateCtx, DiscordCommand},
+    diagnostics::DiagnosticsCtx,
     introspection::IntrospectionCtx,
     management::ManagementCtx,
     messaging::MessagingCtx,
 };
+pub use crate::tracing_channel::TraceLevelController;
 
 // ── Server struct ─────────────────────────────────────────────────────────────
 
@@ -42,6 +44,7 @@ pub struct DioneServer {
     pub state_dir: Utf8PathBuf,
     pub notification_tx: mpsc::Sender<Value>,
     pub discord_cmd_tx: Option<mpsc::Sender<DiscordCommand>>,
+    pub trace_controller: TraceLevelController,
 }
 
 // ── Context factory methods ───────────────────────────────────────────────────
@@ -82,6 +85,12 @@ impl DioneServer {
             discord_cmd_tx: self.discord_cmd_tx.clone(),
             state: self.state.clone(),
             state_dir: self.state_dir.clone(),
+        }
+    }
+
+    pub(crate) fn diagnostics_ctx(&self) -> DiagnosticsCtx<'_> {
+        DiagnosticsCtx {
+            trace_controller: &self.trace_controller,
         }
     }
 }
@@ -184,7 +193,6 @@ async fn handle_request(server: &DioneServer, req: Value) -> Option<Value> {
     let result = dispatch(server, method, params).await;
 
     if is_notification {
-        // Client-sent notification: consume silently.
         return None;
     }
 
@@ -216,6 +224,46 @@ async fn dispatch(server: &DioneServer, method: &str, params: Value) -> Result<V
                 .ok_or_else(|| "missing tool name".to_string())?;
             let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
             call_tool(server, tool_name, arguments).await
+        }
+
+        // ── Permission relay (inbound from Claude Code) ──────────────────────
+        "notifications/claude/channel/permission_request" => {
+            let request_id = params
+                .get("request_id")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if request_id.is_empty() {
+                tracing::warn!("permission_request missing request_id, ignoring");
+                return Ok(json!({}));
+            }
+            let tool_name = params
+                .get("tool_name")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let description = params
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let input_preview = params
+                .get("input_preview")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+
+            let config = crate::config::load_config(&server.state_dir);
+            if let Err(e) = crate::permissions::send_permission_request(
+                &server.http,
+                &config,
+                &server.state,
+                request_id,
+                tool_name,
+                description,
+                input_preview,
+            )
+            .await
+            {
+                tracing::warn!(error = %e, "failed to relay permission request");
+            }
+            Ok(json!({}))
         }
 
         other => {
