@@ -50,6 +50,21 @@ async fn test_initialize_returns_capabilities() {
             .is_some(),
         "initialize response must include capabilities.tools"
     );
+    // Must advertise experimental channel capabilities.
+    let experimental = resp.get("capabilities").and_then(|c| c.get("experimental"));
+    assert!(
+        experimental.is_some(),
+        "must include capabilities.experimental"
+    );
+    let experimental = experimental.unwrap();
+    assert!(
+        experimental.get("claude/channel").is_some(),
+        "must declare claude/channel experimental capability"
+    );
+    assert!(
+        experimental.get("claude/channel/permission").is_some(),
+        "must declare claude/channel/permission experimental capability"
+    );
     // Must include server info.
     assert!(
         resp.get("serverInfo").and_then(|s| s.get("name")).is_some(),
@@ -377,6 +392,7 @@ fn test_permission_deny_uses_deny_behavior() {
     };
     let notif = test_helpers::make_notification(event);
     assert_eq!(notif["params"]["behavior"], "deny");
+    assert_eq!(notif["method"], "notifications/claude/channel/permission");
 }
 
 // ── Snapshot tests ────────────────────────────────────────────────────────────

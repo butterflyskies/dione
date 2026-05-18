@@ -183,17 +183,44 @@ impl EventHandler for Handler {
         }
     }
 
-    async fn reaction_add(&self, _ctx: Context, reaction: Reaction) {
+    async fn reaction_add(&self, ctx: Context, reaction: Reaction) {
         let message_id = reaction.message_id.get();
+        let channel_id = reaction.channel_id;
+        let bot_id = self.bot_user_id.load(Ordering::Relaxed);
 
-        // Only forward reactions to messages the bot sent.
-        let is_bot_message = {
+        let cached = {
             let state = self.state.read().await;
-            state.recent_sent_ids.contains(&message_id)
+            if state.recent_sent_ids.contains(&message_id) {
+                Some(true)
+            } else if state.non_bot_message_ids.contains(&message_id) {
+                Some(false)
+            } else {
+                None
+            }
         };
 
-        if !is_bot_message {
-            return;
+        match cached {
+            Some(true) => {}
+            Some(false) => return,
+            None => match ctx.http.get_message(channel_id, reaction.message_id).await {
+                Ok(msg) if msg.author.id.get() == bot_id => {
+                    let mut state = self.state.write().await;
+                    state.note_sent(message_id);
+                }
+                Ok(_) => {
+                    let mut state = self.state.write().await;
+                    state.note_non_bot(message_id);
+                    return;
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        message_id,
+                        error = %e,
+                        "could not verify reaction target authorship"
+                    );
+                    return;
+                }
+            },
         }
 
         let user_id = reaction.user_id.map(|u| u.get()).unwrap_or(0);
@@ -210,9 +237,9 @@ impl EventHandler for Handler {
         };
 
         let event = NotificationEvent::Reaction {
-            chat_id: reaction.channel_id.get().to_string(),
+            chat_id: channel_id.get().to_string(),
             message_id: message_id.to_string(),
-            user: String::new(), // user name not available in reaction event without a fetch
+            user: String::new(),
             user_id: user_id.to_string(),
             emoji,
         };

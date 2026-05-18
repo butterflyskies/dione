@@ -22,6 +22,8 @@ pub struct SharedState {
     pub dm_channel_ids: HashSet<u64>,
     /// Pending permission relay requests keyed by Discord message ID.
     pub pending_permissions: BTreeMap<u64, PendingPermission>,
+    /// Message IDs confirmed not authored by the bot (negative cache for reaction lookups).
+    pub non_bot_message_ids: BTreeSet<u64>,
 }
 
 /// Thread-safe shared state handle.
@@ -43,6 +45,7 @@ impl SharedState {
             dm_channel_map: HashMap::new(),
             dm_channel_ids: HashSet::new(),
             pending_permissions: BTreeMap::new(),
+            non_bot_message_ids: BTreeSet::new(),
         }
     }
 
@@ -58,18 +61,17 @@ impl SharedState {
         self.prune_sent_ids(SENT_IDS_CAP);
     }
 
+    /// Records a message ID confirmed not authored by the bot.
+    pub fn note_non_bot(&mut self, id: u64) {
+        self.non_bot_message_ids.insert(id);
+        prune_oldest(&mut self.non_bot_message_ids, SENT_IDS_CAP);
+    }
+
     /// Keeps only the most recent `cap` entries by ID value.
     ///
     /// Snowflake IDs are monotonically increasing, so higher values are newer.
     pub fn prune_sent_ids(&mut self, cap: usize) {
-        while self.recent_sent_ids.len() > cap {
-            // Remove the smallest (oldest) ID.
-            if let Some(&oldest) = self.recent_sent_ids.iter().next() {
-                self.recent_sent_ids.remove(&oldest);
-            } else {
-                break;
-            }
-        }
+        prune_oldest(&mut self.recent_sent_ids, cap);
     }
 
     /// Removes pending permission entries older than 5 minutes.
@@ -77,6 +79,16 @@ impl SharedState {
         let cutoff = Utc::now() - chrono::Duration::seconds(PERMISSION_STALE_SECS);
         self.pending_permissions
             .retain(|_msg_id, p| p.created_at > cutoff);
+    }
+}
+
+fn prune_oldest(set: &mut BTreeSet<u64>, cap: usize) {
+    while set.len() > cap {
+        if let Some(&oldest) = set.iter().next() {
+            set.remove(&oldest);
+        } else {
+            break;
+        }
     }
 }
 

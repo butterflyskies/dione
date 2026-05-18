@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-17
+
+### Fixed
+- Declare `claude/channel` and `claude/channel/permission` experimental
+  capabilities in the MCP initialize handshake
+- Permission notification now uses `notifications/claude/channel/permission`
+  method with `behavior` field instead of generic channel notification
+- Add `DIRECT_MESSAGE_REACTIONS` gateway intent so DM reactions are received
+- Reaction handler falls back to Discord API fetch when message ID is not in
+  the in-memory sent set, surviving bot restarts
+
 ## [0.1.1] - 2026-05-17
+
 
 ### Added
 - Discord MCP channel server for Claude Code via `--channels`
