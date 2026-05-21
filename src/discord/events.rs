@@ -88,6 +88,11 @@ impl EventHandler for Handler {
         let config = crate::config::load_config(&self.state_dir);
         let bot_user_id = self.bot_user_id.load(Ordering::Relaxed);
 
+        {
+            let mut state = self.state.write().await;
+            state.cache_username(msg.author.id.get(), msg.author.name.clone());
+        }
+
         let is_dm = msg.guild_id.is_none();
 
         if is_dm {
@@ -242,10 +247,15 @@ impl EventHandler for Handler {
             _ => return,
         };
 
+        let user_name = {
+            let state = self.state.read().await;
+            state.user_names.get(&user_id).cloned().unwrap_or_default()
+        };
+
         let event = NotificationEvent::Reaction {
             chat_id: channel_id.get().to_string(),
             message_id: message_id.to_string(),
-            user: String::new(),
+            user: user_name,
             user_id: user_id.to_string(),
             emoji,
         };
