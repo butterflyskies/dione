@@ -230,7 +230,7 @@ impl EventHandler for Handler {
         }
 
         let user_id = reaction.user_id.map(|u| u.get()).unwrap_or(0);
-        if user_id == 0 {
+        if user_id == 0 || user_id == bot_id {
             return;
         }
 
