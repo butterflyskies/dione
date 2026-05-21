@@ -1,0 +1,15 @@
+# Dione configuration — edit and save, changes take effect on next message.
+# See https://github.com/butterflyskies/dione for documentation.
+
+[access]
+dm_policy = "queue"     # "queue", "drop", or "disabled"
+allow_from = []         # Discord user IDs that can DM the bot
+admins = []             # Discord user IDs that receive access requests
+
+# [[channels]]
+# id = ""               # Discord channel ID
+# require_mention = true
+# allow_from = []
+
+[delivery]
+text_chunk_limit = 2000

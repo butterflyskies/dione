@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::Read as _;
+use std::sync::Mutex;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use regex::RegexSet;
@@ -293,21 +294,45 @@ pub fn state_dir() -> Utf8PathBuf {
 
 /// Loads configuration from `{state_dir}/config.toml`.
 ///
-/// On missing file, returns defaults. On parse error, renames the corrupt file
-/// to `.corrupt-{timestamp}` and returns defaults.
-///
-/// Returns a `LoadedConfig` with pre-parsed ID sets and compiled regexes.
+static LAST_VALID_CONFIG: Mutex<Option<LoadedConfig>> = Mutex::new(None);
+
+/// On missing file, returns defaults. On parse error, logs a warning and
+/// returns the last valid config (or defaults if none has been loaded yet).
+/// The file is left intact so the user or agent can fix it.
 pub fn load_config(state_dir: &Utf8Path) -> LoadedConfig {
+    load_config_checked(state_dir).0
+}
+
+/// Like [`load_config`], but also returns `Some(error_message)` if the config
+/// had a parse error and we fell back to a previous valid config or defaults.
+pub fn load_config_checked(state_dir: &Utf8Path) -> (LoadedConfig, Option<String>) {
     let config_path = state_dir.join("config.toml");
+    let mut config_error = None;
     let raw = match try_load_config(&config_path) {
         Ok(cfg) => cfg,
         Err(ConfigError::NotFound { .. }) => {
-            tracing::debug!(path = %config_path, "config file not found, using defaults");
-            Config::default()
+            let defaults = Config::default();
+            write_default_config(&config_path);
+            tracing::info!(path = %config_path, "config file not found, generated default config");
+            defaults
         }
         Err(ConfigError::Parse(e)) => {
-            tracing::error!(path = %config_path, error = %e, "config parse error, renaming to .corrupt");
-            rename_corrupt(&config_path);
+            let error_msg = format!("config parse error: {e}");
+            let fallback = LAST_VALID_CONFIG.lock().ok().and_then(|g| g.clone());
+            if let Some(cached) = fallback {
+                tracing::warn!(
+                    path = %config_path,
+                    error = %e,
+                    "config parse error, continuing with last valid config"
+                );
+                return (cached, Some(error_msg));
+            }
+            tracing::error!(
+                path = %config_path,
+                error = %e,
+                "config parse error and no previous valid config, using defaults"
+            );
+            config_error = Some(error_msg);
             Config::default()
         }
         Err(ConfigError::Io(e)) => {
@@ -315,7 +340,11 @@ pub fn load_config(state_dir: &Utf8Path) -> LoadedConfig {
             Config::default()
         }
     };
-    LoadedConfig::from_raw(raw)
+    let loaded = LoadedConfig::from_raw(raw);
+    if let Ok(mut guard) = LAST_VALID_CONFIG.lock() {
+        *guard = Some(loaded.clone());
+    }
+    (loaded, config_error)
 }
 
 /// Resolves the Discord bot token.
@@ -328,6 +357,13 @@ pub fn resolve_token(config: &Config) -> Option<String> {
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
+
+fn write_default_config(config_path: &Utf8Path) {
+    const TEMPLATE: &str = include_str!("config_template.toml");
+    if let Err(e) = std::fs::write(config_path.as_std_path(), TEMPLATE) {
+        tracing::warn!(path = %config_path, error = %e, "failed to write default config");
+    }
+}
 
 fn try_load_config(config_path: &Utf8Path) -> Result<Config, ConfigError> {
     let mut file = match File::open(config_path.as_std_path()) {
@@ -349,23 +385,12 @@ fn try_load_config(config_path: &Utf8Path) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
-fn rename_corrupt(config_path: &Utf8Path) {
-    let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
-    let corrupt_name = format!(".corrupt-{ts}");
-    let corrupt_path = config_path
-        .parent()
-        .unwrap_or(Utf8Path::new("."))
-        .join(corrupt_name);
-    if let Err(e) = fs::rename(config_path.as_std_path(), corrupt_path.as_std_path()) {
-        tracing::warn!(error = %e, "failed to rename corrupt config file");
-    }
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
 
     fn temp_state_dir() -> (TempDir, Utf8PathBuf) {
@@ -375,35 +400,52 @@ mod tests {
     }
 
     #[test]
-    fn test_missing_config_returns_defaults() {
+    fn test_missing_config_generates_and_returns_defaults() {
         let (_dir, state_dir) = temp_state_dir();
+        let config_path = state_dir.join("config.toml");
+
         let cfg = load_config(&state_dir);
         assert_eq!(cfg.access.dm_policy, DmPolicy::Queue);
         assert!(cfg.access.allow_from.is_empty());
         assert_eq!(cfg.delivery.text_chunk_limit, 2000);
+
+        // Should have generated a default config file.
+        assert!(
+            config_path.as_std_path().exists(),
+            "default config.toml should have been generated"
+        );
+        let contents = fs::read_to_string(config_path.as_std_path()).unwrap();
+        assert!(contents.contains("dm_policy"));
     }
 
     #[test]
-    fn test_corrupt_config_renames_and_returns_defaults() {
+    fn test_corrupt_config_keeps_file_and_falls_back() {
         let (_dir, state_dir) = temp_state_dir();
         let config_path = state_dir.join("config.toml");
-        fs::write(config_path.as_std_path(), b"this is not valid toml {{{{").unwrap();
 
-        let cfg = load_config(&state_dir);
-        // Corrupt file should have been renamed away.
-        assert!(
-            !config_path.as_std_path().exists(),
-            "config.toml should be renamed"
+        // Load a valid config with dm_policy = "drop" to prime the cache.
+        fs::write(
+            config_path.as_std_path(),
+            b"[access]\ndm_policy = \"drop\"\n",
+        )
+        .unwrap();
+        let before = load_config(&state_dir);
+        assert_eq!(before.access.dm_policy, DmPolicy::Drop);
+
+        // Now write a corrupt config — should fall back to last valid (not defaults).
+        fs::write(config_path.as_std_path(), b"not valid toml {{{{").unwrap();
+        let after = load_config(&state_dir);
+        assert_ne!(
+            after.access.dm_policy,
+            DmPolicy::Queue,
+            "should NOT reset to defaults on corrupt config"
         );
-        // Should have a .corrupt-* file.
-        let entries: Vec<_> = fs::read_dir(state_dir.as_std_path())
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().starts_with(".corrupt-"))
-            .collect();
-        assert_eq!(entries.len(), 1, "expected one .corrupt-* file");
-        // Should return defaults.
-        assert_eq!(cfg.access.dm_policy, DmPolicy::Queue);
+
+        // File should be left intact for the user to fix.
+        assert!(
+            config_path.as_std_path().exists(),
+            "config.toml should still exist"
+        );
     }
 
     #[test]
