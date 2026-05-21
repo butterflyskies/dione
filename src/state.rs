@@ -24,6 +24,8 @@ pub struct SharedState {
     pub pending_permissions: BTreeMap<u64, PendingPermission>,
     /// Message IDs confirmed not authored by the bot (negative cache for reaction lookups).
     pub non_bot_message_ids: BTreeSet<u64>,
+    /// Cache of user ID → username, populated from message events.
+    pub user_names: HashMap<u64, String>,
 }
 
 /// Thread-safe shared state handle.
@@ -46,6 +48,7 @@ impl SharedState {
             dm_channel_ids: HashSet::new(),
             pending_permissions: BTreeMap::new(),
             non_bot_message_ids: BTreeSet::new(),
+            user_names: HashMap::new(),
         }
     }
 
@@ -72,6 +75,16 @@ impl SharedState {
     /// Snowflake IDs are monotonically increasing, so higher values are newer.
     pub fn prune_sent_ids(&mut self, cap: usize) {
         prune_oldest(&mut self.recent_sent_ids, cap);
+    }
+
+    /// Caches a user ID → username mapping, pruning if over cap.
+    pub fn cache_username(&mut self, user_id: u64, name: String) {
+        self.user_names.insert(user_id, name);
+        if self.user_names.len() > SENT_IDS_CAP
+            && let Some(&oldest) = self.user_names.keys().next()
+        {
+            self.user_names.remove(&oldest);
+        }
     }
 
     /// Removes pending permission entries older than 5 minutes.
