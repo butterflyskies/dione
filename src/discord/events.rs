@@ -5,6 +5,7 @@ use serenity::async_trait;
 use serenity::builder::{
     CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage,
 };
+use serenity::model::event::MessageUpdateEvent;
 use serenity::model::prelude::*;
 use serenity::prelude::*;
 
@@ -51,6 +52,18 @@ pub enum NotificationEvent {
         target: String,
         message: String,
         fields: Vec<(String, String)>,
+    },
+    MessageEdit {
+        chat_id: String,
+        message_id: String,
+        user: String,
+        user_id: String,
+        new_content: String,
+        timestamp: String,
+    },
+    MessageDelete {
+        chat_id: String,
+        message_id: String,
     },
     ConfigError {
         error: String,
@@ -268,6 +281,127 @@ impl EventHandler for Handler {
 
         if let Err(e) = self.tx.send(event).await {
             tracing::warn!(error = %e, "failed to send reaction notification event");
+        }
+    }
+
+    async fn message_update(
+        &self,
+        _ctx: Context,
+        old_if_available: Option<Message>,
+        new: Option<Message>,
+        event: MessageUpdateEvent,
+    ) {
+        let Some(edited_ts) = event.edited_timestamp else {
+            return;
+        };
+
+        let author = event
+            .author
+            .as_ref()
+            .or_else(|| new.as_ref().map(|m| &m.author))
+            .or_else(|| old_if_available.as_ref().map(|m| &m.author));
+        let Some(author) = author else {
+            return;
+        };
+        if author.bot {
+            return;
+        }
+
+        let new_content = event
+            .content
+            .or_else(|| new.as_ref().map(|m| m.content.clone()));
+        let Some(new_content) = new_content else {
+            return;
+        };
+
+        let channel_id = event.channel_id.get();
+        let (config, config_err) = crate::config::load_config_checked(&self.state_dir);
+        if let Some(error) = config_err {
+            let _ = self.tx.send(NotificationEvent::ConfigError { error }).await;
+        }
+
+        let is_dm = event.guild_id.is_none();
+        let decision = if is_dm {
+            InboundGate::check_dm(&config, author.id.get())
+        } else {
+            InboundGate::check_guild_passive(&config, channel_id, author.id.get())
+        };
+        if !matches!(decision, GateDecision::Deliver) {
+            tracing::trace!(
+                channel_id,
+                sender_id = author.id.get(),
+                ?decision,
+                "message edit dropped by gate"
+            );
+            return;
+        }
+
+        {
+            let mut state = self.state.write().await;
+            if is_dm {
+                state.record_dm_channel(author.id.get(), channel_id);
+            }
+            state.cache_username(author.id.get(), author.name.clone());
+        }
+
+        let timestamp = edited_ts.to_rfc3339().unwrap_or_default();
+
+        let ev = NotificationEvent::MessageEdit {
+            chat_id: channel_id.to_string(),
+            message_id: event.id.get().to_string(),
+            user: author.name.clone(),
+            user_id: author.id.get().to_string(),
+            new_content,
+            timestamp,
+        };
+
+        if let Err(e) = self.tx.send(ev).await {
+            tracing::warn!(error = %e, "failed to send message edit notification");
+        }
+    }
+
+    async fn message_delete(
+        &self,
+        _ctx: Context,
+        channel_id: ChannelId,
+        deleted_message_id: MessageId,
+        guild_id: Option<GuildId>,
+    ) {
+        let cid = channel_id.get();
+        let mid = deleted_message_id.get();
+
+        {
+            let state = self.state.read().await;
+            if state.recent_sent_ids.contains(&mid) {
+                return;
+            }
+        }
+
+        let (config, config_err) = crate::config::load_config_checked(&self.state_dir);
+        if let Some(error) = config_err {
+            let _ = self.tx.send(NotificationEvent::ConfigError { error }).await;
+        }
+
+        let is_dm = guild_id.is_none();
+        let is_known = if is_dm {
+            config.access.dm_policy != crate::config::DmPolicy::Disabled && {
+                let state = self.state.read().await;
+                state.dm_channel_ids.contains(&cid)
+            }
+        } else {
+            config.channel_policy(cid).is_some()
+        };
+        if !is_known {
+            return;
+        }
+
+        let ev = NotificationEvent::MessageDelete {
+            chat_id: cid.to_string(),
+            message_id: mid.to_string(),
+        };
+
+        if let Err(e) = self.tx.send(ev).await {
+            tracing::warn!(error = %e, "failed to send message delete notification");
         }
     }
 

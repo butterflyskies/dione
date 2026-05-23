@@ -109,6 +109,47 @@ pub(crate) fn event_to_notification(event: NotificationEvent) -> Value {
                 }
             })
         }
+        NotificationEvent::MessageEdit {
+            chat_id,
+            message_id,
+            user,
+            user_id,
+            new_content,
+            timestamp,
+        } => {
+            json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/claude/channel",
+                "params": {
+                    "content": new_content,
+                    "meta": {
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        "user": user,
+                        "user_id": user_id,
+                        "type": "message_edit",
+                        "ts": timestamp,
+                    },
+                }
+            })
+        }
+        NotificationEvent::MessageDelete {
+            chat_id,
+            message_id,
+        } => {
+            json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/claude/channel",
+                "params": {
+                    "content": "message deleted",
+                    "meta": {
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        "type": "message_delete",
+                    },
+                }
+            })
+        }
         NotificationEvent::ConfigError { error } => {
             json!({
                 "jsonrpc": "2.0",
