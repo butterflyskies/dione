@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use camino::Utf8PathBuf;
 use serde_json::{Value, json};
-use serenity::builder::{CreateMessage, EditMessage};
+use serenity::builder::{CreateAttachment, CreateMessage, EditMessage};
 use serenity::model::id::{ChannelId, MessageId};
 
 use crate::config::{ChunkMode, load_config};
@@ -20,7 +20,7 @@ pub struct MessagingCtx {
 // ── Gate helper ───────────────────────────────────────────────────────────────
 
 /// Returns `Ok(())` if the channel is permitted, or `Err(json_error)` if not.
-async fn check_outbound(ctx: &MessagingCtx, channel_id: u64) -> Result<(), Value> {
+pub(crate) async fn check_outbound(ctx: &MessagingCtx, channel_id: u64) -> Result<(), Value> {
     let config = load_config(&ctx.state_dir);
     let state = ctx.state.read().await;
     if !OutboundGate::check_channel(&config, channel_id, &state.dm_channel_ids) {
@@ -255,6 +255,61 @@ pub async fn download_attachment(ctx: &MessagingCtx, channel_id: u64, message_id
     }
 
     json!({ "saved": saved_paths })
+}
+
+// ── send_attachment (shared helper) ──────────────────────────────────────────
+
+pub(crate) async fn send_attachment(
+    ctx: &MessagingCtx,
+    channel_id: u64,
+    attachment: CreateAttachment,
+    caption: Option<&str>,
+) -> Value {
+    let ch = ChannelId::new(channel_id);
+    let _ = ctx.http.broadcast_typing(ch).await;
+    let mut builder = CreateMessage::new().add_file(attachment);
+    if let Some(text) = caption {
+        builder = builder.content(text);
+    }
+    match ch.send_message(&ctx.http, builder).await {
+        Ok(msg) => {
+            let mid = msg.id.get();
+            let mut state = ctx.state.write().await;
+            state.note_sent(mid);
+            json!({ "ok": true, "message_id": mid.to_string() })
+        }
+        Err(e) => json!({ "error": format!("failed to send: {e}") }),
+    }
+}
+
+// ── send_file ────────────────────────────────────────────────────────────────
+
+pub async fn send_file(
+    ctx: &MessagingCtx,
+    channel_id: u64,
+    file_path: &str,
+    caption: Option<&str>,
+) -> Value {
+    let path = std::path::Path::new(file_path);
+    if !path.is_absolute() {
+        return json!({ "error": "file_path must be absolute" });
+    }
+
+    if let Err(e) = check_outbound(ctx, channel_id).await {
+        return e;
+    }
+
+    let utf8_path = camino::Utf8Path::new(file_path);
+    if !OutboundGate::check_file_send(utf8_path, &ctx.state_dir) {
+        return json!({ "error": "file_path is not permitted for upload" });
+    }
+
+    let attachment = match CreateAttachment::path(path).await {
+        Ok(a) => a,
+        Err(e) => return json!({ "error": format!("failed to read file: {e}") }),
+    };
+
+    send_attachment(ctx, channel_id, attachment, caption).await
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

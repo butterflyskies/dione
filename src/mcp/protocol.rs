@@ -75,6 +75,15 @@ pub(crate) fn tools_list() -> Value {
                     "message_id": { "type": "string" }
                 }
             })),
+            tool("send_file", "Upload a file as an attachment to a Discord channel", json!({
+                "type": "object",
+                "required": ["channel_id", "file_path"],
+                "properties": {
+                    "channel_id": { "type": "string", "description": "Discord channel ID" },
+                    "file_path": { "type": "string", "description": "Absolute path to the file to upload" },
+                    "caption": { "type": "string", "description": "Optional message text to accompany the file" }
+                }
+            })),
             tool("list_guilds", "List guilds the bot is in", json!({
                 "type": "object",
                 "properties": {}
@@ -177,6 +186,22 @@ pub(crate) fn tools_list() -> Value {
             // presence updates require the Discord gateway shard manager, which is
             // not yet wired to the MCP command channel. The implementation stub
             // remains in bot_state.rs for future use.
+            tool("render_latex", "Render a LaTeX math expression to a PNG image file", json!({
+                "type": "object",
+                "required": ["latex"],
+                "properties": {
+                    "latex": { "type": "string", "description": "LaTeX math expression (without $ delimiters)" }
+                }
+            })),
+            tool("render_latex_to_channel", "Render a LaTeX math expression and post it as an image to a Discord channel", json!({
+                "type": "object",
+                "required": ["channel_id", "latex"],
+                "properties": {
+                    "channel_id": { "type": "string", "description": "Discord channel ID" },
+                    "latex": { "type": "string", "description": "LaTeX math expression (without $ delimiters)" },
+                    "caption": { "type": "string", "description": "Optional message text to accompany the image" }
+                }
+            })),
             tool("send_typing", "Send a typing indicator to a channel", json!({
                 "type": "object",
                 "required": ["channel_id"],

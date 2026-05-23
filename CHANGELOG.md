@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-22
+
+### Added
+- Forward `message_edit` and `message_delete` Discord events to MCP client
+  - `message_update` handler: filters embed-only updates, gates through
+    `InboundGate`, resolves author from 3-level fallback chain
+  - `message_delete` handler: filters bot's own messages via `recent_sent_ids`,
+    checks `dm_policy` for DM channels
+  - `InboundGate::check_guild_passive` for events without mention context —
+    enforces channel opt-in and `allow_from` but not `require_mention`
+  - Both handlers use `load_config_checked` with `ConfigError` forwarding
+  - Snapshot tests for both notification types
+- `render_latex` tool — renders LaTeX math to PNG via mitex + typst (pure Rust,
+  no external TeX installation)
+- `send_file` tool — uploads a local file as a Discord attachment with optional
+  caption
+- `render_latex_to_channel` tool — renders LaTeX and posts the PNG directly to
+  a Discord channel (combines `render_latex` + `send_file`)
+
+### Fixed
+- Graceful config recovery: cache last valid config on parse errors, keep file
+  intact, send `ConfigError` notification to MCP client (#17)
+- Filter bot's own reactions from channel events (#15)
+- Resolve usernames on reaction events via message cache (#16)
+
 ## [0.3.0] - 2026-05-17
 
 ### Added

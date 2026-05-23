@@ -151,6 +151,22 @@ async fn test_tools_list_contains_expected_tools() {
         names.contains(&"send_typing"),
         "tools/list must include send_typing"
     );
+
+    // Rendering tools.
+    assert!(
+        names.contains(&"render_latex"),
+        "tools/list must include render_latex"
+    );
+    assert!(
+        names.contains(&"render_latex_to_channel"),
+        "tools/list must include render_latex_to_channel"
+    );
+
+    // File tools.
+    assert!(
+        names.contains(&"send_file"),
+        "tools/list must include send_file"
+    );
 }
 
 #[tokio::test]
@@ -251,6 +267,65 @@ async fn test_tools_call_send_typing_rejected_unknown_channel() {
         json!(true),
         "send_typing to unknown channel should return isError: true"
     );
+}
+
+#[tokio::test]
+async fn test_tools_call_send_file_rejected_unknown_channel() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 30,
+        "method": "tools/call",
+        "params": {
+            "name": "send_file",
+            "arguments": { "channel_id": "999999", "file_path": "/tmp/test.png" }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    assert_eq!(resp["result"]["isError"], json!(true));
+}
+
+#[tokio::test]
+async fn test_tools_call_send_file_rejects_relative_path() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 31,
+        "method": "tools/call",
+        "params": {
+            "name": "send_file",
+            "arguments": { "channel_id": "999999", "file_path": "relative/path.png" }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    assert_eq!(resp["result"]["isError"], json!(true));
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("file_path must be absolute"),
+        "expected path rejection, got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn test_tools_call_render_latex_to_channel_rejected_unknown_channel() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 32,
+        "method": "tools/call",
+        "params": {
+            "name": "render_latex_to_channel",
+            "arguments": { "channel_id": "999999", "latex": "x^2" }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    assert_eq!(resp["result"]["isError"], json!(true));
 }
 
 #[tokio::test]
