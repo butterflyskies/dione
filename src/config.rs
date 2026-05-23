@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read as _;
-use std::sync::Mutex;
+use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use camino::{Utf8Path, Utf8PathBuf};
 use regex::RegexSet;
 use serde::Deserialize;
@@ -294,7 +295,8 @@ pub fn state_dir() -> Utf8PathBuf {
 
 /// Loads configuration from `{state_dir}/config.toml`.
 ///
-static LAST_VALID_CONFIG: Mutex<Option<LoadedConfig>> = Mutex::new(None);
+static LAST_VALID_CONFIG: std::sync::LazyLock<ArcSwap<Option<LoadedConfig>>> =
+    std::sync::LazyLock::new(|| ArcSwap::from_pointee(None));
 
 /// On missing file, returns defaults. On parse error, logs a warning and
 /// returns the last valid config (or defaults if none has been loaded yet).
@@ -318,8 +320,8 @@ pub fn load_config_checked(state_dir: &Utf8Path) -> (LoadedConfig, Option<String
         }
         Err(ConfigError::Parse(e)) => {
             let error_msg = format!("config parse error: {e}");
-            let fallback = LAST_VALID_CONFIG.lock().ok().and_then(|g| g.clone());
-            if let Some(cached) = fallback {
+            let guard = LAST_VALID_CONFIG.load();
+            if let Some(cached) = (**guard).clone() {
                 tracing::warn!(
                     path = %config_path,
                     error = %e,
@@ -341,9 +343,7 @@ pub fn load_config_checked(state_dir: &Utf8Path) -> (LoadedConfig, Option<String
         }
     };
     let loaded = LoadedConfig::from_raw(raw);
-    if let Ok(mut guard) = LAST_VALID_CONFIG.lock() {
-        *guard = Some(loaded.clone());
-    }
+    LAST_VALID_CONFIG.store(Arc::new(Some(loaded.clone())));
     (loaded, config_error)
 }
 
