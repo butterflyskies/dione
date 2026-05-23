@@ -405,14 +405,14 @@ pub async fn get_message(ctx: &MessagingCtx, channel_id: u64, message_id: u64) -
 /// Converts a serenity [`Timestamp`] to an RFC 3339 string.
 ///
 /// If `to_rfc3339()` returns `None` — which indicates the timestamp is broken
-/// at the Discord API level — logs a trace and falls back to the current UTC
+/// at the Discord API level — logs a warning and falls back to the current UTC
 /// time so tool responses never contain an empty timestamp string.
 fn serenity_ts_to_rfc3339(ts: &Timestamp) -> String {
     match ts.to_rfc3339() {
         Some(s) => s,
         None => {
             let fallback = chrono::Utc::now().to_rfc3339();
-            tracing::trace!(
+            tracing::warn!(
                 fallback = %fallback,
                 "Discord timestamp failed to_rfc3339(); using current UTC time as fallback"
             );
