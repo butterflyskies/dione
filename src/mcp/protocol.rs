@@ -227,6 +227,60 @@ pub(crate) fn tools_list() -> Value {
                     "filter": { "type": "string", "description": "tracing EnvFilter string, e.g. \"dione=debug\", \"dione::discord::events=trace\"" }
                 }
             })),
+            tool("list_config_channels", "List all channels in dione's config with their settings", json!({
+                "type": "object",
+                "properties": {}
+            })),
+            tool("get_access_config", "Get the current access config (dm_policy, allow_from, admins)", json!({
+                "type": "object",
+                "properties": {}
+            })),
+            tool("add_channel", "Add a channel to dione's config", json!({
+                "type": "object",
+                "required": ["id"],
+                "properties": {
+                    "id": { "type": "string", "description": "Discord channel ID" },
+                    "require_mention": { "type": "boolean", "description": "Whether the bot must be mentioned to respond (default: true)" },
+                    "allow_from": { "type": "array", "items": { "type": "string" }, "description": "User IDs allowed in this channel (empty = everyone)" }
+                }
+            })),
+            tool("remove_channel", "Remove a channel from dione's config", json!({
+                "type": "object",
+                "required": ["id"],
+                "properties": {
+                    "id": { "type": "string", "description": "Discord channel ID" }
+                }
+            })),
+            tool("update_channel", "Update settings for a channel in dione's config", json!({
+                "type": "object",
+                "required": ["id"],
+                "properties": {
+                    "id": { "type": "string", "description": "Discord channel ID" },
+                    "require_mention": { "type": "boolean", "description": "Whether the bot must be mentioned to respond" },
+                    "allow_from": { "type": "array", "items": { "type": "string" }, "description": "User IDs allowed in this channel (empty = everyone)" }
+                }
+            })),
+            tool("update_dm_policy", "Update the DM policy in dione's config", json!({
+                "type": "object",
+                "required": ["policy"],
+                "properties": {
+                    "policy": { "type": "string", "enum": ["queue", "drop", "disabled"], "description": "DM handling policy" }
+                }
+            })),
+            tool("add_allow_from", "Add a user ID to the global allow_from list", json!({
+                "type": "object",
+                "required": ["user_id"],
+                "properties": {
+                    "user_id": { "type": "string", "description": "Discord user ID to allow" }
+                }
+            })),
+            tool("remove_allow_from", "Remove a user ID from the global allow_from list", json!({
+                "type": "object",
+                "required": ["user_id"],
+                "properties": {
+                    "user_id": { "type": "string", "description": "Discord user ID to remove" }
+                }
+            })),
         ]
     })
 }
