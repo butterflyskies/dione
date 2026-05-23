@@ -1,0 +1,16 @@
+---
+source: tests/mcp_protocol.rs
+expression: notif
+---
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/claude/channel",
+  "params": {
+    "content": "message deleted",
+    "meta": {
+      "chat_id": "1003",
+      "message_id": "2003",
+      "type": "message_delete"
+    }
+  }
+}

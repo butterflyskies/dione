@@ -77,6 +77,31 @@ impl InboundGate {
 
         GateDecision::Deliver
     }
+
+    /// Decides what to do with a passive guild event (edit, delete) that lacks
+    /// mention context. Enforces channel opt-in and `allow_from` but not
+    /// `require_mention`.
+    pub fn check_guild_passive(
+        config: &LoadedConfig,
+        channel_id: u64,
+        sender_id: u64,
+    ) -> GateDecision {
+        let Some(policy) = config.channel_policy(channel_id) else {
+            tracing::debug!(channel_id, "guild event dropped: channel not opted in");
+            return GateDecision::Drop;
+        };
+
+        if !policy.allow_from.is_empty() && !policy.allow_from.contains(&sender_id) {
+            tracing::debug!(
+                channel_id,
+                sender_id,
+                "guild event dropped: sender not in channel allow_from"
+            );
+            return GateDecision::Drop;
+        }
+
+        GateDecision::Deliver
+    }
 }
 
 // ── Outbound gate ─────────────────────────────────────────────────────────────
@@ -316,6 +341,54 @@ mod tests {
         // Non-allowed user drops.
         assert_eq!(
             InboundGate::check_guild(&config, 500, 999, false),
+            GateDecision::Drop
+        );
+    }
+
+    // ── Passive guild gate tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_guild_passive_delivers_in_require_mention_channel() {
+        let config = loaded(base_config());
+        assert_eq!(
+            InboundGate::check_guild_passive(&config, 500, 999),
+            GateDecision::Deliver
+        );
+    }
+
+    #[test]
+    fn test_guild_passive_delivers_without_require_mention() {
+        let mut raw = base_config();
+        raw.channels[0].require_mention = false;
+        let config = loaded(raw);
+        assert_eq!(
+            InboundGate::check_guild_passive(&config, 500, 999),
+            GateDecision::Deliver
+        );
+    }
+
+    #[test]
+    fn test_guild_passive_drops_unknown_channel() {
+        let config = loaded(base_config());
+        assert_eq!(
+            InboundGate::check_guild_passive(&config, 9999, 100),
+            GateDecision::Drop
+        );
+    }
+
+    #[test]
+    fn test_guild_passive_enforces_allow_from() {
+        let mut raw = base_config();
+        raw.channels[0].require_mention = true;
+        raw.channels[0].allow_from = vec!["200".to_string()];
+        let config = loaded(raw);
+
+        assert_eq!(
+            InboundGate::check_guild_passive(&config, 500, 200),
+            GateDecision::Deliver
+        );
+        assert_eq!(
+            InboundGate::check_guild_passive(&config, 500, 999),
             GateDecision::Drop
         );
     }

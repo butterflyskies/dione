@@ -1,0 +1,19 @@
+---
+source: tests/mcp_protocol.rs
+expression: notif
+---
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/claude/channel",
+  "params": {
+    "content": "fixed a typo",
+    "meta": {
+      "chat_id": "1002",
+      "message_id": "2002",
+      "ts": "2026-01-01T00:01:00+00:00",
+      "type": "message_edit",
+      "user": "editor",
+      "user_id": "3002"
+    }
+  }
+}

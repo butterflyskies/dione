@@ -438,6 +438,30 @@ fn test_notification_permission_response_snapshot() {
     insta::assert_json_snapshot!(notif);
 }
 
+#[test]
+fn test_notification_message_edit_snapshot() {
+    let event = NotificationEvent::MessageEdit {
+        chat_id: "1002".to_string(),
+        message_id: "2002".to_string(),
+        user: "editor".to_string(),
+        user_id: "3002".to_string(),
+        new_content: "fixed a typo".to_string(),
+        timestamp: "2026-01-01T00:01:00+00:00".to_string(),
+    };
+    let notif = test_helpers::make_notification(event);
+    insta::assert_json_snapshot!(notif);
+}
+
+#[test]
+fn test_notification_message_delete_snapshot() {
+    let event = NotificationEvent::MessageDelete {
+        chat_id: "1003".to_string(),
+        message_id: "2003".to_string(),
+    };
+    let notif = test_helpers::make_notification(event);
+    insta::assert_json_snapshot!(notif);
+}
+
 // ── Trace notification tests ─────────────────────────────────────────────────
 
 #[test]
