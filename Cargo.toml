@@ -1,6 +1,6 @@
 [package]
 name = "dione"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
@@ -27,6 +27,12 @@ regex = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 camino = { version = "1", features = ["serde1"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+typst = "0.14.2"
+typst-render = "0.14.2"
+typst-assets = { version = "0.14.2", features = ["fonts"] }
+typst-as-lib = "0.15.4"
+mitex = "0.2.4"
+tempfile = "3"
 
 [dev-dependencies]
 insta = { version = "1", features = ["json", "redactions"] }

@@ -13,8 +13,9 @@ use crate::mcp::tools::{
     management::{create_thread, delete_message, pin_message, unpin_message},
     messaging::{
         download_attachment, edit_message, fetch_messages, get_message, react as discord_react,
-        reply,
+        reply, send_file,
     },
+    render::{render_latex, render_latex_to_channel},
 };
 
 /// Dispatch a `tools/call` request to the appropriate handler.
@@ -79,6 +80,16 @@ pub(crate) async fn call_tool(
             let channel_id = parse_id(&args, "channel_id")?;
             let message_id = parse_id(&args, "message_id")?;
             get_message(&ctx, channel_id, message_id).await
+        }
+        "send_file" => {
+            let ctx = server.messaging_ctx();
+            let channel_id = parse_id(&args, "channel_id")?;
+            let file_path = args
+                .get("file_path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing file_path".to_string())?;
+            let caption = args.get("caption").and_then(Value::as_str);
+            send_file(&ctx, channel_id, file_path, caption).await
         }
 
         // Introspection
@@ -169,6 +180,25 @@ pub(crate) async fn call_tool(
             let ctx = server.bot_state_ctx();
             let channel_id = parse_id(&args, "channel_id")?;
             send_typing(&ctx, channel_id).await
+        }
+
+        // Rendering
+        "render_latex" => {
+            let latex = args
+                .get("latex")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing latex".to_string())?;
+            render_latex(latex).await
+        }
+        "render_latex_to_channel" => {
+            let ctx = server.messaging_ctx();
+            let channel_id = parse_id(&args, "channel_id")?;
+            let latex = args
+                .get("latex")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing latex".to_string())?;
+            let caption = args.get("caption").and_then(Value::as_str);
+            render_latex_to_channel(&ctx, channel_id, latex, caption).await
         }
 
         // Diagnostics

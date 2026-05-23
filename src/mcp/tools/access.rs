@@ -118,7 +118,9 @@ async fn add_to_allow_from(
         .ok_or("allow_from is not an array")?;
 
     // Dedup: don't add if already present.
-    let already_present = allow_from.iter().any(|v| v.as_str() == Some(&user_id_str));
+    let already_present = allow_from
+        .iter()
+        .any(|v| v.as_str() == Some(user_id_str.as_str()));
 
     if !already_present {
         allow_from.push(user_id_str);
