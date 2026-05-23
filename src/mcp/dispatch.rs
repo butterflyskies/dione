@@ -2,6 +2,7 @@
 
 use serde_json::{Value, json};
 
+use crate::config_store::{ConfigStore, DiscordId};
 use crate::mcp::server::DioneServer;
 use crate::mcp::tools::{
     access::{approve_access, deny_access, list_access_requests},
@@ -175,6 +176,115 @@ pub(crate) async fn call_tool(
             deny_access(&ctx, user_id).await
         }
 
+        // Config management — read-only (no ConfigStore mutation needed)
+        "list_config_channels" => ConfigStore::list_channels(&server.state_dir),
+        "get_access_config" => ConfigStore::get_access(&server.state_dir),
+
+        // Config management — mutations (ConfigStore)
+        "add_channel" => {
+            let id_str = parse_str(&args, "id")?;
+            DiscordId::parse(id_str)?;
+            let require_mention = args.get("require_mention").and_then(Value::as_bool);
+            let allow_from = parse_string_array(&args, "allow_from").unwrap_or_default();
+            for af in &allow_from {
+                DiscordId::parse(af)?;
+            }
+            match async {
+                let mut editor = ConfigStore::load(&server.state_dir).await?;
+                editor.add_channel_entry(id_str, require_mention.unwrap_or(true), allow_from)?;
+                editor.save().await
+            }
+            .await
+            {
+                Ok(()) => json!({ "ok": true, "id": id_str }),
+                Err(e) => json!({ "error": e.to_string() }),
+            }
+        }
+        "remove_channel" => {
+            let id_str = parse_str(&args, "id")?;
+            DiscordId::parse(id_str)?;
+            match async {
+                let mut editor = ConfigStore::load(&server.state_dir).await?;
+                editor.remove_channel_entry(id_str)?;
+                editor.save().await
+            }
+            .await
+            {
+                Ok(()) => json!({ "ok": true, "id": id_str }),
+                Err(e) => json!({ "error": e.to_string() }),
+            }
+        }
+        "update_channel" => {
+            let id_str = parse_str(&args, "id")?;
+            DiscordId::parse(id_str)?;
+            let require_mention = args.get("require_mention").and_then(Value::as_bool);
+            let allow_from = parse_string_array(&args, "allow_from");
+            if require_mention.is_none() && allow_from.is_none() {
+                json!({ "error": "at least one of require_mention or allow_from must be provided" })
+            } else {
+                if let Some(ref af) = allow_from {
+                    for entry in af {
+                        DiscordId::parse(entry)?;
+                    }
+                }
+                match async {
+                    let mut editor = ConfigStore::load(&server.state_dir).await?;
+                    editor.update_channel_entry(id_str, require_mention, allow_from)?;
+                    editor.save().await
+                }
+                .await
+                {
+                    Ok(()) => json!({ "ok": true, "id": id_str }),
+                    Err(e) => json!({ "error": e.to_string() }),
+                }
+            }
+        }
+        "update_dm_policy" => {
+            let policy = parse_str(&args, "policy")?;
+            if !matches!(policy, "drop" | "queue" | "disabled") {
+                json!({ "error": format!("invalid dm_policy: {policy}; must be one of: drop, queue, disabled") })
+            } else {
+                match async {
+                    let mut editor = ConfigStore::load(&server.state_dir).await?;
+                    editor.set_dm_policy(policy);
+                    editor.save().await
+                }
+                .await
+                {
+                    Ok(()) => json!({ "ok": true, "dm_policy": policy }),
+                    Err(e) => json!({ "error": e.to_string() }),
+                }
+            }
+        }
+        "add_allow_from" => {
+            let user_id = parse_str(&args, "user_id")?;
+            DiscordId::parse(user_id)?;
+            match async {
+                let mut editor = ConfigStore::load(&server.state_dir).await?;
+                editor.add_to_allow_from(user_id)?;
+                editor.save().await
+            }
+            .await
+            {
+                Ok(()) => json!({ "ok": true, "user_id": user_id }),
+                Err(e) => json!({ "error": e.to_string() }),
+            }
+        }
+        "remove_allow_from" => {
+            let user_id = parse_str(&args, "user_id")?;
+            DiscordId::parse(user_id)?;
+            match async {
+                let mut editor = ConfigStore::load(&server.state_dir).await?;
+                editor.remove_from_allow_from(user_id)?;
+                editor.save().await
+            }
+            .await
+            {
+                Ok(()) => json!({ "ok": true, "user_id": user_id }),
+                Err(e) => json!({ "error": e.to_string() }),
+            }
+        }
+
         // Bot state
         "send_typing" => {
             let ctx = server.bot_state_ctx();
@@ -260,4 +370,18 @@ pub(crate) fn parse_optional_id(args: &Value, key: &str) -> Option<u64> {
         return s.parse::<u64>().ok();
     }
     None
+}
+
+fn parse_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("missing {key}"))
+}
+
+fn parse_string_array(args: &Value, key: &str) -> Option<Vec<String>> {
+    args.get(key).and_then(Value::as_array).map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect()
+    })
 }

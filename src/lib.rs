@@ -1,4 +1,5 @@
 pub mod config;
+pub mod config_store;
 pub mod discord;
 pub mod gate;
 pub mod mcp;
