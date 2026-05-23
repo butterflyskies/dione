@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-23
+
+### Added
+- Config management MCP tools: `add_channel`, `remove_channel`, `update_channel`,
+  `list_config_channels`, `get_access_config`, `update_dm_policy`, `add_allow_from`,
+  `remove_allow_from` — manage dione's config.toml without manual file editing (#33)
+- `ConfigStore` type for atomic config mutations with ArcSwap cache update on save
+- `DiscordId` newtype for validated Discord snowflake IDs
+- `send_dm` tool — initiate DM conversations by user ID, creating the DM channel
+  if needed. Shared `create_dm_channel` helper replaces inline logic in
+  `notify_admin_dm` (#37)
+- Configurable timezone for all timestamps via `timezone` config option (IANA names
+  like `"America/Los_Angeles"`). `LocalTimestamp` newtype handles conversion at
+  construction (#34)
+- `timestamp` module with `LocalTimestamp` type — `Serialize`, `Display`, `From`
+  trait impls for ergonomic use in `json!()` macros
+
+### Fixed
+- Config cache is now lock-free using `ArcSwap` instead of `Mutex` (#32)
+- `to_rfc3339().unwrap_or_default()` no longer produces empty timestamps — falls
+  back to `Utc::now()` with warning log (closes #23)
+- `ConfigStore::save()` updates the ArcSwap cache immediately after write, eliminating
+  redundant disk re-reads
+- Tmp file cleanup on rename failure in `ConfigStore::save()`
+
+### Changed
+- CI: bump actions, add shared cache key (#27), bump cargo-deny-action (#36)
+
 ## [0.4.0] - 2026-05-22
 
 ### Added
