@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
+use camino::Utf8PathBuf;
 use serde_json::{Value, json};
 use serenity::model::id::{GuildId, UserId};
 
 /// Context for introspection tools.
 pub struct IntrospectionCtx {
     pub http: Arc<serenity::http::Http>,
+    pub state_dir: Utf8PathBuf,
 }
 
 // ── list_guilds ───────────────────────────────────────────────────────────────
@@ -88,13 +90,27 @@ pub async fn get_member(ctx: &IntrospectionCtx, guild_id: u64, user_id: u64) -> 
         .get_member(GuildId::new(guild_id), UserId::new(user_id))
         .await
     {
-        Ok(member) => json!({
-            "user_id": member.user.id.get().to_string(),
-            "username": member.user.name,
-            "nick": member.nick,
-            "roles": member.roles.iter().map(|r| r.get().to_string()).collect::<Vec<_>>(),
-            "joined_at": member.joined_at.map(|t| t.to_rfc3339()),
-        }),
+        Ok(member) => {
+            let config = crate::config::load_config(&ctx.state_dir);
+            json!({
+                "user_id": member.user.id.get().to_string(),
+                "username": member.user.name,
+                "nick": member.nick,
+                "roles": member.roles.iter().map(|r| r.get().to_string()).collect::<Vec<_>>(),
+                "joined_at": member.joined_at.and_then(|t| {
+                    match t.to_rfc3339() {
+                        Some(ts) => Some(config.localize_rfc3339(&ts)),
+                        None => {
+                            tracing::warn!(
+                                user_id,
+                                "joined_at Timestamp failed to_rfc3339(); omitting field"
+                            );
+                            None
+                        }
+                    }
+                }),
+            })
+        }
         Err(e) => json!({ "error": e.to_string() }),
     }
 }

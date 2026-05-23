@@ -1,6 +1,9 @@
 # Dione configuration — edit and save, changes take effect on next message.
 # See https://github.com/butterflyskies/dione for documentation.
 
+# IANA timezone for timestamps (e.g. "America/Los_Angeles"). Defaults to UTC.
+# timezone = "America/Los_Angeles"
+
 [access]
 dm_policy = "queue"     # "queue", "drop", or "disabled"
 allow_from = []         # Discord user IDs that can DM the bot

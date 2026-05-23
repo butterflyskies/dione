@@ -128,7 +128,7 @@ impl EventHandler for Handler {
                         state.record_dm_channel(sender_id, channel_id);
                     }
 
-                    let event = build_message_event(&msg);
+                    let event = build_message_event(&msg, &config);
                     if let Err(e) = self.tx.send(event).await {
                         tracing::warn!(error = %e, "failed to send DM notification event");
                     }
@@ -193,7 +193,7 @@ impl EventHandler for Handler {
 
             match decision {
                 GateDecision::Deliver => {
-                    let event = build_message_event(&msg);
+                    let event = build_message_event(&msg, &config);
                     if let Err(e) = self.tx.send(event).await {
                         tracing::warn!(error = %e, "failed to send guild notification event");
                     }
@@ -344,7 +344,9 @@ impl EventHandler for Handler {
             state.cache_username(author.id.get(), author.name.clone());
         }
 
-        let timestamp = edited_ts.to_rfc3339().unwrap_or_default();
+        let timestamp = config
+            .localize_rfc3339(&serenity_ts_to_rfc3339("edited_ts", &edited_ts))
+            .into();
 
         let ev = NotificationEvent::MessageEdit {
             chat_id: channel_id.to_string(),
@@ -468,7 +470,27 @@ impl EventHandler for Handler {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn build_message_event(msg: &Message) -> NotificationEvent {
+/// Converts a serenity [`Timestamp`] to an RFC 3339 string.
+///
+/// If `to_rfc3339()` returns `None` — which indicates the timestamp is broken
+/// at the Discord API level — logs a warning and falls back to the current UTC
+/// time so callers never receive an empty string.
+fn serenity_ts_to_rfc3339(field: &str, ts: &serenity::model::Timestamp) -> String {
+    match ts.to_rfc3339() {
+        Some(s) => s,
+        None => {
+            let fallback = chrono::Utc::now().to_rfc3339();
+            tracing::warn!(
+                field,
+                fallback = %fallback,
+                "Discord timestamp failed to_rfc3339(); using current UTC time as fallback"
+            );
+            fallback
+        }
+    }
+}
+
+fn build_message_event(msg: &Message, config: &crate::config::LoadedConfig) -> NotificationEvent {
     let attachments = msg
         .attachments
         .iter()
@@ -490,7 +512,9 @@ fn build_message_event(msg: &Message) -> NotificationEvent {
         user: msg.author.name.clone(),
         user_id: msg.author.id.get().to_string(),
         content: msg.content.clone(),
-        timestamp: msg.timestamp.to_rfc3339().unwrap_or_default(),
+        timestamp: config
+            .localize_rfc3339(&serenity_ts_to_rfc3339("msg.timestamp", &msg.timestamp))
+            .into(),
         attachments,
         is_voice_message,
     }

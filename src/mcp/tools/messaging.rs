@@ -3,6 +3,7 @@ use std::sync::Arc;
 use camino::Utf8PathBuf;
 use serde_json::{Value, json};
 use serenity::builder::{CreateAttachment, CreateMessage, EditMessage};
+use serenity::model::Timestamp;
 use serenity::model::id::{ChannelId, MessageId};
 
 use crate::config::{ChunkMode, load_config};
@@ -172,6 +173,7 @@ pub async fn fetch_messages(ctx: &MessagingCtx, channel_id: u64, limit: u8) -> V
         .await
     {
         Ok(messages) => {
+            let config = load_config(&ctx.state_dir);
             let msgs: Vec<Value> = messages
                 .iter()
                 .map(|m| {
@@ -180,7 +182,7 @@ pub async fn fetch_messages(ctx: &MessagingCtx, channel_id: u64, limit: u8) -> V
                         "author": m.author.name,
                         "author_id": m.author.id.get().to_string(),
                         "content": m.content,
-                        "timestamp": m.timestamp.to_rfc3339(),
+                        "timestamp": config.localize_rfc3339(&serenity_ts_to_rfc3339(&m.timestamp)),
                         "attachments": m.attachments.iter().map(|a| json!({
                             "name": a.filename,
                             "url": a.url,
@@ -378,19 +380,43 @@ pub async fn get_message(ctx: &MessagingCtx, channel_id: u64, message_id: u64) -
         .get_message(ChannelId::new(channel_id), MessageId::new(message_id))
         .await
     {
-        Ok(m) => json!({
-            "id": m.id.get().to_string(),
-            "author": m.author.name,
-            "author_id": m.author.id.get().to_string(),
-            "content": m.content,
-            "timestamp": m.timestamp.to_rfc3339(),
-            "attachments": m.attachments.iter().map(|a| json!({
-                "name": a.filename,
-                "url": a.url,
-                "size": a.size,
-                "content_type": a.content_type,
-            })).collect::<Vec<_>>(),
-        }),
+        Ok(m) => {
+            let config = load_config(&ctx.state_dir);
+            json!({
+                "id": m.id.get().to_string(),
+                "author": m.author.name,
+                "author_id": m.author.id.get().to_string(),
+                "content": m.content,
+                "timestamp": config.localize_rfc3339(&serenity_ts_to_rfc3339(&m.timestamp)),
+                "attachments": m.attachments.iter().map(|a| json!({
+                    "name": a.filename,
+                    "url": a.url,
+                    "size": a.size,
+                    "content_type": a.content_type,
+                })).collect::<Vec<_>>(),
+            })
+        }
         Err(e) => json!({ "error": e.to_string() }),
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Converts a serenity [`Timestamp`] to an RFC 3339 string.
+///
+/// If `to_rfc3339()` returns `None` — which indicates the timestamp is broken
+/// at the Discord API level — logs a trace and falls back to the current UTC
+/// time so tool responses never contain an empty timestamp string.
+fn serenity_ts_to_rfc3339(ts: &Timestamp) -> String {
+    match ts.to_rfc3339() {
+        Some(s) => s,
+        None => {
+            let fallback = chrono::Utc::now().to_rfc3339();
+            tracing::trace!(
+                fallback = %fallback,
+                "Discord timestamp failed to_rfc3339(); using current UTC time as fallback"
+            );
+            fallback
+        }
     }
 }
