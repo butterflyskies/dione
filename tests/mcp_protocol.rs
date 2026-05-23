@@ -337,13 +337,9 @@ async fn test_tools_call_render_latex_to_channel_rejected_unknown_channel() {
 #[tokio::test]
 async fn test_tools_call_send_dm_disabled_returns_error() {
     let (_dir, state_dir) = temp_state_dir();
-    // Write a config with dm_policy = "disabled" so send_dm is gated out.
-    let config_path = state_dir.join("config.toml");
-    std::fs::write(
-        config_path.as_std_path(),
-        b"[access]\ndm_policy = \"disabled\"\n",
-    )
-    .unwrap();
+    let mut config = dione::config::Config::default();
+    config.access.dm_policy = dione::config::DmPolicy::Disabled;
+    dione::config::store_loaded_config(&dione::config::LoadedConfig::from_raw(config));
     let server = make_server(&state_dir);
 
     let req = json!({

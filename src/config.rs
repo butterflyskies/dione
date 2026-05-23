@@ -332,21 +332,24 @@ pub fn state_dir() -> Utf8PathBuf {
     Utf8PathBuf::from(home).join(".claude/channels/dione")
 }
 
-/// Loads configuration from `{state_dir}/config.toml`.
-///
-static LAST_VALID_CONFIG: std::sync::LazyLock<ArcSwap<Option<LoadedConfig>>> =
-    std::sync::LazyLock::new(|| ArcSwap::from_pointee(None));
+static LAST_VALID_CONFIG: std::sync::LazyLock<ArcSwap<LoadedConfig>> =
+    std::sync::LazyLock::new(|| ArcSwap::from_pointee(LoadedConfig::from_raw(Config::default())));
 
-/// On missing file, returns defaults. On parse error, logs a warning and
-/// returns the last valid config (or defaults if none has been loaded yet).
-/// The file is left intact so the user or agent can fix it.
-pub fn load_config(state_dir: &Utf8Path) -> LoadedConfig {
-    load_config_checked(state_dir).0
+/// Returns the current config from the in-memory cache.
+///
+/// If the cache has not been populated by [`reload_config`] yet, returns
+/// defaults. In practice, `reload_config` is called at startup before any
+/// reader.
+pub fn load_config(_state_dir: &Utf8Path) -> LoadedConfig {
+    let guard = LAST_VALID_CONFIG.load();
+    (**guard).clone()
 }
 
-/// Like [`load_config`], but also returns `Some(error_message)` if the config
-/// had a parse error and we fell back to a previous valid config or defaults.
-pub fn load_config_checked(state_dir: &Utf8Path) -> (LoadedConfig, Option<String>) {
+/// Reads config from disk, updates the in-memory cache, and returns the result.
+///
+/// Called by the file watcher on changes, by [`ConfigStore::save`] after writes,
+/// and as a fallback when the cache is empty.
+pub fn reload_config(state_dir: &Utf8Path) -> (LoadedConfig, Option<String>) {
     let config_path = state_dir.join("config.toml");
     let mut config_error = None;
     let raw = match try_load_config(&config_path) {
@@ -359,25 +362,18 @@ pub fn load_config_checked(state_dir: &Utf8Path) -> (LoadedConfig, Option<String
         }
         Err(ConfigError::Parse(e)) => {
             let error_msg = format!("config parse error: {e}");
-            let guard = LAST_VALID_CONFIG.load();
-            if let Some(cached) = (**guard).clone() {
-                tracing::warn!(
-                    path = %config_path,
-                    error = %e,
-                    "config parse error, continuing with last valid config"
-                );
-                return (cached, Some(error_msg));
-            }
-            tracing::error!(
+            let cached = (**LAST_VALID_CONFIG.load()).clone();
+            tracing::warn!(
                 path = %config_path,
                 error = %e,
-                "config parse error and no previous valid config, using defaults"
+                "config parse error, continuing with last valid config"
             );
-            config_error = Some(error_msg);
-            Config::default()
+            return (cached, Some(error_msg));
         }
         Err(ConfigError::Io(e)) => {
+            let error_msg = format!("config IO error: {e}");
             tracing::warn!(path = %config_path, error = %e, "failed to read config, using defaults");
+            config_error = Some(error_msg);
             Config::default()
         }
     };
@@ -391,7 +387,7 @@ pub fn load_config_checked(state_dir: &Utf8Path) -> (LoadedConfig, Option<String
 /// Call this after writing a new config to disk (e.g. from `ConfigStore::save`)
 /// to keep the in-memory cache consistent without a redundant re-read.
 pub fn store_loaded_config(loaded: &LoadedConfig) {
-    LAST_VALID_CONFIG.store(Arc::new(Some(loaded.clone())));
+    LAST_VALID_CONFIG.store(Arc::new(loaded.clone()));
 }
 
 /// Resolves the Discord bot token.
@@ -451,7 +447,7 @@ mod tests {
         let (_dir, state_dir) = temp_state_dir();
         let config_path = state_dir.join("config.toml");
 
-        let cfg = load_config(&state_dir);
+        let cfg = reload_config(&state_dir).0;
         assert_eq!(cfg.access.dm_policy, DmPolicy::Queue);
         assert!(cfg.access.allow_from.is_empty());
         assert_eq!(cfg.delivery.text_chunk_limit, 2000);
@@ -476,12 +472,12 @@ mod tests {
             b"[access]\ndm_policy = \"drop\"\n",
         )
         .unwrap();
-        let before = load_config(&state_dir);
+        let before = reload_config(&state_dir).0;
         assert_eq!(before.access.dm_policy, DmPolicy::Drop);
 
         // Now write a corrupt config — should fall back and report an error.
         fs::write(config_path.as_std_path(), b"not valid toml {{{{").unwrap();
-        let (after, error) = load_config_checked(&state_dir);
+        let (after, error) = reload_config(&state_dir);
 
         // Must report a parse error.
         assert!(
@@ -543,7 +539,7 @@ notify_cooldown_seconds = 30
 enabled = true
 "#;
         fs::write(config_path.as_std_path(), toml.as_bytes()).unwrap();
-        let cfg = load_config(&state_dir);
+        let cfg = reload_config(&state_dir).0;
 
         assert_eq!(cfg.token.as_deref(), Some("my-token"));
         assert_eq!(cfg.access.dm_policy, DmPolicy::Drop);
@@ -586,7 +582,7 @@ enabled = true
         let (_dir, state_dir) = temp_state_dir();
         let config_path = state_dir.join("config.toml");
         fs::write(config_path.as_std_path(), b"[access]\nallow_from = []\n").unwrap();
-        let cfg = load_config(&state_dir);
+        let cfg = reload_config(&state_dir).0;
         assert!(cfg.access.allow_from.is_empty());
     }
 

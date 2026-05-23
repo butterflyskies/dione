@@ -324,6 +324,13 @@ pub(crate) async fn call_tool(
         }
 
         // Diagnostics
+        "reload_config" => {
+            let (_, error) = crate::config::reload_config(&server.state_dir);
+            match error {
+                Some(e) => json!({ "error": e }),
+                None => json!({ "ok": true }),
+            }
+        }
         "get_version" => get_version().await,
         "set_trace_level" => {
             let ctx = server.diagnostics_ctx();
