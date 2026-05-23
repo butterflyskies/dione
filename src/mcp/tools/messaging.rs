@@ -6,7 +6,7 @@ use serenity::builder::{CreateAttachment, CreateMessage, EditMessage};
 use serenity::model::Timestamp;
 use serenity::model::id::{ChannelId, MessageId};
 
-use crate::config::{ChunkMode, load_config};
+use crate::config::{ChunkMode, DmPolicy, load_config};
 use crate::discord::chunk;
 use crate::gate::OutboundGate;
 use crate::state::State;
@@ -312,6 +312,53 @@ pub async fn send_file(
     };
 
     send_attachment(ctx, channel_id, attachment, caption).await
+}
+
+// ── DM helpers ───────────────────────────────────────────────────────────────
+
+pub(crate) async fn create_dm_channel(
+    http: &serenity::http::Http,
+    user_id: u64,
+) -> Result<serenity::model::channel::PrivateChannel, String> {
+    let dm_body = json!({ "recipient_id": user_id.to_string() });
+    http.create_private_channel(&dm_body)
+        .await
+        .map_err(|e| format!("failed to create DM channel: {e}"))
+}
+
+// ── send_dm ──────────────────────────────────────────────────────────────────
+
+pub async fn send_dm(ctx: &MessagingCtx, user_id: u64, content: &str) -> Value {
+    let config = load_config(&ctx.state_dir);
+
+    if config.access.dm_policy == DmPolicy::Disabled {
+        return json!({ "error": "dm_policy is set to disabled; cannot initiate DMs" });
+    }
+
+    let channel = match create_dm_channel(&ctx.http, user_id).await {
+        Ok(c) => c,
+        Err(e) => return json!({ "error": e }),
+    };
+
+    let channel_id = channel.id.get();
+
+    {
+        let mut state = ctx.state.write().await;
+        state.record_dm_channel(user_id, channel_id);
+    }
+
+    let result = reply(ctx, channel_id, content, None).await;
+
+    if result.get("error").is_some() {
+        return result;
+    }
+
+    let message_ids = result["message_ids"].clone();
+    json!({
+        "ok": true,
+        "channel_id": channel_id.to_string(),
+        "message_ids": message_ids,
+    })
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

@@ -167,6 +167,12 @@ async fn test_tools_list_contains_expected_tools() {
         names.contains(&"send_file"),
         "tools/list must include send_file"
     );
+
+    // DM tools.
+    assert!(
+        names.contains(&"send_dm"),
+        "tools/list must include send_dm"
+    );
 }
 
 #[tokio::test]
@@ -326,6 +332,63 @@ async fn test_tools_call_render_latex_to_channel_rejected_unknown_channel() {
     });
     let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
     assert_eq!(resp["result"]["isError"], json!(true));
+}
+
+#[tokio::test]
+async fn test_tools_call_send_dm_disabled_returns_error() {
+    let (_dir, state_dir) = temp_state_dir();
+    // Write a config with dm_policy = "disabled" so send_dm is gated out.
+    let config_path = state_dir.join("config.toml");
+    std::fs::write(
+        config_path.as_std_path(),
+        b"[access]\ndm_policy = \"disabled\"\n",
+    )
+    .unwrap();
+    let server = make_server(&state_dir);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 40,
+        "method": "tools/call",
+        "params": {
+            "name": "send_dm",
+            "arguments": { "user_id": "123456789", "content": "hello" }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    assert_eq!(resp["id"], 40);
+    assert_eq!(
+        resp["result"]["isError"],
+        json!(true),
+        "send_dm with dm_policy=disabled should return isError: true"
+    );
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("disabled"),
+        "error message should mention 'disabled', got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn test_tools_call_send_dm_missing_user_id_returns_error() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 41,
+        "method": "tools/call",
+        "params": {
+            "name": "send_dm",
+            "arguments": { "content": "hello" }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    assert_eq!(resp["id"], 41);
+    assert!(
+        resp.get("error").is_some(),
+        "send_dm without user_id should produce a JSON-RPC error"
+    );
 }
 
 #[tokio::test]
