@@ -61,6 +61,7 @@ impl DioneServer {
     pub(crate) fn introspection_ctx(&self) -> IntrospectionCtx {
         IntrospectionCtx {
             http: self.http.clone(),
+            state_dir: self.state_dir.clone(),
         }
     }
 

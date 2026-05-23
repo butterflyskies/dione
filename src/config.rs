@@ -9,6 +9,8 @@ use regex::RegexSet;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::timestamp::LocalTimestamp;
+
 // ── Error type ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Error)]
@@ -29,6 +31,9 @@ pub enum ConfigError {
 pub struct Config {
     /// Optional Discord bot token. `DISCORD_BOT_TOKEN` env var takes precedence.
     pub token: Option<String>,
+    /// IANA timezone name for timestamps in channel events (e.g. "America/Los_Angeles").
+    /// Defaults to UTC.
+    pub timezone: Option<String>,
     pub access: AccessConfig,
     pub channels: Vec<ChannelConfig>,
     pub mentions: MentionConfig,
@@ -184,6 +189,8 @@ pub struct LoadedConfig {
     pub channel_policies: HashMap<u64, ChannelPolicy>,
     /// Pre-compiled mention regex patterns.
     pub mention_patterns: Option<RegexSet>,
+    /// Parsed timezone for timestamp conversion. None = UTC.
+    pub tz: Option<chrono_tz::Tz>,
 }
 
 /// Pre-parsed per-channel access policy.
@@ -220,12 +227,23 @@ impl LoadedConfig {
             })
             .collect();
         let mention_patterns = compile_mention_patterns(&raw);
+        let tz = raw
+            .timezone
+            .as_deref()
+            .and_then(|s| match s.parse::<chrono_tz::Tz>() {
+                Ok(tz) => Some(tz),
+                Err(_) => {
+                    tracing::warn!(timezone = s, "invalid IANA timezone, falling back to UTC");
+                    None
+                }
+            });
         Self {
             raw,
             allowed_ids,
             admin_ids,
             channel_policies,
             mention_patterns,
+            tz,
         }
     }
 
@@ -242,6 +260,27 @@ impl LoadedConfig {
     /// O(1) channel policy lookup.
     pub fn channel_policy(&self, channel_id: u64) -> Option<&ChannelPolicy> {
         self.channel_policies.get(&channel_id)
+    }
+
+    /// Convert a `chrono::DateTime<Utc>` to a [`LocalTimestamp`] in the configured timezone.
+    pub fn localize_utc(&self, utc: &chrono::DateTime<chrono::Utc>) -> LocalTimestamp {
+        let s = match self.tz {
+            Some(tz) => utc.with_timezone(&tz).to_rfc3339(),
+            None => utc.to_rfc3339(),
+        };
+        LocalTimestamp(s)
+    }
+
+    /// Convert an RFC3339 timestamp string to a [`LocalTimestamp`] in the configured timezone.
+    pub fn localize_rfc3339(&self, rfc3339: &str) -> LocalTimestamp {
+        let s = match self.tz {
+            Some(tz) => match chrono::DateTime::parse_from_rfc3339(rfc3339) {
+                Ok(dt) => dt.with_timezone(&tz).to_rfc3339(),
+                Err(_) => rfc3339.to_owned(),
+            },
+            None => rfc3339.to_owned(),
+        };
+        LocalTimestamp(s)
     }
 }
 
