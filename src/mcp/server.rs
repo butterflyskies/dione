@@ -50,42 +50,47 @@ pub struct DioneServer {
 // ── Context factory methods ───────────────────────────────────────────────────
 
 impl DioneServer {
-    pub(crate) fn messaging_ctx(&self) -> MessagingCtx {
+    pub(crate) fn messaging_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> MessagingCtx {
         MessagingCtx {
             http: self.http.clone(),
             state: self.state.clone(),
+            config,
             state_dir: self.state_dir.clone(),
         }
     }
 
-    pub(crate) fn introspection_ctx(&self) -> IntrospectionCtx {
+    pub(crate) fn introspection_ctx(
+        &self,
+        config: Arc<crate::config::LoadedConfig>,
+    ) -> IntrospectionCtx {
         IntrospectionCtx {
             http: self.http.clone(),
-            state_dir: self.state_dir.clone(),
+            config,
         }
     }
 
-    pub(crate) fn management_ctx(&self) -> ManagementCtx {
+    pub(crate) fn management_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> ManagementCtx {
         ManagementCtx {
             http: self.http.clone(),
             state: self.state.clone(),
-            state_dir: self.state_dir.clone(),
+            config,
         }
     }
 
-    pub(crate) fn access_ctx(&self) -> AccessCtx {
+    pub(crate) fn access_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> AccessCtx {
         AccessCtx {
             queue: self.queue.clone(),
+            config,
             state_dir: self.state_dir.clone(),
         }
     }
 
-    pub(crate) fn bot_state_ctx(&self) -> BotStateCtx {
+    pub(crate) fn bot_state_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> BotStateCtx {
         BotStateCtx {
             http: self.http.clone(),
             discord_cmd_tx: self.discord_cmd_tx.clone(),
             state: self.state.clone(),
-            state_dir: self.state_dir.clone(),
+            config,
         }
     }
 

@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use camino::Utf8PathBuf;
 use serde_json::{Value, json};
 use serenity::builder::CreateThread;
 use serenity::model::channel::ChannelType;
 use serenity::model::id::{ChannelId, MessageId};
 
+use crate::config::LoadedConfig;
 use crate::gate::OutboundGate;
 use crate::state::State;
 
@@ -13,16 +13,12 @@ use crate::state::State;
 pub struct ManagementCtx {
     pub http: Arc<serenity::http::Http>,
     pub state: State,
-    pub state_dir: Utf8PathBuf,
+    pub config: Arc<LoadedConfig>,
 }
 
-/// Checks the outbound gate for a management operation on `channel_id`.
-///
-/// Returns `Err(json_error)` if the channel is not in the allowlist.
 async fn check_outbound(ctx: &ManagementCtx, channel_id: u64) -> Result<(), Value> {
-    let config = crate::config::load_config(&ctx.state_dir);
     let state = ctx.state.read().await;
-    if !OutboundGate::check_channel(&config, channel_id, &state.dm_channel_ids) {
+    if !OutboundGate::check_channel(&ctx.config, channel_id, &state.dm_channel_ids) {
         return Err(json!({ "error": "channel not in allowlist" }));
     }
     Ok(())

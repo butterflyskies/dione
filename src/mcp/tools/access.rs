@@ -3,18 +3,19 @@ use std::sync::Arc;
 use camino::Utf8PathBuf;
 use serde_json::{Value, json};
 
+use crate::config::LoadedConfig;
 use crate::config_store::ConfigStore;
 
 /// Context for access management tools.
 pub struct AccessCtx {
     pub queue: Arc<tokio::sync::Mutex<crate::queue::AccessQueue>>,
+    pub config: Arc<LoadedConfig>,
     pub state_dir: Utf8PathBuf,
 }
 
 // ── list_access_requests ──────────────────────────────────────────────────────
 
 pub async fn list_access_requests(ctx: &AccessCtx) -> Value {
-    let config = crate::config::load_config(&ctx.state_dir);
     let queue = ctx.queue.lock().await;
     let requests: Vec<Value> = queue
         .list()
@@ -24,7 +25,7 @@ pub async fn list_access_requests(ctx: &AccessCtx) -> Value {
                 "user_id": r.user_id.to_string(),
                 "username": r.username,
                 "message_preview": r.message_preview,
-                "timestamp": config.localize_utc(&r.timestamp),
+                "timestamp": ctx.config.localize_utc(&r.timestamp),
             })
         })
         .collect();
