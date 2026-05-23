@@ -109,5 +109,17 @@ pub(crate) fn event_to_notification(event: NotificationEvent) -> Value {
                 }
             })
         }
+        NotificationEvent::ConfigError { error } => {
+            json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/claude/channel",
+                "params": {
+                    "content": format!("config.toml parse error — running on last valid config. Error: {error}"),
+                    "meta": {
+                        "type": "config_error",
+                    },
+                }
+            })
+        }
     }
 }

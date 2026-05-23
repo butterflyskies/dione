@@ -52,6 +52,9 @@ pub enum NotificationEvent {
         message: String,
         fields: Vec<(String, String)>,
     },
+    ConfigError {
+        error: String,
+    },
 }
 
 // ── Handler struct ────────────────────────────────────────────────────────────
@@ -85,7 +88,10 @@ impl EventHandler for Handler {
             return;
         }
 
-        let config = crate::config::load_config(&self.state_dir);
+        let (config, config_err) = crate::config::load_config_checked(&self.state_dir);
+        if let Some(error) = config_err {
+            let _ = self.tx.send(NotificationEvent::ConfigError { error }).await;
+        }
         let bot_user_id = self.bot_user_id.load(Ordering::Relaxed);
 
         {
