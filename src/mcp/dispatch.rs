@@ -28,10 +28,12 @@ pub(crate) async fn call_tool(
     name: &str,
     args: Value,
 ) -> Result<Value, String> {
+    let config = std::sync::Arc::new(crate::config::load_config(&server.state_dir));
+
     let result = match name {
         // Messaging
         "reply" => {
-            let ctx = server.messaging_ctx();
+            let ctx = server.messaging_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
             let content = args
                 .get("content")
@@ -41,7 +43,7 @@ pub(crate) async fn call_tool(
             reply(&ctx, channel_id, content, reply_to).await
         }
         "react" => {
-            let ctx = server.messaging_ctx();
+            let ctx = server.messaging_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
             let message_id = parse_id(&args, "message_id")?;
             let emoji = args
@@ -51,7 +53,7 @@ pub(crate) async fn call_tool(
             discord_react(&ctx, channel_id, message_id, emoji).await
         }
         "edit_message" => {
-            let ctx = server.messaging_ctx();
+            let ctx = server.messaging_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
             let message_id = parse_id(&args, "message_id")?;
             let content = args
@@ -61,7 +63,7 @@ pub(crate) async fn call_tool(
             edit_message(&ctx, channel_id, message_id, content).await
         }
         "fetch_messages" => {
-            let ctx = server.messaging_ctx();
+            let ctx = server.messaging_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
             let limit = args
                 .get("limit")
@@ -71,19 +73,19 @@ pub(crate) async fn call_tool(
             fetch_messages(&ctx, channel_id, limit).await
         }
         "download_attachment" => {
-            let ctx = server.messaging_ctx();
+            let ctx = server.messaging_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
             let message_id = parse_id(&args, "message_id")?;
             download_attachment(&ctx, channel_id, message_id).await
         }
         "get_message" => {
-            let ctx = server.messaging_ctx();
+            let ctx = server.messaging_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
             let message_id = parse_id(&args, "message_id")?;
             get_message(&ctx, channel_id, message_id).await
         }
         "send_file" => {
-            let ctx = server.messaging_ctx();
+            let ctx = server.messaging_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
             let file_path = args
                 .get("file_path")
@@ -94,7 +96,7 @@ pub(crate) async fn call_tool(
         }
 
         "send_dm" => {
-            let ctx = server.messaging_ctx();
+            let ctx = server.messaging_ctx(config.clone());
             let user_id = parse_id(&args, "user_id")?;
             let content = args
                 .get("content")
@@ -105,56 +107,56 @@ pub(crate) async fn call_tool(
 
         // Introspection
         "list_guilds" => {
-            let ctx = server.introspection_ctx();
+            let ctx = server.introspection_ctx(config.clone());
             list_guilds(&ctx).await
         }
         "list_channels" => {
-            let ctx = server.introspection_ctx();
+            let ctx = server.introspection_ctx(config.clone());
             let guild_id = parse_id(&args, "guild_id")?;
             list_channels(&ctx, guild_id).await
         }
         "get_channel" => {
-            let ctx = server.introspection_ctx();
+            let ctx = server.introspection_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
             get_channel(&ctx, channel_id).await
         }
         "get_user" => {
-            let ctx = server.introspection_ctx();
+            let ctx = server.introspection_ctx(config.clone());
             let user_id = parse_id(&args, "user_id")?;
             get_user(&ctx, user_id).await
         }
         "get_member" => {
-            let ctx = server.introspection_ctx();
+            let ctx = server.introspection_ctx(config.clone());
             let guild_id = parse_id(&args, "guild_id")?;
             let user_id = parse_id(&args, "user_id")?;
             get_member(&ctx, guild_id, user_id).await
         }
         "list_roles" => {
-            let ctx = server.introspection_ctx();
+            let ctx = server.introspection_ctx(config.clone());
             let guild_id = parse_id(&args, "guild_id")?;
             list_roles(&ctx, guild_id).await
         }
         "list_emojis" => {
-            let ctx = server.introspection_ctx();
+            let ctx = server.introspection_ctx(config.clone());
             let guild_id = parse_id(&args, "guild_id")?;
             list_emojis(&ctx, guild_id).await
         }
 
         // Management
         "pin_message" => {
-            let ctx = server.management_ctx();
+            let ctx = server.management_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
             let message_id = parse_id(&args, "message_id")?;
             pin_message(&ctx, channel_id, message_id).await
         }
         "unpin_message" => {
-            let ctx = server.management_ctx();
+            let ctx = server.management_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
             let message_id = parse_id(&args, "message_id")?;
             unpin_message(&ctx, channel_id, message_id).await
         }
         "create_thread" => {
-            let ctx = server.management_ctx();
+            let ctx = server.management_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
             let message_id = parse_optional_id(&args, "message_id");
             let name = args
@@ -164,7 +166,7 @@ pub(crate) async fn call_tool(
             create_thread(&ctx, channel_id, message_id, name).await
         }
         "delete_message" => {
-            let ctx = server.management_ctx();
+            let ctx = server.management_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
             let message_id = parse_id(&args, "message_id")?;
             delete_message(&ctx, channel_id, message_id).await
@@ -172,16 +174,16 @@ pub(crate) async fn call_tool(
 
         // Access
         "list_access_requests" => {
-            let ctx = server.access_ctx();
+            let ctx = server.access_ctx(config.clone());
             list_access_requests(&ctx).await
         }
         "approve_access" => {
-            let ctx = server.access_ctx();
+            let ctx = server.access_ctx(config.clone());
             let user_id = parse_id(&args, "user_id")?;
             approve_access(&ctx, user_id).await
         }
         "deny_access" => {
-            let ctx = server.access_ctx();
+            let ctx = server.access_ctx(config.clone());
             let user_id = parse_id(&args, "user_id")?;
             deny_access(&ctx, user_id).await
         }
@@ -297,7 +299,7 @@ pub(crate) async fn call_tool(
 
         // Bot state
         "send_typing" => {
-            let ctx = server.bot_state_ctx();
+            let ctx = server.bot_state_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
             send_typing(&ctx, channel_id).await
         }
@@ -311,7 +313,7 @@ pub(crate) async fn call_tool(
             render_latex(latex).await
         }
         "render_latex_to_channel" => {
-            let ctx = server.messaging_ctx();
+            let ctx = server.messaging_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
             let latex = args
                 .get("latex")

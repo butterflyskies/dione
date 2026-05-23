@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
-use camino::Utf8PathBuf;
 use serde_json::{Value, json};
 use serenity::model::id::{GuildId, UserId};
+
+use crate::config::LoadedConfig;
 
 /// Context for introspection tools.
 pub struct IntrospectionCtx {
     pub http: Arc<serenity::http::Http>,
-    pub state_dir: Utf8PathBuf,
+    pub config: Arc<LoadedConfig>,
 }
 
 // ── list_guilds ───────────────────────────────────────────────────────────────
@@ -91,7 +92,6 @@ pub async fn get_member(ctx: &IntrospectionCtx, guild_id: u64, user_id: u64) -> 
         .await
     {
         Ok(member) => {
-            let config = crate::config::load_config(&ctx.state_dir);
             json!({
                 "user_id": member.user.id.get().to_string(),
                 "username": member.user.name,
@@ -99,7 +99,7 @@ pub async fn get_member(ctx: &IntrospectionCtx, guild_id: u64, user_id: u64) -> 
                 "roles": member.roles.iter().map(|r| r.get().to_string()).collect::<Vec<_>>(),
                 "joined_at": member.joined_at.and_then(|t| {
                     match t.to_rfc3339() {
-                        Some(ts) => Some(config.localize_rfc3339(&ts)),
+                        Some(ts) => Some(ctx.config.localize_rfc3339(&ts)),
                         None => {
                             tracing::warn!(
                                 user_id,

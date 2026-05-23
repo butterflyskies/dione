@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use camino::Utf8PathBuf;
 use serde_json::{Value, json};
 use serenity::model::id::ChannelId;
 use tokio::sync::mpsc;
 
+use crate::config::LoadedConfig;
 use crate::gate::OutboundGate;
 use crate::state::State;
 
@@ -22,10 +22,9 @@ pub enum DiscordCommand {
 /// Context for bot-state tools.
 pub struct BotStateCtx {
     pub http: Arc<serenity::http::Http>,
-    /// Channel to send commands back to the Discord task (gateway operations).
     pub discord_cmd_tx: Option<mpsc::Sender<DiscordCommand>>,
     pub state: State,
-    pub state_dir: Utf8PathBuf,
+    pub config: Arc<LoadedConfig>,
 }
 
 // ── set_presence ──────────────────────────────────────────────────────────────
@@ -49,11 +48,9 @@ pub async fn set_presence(ctx: &BotStateCtx, status: &str, activity_name: Option
 // ── send_typing ───────────────────────────────────────────────────────────────
 
 pub async fn send_typing(ctx: &BotStateCtx, channel_id: u64) -> Value {
-    // Outbound gate check — same policy as messaging tools.
-    let config = crate::config::load_config(&ctx.state_dir);
     let allowed = {
         let state = ctx.state.read().await;
-        OutboundGate::check_channel(&config, channel_id, &state.dm_channel_ids)
+        OutboundGate::check_channel(&ctx.config, channel_id, &state.dm_channel_ids)
     };
     if !allowed {
         return json!({ "error": "channel not in allowlist" });

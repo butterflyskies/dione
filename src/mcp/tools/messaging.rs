@@ -6,7 +6,7 @@ use serenity::builder::{CreateAttachment, CreateMessage, EditMessage};
 use serenity::model::Timestamp;
 use serenity::model::id::{ChannelId, MessageId};
 
-use crate::config::{ChunkMode, DmPolicy, load_config};
+use crate::config::{ChunkMode, DmPolicy, LoadedConfig};
 use crate::discord::chunk;
 use crate::gate::OutboundGate;
 use crate::state::State;
@@ -15,6 +15,7 @@ use crate::state::State;
 pub struct MessagingCtx {
     pub http: Arc<serenity::http::Http>,
     pub state: State,
+    pub config: Arc<LoadedConfig>,
     pub state_dir: Utf8PathBuf,
 }
 
@@ -22,9 +23,8 @@ pub struct MessagingCtx {
 
 /// Returns `Ok(())` if the channel is permitted, or `Err(json_error)` if not.
 pub(crate) async fn check_outbound(ctx: &MessagingCtx, channel_id: u64) -> Result<(), Value> {
-    let config = load_config(&ctx.state_dir);
     let state = ctx.state.read().await;
-    if !OutboundGate::check_channel(&config, channel_id, &state.dm_channel_ids) {
+    if !OutboundGate::check_channel(&ctx.config, channel_id, &state.dm_channel_ids) {
         return Err(
             json!({ "error": format!("channel {channel_id} is not a permitted outbound target") }),
         );
@@ -44,15 +44,14 @@ pub async fn reply(
         return e;
     }
 
-    let config = load_config(&ctx.state_dir);
     let ch = ChannelId::new(channel_id);
 
     // Fire typing indicator now that we've committed to sending a reply.
     let _ = ctx.http.broadcast_typing(ch).await;
 
-    let limit = config.delivery.text_chunk_limit;
-    let mode = config.delivery.chunk_mode;
-    let reply_mode = config.delivery.reply_to_mode;
+    let limit = ctx.config.delivery.text_chunk_limit;
+    let mode = ctx.config.delivery.chunk_mode;
+    let reply_mode = ctx.config.delivery.reply_to_mode;
 
     // Determine chunk mode default.
     let effective_mode = if limit == 0 {
@@ -173,7 +172,6 @@ pub async fn fetch_messages(ctx: &MessagingCtx, channel_id: u64, limit: u8) -> V
         .await
     {
         Ok(messages) => {
-            let config = load_config(&ctx.state_dir);
             let msgs: Vec<Value> = messages
                 .iter()
                 .map(|m| {
@@ -182,7 +180,7 @@ pub async fn fetch_messages(ctx: &MessagingCtx, channel_id: u64, limit: u8) -> V
                         "author": m.author.name,
                         "author_id": m.author.id.get().to_string(),
                         "content": m.content,
-                        "timestamp": config.localize_rfc3339(&serenity_ts_to_rfc3339(&m.timestamp)),
+                        "timestamp": ctx.config.localize_rfc3339(&serenity_ts_to_rfc3339(&m.timestamp)),
                         "attachments": m.attachments.iter().map(|a| json!({
                             "name": a.filename,
                             "url": a.url,
@@ -329,9 +327,7 @@ pub(crate) async fn create_dm_channel(
 // ── send_dm ──────────────────────────────────────────────────────────────────
 
 pub async fn send_dm(ctx: &MessagingCtx, user_id: u64, content: &str) -> Value {
-    let config = load_config(&ctx.state_dir);
-
-    if config.access.dm_policy == DmPolicy::Disabled {
+    if ctx.config.access.dm_policy == DmPolicy::Disabled {
         return json!({ "error": "dm_policy is set to disabled; cannot initiate DMs" });
     }
 
@@ -428,13 +424,12 @@ pub async fn get_message(ctx: &MessagingCtx, channel_id: u64, message_id: u64) -
         .await
     {
         Ok(m) => {
-            let config = load_config(&ctx.state_dir);
             json!({
                 "id": m.id.get().to_string(),
                 "author": m.author.name,
                 "author_id": m.author.id.get().to_string(),
                 "content": m.content,
-                "timestamp": config.localize_rfc3339(&serenity_ts_to_rfc3339(&m.timestamp)),
+                "timestamp": ctx.config.localize_rfc3339(&serenity_ts_to_rfc3339(&m.timestamp)),
                 "attachments": m.attachments.iter().map(|a| json!({
                     "name": a.filename,
                     "url": a.url,
