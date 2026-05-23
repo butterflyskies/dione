@@ -10,6 +10,7 @@ use serenity::model::prelude::*;
 use serenity::prelude::*;
 
 use crate::gate::{GateDecision, InboundGate, MentionDetector};
+use crate::mcp::tools::messaging::create_dm_channel;
 use crate::queue::AccessRequest;
 
 // ── Event types ───────────────────────────────────────────────────────────────
@@ -529,8 +530,7 @@ async fn notify_admin_dm(
     message_preview: &str,
 ) {
     // Create DM channel with admin.
-    let dm_body = serde_json::json!({ "recipient_id": admin_id.to_string() });
-    let channel = match http.create_private_channel(&dm_body).await {
+    let channel = match create_dm_channel(http, admin_id).await {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(

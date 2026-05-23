@@ -14,7 +14,7 @@ use crate::mcp::tools::{
     management::{create_thread, delete_message, pin_message, unpin_message},
     messaging::{
         download_attachment, edit_message, fetch_messages, get_message, react as discord_react,
-        reply, send_file,
+        reply, send_dm, send_file,
     },
     render::{render_latex, render_latex_to_channel},
 };
@@ -91,6 +91,16 @@ pub(crate) async fn call_tool(
                 .ok_or_else(|| "missing file_path".to_string())?;
             let caption = args.get("caption").and_then(Value::as_str);
             send_file(&ctx, channel_id, file_path, caption).await
+        }
+
+        "send_dm" => {
+            let ctx = server.messaging_ctx();
+            let user_id = parse_id(&args, "user_id")?;
+            let content = args
+                .get("content")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing content".to_string())?;
+            send_dm(&ctx, user_id, content).await
         }
 
         // Introspection

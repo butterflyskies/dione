@@ -84,6 +84,14 @@ pub(crate) fn tools_list() -> Value {
                     "caption": { "type": "string", "description": "Optional message text to accompany the file" }
                 }
             })),
+            tool("send_dm", "Initiate a DM conversation with a Discord user and send a message", json!({
+                "type": "object",
+                "required": ["user_id", "content"],
+                "properties": {
+                    "user_id": { "type": "string", "description": "Discord user ID to send the DM to" },
+                    "content": { "type": "string", "description": "Message content to send" }
+                }
+            })),
             tool("list_guilds", "List guilds the bot is in", json!({
                 "type": "object",
                 "properties": {}
