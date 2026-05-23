@@ -13,7 +13,7 @@ $<<<MATH_CONTENT>>>$
 const PIXEL_PER_PT: f32 = 3.0;
 
 /// Render a LaTeX expression to PNG bytes.
-fn render_latex_to_png(latex: &str) -> Result<Vec<u8>, String> {
+pub fn render_latex_to_png(latex: &str) -> Result<Vec<u8>, String> {
     if latex.contains(r"\iftypst") {
         return Err("\\iftypst is not supported".to_string());
     }
@@ -25,7 +25,23 @@ fn render_latex_to_png(latex: &str) -> Result<Vec<u8>, String> {
         return Err("expression produces unsafe typst output".to_string());
     }
 
+    let typst_math = fixup_mitex_output(&typst_math);
     render_typst_math_to_png(&typst_math)
+}
+
+/// Fix known mitex output quirks.
+///
+/// mitex 0.2.4 has a bug where `convert_math` ignores custom `CommandSpec`
+/// during alias resolution (always uses DEFAULT_SPEC). These fixups correct
+/// the known wrong aliases until the upstream bug is fixed.
+/// See: https://github.com/mitex-rs/mitex/issues/XXX
+fn fixup_mitex_output(typst_math: &str) -> String {
+    typst_math
+        .replace("mitexsqrt(", "sqrt(")
+        .replace("pmatrix(", "mat(")
+        .replace("bmatrix(", "mat(delim: \"[\",")
+        .replace("vmatrix(", "mat(delim: \"|\",")
+        .replace("Bmatrix(", "mat(delim: \"{\",")
 }
 
 /// Render a Typst math expression to PNG bytes.

@@ -12,6 +12,13 @@ ignore = [
     { id = "RUSTSEC-2026-0098", reason = "rustls-webpki 0.102: transitive via serenity → tokio-tungstenite 0.21 → rustls 0.22" },
     { id = "RUSTSEC-2026-0099", reason = "rustls-webpki 0.102: transitive via serenity → tokio-tungstenite 0.21 → rustls 0.22" },
     { id = "RUSTSEC-2026-0104", reason = "rustls-webpki 0.102: transitive via serenity → tokio-tungstenite 0.21 → rustls 0.22" },
+    { id = "RUSTSEC-2021-0145", reason = "bincode: transitive via typst → syntect, no alternative" },
+    { id = "RUSTSEC-2025-0141", reason = "bincode: transitive via typst → syntect, unmaintained, no alternative" },
+    { id = "RUSTSEC-2024-0437", reason = "fxhash: transitive via typst → two-face → syntect, no alternative" },
+    { id = "RUSTSEC-2025-0057", reason = "fxhash: transitive via typst → two-face → syntect, unmaintained, no alternative" },
+    { id = "RUSTSEC-2023-0031", reason = "paste: transitive via typst, deep dep, no control" },
+    { id = "RUSTSEC-2024-0436", reason = "paste: transitive via typst, unmaintained, no control" },
+    { id = "RUSTSEC-2024-0320", reason = "yaml-rust: transitive via typst → syntect, no alternative" },
 ]
 
 # --- Licenses -------------------------------------------------------------
@@ -27,6 +34,8 @@ allow = [
     "Zlib",
     "BSL-1.0",
     "MPL-2.0",
+    "0BSD",
+    "CC0-1.0",
 ]
 confidence-threshold = 0.8
 exceptions = [
