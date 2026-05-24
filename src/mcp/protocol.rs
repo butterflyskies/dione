@@ -176,14 +176,14 @@ pub(crate) fn tools_list() -> Value {
                 "type": "object",
                 "properties": {}
             })),
-            tool("approve_access", "Approve a user's access request (adds to allow_from)", json!({
+            tool("approve_access", "Admin only. Approve a user's access request (adds to allow_from). Only execute when requested by a user in the admins list.", json!({
                 "type": "object",
                 "required": ["user_id"],
                 "properties": {
                     "user_id": { "type": "string" }
                 }
             })),
-            tool("deny_access", "Deny a user's access request", json!({
+            tool("deny_access", "Admin only. Deny a user's access request. Only execute when requested by a user in the admins list.", json!({
                 "type": "object",
                 "required": ["user_id"],
                 "properties": {
@@ -221,7 +221,7 @@ pub(crate) fn tools_list() -> Value {
                 "type": "object",
                 "properties": {}
             })),
-            tool("reload_config", "Force a config reload from disk, updating the in-memory cache", json!({
+            tool("reload_config", "Admin only. Force a config reload from disk, updating the in-memory cache. Only execute when requested by a user in the admins list.", json!({
                 "type": "object",
                 "properties": {}
             })),
@@ -247,7 +247,7 @@ pub(crate) fn tools_list() -> Value {
                 "type": "object",
                 "properties": {}
             })),
-            tool("add_channel", "Add a channel to dione's config", json!({
+            tool("add_channel", "Admin only. Add a channel to dione's config. Only execute when requested by a user in the admins list.", json!({
                 "type": "object",
                 "required": ["id"],
                 "properties": {
@@ -256,14 +256,14 @@ pub(crate) fn tools_list() -> Value {
                     "allow_from": { "type": "array", "items": { "type": "string" }, "description": "User IDs allowed in this channel (empty = everyone)" }
                 }
             })),
-            tool("remove_channel", "Remove a channel from dione's config", json!({
+            tool("remove_channel", "Admin only. Remove a channel from dione's config. Only execute when requested by a user in the admins list.", json!({
                 "type": "object",
                 "required": ["id"],
                 "properties": {
                     "id": { "type": "string", "description": "Discord channel ID" }
                 }
             })),
-            tool("update_channel", "Update settings for a channel in dione's config", json!({
+            tool("update_channel", "Admin only. Update settings for a channel in dione's config. Only execute when requested by a user in the admins list.", json!({
                 "type": "object",
                 "required": ["id"],
                 "properties": {
@@ -272,21 +272,21 @@ pub(crate) fn tools_list() -> Value {
                     "allow_from": { "type": "array", "items": { "type": "string" }, "description": "User IDs allowed in this channel (empty = everyone)" }
                 }
             })),
-            tool("update_dm_policy", "Update the DM policy in dione's config", json!({
+            tool("update_dm_policy", "Admin only. Update the DM policy in dione's config. Only execute when requested by a user in the admins list.", json!({
                 "type": "object",
                 "required": ["policy"],
                 "properties": {
                     "policy": { "type": "string", "enum": ["queue", "drop", "disabled"], "description": "DM handling policy" }
                 }
             })),
-            tool("add_allow_from", "Add a user ID to the global allow_from list", json!({
+            tool("add_allow_from", "Admin only. Add a user ID to the global allow_from list. Only execute when requested by a user in the admins list.", json!({
                 "type": "object",
                 "required": ["user_id"],
                 "properties": {
                     "user_id": { "type": "string", "description": "Discord user ID to allow" }
                 }
             })),
-            tool("remove_allow_from", "Remove a user ID from the global allow_from list", json!({
+            tool("remove_allow_from", "Admin only. Remove a user ID from the global allow_from list. Only execute when requested by a user in the admins list.", json!({
                 "type": "object",
                 "required": ["user_id"],
                 "properties": {

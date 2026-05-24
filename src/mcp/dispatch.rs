@@ -19,6 +19,14 @@ use crate::mcp::tools::{
     render::{render_latex, render_latex_to_channel},
 };
 
+fn check_admin_gate(config: &crate::config::LoadedConfig) -> Result<(), String> {
+    if config.access.admin_only_mutations {
+        Err("admin_only_mutations is enabled; config mutation tools are disabled".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 /// Dispatch a `tools/call` request to the appropriate handler.
 ///
 /// Returns an MCP tool-result `Value` on success, or a `String` error message
@@ -178,11 +186,13 @@ pub(crate) async fn call_tool(
             list_access_requests(&ctx).await
         }
         "approve_access" => {
+            check_admin_gate(&config)?;
             let ctx = server.access_ctx(config.clone());
             let user_id = parse_id(&args, "user_id")?;
             approve_access(&ctx, user_id).await
         }
         "deny_access" => {
+            check_admin_gate(&config)?;
             let ctx = server.access_ctx(config.clone());
             let user_id = parse_id(&args, "user_id")?;
             deny_access(&ctx, user_id).await
@@ -192,8 +202,9 @@ pub(crate) async fn call_tool(
         "list_config_channels" => ConfigStore::list_channels(&server.state_dir),
         "get_access_config" => ConfigStore::get_access(&server.state_dir),
 
-        // Config management — mutations (ConfigStore)
+        // Config management — mutations (ConfigStore, admin-gated)
         "add_channel" => {
+            check_admin_gate(&config)?;
             let id_str = parse_str(&args, "id")?;
             DiscordId::parse(id_str)?;
             let require_mention = args.get("require_mention").and_then(Value::as_bool);
@@ -213,6 +224,7 @@ pub(crate) async fn call_tool(
             }
         }
         "remove_channel" => {
+            check_admin_gate(&config)?;
             let id_str = parse_str(&args, "id")?;
             DiscordId::parse(id_str)?;
             match async {
@@ -227,6 +239,7 @@ pub(crate) async fn call_tool(
             }
         }
         "update_channel" => {
+            check_admin_gate(&config)?;
             let id_str = parse_str(&args, "id")?;
             DiscordId::parse(id_str)?;
             let require_mention = args.get("require_mention").and_then(Value::as_bool);
@@ -252,6 +265,7 @@ pub(crate) async fn call_tool(
             }
         }
         "update_dm_policy" => {
+            check_admin_gate(&config)?;
             let policy = parse_str(&args, "policy")?;
             if !matches!(policy, "drop" | "queue" | "disabled") {
                 json!({ "error": format!("invalid dm_policy: {policy}; must be one of: drop, queue, disabled") })
@@ -269,6 +283,7 @@ pub(crate) async fn call_tool(
             }
         }
         "add_allow_from" => {
+            check_admin_gate(&config)?;
             let user_id = parse_str(&args, "user_id")?;
             DiscordId::parse(user_id)?;
             match async {
@@ -283,6 +298,7 @@ pub(crate) async fn call_tool(
             }
         }
         "remove_allow_from" => {
+            check_admin_gate(&config)?;
             let user_id = parse_str(&args, "user_id")?;
             DiscordId::parse(user_id)?;
             match async {
@@ -325,6 +341,7 @@ pub(crate) async fn call_tool(
 
         // Diagnostics
         "reload_config" => {
+            check_admin_gate(&config)?;
             let (_, error) = crate::config::reload_config(&server.state_dir);
             match error {
                 Some(e) => json!({ "error": e }),

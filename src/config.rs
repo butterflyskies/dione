@@ -49,6 +49,8 @@ pub struct AccessConfig {
     pub dm_policy: DmPolicy,
     pub allow_from: Vec<String>,
     pub admins: Vec<String>,
+    #[serde(default)]
+    pub admin_only_mutations: bool,
 }
 
 impl Default for AccessConfig {
@@ -57,6 +59,7 @@ impl Default for AccessConfig {
             dm_policy: DmPolicy::Queue,
             allow_from: Vec::new(),
             admins: Vec::new(),
+            admin_only_mutations: false,
         }
     }
 }
@@ -594,6 +597,7 @@ enabled = true
                 dm_policy: DmPolicy::Queue,
                 allow_from: vec!["111".to_string(), "222".to_string()],
                 admins: vec!["111".to_string()],
+                admin_only_mutations: false,
             },
             channels: vec![ChannelConfig {
                 id: "500".to_string(),
@@ -682,9 +686,10 @@ enabled = true
                     "999".to_string(),
                 ],
                 admins: vec!["bad-admin-id".to_string()],
+                admin_only_mutations: false,
             },
             channels: vec![ChannelConfig {
-                id: "not-numeric".to_string(), // invalid channel ID
+                id: "not-numeric".to_string(),
                 require_mention: false,
                 allow_from: vec![],
             }],
@@ -721,6 +726,7 @@ enabled = true
                 dm_policy: DmPolicy::Queue,
                 allow_from: vec![],
                 admins: vec![],
+                admin_only_mutations: false,
             },
             ..Default::default()
         };
