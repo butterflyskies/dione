@@ -28,6 +28,7 @@ regex = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 chrono-tz = "0.10"
 camino = { version = "1", features = ["serde1"] }
+notify = "8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 typst = "0.14.2"
 typst-render = "0.14.2"

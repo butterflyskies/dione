@@ -221,6 +221,10 @@ pub(crate) fn tools_list() -> Value {
                 "type": "object",
                 "properties": {}
             })),
+            tool("reload_config", "Force a config reload from disk, updating the in-memory cache", json!({
+                "type": "object",
+                "properties": {}
+            })),
             tool("set_trace_level", "Set the channel-forwarding trace filter (events matching this filter are sent as channel notifications with type=\"trace\")", json!({
                 "type": "object",
                 "required": ["filter"],

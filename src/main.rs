@@ -56,7 +56,7 @@ async fn main() -> Result<()> {
         .init();
 
     let state_dir = dione::config::state_dir();
-    let config = dione::config::load_config(&state_dir);
+    let config = dione::config::reload_config(&state_dir).0;
     tracing::info!(
         ?state_dir,
         dm_policy = ?config.access.dm_policy,
@@ -77,6 +77,9 @@ async fn main() -> Result<()> {
 
     // Discord → MCP event channel.
     let (event_tx, event_rx) = mpsc::channel::<NotificationEvent>(256);
+
+    // Config file watcher — reloads ArcSwap cache on config.toml changes.
+    dione::config_watcher::spawn(state_dir.clone(), event_tx.clone(), cancel.clone());
 
     // MCP notification channel (for server-initiated writes, currently unused beyond event_rx).
     let (notif_tx, _notif_rx) = mpsc::channel::<serde_json::Value>(64);

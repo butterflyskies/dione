@@ -102,10 +102,7 @@ impl EventHandler for Handler {
             return;
         }
 
-        let (config, config_err) = crate::config::load_config_checked(&self.state_dir);
-        if let Some(error) = config_err {
-            let _ = self.tx.send(NotificationEvent::ConfigError { error }).await;
-        }
+        let config = crate::config::load_config(&self.state_dir);
         let bot_user_id = self.bot_user_id.load(Ordering::Relaxed);
 
         {
@@ -316,10 +313,7 @@ impl EventHandler for Handler {
         };
 
         let channel_id = event.channel_id.get();
-        let (config, config_err) = crate::config::load_config_checked(&self.state_dir);
-        if let Some(error) = config_err {
-            let _ = self.tx.send(NotificationEvent::ConfigError { error }).await;
-        }
+        let config = crate::config::load_config(&self.state_dir);
 
         let is_dm = event.guild_id.is_none();
         let decision = if is_dm {
@@ -380,10 +374,7 @@ impl EventHandler for Handler {
             }
         }
 
-        let (config, config_err) = crate::config::load_config_checked(&self.state_dir);
-        if let Some(error) = config_err {
-            let _ = self.tx.send(NotificationEvent::ConfigError { error }).await;
-        }
+        let config = crate::config::load_config(&self.state_dir);
 
         let is_dm = guild_id.is_none();
         let is_known = if is_dm {
