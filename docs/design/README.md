@@ -37,3 +37,9 @@ separation for permission relay, and an access request queue for unknown senders
 
 - Full STRIDE threat model (opted for lightweight review — blast radius is small,
   most security properties ported from battle-tested TypeScript plugin)
+
+## Feature Designs
+
+| Feature | Issue | Status | Doc |
+|---------|-------|--------|-----|
+| YouTube video tool | [#40](https://github.com/butterflyskies/dione/issues/40) | Draft | [youtube-video/design.md](youtube-video/design.md) |
