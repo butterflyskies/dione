@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-26
+
+### Added
+- Thread support: messages in Discord threads are now delivered and gated via
+  their parent channel's policy. `create_thread` tool now works end-to-end.
+- `ResolvedChannel` struct and `resolve_guild_channel()` helper for DRY
+  thread resolution across event handlers.
+- Thread-parent cache (`BTreeMap<u64, Option<u64>>`) with negative caching
+  to avoid repeated Discord API calls for non-thread channels.
+- `OutboundGate::check_channel_with_threads()` allows sending to threads
+  whose parent channel is permitted.
+- `thread_parent_id` field in Message, MessageEdit, and MessageDelete
+  notifications so agents know when a message is in a thread.
+
 ## [0.5.0] - 2026-05-23
 
 ### Added
