@@ -36,6 +36,8 @@ pub enum NotificationEvent {
         timestamp: String,
         attachments: Vec<AttachmentMeta>,
         is_voice_message: bool,
+        /// If the message was sent in a thread, the parent channel ID.
+        thread_parent_id: Option<String>,
     },
     Reaction {
         chat_id: String,
@@ -61,10 +63,14 @@ pub enum NotificationEvent {
         user_id: String,
         new_content: String,
         timestamp: String,
+        /// If the edit was in a thread, the parent channel ID.
+        thread_parent_id: Option<String>,
     },
     MessageDelete {
         chat_id: String,
         message_id: String,
+        /// If the delete was in a thread, the parent channel ID.
+        thread_parent_id: Option<String>,
     },
     ConfigError {
         error: String,
@@ -126,7 +132,7 @@ impl EventHandler for Handler {
                         state.record_dm_channel(sender_id, channel_id);
                     }
 
-                    let event = build_message_event(&msg, &config);
+                    let event = build_message_event(&msg, &config, None);
                     if let Err(e) = self.tx.send(event).await {
                         tracing::warn!(error = %e, "failed to send DM notification event");
                     }
@@ -183,15 +189,21 @@ impl EventHandler for Handler {
                 config.mention_patterns.as_ref(),
             );
 
-            // Determine effective channel ID — use parent for threads if available.
             let channel_id = msg.channel_id.get();
 
-            let decision =
-                InboundGate::check_guild(&config, channel_id, msg.author.id.get(), is_mentioned);
+            let resolved =
+                resolve_guild_channel(&ctx.http, &self.state, &config, channel_id, false).await;
+
+            let decision = InboundGate::check_guild(
+                &config,
+                resolved.gate_channel_id,
+                msg.author.id.get(),
+                is_mentioned,
+            );
 
             match decision {
                 GateDecision::Deliver => {
-                    let event = build_message_event(&msg, &config);
+                    let event = build_message_event(&msg, &config, resolved.thread_parent_id);
                     if let Err(e) = self.tx.send(event).await {
                         tracing::warn!(error = %e, "failed to send guild notification event");
                     }
@@ -284,7 +296,7 @@ impl EventHandler for Handler {
 
     async fn message_update(
         &self,
-        _ctx: Context,
+        ctx: Context,
         old_if_available: Option<Message>,
         new: Option<Message>,
         event: MessageUpdateEvent,
@@ -316,10 +328,14 @@ impl EventHandler for Handler {
         let config = crate::config::load_config(&self.state_dir);
 
         let is_dm = event.guild_id.is_none();
+
+        let resolved =
+            resolve_guild_channel(&ctx.http, &self.state, &config, channel_id, is_dm).await;
+
         let decision = if is_dm {
             InboundGate::check_dm(&config, author.id.get())
         } else {
-            InboundGate::check_guild_passive(&config, channel_id, author.id.get())
+            InboundGate::check_guild_passive(&config, resolved.gate_channel_id, author.id.get())
         };
         if !matches!(decision, GateDecision::Deliver) {
             tracing::trace!(
@@ -350,6 +366,7 @@ impl EventHandler for Handler {
             user_id: author.id.get().to_string(),
             new_content,
             timestamp,
+            thread_parent_id: resolved.thread_parent_id.map(|id| id.to_string()),
         };
 
         if let Err(e) = self.tx.send(ev).await {
@@ -359,7 +376,7 @@ impl EventHandler for Handler {
 
     async fn message_delete(
         &self,
-        _ctx: Context,
+        ctx: Context,
         channel_id: ChannelId,
         deleted_message_id: MessageId,
         guild_id: Option<GuildId>,
@@ -377,13 +394,16 @@ impl EventHandler for Handler {
         let config = crate::config::load_config(&self.state_dir);
 
         let is_dm = guild_id.is_none();
+
+        let resolved = resolve_guild_channel(&ctx.http, &self.state, &config, cid, is_dm).await;
+
         let is_known = if is_dm {
             config.access.dm_policy != crate::config::DmPolicy::Disabled && {
                 let state = self.state.read().await;
                 state.dm_channel_ids.contains(&cid)
             }
         } else {
-            config.channel_policy(cid).is_some()
+            config.channel_policy(resolved.gate_channel_id).is_some()
         };
         if !is_known {
             return;
@@ -392,6 +412,7 @@ impl EventHandler for Handler {
         let ev = NotificationEvent::MessageDelete {
             chat_id: cid.to_string(),
             message_id: mid.to_string(),
+            thread_parent_id: resolved.thread_parent_id.map(|id| id.to_string()),
         };
 
         if let Err(e) = self.tx.send(ev).await {
@@ -462,6 +483,43 @@ impl EventHandler for Handler {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// Result of resolving a channel's thread parentage and computing the
+/// effective channel ID for gate decisions.
+struct ResolvedChannel {
+    /// If the message was in a thread, the parent channel ID.
+    thread_parent_id: Option<u64>,
+    /// The channel ID to use for gate decisions: parent if this is a thread,
+    /// otherwise the original channel ID.
+    gate_channel_id: u64,
+}
+
+/// Resolves thread parentage for a channel and returns the effective gate
+/// channel ID.
+///
+/// If the channel is directly configured, it is used as-is (no thread
+/// resolution needed). Otherwise, we check whether the channel is a thread
+/// and, if so, use its parent for gate decisions.
+///
+/// For DM channels (`is_dm = true`), thread resolution is skipped entirely.
+async fn resolve_guild_channel(
+    http: &serenity::http::Http,
+    state: &crate::state::State,
+    config: &crate::config::LoadedConfig,
+    channel_id: u64,
+    is_dm: bool,
+) -> ResolvedChannel {
+    let thread_parent_id = if !is_dm && config.channel_policy(channel_id).is_none() {
+        resolve_thread_parent(http, state, channel_id).await
+    } else {
+        None
+    };
+    let gate_channel_id = thread_parent_id.unwrap_or(channel_id);
+    ResolvedChannel {
+        thread_parent_id,
+        gate_channel_id,
+    }
+}
+
 /// Converts a serenity [`Timestamp`] to an RFC 3339 string.
 ///
 /// If `to_rfc3339()` returns `None` — which indicates the timestamp is broken
@@ -482,7 +540,11 @@ fn serenity_ts_to_rfc3339(field: &str, ts: &serenity::model::Timestamp) -> Strin
     }
 }
 
-fn build_message_event(msg: &Message, config: &crate::config::LoadedConfig) -> NotificationEvent {
+fn build_message_event(
+    msg: &Message,
+    config: &crate::config::LoadedConfig,
+    thread_parent_id: Option<u64>,
+) -> NotificationEvent {
     let attachments = msg
         .attachments
         .iter()
@@ -509,7 +571,56 @@ fn build_message_event(msg: &Message, config: &crate::config::LoadedConfig) -> N
             .into(),
         attachments,
         is_voice_message,
+        thread_parent_id: thread_parent_id.map(|id| id.to_string()),
     }
+}
+
+/// Resolves the parent channel ID for a thread channel.
+///
+/// First checks the in-memory cache (including negative entries for channels
+/// confirmed not to be threads), then falls back to an API call. Caches
+/// the result either way. Returns `None` if the channel is not a thread.
+async fn resolve_thread_parent(
+    http: &serenity::http::Http,
+    state: &crate::state::State,
+    channel_id: u64,
+) -> Option<u64> {
+    // Check cache first — includes negative entries (Some(None)).
+    {
+        let state = state.read().await;
+        if let Some(cached) = state.thread_parents.get(&channel_id) {
+            return *cached;
+        }
+    }
+
+    // Not cached — ask Discord.
+    let channel = match http.get_channel(ChannelId::new(channel_id)).await {
+        Ok(ch) => ch,
+        Err(e) => {
+            tracing::debug!(channel_id, error = %e, "failed to look up channel for thread detection");
+            return None;
+        }
+    };
+
+    let parent_id = match channel {
+        serenity::model::channel::Channel::Guild(gc)
+            if matches!(
+                gc.kind,
+                ChannelType::PublicThread | ChannelType::PrivateThread | ChannelType::NewsThread
+            ) =>
+        {
+            gc.parent_id.map(|p| p.get())
+        }
+        _ => None,
+    };
+
+    // Cache the result — including None for non-threads (negative cache).
+    {
+        let mut state = state.write().await;
+        state.record_thread_parent(channel_id, parent_id);
+    }
+
+    parent_id
 }
 
 /// Sends a DM to an admin about a pending access request.

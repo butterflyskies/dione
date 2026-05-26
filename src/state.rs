@@ -25,7 +25,12 @@ pub struct SharedState {
     /// Message IDs confirmed not authored by the bot (negative cache for reaction lookups).
     pub non_bot_message_ids: BTreeSet<u64>,
     /// Cache of user ID → username, populated from message events.
-    pub user_names: HashMap<u64, String>,
+    pub user_names: BTreeMap<u64, String>,
+    /// Cache of thread channel ID → parent channel ID. Populated when we
+    /// encounter messages in threads and look up the parent via the Discord API.
+    /// `None` means the channel was looked up and confirmed **not** to be a thread
+    /// (negative cache), avoiding repeated HTTP calls.
+    pub thread_parents: BTreeMap<u64, Option<u64>>,
 }
 
 /// Thread-safe shared state handle.
@@ -33,6 +38,9 @@ pub type State = Arc<RwLock<SharedState>>;
 
 /// Maximum recent-sent-ID entries kept in memory.
 const SENT_IDS_CAP: usize = 200;
+
+/// Maximum thread-parent cache entries.
+const THREAD_CACHE_CAP: usize = 200;
 
 /// Stale threshold for pending permissions (5 minutes).
 const PERMISSION_STALE_SECS: i64 = 300;
@@ -48,7 +56,8 @@ impl SharedState {
             dm_channel_ids: HashSet::new(),
             pending_permissions: BTreeMap::new(),
             non_bot_message_ids: BTreeSet::new(),
-            user_names: HashMap::new(),
+            user_names: BTreeMap::new(),
+            thread_parents: BTreeMap::new(),
         }
     }
 
@@ -77,13 +86,33 @@ impl SharedState {
         prune_oldest(&mut self.recent_sent_ids, cap);
     }
 
+    /// Records a thread → parent channel mapping for gate and notification lookups.
+    ///
+    /// Pass `Some(parent_id)` for confirmed threads, or `None` to negatively
+    /// cache a channel that is not a thread (avoids repeated HTTP lookups).
+    pub fn record_thread_parent(&mut self, thread_id: u64, parent_id: Option<u64>) {
+        self.thread_parents.insert(thread_id, parent_id);
+        // Prune if over cap — BTreeMap with snowflake keys evicts oldest first.
+        while self.thread_parents.len() > THREAD_CACHE_CAP {
+            if let Some(&oldest) = self.thread_parents.keys().next() {
+                self.thread_parents.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+    }
+
     /// Caches a user ID → username mapping, pruning if over cap.
+    ///
+    /// BTreeMap with snowflake keys evicts oldest (smallest) ID first.
     pub fn cache_username(&mut self, user_id: u64, name: String) {
         self.user_names.insert(user_id, name);
-        if self.user_names.len() > SENT_IDS_CAP
-            && let Some(&oldest) = self.user_names.keys().next()
-        {
-            self.user_names.remove(&oldest);
+        while self.user_names.len() > SENT_IDS_CAP {
+            if let Some(&oldest) = self.user_names.keys().next() {
+                self.user_names.remove(&oldest);
+            } else {
+                break;
+            }
         }
     }
 
@@ -147,6 +176,58 @@ mod tests {
             state.recent_sent_ids.len() <= SENT_IDS_CAP,
             "sent IDs exceeded cap: {}",
             state.recent_sent_ids.len()
+        );
+    }
+
+    #[test]
+    fn test_record_thread_parent_prunes_at_cap() {
+        let mut state = SharedState::new();
+        // Insert 210 entries — all positive (Some).
+        for i in 0u64..210 {
+            state.record_thread_parent(i, Some(i + 1000));
+        }
+        assert!(
+            state.thread_parents.len() <= THREAD_CACHE_CAP,
+            "thread_parents exceeded cap: {}",
+            state.thread_parents.len()
+        );
+        // The oldest (lowest) IDs should have been evicted.
+        assert!(
+            !state.thread_parents.contains_key(&0),
+            "oldest entry (0) should be evicted"
+        );
+        assert!(
+            !state.thread_parents.contains_key(&9),
+            "oldest entry (9) should be evicted"
+        );
+        // Newest entries should still be present.
+        assert!(
+            state.thread_parents.contains_key(&209),
+            "newest entry (209) should be retained"
+        );
+    }
+
+    #[test]
+    fn test_record_thread_parent_prunes_negative_cache_entries() {
+        let mut state = SharedState::new();
+        // Insert 210 entries — all negative (None), simulating channels confirmed not-threads.
+        for i in 0u64..210 {
+            state.record_thread_parent(i, None);
+        }
+        assert!(
+            state.thread_parents.len() <= THREAD_CACHE_CAP,
+            "thread_parents exceeded cap with negative entries: {}",
+            state.thread_parents.len()
+        );
+        // Oldest negative entries should be evicted just like positive ones.
+        assert!(
+            !state.thread_parents.contains_key(&0),
+            "oldest negative entry (0) should be evicted"
+        );
+        // Newest entries should still be present.
+        assert!(
+            state.thread_parents.contains_key(&209),
+            "newest negative entry (209) should be retained"
         );
     }
 

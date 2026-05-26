@@ -474,6 +474,7 @@ fn test_notification_has_no_id_field() {
         timestamp: "2026-01-01T00:00:00Z".to_string(),
         attachments: vec![],
         is_voice_message: false,
+        thread_parent_id: None,
     };
     let notif = test_helpers::make_notification(event);
     assert!(
@@ -497,6 +498,7 @@ fn test_notification_attachment_metadata_present() {
             size: 2048,
         }],
         is_voice_message: false,
+        thread_parent_id: None,
     };
     let notif = test_helpers::make_notification(event);
     let meta = &notif["params"]["meta"];
@@ -515,6 +517,7 @@ fn test_notification_voice_flag_in_meta() {
         timestamp: "2026-01-01T00:00:00Z".to_string(),
         attachments: vec![],
         is_voice_message: true,
+        thread_parent_id: None,
     };
     let notif = test_helpers::make_notification(event);
     assert_eq!(notif["params"]["meta"]["is_voice_message"], true);
@@ -544,6 +547,7 @@ fn test_notification_message_snapshot() {
         timestamp: "2026-01-01T00:00:00+00:00".to_string(),
         attachments: vec![],
         is_voice_message: false,
+        thread_parent_id: None,
     };
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
@@ -581,6 +585,7 @@ fn test_notification_message_edit_snapshot() {
         user_id: "3002".to_string(),
         new_content: "fixed a typo".to_string(),
         timestamp: "2026-01-01T00:01:00+00:00".to_string(),
+        thread_parent_id: None,
     };
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
@@ -591,6 +596,26 @@ fn test_notification_message_delete_snapshot() {
     let event = NotificationEvent::MessageDelete {
         chat_id: "1003".to_string(),
         message_id: "2003".to_string(),
+        thread_parent_id: None,
+    };
+    let notif = test_helpers::make_notification(event);
+    insta::assert_json_snapshot!(notif);
+}
+
+// ── Snapshot: message with thread_parent_id present ─────────────────────────
+
+#[test]
+fn test_notification_message_in_thread_snapshot() {
+    let event = NotificationEvent::Message {
+        chat_id: "1000".to_string(),
+        message_id: "2000".to_string(),
+        user: "threaduser".to_string(),
+        user_id: "3000".to_string(),
+        content: "reply in thread".to_string(),
+        timestamp: "2026-01-01T00:00:00+00:00".to_string(),
+        attachments: vec![],
+        is_voice_message: false,
+        thread_parent_id: Some("700".into()),
     };
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
