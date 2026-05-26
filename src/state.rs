@@ -26,6 +26,9 @@ pub struct SharedState {
     pub non_bot_message_ids: BTreeSet<u64>,
     /// Cache of user ID → username, populated from message events.
     pub user_names: HashMap<u64, String>,
+    /// Cache of thread channel ID → parent channel ID. Populated when we
+    /// encounter messages in threads and look up the parent via the Discord API.
+    pub thread_parents: HashMap<u64, u64>,
 }
 
 /// Thread-safe shared state handle.
@@ -49,6 +52,7 @@ impl SharedState {
             pending_permissions: BTreeMap::new(),
             non_bot_message_ids: BTreeSet::new(),
             user_names: HashMap::new(),
+            thread_parents: HashMap::new(),
         }
     }
 
@@ -75,6 +79,19 @@ impl SharedState {
     /// Snowflake IDs are monotonically increasing, so higher values are newer.
     pub fn prune_sent_ids(&mut self, cap: usize) {
         prune_oldest(&mut self.recent_sent_ids, cap);
+    }
+
+    /// Records a thread → parent channel mapping for gate and notification lookups.
+    pub fn record_thread_parent(&mut self, thread_id: u64, parent_id: u64) {
+        self.thread_parents.insert(thread_id, parent_id);
+        // Prune if over cap.
+        if self.thread_parents.len() > SENT_IDS_CAP {
+            // Remove an arbitrary entry — HashMap doesn't have ordering,
+            // but this is good enough to bound memory.
+            if let Some(&oldest) = self.thread_parents.keys().next() {
+                self.thread_parents.remove(&oldest);
+            }
+        }
     }
 
     /// Caches a user ID → username mapping, pruning if over cap.

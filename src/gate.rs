@@ -111,10 +111,23 @@ pub struct OutboundGate;
 
 impl OutboundGate {
     /// Returns `true` if the bot may send to `channel_id`. O(1).
+    ///
+    /// Accepts a thread-parent cache to allow sending to threads whose parent
+    /// channel is opted in.
     pub fn check_channel(
         config: &LoadedConfig,
         channel_id: u64,
         dm_channel_ids: &std::collections::HashSet<u64>,
+    ) -> bool {
+        Self::check_channel_with_threads(config, channel_id, dm_channel_ids, &Default::default())
+    }
+
+    /// Like [`check_channel`](Self::check_channel) but also checks thread parent mappings.
+    pub fn check_channel_with_threads(
+        config: &LoadedConfig,
+        channel_id: u64,
+        dm_channel_ids: &std::collections::HashSet<u64>,
+        thread_parents: &std::collections::HashMap<u64, u64>,
     ) -> bool {
         // O(1) check: is this an established DM channel?
         if dm_channel_ids.contains(&channel_id) {
@@ -122,7 +135,16 @@ impl OutboundGate {
         }
 
         // O(1) check: is this an opted-in guild channel?
-        config.channel_policy(channel_id).is_some()
+        if config.channel_policy(channel_id).is_some() {
+            return true;
+        }
+
+        // O(1) check: is this a thread whose parent is opted in?
+        if let Some(&parent_id) = thread_parents.get(&channel_id) {
+            return config.channel_policy(parent_id).is_some();
+        }
+
+        false
     }
 
     /// Returns `true` if `path` may be sent as a file attachment.

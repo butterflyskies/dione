@@ -18,7 +18,12 @@ pub struct ManagementCtx {
 
 async fn check_outbound(ctx: &ManagementCtx, channel_id: u64) -> Result<(), Value> {
     let state = ctx.state.read().await;
-    if !OutboundGate::check_channel(&ctx.config, channel_id, &state.dm_channel_ids) {
+    if !OutboundGate::check_channel_with_threads(
+        &ctx.config,
+        channel_id,
+        &state.dm_channel_ids,
+        &state.thread_parents,
+    ) {
         return Err(json!({ "error": "channel not in allowlist" }));
     }
     Ok(())
@@ -69,10 +74,9 @@ pub async fn create_thread(
     }
     let thread_builder = CreateThread::new(name).kind(ChannelType::PublicThread);
 
-    match message_id {
+    let result = match message_id {
         Some(mid) => {
-            match ctx
-                .http
+            ctx.http
                 .create_thread_from_message(
                     ChannelId::new(channel_id),
                     MessageId::new(mid),
@@ -80,29 +84,29 @@ pub async fn create_thread(
                     None,
                 )
                 .await
-            {
-                Ok(ch) => json!({
-                    "ok": true,
-                    "thread_id": ch.id.get().to_string(),
-                    "name": ch.name,
-                }),
-                Err(e) => json!({ "error": e.to_string() }),
-            }
         }
         None => {
-            match ctx
-                .http
+            ctx.http
                 .create_thread(ChannelId::new(channel_id), &thread_builder, None)
                 .await
-            {
-                Ok(ch) => json!({
-                    "ok": true,
-                    "thread_id": ch.id.get().to_string(),
-                    "name": ch.name,
-                }),
-                Err(e) => json!({ "error": e.to_string() }),
-            }
         }
+    };
+
+    match result {
+        Ok(ch) => {
+            let thread_id = ch.id.get();
+            // Record thread → parent mapping so the gate allows sending to this thread.
+            {
+                let mut state = ctx.state.write().await;
+                state.record_thread_parent(thread_id, channel_id);
+            }
+            json!({
+                "ok": true,
+                "thread_id": thread_id.to_string(),
+                "name": ch.name,
+            })
+        }
+        Err(e) => json!({ "error": e.to_string() }),
     }
 }
 

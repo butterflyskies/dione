@@ -16,6 +16,7 @@ pub(crate) fn event_to_notification(event: NotificationEvent) -> Value {
             timestamp,
             attachments,
             is_voice_message,
+            thread_parent_id,
         } => {
             let mut meta = json!({
                 "chat_id": chat_id,
@@ -26,6 +27,9 @@ pub(crate) fn event_to_notification(event: NotificationEvent) -> Value {
             });
             if is_voice_message {
                 meta["is_voice_message"] = json!(true);
+            }
+            if let Some(parent_id) = thread_parent_id {
+                meta["thread_parent_id"] = json!(parent_id);
             }
             if !attachments.is_empty() {
                 meta["attachment_count"] = json!(attachments.len().to_string());

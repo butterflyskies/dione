@@ -50,7 +50,12 @@ pub async fn set_presence(ctx: &BotStateCtx, status: &str, activity_name: Option
 pub async fn send_typing(ctx: &BotStateCtx, channel_id: u64) -> Value {
     let allowed = {
         let state = ctx.state.read().await;
-        OutboundGate::check_channel(&ctx.config, channel_id, &state.dm_channel_ids)
+        OutboundGate::check_channel_with_threads(
+            &ctx.config,
+            channel_id,
+            &state.dm_channel_ids,
+            &state.thread_parents,
+        )
     };
     if !allowed {
         return json!({ "error": "channel not in allowlist" });
