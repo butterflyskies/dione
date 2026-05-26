@@ -110,16 +110,20 @@ impl InboundGate {
 pub struct OutboundGate;
 
 impl OutboundGate {
-    /// Returns `true` if the bot may send to `channel_id`. O(1).
+    /// Returns `true` if the bot may send to `channel_id`.
     ///
-    /// Accepts a thread-parent cache to allow sending to threads whose parent
-    /// channel is opted in.
+    /// Convenience wrapper that passes an empty thread-parent cache.
     pub fn check_channel(
         config: &LoadedConfig,
         channel_id: u64,
         dm_channel_ids: &std::collections::HashSet<u64>,
     ) -> bool {
-        Self::check_channel_with_threads(config, channel_id, dm_channel_ids, &Default::default())
+        Self::check_channel_with_threads(
+            config,
+            channel_id,
+            dm_channel_ids,
+            &std::collections::BTreeMap::new(),
+        )
     }
 
     /// Like [`check_channel`](Self::check_channel) but also checks thread parent mappings.
@@ -127,21 +131,21 @@ impl OutboundGate {
         config: &LoadedConfig,
         channel_id: u64,
         dm_channel_ids: &std::collections::HashSet<u64>,
-        thread_parents: &std::collections::HashMap<u64, u64>,
+        thread_parents: &std::collections::BTreeMap<u64, Option<u64>>,
     ) -> bool {
         // O(1) check: is this an established DM channel?
         if dm_channel_ids.contains(&channel_id) {
             return true;
         }
 
-        // O(1) check: is this an opted-in guild channel?
+        // O(log n) check: is this an opted-in guild channel?
         if config.channel_policy(channel_id).is_some() {
             return true;
         }
 
-        // O(1) check: is this a thread whose parent is opted in?
-        if let Some(&parent_id) = thread_parents.get(&channel_id) {
-            return config.channel_policy(parent_id).is_some();
+        // O(log n) check: is this a thread whose parent is opted in?
+        if let Some(Some(parent_id)) = thread_parents.get(&channel_id) {
+            return config.channel_policy(*parent_id).is_some();
         }
 
         false
@@ -587,6 +591,56 @@ mod tests {
         assert!(
             !OutboundGate::check_file_send(file_path, state_dir),
             "symlink whose canonical path is inside state_dir must be rejected"
+        );
+    }
+
+    // ── Thread-aware outbound gate tests ────────────────────────────────────
+
+    fn thread_map(entries: &[(u64, Option<u64>)]) -> std::collections::BTreeMap<u64, Option<u64>> {
+        entries.iter().copied().collect()
+    }
+
+    // Thread whose parent is allowed → allowed.
+    #[test]
+    fn test_outbound_thread_parent_allowed() {
+        let config = loaded(base_config()); // channel 500 is in config
+        let threads = thread_map(&[(700, Some(500))]);
+        assert!(
+            OutboundGate::check_channel_with_threads(&config, 700, &dm_ids(&[]), &threads),
+            "thread whose parent channel is opted in must be allowed"
+        );
+    }
+
+    // Thread whose parent is not allowed → rejected.
+    #[test]
+    fn test_outbound_thread_parent_not_allowed() {
+        let config = loaded(base_config());
+        let threads = thread_map(&[(700, Some(9999))]);
+        assert!(
+            !OutboundGate::check_channel_with_threads(&config, 700, &dm_ids(&[]), &threads),
+            "thread whose parent channel is not opted in must be rejected"
+        );
+    }
+
+    // Thread not in map → rejected.
+    #[test]
+    fn test_outbound_thread_not_in_map() {
+        let config = loaded(base_config());
+        let threads = thread_map(&[]);
+        assert!(
+            !OutboundGate::check_channel_with_threads(&config, 700, &dm_ids(&[]), &threads),
+            "thread not in cache must be rejected"
+        );
+    }
+
+    // Negatively cached channel (None) → rejected.
+    #[test]
+    fn test_outbound_thread_negatively_cached() {
+        let config = loaded(base_config());
+        let threads = thread_map(&[(700, None)]);
+        assert!(
+            !OutboundGate::check_channel_with_threads(&config, 700, &dm_ids(&[]), &threads),
+            "negatively cached channel (not a thread) must be rejected"
         );
     }
 

@@ -98,7 +98,7 @@ pub async fn create_thread(
             // Record thread → parent mapping so the gate allows sending to this thread.
             {
                 let mut state = ctx.state.write().await;
-                state.record_thread_parent(thread_id, channel_id);
+                state.record_thread_parent(thread_id, Some(channel_id));
             }
             json!({
                 "ok": true,

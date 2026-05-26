@@ -63,10 +63,14 @@ pub enum NotificationEvent {
         user_id: String,
         new_content: String,
         timestamp: String,
+        /// If the edit was in a thread, the parent channel ID.
+        thread_parent_id: Option<String>,
     },
     MessageDelete {
         chat_id: String,
         message_id: String,
+        /// If the delete was in a thread, the parent channel ID.
+        thread_parent_id: Option<String>,
     },
     ConfigError {
         error: String,
@@ -332,19 +336,18 @@ impl EventHandler for Handler {
         let config = crate::config::load_config(&self.state_dir);
 
         let is_dm = event.guild_id.is_none();
+
+        // Resolve thread parent for guild messages that aren't directly configured.
+        let thread_parent_id = if !is_dm && config.channel_policy(channel_id).is_none() {
+            resolve_thread_parent(&ctx.http, &self.state, channel_id).await
+        } else {
+            None
+        };
+
         let decision = if is_dm {
             InboundGate::check_dm(&config, author.id.get())
         } else {
-            // Resolve thread parent for gate check.
-            let gate_channel_id = if config.channel_policy(channel_id).is_some() {
-                channel_id
-            } else if let Some(parent_id) =
-                resolve_thread_parent(&ctx.http, &self.state, channel_id).await
-            {
-                parent_id
-            } else {
-                channel_id
-            };
+            let gate_channel_id = thread_parent_id.unwrap_or(channel_id);
             InboundGate::check_guild_passive(&config, gate_channel_id, author.id.get())
         };
         if !matches!(decision, GateDecision::Deliver) {
@@ -376,6 +379,7 @@ impl EventHandler for Handler {
             user_id: author.id.get().to_string(),
             new_content,
             timestamp,
+            thread_parent_id: thread_parent_id.map(|id| id.to_string()),
         };
 
         if let Err(e) = self.tx.send(ev).await {
@@ -385,7 +389,7 @@ impl EventHandler for Handler {
 
     async fn message_delete(
         &self,
-        _ctx: Context,
+        ctx: Context,
         channel_id: ChannelId,
         deleted_message_id: MessageId,
         guild_id: Option<GuildId>,
@@ -403,21 +407,26 @@ impl EventHandler for Handler {
         let config = crate::config::load_config(&self.state_dir);
 
         let is_dm = guild_id.is_none();
+
+        // Resolve thread parent (with HTTP fallback) for guild messages
+        // that aren't directly configured.
+        let thread_parent_id = if !is_dm && config.channel_policy(cid).is_none() {
+            resolve_thread_parent(&ctx.http, &self.state, cid).await
+        } else {
+            None
+        };
+
         let is_known = if is_dm {
             config.access.dm_policy != crate::config::DmPolicy::Disabled && {
                 let state = self.state.read().await;
                 state.dm_channel_ids.contains(&cid)
             }
         } else {
-            // Check direct channel policy, or thread parent cache for threads.
-            config.channel_policy(cid).is_some() || {
-                let state = self.state.read().await;
-                state
-                    .thread_parents
-                    .get(&cid)
-                    .map(|&pid| config.channel_policy(pid).is_some())
+            // Check direct channel policy, or resolved thread parent.
+            config.channel_policy(cid).is_some()
+                || thread_parent_id
+                    .map(|pid| config.channel_policy(pid).is_some())
                     .unwrap_or(false)
-            }
         };
         if !is_known {
             return;
@@ -426,6 +435,7 @@ impl EventHandler for Handler {
         let ev = NotificationEvent::MessageDelete {
             chat_id: cid.to_string(),
             message_id: mid.to_string(),
+            thread_parent_id: thread_parent_id.map(|id| id.to_string()),
         };
 
         if let Err(e) = self.tx.send(ev).await {
@@ -553,18 +563,19 @@ fn build_message_event(
 
 /// Resolves the parent channel ID for a thread channel.
 ///
-/// First checks the in-memory cache, then falls back to an API call. Caches
+/// First checks the in-memory cache (including negative entries for channels
+/// confirmed not to be threads), then falls back to an API call. Caches
 /// the result either way. Returns `None` if the channel is not a thread.
 async fn resolve_thread_parent(
     http: &serenity::http::Http,
     state: &crate::state::State,
     channel_id: u64,
 ) -> Option<u64> {
-    // Check cache first.
+    // Check cache first — includes negative entries (Some(None)).
     {
         let state = state.read().await;
-        if let Some(&parent_id) = state.thread_parents.get(&channel_id) {
-            return Some(parent_id);
+        if let Some(cached) = state.thread_parents.get(&channel_id) {
+            return *cached;
         }
     }
 
@@ -589,10 +600,10 @@ async fn resolve_thread_parent(
         _ => None,
     };
 
-    // Cache the result if it's a thread.
-    if let Some(pid) = parent_id {
+    // Cache the result — including None for non-threads (negative cache).
+    {
         let mut state = state.write().await;
-        state.record_thread_parent(channel_id, pid);
+        state.record_thread_parent(channel_id, parent_id);
     }
 
     parent_id

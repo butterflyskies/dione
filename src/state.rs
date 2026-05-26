@@ -25,10 +25,12 @@ pub struct SharedState {
     /// Message IDs confirmed not authored by the bot (negative cache for reaction lookups).
     pub non_bot_message_ids: BTreeSet<u64>,
     /// Cache of user ID → username, populated from message events.
-    pub user_names: HashMap<u64, String>,
+    pub user_names: BTreeMap<u64, String>,
     /// Cache of thread channel ID → parent channel ID. Populated when we
     /// encounter messages in threads and look up the parent via the Discord API.
-    pub thread_parents: HashMap<u64, u64>,
+    /// `None` means the channel was looked up and confirmed **not** to be a thread
+    /// (negative cache), avoiding repeated HTTP calls.
+    pub thread_parents: BTreeMap<u64, Option<u64>>,
 }
 
 /// Thread-safe shared state handle.
@@ -36,6 +38,9 @@ pub type State = Arc<RwLock<SharedState>>;
 
 /// Maximum recent-sent-ID entries kept in memory.
 const SENT_IDS_CAP: usize = 200;
+
+/// Maximum thread-parent cache entries.
+const THREAD_CACHE_CAP: usize = 200;
 
 /// Stale threshold for pending permissions (5 minutes).
 const PERMISSION_STALE_SECS: i64 = 300;
@@ -51,8 +56,8 @@ impl SharedState {
             dm_channel_ids: HashSet::new(),
             pending_permissions: BTreeMap::new(),
             non_bot_message_ids: BTreeSet::new(),
-            user_names: HashMap::new(),
-            thread_parents: HashMap::new(),
+            user_names: BTreeMap::new(),
+            thread_parents: BTreeMap::new(),
         }
     }
 
@@ -82,25 +87,32 @@ impl SharedState {
     }
 
     /// Records a thread → parent channel mapping for gate and notification lookups.
-    pub fn record_thread_parent(&mut self, thread_id: u64, parent_id: u64) {
+    ///
+    /// Pass `Some(parent_id)` for confirmed threads, or `None` to negatively
+    /// cache a channel that is not a thread (avoids repeated HTTP lookups).
+    pub fn record_thread_parent(&mut self, thread_id: u64, parent_id: Option<u64>) {
         self.thread_parents.insert(thread_id, parent_id);
-        // Prune if over cap.
-        if self.thread_parents.len() > SENT_IDS_CAP {
-            // Remove an arbitrary entry — HashMap doesn't have ordering,
-            // but this is good enough to bound memory.
+        // Prune if over cap — BTreeMap with snowflake keys evicts oldest first.
+        while self.thread_parents.len() > THREAD_CACHE_CAP {
             if let Some(&oldest) = self.thread_parents.keys().next() {
                 self.thread_parents.remove(&oldest);
+            } else {
+                break;
             }
         }
     }
 
     /// Caches a user ID → username mapping, pruning if over cap.
+    ///
+    /// BTreeMap with snowflake keys evicts oldest (smallest) ID first.
     pub fn cache_username(&mut self, user_id: u64, name: String) {
         self.user_names.insert(user_id, name);
-        if self.user_names.len() > SENT_IDS_CAP
-            && let Some(&oldest) = self.user_names.keys().next()
-        {
-            self.user_names.remove(&oldest);
+        while self.user_names.len() > SENT_IDS_CAP {
+            if let Some(&oldest) = self.user_names.keys().next() {
+                self.user_names.remove(&oldest);
+            } else {
+                break;
+            }
         }
     }
 
