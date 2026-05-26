@@ -602,6 +602,25 @@ fn test_notification_message_delete_snapshot() {
     insta::assert_json_snapshot!(notif);
 }
 
+// ── Snapshot: message with thread_parent_id present ─────────────────────────
+
+#[test]
+fn test_notification_message_in_thread_snapshot() {
+    let event = NotificationEvent::Message {
+        chat_id: "1000".to_string(),
+        message_id: "2000".to_string(),
+        user: "threaduser".to_string(),
+        user_id: "3000".to_string(),
+        content: "reply in thread".to_string(),
+        timestamp: "2026-01-01T00:00:00+00:00".to_string(),
+        attachments: vec![],
+        is_voice_message: false,
+        thread_parent_id: Some("700".into()),
+    };
+    let notif = test_helpers::make_notification(event);
+    insta::assert_json_snapshot!(notif);
+}
+
 // ── Trace notification tests ─────────────────────────────────────────────────
 
 #[test]

@@ -180,6 +180,58 @@ mod tests {
     }
 
     #[test]
+    fn test_record_thread_parent_prunes_at_cap() {
+        let mut state = SharedState::new();
+        // Insert 210 entries — all positive (Some).
+        for i in 0u64..210 {
+            state.record_thread_parent(i, Some(i + 1000));
+        }
+        assert!(
+            state.thread_parents.len() <= THREAD_CACHE_CAP,
+            "thread_parents exceeded cap: {}",
+            state.thread_parents.len()
+        );
+        // The oldest (lowest) IDs should have been evicted.
+        assert!(
+            !state.thread_parents.contains_key(&0),
+            "oldest entry (0) should be evicted"
+        );
+        assert!(
+            !state.thread_parents.contains_key(&9),
+            "oldest entry (9) should be evicted"
+        );
+        // Newest entries should still be present.
+        assert!(
+            state.thread_parents.contains_key(&209),
+            "newest entry (209) should be retained"
+        );
+    }
+
+    #[test]
+    fn test_record_thread_parent_prunes_negative_cache_entries() {
+        let mut state = SharedState::new();
+        // Insert 210 entries — all negative (None), simulating channels confirmed not-threads.
+        for i in 0u64..210 {
+            state.record_thread_parent(i, None);
+        }
+        assert!(
+            state.thread_parents.len() <= THREAD_CACHE_CAP,
+            "thread_parents exceeded cap with negative entries: {}",
+            state.thread_parents.len()
+        );
+        // Oldest negative entries should be evicted just like positive ones.
+        assert!(
+            !state.thread_parents.contains_key(&0),
+            "oldest negative entry (0) should be evicted"
+        );
+        // Newest entries should still be present.
+        assert!(
+            state.thread_parents.contains_key(&209),
+            "newest negative entry (209) should be retained"
+        );
+    }
+
+    #[test]
     fn test_prune_stale_permissions() {
         let mut state = SharedState::new();
 

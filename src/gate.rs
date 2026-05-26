@@ -644,6 +644,45 @@ mod tests {
         );
     }
 
+    // ── Direct channel policy precedence over thread map ───────────────────
+
+    // Channel 500 is both directly configured AND in the thread map.
+    // The direct channel_policy check short-circuits before consulting
+    // the thread map — this test documents that intent.
+    #[test]
+    fn test_outbound_direct_channel_policy_takes_precedence_over_thread_map() {
+        let config = loaded(base_config()); // channel 500 is in config
+        let threads = thread_map(&[(500, Some(9999))]); // thread map says parent is 9999 (not configured)
+        assert!(
+            OutboundGate::check_channel_with_threads(&config, 500, &dm_ids(&[]), &threads),
+            "directly configured channel must pass even when thread map maps it elsewhere"
+        );
+    }
+
+    // ── check_channel delegates with empty thread map ────────────────────
+
+    // check_channel (convenience wrapper) passes an empty thread map, so a
+    // thread channel ID that would be allowed via thread_parents is rejected.
+    #[test]
+    fn test_outbound_check_channel_does_not_use_thread_map() {
+        let config = loaded(base_config()); // channel 500 is in config
+        // Thread 700 → parent 500 would pass check_channel_with_threads.
+        assert!(
+            OutboundGate::check_channel_with_threads(
+                &config,
+                700,
+                &dm_ids(&[]),
+                &thread_map(&[(700, Some(500))])
+            ),
+            "sanity: thread 700 with parent 500 should pass check_channel_with_threads"
+        );
+        // But check_channel (which passes empty map) should reject it.
+        assert!(
+            !OutboundGate::check_channel(&config, 700, &dm_ids(&[])),
+            "check_channel must not consult thread parents — it passes an empty map"
+        );
+    }
+
     // ── Sanitize filename tests ───────────────────────────────────────────────
 
     #[test]

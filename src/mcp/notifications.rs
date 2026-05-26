@@ -242,6 +242,24 @@ mod tests {
     }
 
     #[test]
+    fn test_message_omits_thread_parent_id_when_none() {
+        let event = NotificationEvent::Message {
+            chat_id: "100".into(),
+            message_id: "200".into(),
+            user: "bob".into(),
+            user_id: "300".into(),
+            content: "hello from channel".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            attachments: vec![],
+            is_voice_message: false,
+            thread_parent_id: None,
+        };
+        let json = event_to_notification(event);
+        let meta = &json["params"]["meta"];
+        assert!(meta.get("thread_parent_id").is_none());
+    }
+
+    #[test]
     fn test_message_includes_thread_parent_id() {
         let event = NotificationEvent::Message {
             chat_id: "100".into(),
