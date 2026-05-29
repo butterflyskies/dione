@@ -808,10 +808,7 @@ fn test_reply_tool_schema_includes_suppress_ping() {
         props.get("suppress_ping").is_some(),
         "reply tool schema must include suppress_ping property"
     );
-    assert_eq!(
-        props["suppress_ping"]["type"], "boolean",
-        "suppress_ping must be a boolean"
-    );
+    insta::assert_json_snapshot!(props["suppress_ping"]);
 }
 
 #[tokio::test]
@@ -834,17 +831,7 @@ async fn test_reply_suppress_ping_defaults_to_false_gate_rejection() {
         }
     });
     let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
-    assert_eq!(resp["id"], 50);
-    assert_eq!(
-        resp["result"]["isError"],
-        json!(true),
-        "reply to unconfigured channel should return isError"
-    );
-    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(
-        text.contains("not a permitted outbound target"),
-        "expected gate rejection, got: {text}"
-    );
+    insta::assert_json_snapshot!(resp["result"]);
 }
 
 #[tokio::test]
@@ -869,17 +856,7 @@ async fn test_reply_suppress_ping_true_gate_rejection() {
         }
     });
     let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
-    assert_eq!(resp["id"], 51);
-    assert_eq!(
-        resp["result"]["isError"],
-        json!(true),
-        "reply with suppress_ping=true to unconfigured channel should return isError"
-    );
-    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(
-        text.contains("not a permitted outbound target"),
-        "expected gate rejection, got: {text}"
-    );
+    insta::assert_json_snapshot!(resp["result"]);
 }
 
 #[tokio::test]
@@ -901,12 +878,7 @@ async fn test_reply_suppress_ping_false_explicit_gate_rejection() {
         }
     });
     let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
-    assert_eq!(resp["id"], 52);
-    assert_eq!(
-        resp["result"]["isError"],
-        json!(true),
-        "reply with suppress_ping=false to unconfigured channel should return isError"
-    );
+    insta::assert_json_snapshot!(resp["result"]);
 }
 
 #[tokio::test]
@@ -939,22 +911,13 @@ async fn test_reply_suppress_ping_true_passes_gate_with_configured_channel() {
         }
     });
     let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
-    assert_eq!(resp["id"], 53);
-    assert_eq!(
-        resp["result"]["isError"],
-        json!(true),
-        "reply should fail (fake HTTP token) but not at the gate"
-    );
+    // The error should be a Discord HTTP error, not a gate rejection.
     let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-    // The error should be a Discord HTTP error, not a gate error.
     assert!(
         !text.contains("not a permitted outbound target"),
         "reply should have passed the outbound gate, got: {text}"
     );
-    assert!(
-        text.contains("failed to send chunk"),
-        "expected Discord HTTP error, got: {text}"
-    );
+    insta::assert_json_snapshot!(resp["result"]);
 }
 
 #[tokio::test]
@@ -987,19 +950,11 @@ async fn test_reply_suppress_ping_false_passes_gate_with_configured_channel() {
         }
     });
     let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
-    assert_eq!(resp["id"], 54);
-    assert_eq!(
-        resp["result"]["isError"],
-        json!(true),
-        "reply should fail (fake HTTP token) but not at the gate"
-    );
+    // The error should be a Discord HTTP error, not a gate rejection.
     let text = resp["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
         !text.contains("not a permitted outbound target"),
         "reply should have passed the outbound gate, got: {text}"
     );
-    assert!(
-        text.contains("failed to send chunk"),
-        "expected Discord HTTP error, got: {text}"
-    );
+    insta::assert_json_snapshot!(resp["result"]);
 }
