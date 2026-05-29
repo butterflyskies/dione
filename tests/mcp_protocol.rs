@@ -790,3 +790,216 @@ async fn test_permission_request_missing_id_is_ignored() {
     let resp = test_helpers::dispatch_request(&server, req).await;
     assert!(resp.is_none());
 }
+
+// ── suppress_ping tests ─────────────────────────────────────────────────────
+
+#[test]
+fn test_reply_tool_schema_includes_suppress_ping() {
+    let list = test_helpers::get_tools_list();
+    let tools = list["tools"].as_array().expect("tools must be an array");
+
+    let reply_tool = tools
+        .iter()
+        .find(|t| t["name"] == "reply")
+        .expect("reply tool must exist in tools/list");
+
+    let props = &reply_tool["inputSchema"]["properties"];
+    assert!(
+        props.get("suppress_ping").is_some(),
+        "reply tool schema must include suppress_ping property"
+    );
+    assert_eq!(
+        props["suppress_ping"]["type"], "boolean",
+        "suppress_ping must be a boolean"
+    );
+}
+
+#[tokio::test]
+async fn test_reply_suppress_ping_defaults_to_false_gate_rejection() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+
+    // Call reply without suppress_ping — should still reach the gate (and be
+    // rejected because no channel is configured).
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 50,
+        "method": "tools/call",
+        "params": {
+            "name": "reply",
+            "arguments": {
+                "channel_id": "999999",
+                "content": "hello"
+            }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    assert_eq!(resp["id"], 50);
+    assert_eq!(
+        resp["result"]["isError"],
+        json!(true),
+        "reply to unconfigured channel should return isError"
+    );
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("not a permitted outbound target"),
+        "expected gate rejection, got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn test_reply_suppress_ping_true_gate_rejection() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+
+    // Call reply with suppress_ping=true — should still reach the gate (and be
+    // rejected because no channel is configured). This exercises the arg parsing
+    // path for suppress_ping.
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 51,
+        "method": "tools/call",
+        "params": {
+            "name": "reply",
+            "arguments": {
+                "channel_id": "999999",
+                "content": "hello",
+                "suppress_ping": true
+            }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    assert_eq!(resp["id"], 51);
+    assert_eq!(
+        resp["result"]["isError"],
+        json!(true),
+        "reply with suppress_ping=true to unconfigured channel should return isError"
+    );
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("not a permitted outbound target"),
+        "expected gate rejection, got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn test_reply_suppress_ping_false_explicit_gate_rejection() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 52,
+        "method": "tools/call",
+        "params": {
+            "name": "reply",
+            "arguments": {
+                "channel_id": "999999",
+                "content": "hello",
+                "suppress_ping": false
+            }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    assert_eq!(resp["id"], 52);
+    assert_eq!(
+        resp["result"]["isError"],
+        json!(true),
+        "reply with suppress_ping=false to unconfigured channel should return isError"
+    );
+}
+
+#[tokio::test]
+async fn test_reply_suppress_ping_true_passes_gate_with_configured_channel() {
+    let (_dir, state_dir) = temp_state_dir();
+
+    // Configure a channel so the outbound gate allows it.
+    let mut config = dione::config::Config::default();
+    config.channels.push(dione::config::ChannelConfig {
+        id: "100100".to_string(),
+        require_mention: false,
+        allow_from: vec![],
+    });
+    dione::config::store_loaded_config(&dione::config::LoadedConfig::from_raw(config));
+    let server = make_server(&state_dir);
+
+    // With suppress_ping=true, the reply should pass the gate but fail at the
+    // Discord HTTP layer (fake token). The error should NOT be a gate rejection.
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 53,
+        "method": "tools/call",
+        "params": {
+            "name": "reply",
+            "arguments": {
+                "channel_id": "100100",
+                "content": "test message",
+                "suppress_ping": true
+            }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    assert_eq!(resp["id"], 53);
+    assert_eq!(
+        resp["result"]["isError"],
+        json!(true),
+        "reply should fail (fake HTTP token) but not at the gate"
+    );
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    // The error should be a Discord HTTP error, not a gate error.
+    assert!(
+        !text.contains("not a permitted outbound target"),
+        "reply should have passed the outbound gate, got: {text}"
+    );
+    assert!(
+        text.contains("failed to send chunk"),
+        "expected Discord HTTP error, got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn test_reply_suppress_ping_false_passes_gate_with_configured_channel() {
+    let (_dir, state_dir) = temp_state_dir();
+
+    // Configure a channel so the outbound gate allows it.
+    let mut config = dione::config::Config::default();
+    config.channels.push(dione::config::ChannelConfig {
+        id: "100101".to_string(),
+        require_mention: false,
+        allow_from: vec![],
+    });
+    dione::config::store_loaded_config(&dione::config::LoadedConfig::from_raw(config));
+    let server = make_server(&state_dir);
+
+    // With suppress_ping=false (default behavior), same path but without
+    // allowed_mentions being set.
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 54,
+        "method": "tools/call",
+        "params": {
+            "name": "reply",
+            "arguments": {
+                "channel_id": "100101",
+                "content": "test message",
+                "suppress_ping": false
+            }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    assert_eq!(resp["id"], 54);
+    assert_eq!(
+        resp["result"]["isError"],
+        json!(true),
+        "reply should fail (fake HTTP token) but not at the gate"
+    );
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        !text.contains("not a permitted outbound target"),
+        "reply should have passed the outbound gate, got: {text}"
+    );
+    assert!(
+        text.contains("failed to send chunk"),
+        "expected Discord HTTP error, got: {text}"
+    );
+}

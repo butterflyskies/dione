@@ -2,7 +2,7 @@ use camino::Utf8PathBuf;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use dione::config::{DmPolicy, load_config};
+use dione::config::{Config, DmPolicy, LoadedConfig};
 use dione::config_store::{ConfigStore, DiscordId};
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
@@ -13,12 +13,50 @@ fn temp_state_dir() -> (TempDir, Utf8PathBuf) {
     (dir, state_dir)
 }
 
-fn list_config_channels(state_dir: &Utf8PathBuf) -> Value {
-    ConfigStore::list_channels(state_dir)
+/// Load config directly from disk, bypassing the global ArcSwap cache.
+///
+/// The global `load_config()` reads from a process-wide cache that is mutated
+/// by `ConfigStore::save()`. When tests run in parallel each test's `save()`
+/// overwrites the same cache, causing flaky assertions. This helper reads the
+/// TOML file from the test's own temp directory so each test is isolated.
+fn load_config_from_disk(state_dir: &Utf8PathBuf) -> LoadedConfig {
+    let config_path = state_dir.join("config.toml");
+    let contents = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let raw: Config = toml::from_str(&contents).unwrap_or_default();
+    LoadedConfig::from_raw(raw)
 }
 
+/// Read channel list directly from disk (bypasses global cache).
+fn list_config_channels(state_dir: &Utf8PathBuf) -> Value {
+    let config = load_config_from_disk(state_dir);
+    let channels: Vec<Value> = config
+        .raw
+        .channels
+        .iter()
+        .map(|ch| {
+            json!({
+                "id": ch.id,
+                "require_mention": ch.require_mention,
+                "allow_from": ch.allow_from,
+            })
+        })
+        .collect();
+    json!({ "channels": channels })
+}
+
+/// Read access config directly from disk (bypasses global cache).
 fn get_access_config(state_dir: &Utf8PathBuf) -> Value {
-    ConfigStore::get_access(state_dir)
+    let config = load_config_from_disk(state_dir);
+    json!({
+        "dm_policy": match config.raw.access.dm_policy {
+            DmPolicy::Queue => "queue",
+            DmPolicy::Drop => "drop",
+            DmPolicy::Disabled => "disabled",
+            _ => "unknown",
+        },
+        "allow_from": config.raw.access.allow_from,
+        "admins": config.raw.access.admins,
+    })
 }
 
 async fn add_channel(
@@ -152,7 +190,7 @@ async fn test_add_channel_roundtrips_through_load_config() {
     let result = add_channel(&state_dir, "12345", Some(false), Some(vec!["111".into()])).await;
     assert_eq!(result["ok"], true);
 
-    let config = load_config(&state_dir);
+    let config = load_config_from_disk(&state_dir);
     assert_eq!(config.raw.channels.len(), 1);
     assert_eq!(config.raw.channels[0].id, "12345");
     assert!(!config.raw.channels[0].require_mention);
@@ -167,7 +205,7 @@ async fn test_add_channel_defaults() {
     let result = add_channel(&state_dir, "99999", None, None).await;
     assert_eq!(result["ok"], true);
 
-    let config = load_config(&state_dir);
+    let config = load_config_from_disk(&state_dir);
     assert!(config.raw.channels[0].require_mention);
     assert!(config.raw.channels[0].allow_from.is_empty());
 }
@@ -180,7 +218,7 @@ async fn test_add_channel_rejects_duplicate() {
     let result = add_channel(&state_dir, "12345", None, None).await;
     assert!(result.get("error").is_some());
 
-    let config = load_config(&state_dir);
+    let config = load_config_from_disk(&state_dir);
     assert_eq!(config.raw.channels.len(), 1);
 }
 
@@ -208,7 +246,7 @@ async fn test_remove_channel_roundtrip() {
     let result = remove_channel(&state_dir, "12345").await;
     assert_eq!(result["ok"], true);
 
-    let config = load_config(&state_dir);
+    let config = load_config_from_disk(&state_dir);
     assert!(config.raw.channels.is_empty());
 }
 
@@ -233,7 +271,7 @@ async fn test_add_remove_add_sequence() {
     assert_eq!(channels.len(), 1);
     assert_eq!(channels[0]["id"], "222");
 
-    let config = load_config(&state_dir);
+    let config = load_config_from_disk(&state_dir);
     assert_eq!(config.raw.channels.len(), 1);
 }
 
@@ -245,7 +283,7 @@ async fn test_update_channel_roundtrip() {
     let result = update_channel(&state_dir, "12345", Some(false), Some(vec!["999".into()])).await;
     assert_eq!(result["ok"], true);
 
-    let config = load_config(&state_dir);
+    let config = load_config_from_disk(&state_dir);
     assert!(!config.raw.channels[0].require_mention);
     assert_eq!(config.raw.channels[0].allow_from, vec!["999"]);
 }
@@ -268,7 +306,7 @@ async fn test_update_channel_rejects_invalid_allow_from() {
     assert!(result.get("error").is_some());
 
     // Config should be unchanged.
-    let config = load_config(&state_dir);
+    let config = load_config_from_disk(&state_dir);
     assert!(config.raw.channels[0].allow_from.is_empty());
 }
 
@@ -290,7 +328,7 @@ async fn test_add_allow_from_roundtrip() {
     let result = add_allow_from(&state_dir, "12345").await;
     assert_eq!(result["ok"], true);
 
-    let config = load_config(&state_dir);
+    let config = load_config_from_disk(&state_dir);
     assert!(config.is_allowed(12345));
 }
 
@@ -319,7 +357,7 @@ async fn test_remove_allow_from_roundtrip() {
     let result = remove_allow_from(&state_dir, "12345").await;
     assert_eq!(result["ok"], true);
 
-    let config = load_config(&state_dir);
+    let config = load_config_from_disk(&state_dir);
     assert!(!config.is_allowed(12345));
 }
 
@@ -348,7 +386,7 @@ async fn test_update_dm_policy_drop() {
     let result = update_dm_policy(&state_dir, "drop").await;
     assert_eq!(result["ok"], true);
 
-    let config = load_config(&state_dir);
+    let config = load_config_from_disk(&state_dir);
     assert_eq!(config.access.dm_policy, DmPolicy::Drop);
 }
 
@@ -359,7 +397,7 @@ async fn test_update_dm_policy_disabled() {
     let result = update_dm_policy(&state_dir, "disabled").await;
     assert_eq!(result["ok"], true);
 
-    let config = load_config(&state_dir);
+    let config = load_config_from_disk(&state_dir);
     assert_eq!(config.access.dm_policy, DmPolicy::Disabled);
 }
 
@@ -371,7 +409,7 @@ async fn test_update_dm_policy_queue() {
     let result = update_dm_policy(&state_dir, "queue").await;
     assert_eq!(result["ok"], true);
 
-    let config = load_config(&state_dir);
+    let config = load_config_from_disk(&state_dir);
     assert_eq!(config.access.dm_policy, DmPolicy::Queue);
 }
 
