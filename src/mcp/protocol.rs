@@ -30,7 +30,8 @@ pub(crate) fn tools_list() -> Value {
                 "properties": {
                     "channel_id": { "type": "string", "description": "Discord channel ID" },
                     "content": { "type": "string", "description": "Message content" },
-                    "reply_to_message_id": { "type": "string", "description": "Optional message ID to reply to" }
+                    "reply_to_message_id": { "type": "string", "description": "Optional message ID to reply to" },
+                    "suppress_ping": { "type": "boolean", "description": "When true, the reply will not ping the user being replied to (default: false)" }
                 }
             })),
             tool("react", "Add a reaction to a message", json!({

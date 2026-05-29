@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use camino::Utf8PathBuf;
 use serde_json::{Value, json};
-use serenity::builder::{CreateAttachment, CreateMessage, EditMessage};
+use serenity::builder::{CreateAllowedMentions, CreateAttachment, CreateMessage, EditMessage};
 use serenity::model::Timestamp;
 use serenity::model::id::{ChannelId, MessageId};
 
@@ -44,6 +44,7 @@ pub async fn reply(
     channel_id: u64,
     content: &str,
     reply_to_message_id: Option<u64>,
+    suppress_ping: bool,
 ) -> Value {
     if let Err(e) = check_outbound(ctx, channel_id).await {
         return e;
@@ -88,6 +89,11 @@ pub async fn reply(
             } else if let Some(prev_id) = first_msg_id {
                 builder = builder.reference_message((ch, prev_id));
             }
+        }
+
+        if suppress_ping {
+            builder =
+                builder.allowed_mentions(CreateAllowedMentions::new().replied_user(false));
         }
 
         match ch.send_message(&ctx.http, builder).await {
@@ -348,7 +354,7 @@ pub async fn send_dm(ctx: &MessagingCtx, user_id: u64, content: &str) -> Value {
         state.record_dm_channel(user_id, channel_id);
     }
 
-    let result = reply(ctx, channel_id, content, None).await;
+    let result = reply(ctx, channel_id, content, None, false).await;
 
     if result.get("error").is_some() {
         return result;
