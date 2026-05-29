@@ -1,0 +1,13 @@
+---
+source: tests/mcp_protocol.rs
+expression: "resp[\"result\"]"
+---
+{
+  "content": [
+    {
+      "text": "{\"error\":\"failed to send chunk 0: 401: Unauthorized\"}",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

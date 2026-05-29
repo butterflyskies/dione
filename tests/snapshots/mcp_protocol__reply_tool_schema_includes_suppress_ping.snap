@@ -1,0 +1,8 @@
+---
+source: tests/mcp_protocol.rs
+expression: "props[\"suppress_ping\"]"
+---
+{
+  "description": "When true, the reply will not ping the user being replied to (default: false)",
+  "type": "boolean"
+}

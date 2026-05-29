@@ -1,0 +1,13 @@
+---
+source: tests/mcp_protocol.rs
+expression: "resp[\"result\"]"
+---
+{
+  "content": [
+    {
+      "text": "{\"error\":\"channel 999999 is not a permitted outbound target\"}",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

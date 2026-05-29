@@ -48,7 +48,11 @@ pub(crate) async fn call_tool(
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing content".to_string())?;
             let reply_to = parse_optional_id(&args, "reply_to_message_id");
-            reply(&ctx, channel_id, content, reply_to).await
+            let suppress_ping = args
+                .get("suppress_ping")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            reply(&ctx, channel_id, content, reply_to, suppress_ping).await
         }
         "react" => {
             let ctx = server.messaging_ctx(config.clone());

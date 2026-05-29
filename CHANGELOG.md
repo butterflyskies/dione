@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-29
+
+### Added
+- `suppress_ping` boolean parameter on the `reply` tool — when `true`, sets
+  `allowed_mentions.replied_user = false` so the reply does not ping the
+  person being replied to. Defaults to `false` (existing behavior preserved).
+  Closes #55.
+
+### Fixed
+- Config store integration test flakiness: parallel tests shared the global
+  ArcSwap cache. Tests now use `load_config_from_disk()` against their own
+  temp directory instead of the process-wide `load_config()`.
+
 ## [0.6.0] - 2026-05-26
 
 ### Added
