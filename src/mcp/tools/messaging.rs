@@ -92,8 +92,7 @@ pub async fn reply(
         }
 
         if suppress_ping {
-            builder =
-                builder.allowed_mentions(CreateAllowedMentions::new().replied_user(false));
+            builder = builder.allowed_mentions(CreateAllowedMentions::new().replied_user(false));
         }
 
         match ch.send_message(&ctx.http, builder).await {
