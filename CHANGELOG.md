@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-03
+
+### Changed
+- Bot messages are no longer unconditionally ignored. If a bot's user ID is in
+  the `allow_from` list, its messages (and edits) are now routed through the
+  normal message handling path. Unknown bots are still dropped.
+
 ## [0.7.0] - 2026-05-29
 
 ### Added

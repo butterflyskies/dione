@@ -103,12 +103,12 @@ impl EventHandler for Handler {
     }
 
     async fn message(&self, ctx: Context, msg: Message) {
-        // Ignore bot messages.
-        if msg.author.bot {
+        let config = crate::config::load_config(&self.state_dir);
+
+        // Allow bot messages only if the bot's user ID is in the allow_from list.
+        if should_drop_bot_message(msg.author.bot, msg.author.id.get(), &config) {
             return;
         }
-
-        let config = crate::config::load_config(&self.state_dir);
         let bot_user_id = self.bot_user_id.load(Ordering::Relaxed);
 
         {
@@ -313,7 +313,11 @@ impl EventHandler for Handler {
         let Some(author) = author else {
             return;
         };
-        if author.bot {
+
+        let config = crate::config::load_config(&self.state_dir);
+
+        // Allow bot messages only if the bot's user ID is in the allow_from list.
+        if should_drop_bot_message(author.bot, author.id.get(), &config) {
             return;
         }
 
@@ -325,7 +329,6 @@ impl EventHandler for Handler {
         };
 
         let channel_id = event.channel_id.get();
-        let config = crate::config::load_config(&self.state_dir);
 
         let is_dm = event.guild_id.is_none();
 
@@ -654,5 +657,85 @@ async fn notify_admin_dm(
     let msg = CreateMessage::new().content(content);
     if let Err(e) = channel.id.send_message(http, msg).await {
         tracing::warn!(admin_id, error = %e, "failed to send access notification DM");
+    }
+}
+
+/// Returns `true` if the message should be dropped because the author is a bot
+/// whose user ID is **not** in the `allow_from` list.
+///
+/// Human messages (is_bot = false) always pass through. Bot messages pass
+/// through only if the bot's user ID is in the config's allow_from list.
+fn should_drop_bot_message(
+    is_bot: bool,
+    user_id: u64,
+    config: &crate::config::LoadedConfig,
+) -> bool {
+    is_bot && !config.is_allowed(user_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{AccessConfig, Config, DmPolicy, LoadedConfig};
+
+    fn config_with_allow_from(ids: Vec<&str>) -> LoadedConfig {
+        let raw = Config {
+            access: AccessConfig {
+                dm_policy: DmPolicy::Queue,
+                allow_from: ids.into_iter().map(String::from).collect(),
+                admins: vec![],
+                admin_only_mutations: false,
+            },
+            ..Default::default()
+        };
+        LoadedConfig::from_raw(raw)
+    }
+
+    // ── Bot message filter tests ─────────────────────────────────────────────
+
+    /// Bot whose user ID is NOT in allow_from must be dropped.
+    #[test]
+    fn test_bot_not_in_allow_from_is_dropped() {
+        let config = config_with_allow_from(vec!["100"]);
+        assert!(
+            should_drop_bot_message(true, 999, &config),
+            "bot user 999 is not in allow_from and must be dropped"
+        );
+    }
+
+    /// Bot whose user ID IS in allow_from must pass through.
+    #[test]
+    fn test_bot_in_allow_from_passes_through() {
+        let config = config_with_allow_from(vec!["100", "200"]);
+        assert!(
+            !should_drop_bot_message(true, 200, &config),
+            "bot user 200 is in allow_from and must not be dropped"
+        );
+    }
+
+    /// Human message (is_bot = false) is never dropped, regardless of allow_from.
+    #[test]
+    fn test_human_message_not_dropped() {
+        let config = config_with_allow_from(vec!["100"]);
+        // Human in allow_from.
+        assert!(
+            !should_drop_bot_message(false, 100, &config),
+            "human user in allow_from must not be dropped"
+        );
+        // Human NOT in allow_from.
+        assert!(
+            !should_drop_bot_message(false, 999, &config),
+            "human user not in allow_from must not be dropped by bot filter"
+        );
+    }
+
+    /// Bot with empty allow_from list is always dropped.
+    #[test]
+    fn test_bot_with_empty_allow_from_is_dropped() {
+        let config = config_with_allow_from(vec![]);
+        assert!(
+            should_drop_bot_message(true, 42, &config),
+            "bot must be dropped when allow_from is empty"
+        );
     }
 }
