@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use serenity::model::id::{ChannelId, MessageId};
 use tokio::sync::RwLock;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -9,6 +10,7 @@ use tokio::sync::RwLock;
 /// A pending permission relay request waiting for admin response.
 pub struct PendingPermission {
     pub request_id: String,
+    pub channel_id: ChannelId,
     pub created_at: DateTime<Utc>,
 }
 
@@ -116,11 +118,40 @@ impl SharedState {
         }
     }
 
-    /// Removes pending permission entries older than 5 minutes.
-    pub fn prune_stale_permissions(&mut self) {
+    /// Removes pending permission entries older than 5 minutes and returns
+    /// the pruned `(ChannelId, MessageId)` pairs so callers can clean up
+    /// the corresponding Discord messages.
+    pub fn prune_stale_permissions(&mut self) -> Vec<(ChannelId, MessageId)> {
         let cutoff = Utc::now() - chrono::Duration::seconds(PERMISSION_STALE_SECS);
-        self.pending_permissions
-            .retain(|_msg_id, p| p.created_at > cutoff);
+        let mut stale = Vec::new();
+        self.pending_permissions.retain(|&msg_id, p| {
+            if p.created_at > cutoff {
+                true
+            } else {
+                stale.push((p.channel_id, MessageId::new(msg_id)));
+                false
+            }
+        });
+        stale
+    }
+
+    /// Removes all pending permission entries matching a `request_id` and
+    /// returns the `(ChannelId, MessageId)` pairs of removed siblings so
+    /// callers can clean up the corresponding Discord messages.
+    pub fn remove_permissions_by_request_id(
+        &mut self,
+        request_id: &str,
+    ) -> Vec<(ChannelId, MessageId)> {
+        let mut removed = Vec::new();
+        self.pending_permissions.retain(|&msg_id, p| {
+            if p.request_id == request_id {
+                removed.push((p.channel_id, MessageId::new(msg_id)));
+                false
+            } else {
+                true
+            }
+        });
+        removed
     }
 }
 
@@ -232,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prune_stale_permissions() {
+    fn test_prune_stale_permissions_mixed() {
         let mut state = SharedState::new();
 
         let old_time = Utc::now() - chrono::Duration::seconds(PERMISSION_STALE_SECS + 10);
@@ -242,6 +273,7 @@ mod tests {
             1001,
             PendingPermission {
                 request_id: "old-request".to_string(),
+                channel_id: ChannelId::new(9001),
                 created_at: old_time,
             },
         );
@@ -249,11 +281,12 @@ mod tests {
             1002,
             PendingPermission {
                 request_id: "fresh-request".to_string(),
+                channel_id: ChannelId::new(9002),
                 created_at: fresh_time,
             },
         );
 
-        state.prune_stale_permissions();
+        let stale = state.prune_stale_permissions();
 
         assert!(
             !state.pending_permissions.contains_key(&1001),
@@ -263,5 +296,121 @@ mod tests {
             state.pending_permissions.contains_key(&1002),
             "fresh permission should be retained"
         );
+        assert_eq!(stale.len(), 1, "should return one stale entry");
+        assert_eq!(
+            stale[0],
+            (ChannelId::new(9001), MessageId::new(1001)),
+            "stale entry should contain typed channel and message IDs"
+        );
+    }
+
+    #[test]
+    fn test_prune_stale_permissions_none_stale() {
+        let mut state = SharedState::new();
+
+        let fresh_time = Utc::now() - chrono::Duration::seconds(10);
+        state.pending_permissions.insert(
+            2001,
+            PendingPermission {
+                request_id: "fresh".to_string(),
+                channel_id: ChannelId::new(9001),
+                created_at: fresh_time,
+            },
+        );
+
+        let stale = state.prune_stale_permissions();
+
+        assert!(stale.is_empty(), "no entries should be pruned");
+        assert_eq!(state.pending_permissions.len(), 1);
+    }
+
+    #[test]
+    fn test_prune_stale_permissions_all_stale() {
+        let mut state = SharedState::new();
+
+        let old_time = Utc::now() - chrono::Duration::seconds(PERMISSION_STALE_SECS + 10);
+        for i in 0u64..3 {
+            state.pending_permissions.insert(
+                3000 + i,
+                PendingPermission {
+                    request_id: format!("req-{i}"),
+                    channel_id: ChannelId::new(9000 + i),
+                    created_at: old_time,
+                },
+            );
+        }
+
+        let stale = state.prune_stale_permissions();
+
+        assert_eq!(stale.len(), 3, "all entries should be pruned");
+        assert!(state.pending_permissions.is_empty());
+    }
+
+    #[test]
+    fn test_prune_stale_permissions_exact_boundary() {
+        let mut state = SharedState::new();
+
+        let exactly_at = Utc::now() - chrono::Duration::seconds(PERMISSION_STALE_SECS);
+        state.pending_permissions.insert(
+            4001,
+            PendingPermission {
+                request_id: "boundary".to_string(),
+                channel_id: ChannelId::new(9001),
+                created_at: exactly_at,
+            },
+        );
+
+        let stale = state.prune_stale_permissions();
+
+        // cutoff uses `>`, so exactly-at-threshold is NOT retained.
+        assert_eq!(stale.len(), 1, "entry at exact boundary should be pruned");
+        assert!(state.pending_permissions.is_empty());
+    }
+
+    #[test]
+    fn test_remove_permissions_by_request_id() {
+        let mut state = SharedState::new();
+
+        let now = Utc::now();
+        // Two messages for the same request_id (multi-admin scenario).
+        state.pending_permissions.insert(
+            5001,
+            PendingPermission {
+                request_id: "shared-req".to_string(),
+                channel_id: ChannelId::new(9001),
+                created_at: now,
+            },
+        );
+        state.pending_permissions.insert(
+            5002,
+            PendingPermission {
+                request_id: "shared-req".to_string(),
+                channel_id: ChannelId::new(9002),
+                created_at: now,
+            },
+        );
+        // Unrelated request should survive.
+        state.pending_permissions.insert(
+            5003,
+            PendingPermission {
+                request_id: "other-req".to_string(),
+                channel_id: ChannelId::new(9003),
+                created_at: now,
+            },
+        );
+
+        let removed = state.remove_permissions_by_request_id("shared-req");
+
+        assert_eq!(
+            removed.len(),
+            2,
+            "both entries for shared-req should be removed"
+        );
+        assert_eq!(
+            state.pending_permissions.len(),
+            1,
+            "unrelated entry should survive"
+        );
+        assert!(state.pending_permissions.contains_key(&5003));
     }
 }

@@ -473,7 +473,31 @@ impl EventHandler for Handler {
             return;
         }
 
-        // Discord acknowledged — forward the permission response event.
+        // Remove all pending entries for this request_id (multi-admin: each admin
+        // gets a separate DM, so there may be sibling messages to clean up).
+        let siblings = {
+            let mut state = self.state.write().await;
+            state.remove_permissions_by_request_id(&request_id)
+        };
+
+        // Delete sibling DMs that other admins received (the clicked message was
+        // already updated above, so skip it).
+        let clicked_msg_id = component.message.id;
+        for (channel_id, msg_id) in &siblings {
+            if *msg_id == clicked_msg_id {
+                continue;
+            }
+            if let Err(e) = ctx.http.delete_message(*channel_id, *msg_id, None).await {
+                tracing::warn!(msg_id = msg_id.get(), error = %e, "failed to delete sibling permission DM");
+            }
+        }
+
+        // Only send the event if we actually owned this request (guard against
+        // duplicate clicks after prune already cleared the entries).
+        if siblings.is_empty() {
+            return;
+        }
+
         let event = NotificationEvent::PermissionResponse {
             request_id: request_id.clone(),
             granted,
