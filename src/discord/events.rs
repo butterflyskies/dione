@@ -473,6 +473,14 @@ impl EventHandler for Handler {
             return;
         }
 
+        // Clean up the pending permission entry now that it's resolved.
+        {
+            let mut state = self.state.write().await;
+            state
+                .pending_permissions
+                .remove(&component.message.id.get());
+        }
+
         // Discord acknowledged — forward the permission response event.
         let event = NotificationEvent::PermissionResponse {
             request_id: request_id.clone(),

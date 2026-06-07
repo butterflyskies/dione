@@ -11,6 +11,8 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::reload;
 
+use serenity::model::id::{ChannelId, MessageId};
+
 use dione::discord::events::{Handler, NotificationEvent};
 use dione::mcp::server::DioneServer;
 use dione::state::SharedState;
@@ -98,6 +100,7 @@ async fn main() -> Result<()> {
         .wrap_err("failed to build Discord client")?;
 
     let http = discord_client.http.clone();
+    let prune_http = http.clone();
 
     // Build MCP server.
     let trace_controller = TraceLevelController::new(stderr_reload_handle, channel_reload_handle);
@@ -134,7 +137,19 @@ async fn main() -> Result<()> {
                 biased;
                 _ = cancel_prune.cancelled() => break,
                 _ = ticker.tick() => {
-                    prune_state.write().await.prune_stale_permissions();
+                    let stale = prune_state.write().await.prune_stale_permissions();
+                    for (channel_id, msg_id) in stale {
+                        if let Err(e) = prune_http
+                            .delete_message(
+                                ChannelId::new(channel_id),
+                                MessageId::new(msg_id),
+                                None,
+                            )
+                            .await
+                        {
+                            tracing::debug!(msg_id, error = %e, "failed to delete stale permission message");
+                        }
+                    }
                     prune_queue.lock().await.prune_expired(prune_expiry);
                 }
             }

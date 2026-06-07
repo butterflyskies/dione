@@ -9,6 +9,7 @@ use tokio::sync::RwLock;
 /// A pending permission relay request waiting for admin response.
 pub struct PendingPermission {
     pub request_id: String,
+    pub channel_id: u64,
     pub created_at: DateTime<Utc>,
 }
 
@@ -116,11 +117,21 @@ impl SharedState {
         }
     }
 
-    /// Removes pending permission entries older than 5 minutes.
-    pub fn prune_stale_permissions(&mut self) {
+    /// Removes pending permission entries older than 5 minutes and returns
+    /// the pruned `(channel_id, message_id)` pairs so callers can clean up
+    /// the corresponding Discord messages.
+    pub fn prune_stale_permissions(&mut self) -> Vec<(u64, u64)> {
         let cutoff = Utc::now() - chrono::Duration::seconds(PERMISSION_STALE_SECS);
-        self.pending_permissions
-            .retain(|_msg_id, p| p.created_at > cutoff);
+        let mut stale = Vec::new();
+        self.pending_permissions.retain(|&msg_id, p| {
+            if p.created_at > cutoff {
+                true
+            } else {
+                stale.push((p.channel_id, msg_id));
+                false
+            }
+        });
+        stale
     }
 }
 
@@ -242,6 +253,7 @@ mod tests {
             1001,
             PendingPermission {
                 request_id: "old-request".to_string(),
+                channel_id: 9001,
                 created_at: old_time,
             },
         );
@@ -249,11 +261,12 @@ mod tests {
             1002,
             PendingPermission {
                 request_id: "fresh-request".to_string(),
+                channel_id: 9002,
                 created_at: fresh_time,
             },
         );
 
-        state.prune_stale_permissions();
+        let stale = state.prune_stale_permissions();
 
         assert!(
             !state.pending_permissions.contains_key(&1001),
@@ -262,6 +275,12 @@ mod tests {
         assert!(
             state.pending_permissions.contains_key(&1002),
             "fresh permission should be retained"
+        );
+        assert_eq!(stale.len(), 1, "should return one stale entry");
+        assert_eq!(
+            stale[0],
+            (9001, 1001),
+            "stale entry should contain channel_id and message_id"
         );
     }
 }

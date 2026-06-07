@@ -73,12 +73,12 @@ pub async fn send_permission_request(
 
         match channel.id.send_message(http, msg).await {
             Ok(sent_msg) => {
-                // Record the pending permission keyed by Discord message ID.
                 let mut locked = state.write().await;
                 locked.pending_permissions.insert(
                     sent_msg.id.get(),
                     PendingPermission {
                         request_id: request_id.to_string(),
+                        channel_id: channel.id.get(),
                         created_at: chrono::Utc::now(),
                     },
                 );
