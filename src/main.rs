@@ -11,8 +11,6 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::reload;
 
-use serenity::model::id::{ChannelId, MessageId};
-
 use dione::discord::events::{Handler, NotificationEvent};
 use dione::mcp::server::DioneServer;
 use dione::state::SharedState;
@@ -139,15 +137,14 @@ async fn main() -> Result<()> {
                 _ = ticker.tick() => {
                     let stale = prune_state.write().await.prune_stale_permissions();
                     for (channel_id, msg_id) in stale {
+                        let edit = serenity::builder::EditMessage::new()
+                            .content("Permission request — **Expired**")
+                            .components(vec![]);
                         if let Err(e) = prune_http
-                            .delete_message(
-                                ChannelId::new(channel_id),
-                                MessageId::new(msg_id),
-                                None,
-                            )
+                            .edit_message(channel_id, msg_id, &edit, vec![])
                             .await
                         {
-                            tracing::debug!(msg_id, error = %e, "failed to delete stale permission message");
+                            tracing::warn!(msg_id = msg_id.get(), error = %e, "failed to edit stale permission message");
                         }
                     }
                     prune_queue.lock().await.prune_expired(prune_expiry);

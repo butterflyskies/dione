@@ -10,12 +10,6 @@ use crate::state::{PendingPermission, State};
 pub enum PermissionError {
     #[error("no admins configured")]
     NoAdmins,
-    #[error("Discord HTTP error: {0}")]
-    Http(String),
-    #[error("permission request not found")]
-    NotFound,
-    #[error("user is not an admin")]
-    NotAdmin,
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -78,7 +72,7 @@ pub async fn send_permission_request(
                     sent_msg.id.get(),
                     PendingPermission {
                         request_id: request_id.to_string(),
-                        channel_id: channel.id.get(),
+                        channel_id: channel.id,
                         created_at: chrono::Utc::now(),
                     },
                 );
@@ -90,27 +84,4 @@ pub async fn send_permission_request(
     }
 
     Ok(())
-}
-
-/// Validates that `user_id` is a configured admin and looks up the `request_id`
-/// associated with `message_id`.
-///
-/// Returns the `request_id` string. The caller is responsible for supplying
-/// the actual `granted` boolean from the interaction.
-pub fn validate_response(
-    state: &crate::state::SharedState,
-    config: &crate::config::LoadedConfig,
-    message_id: u64,
-    user_id: u64,
-) -> Result<String, PermissionError> {
-    if !config.is_admin(user_id) {
-        return Err(PermissionError::NotAdmin);
-    }
-
-    let pending = state
-        .pending_permissions
-        .get(&message_id)
-        .ok_or(PermissionError::NotFound)?;
-
-    Ok(pending.request_id.clone())
 }
