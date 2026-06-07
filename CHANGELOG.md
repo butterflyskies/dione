@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-06-06
+
+### Fixed
+- Stale permission request DMs are now cleaned up: the background pruning task
+  edits expired messages to show "Expired" and removes buttons, instead of
+  leaving them active indefinitely.
+- Button-click handler removes all pending entries for the same request_id
+  (multi-admin cleanup), preventing duplicate PermissionResponse events.
+- Guard against duplicate event emission when entries are already pruned.
+
+### Changed
+- `PendingPermission` stores typed `ChannelId` instead of raw `u64`.
+- `prune_stale_permissions` returns `Vec<(ChannelId, MessageId)>` for
+  caller-driven message cleanup.
+- Removed dead `validate_response` function and unused error variants.
+- Failed permission message cleanup logged at `warn` instead of `debug`.
+
 ## [0.8.0] - 2026-06-03
 
 ### Changed
