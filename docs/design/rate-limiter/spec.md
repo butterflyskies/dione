@@ -20,18 +20,22 @@ before refilling.
 ## State Machine
 
 ```
-Idle --> Active(remaining: N) --> Exhausted --> Cooldown(expires: T) --> Idle
+Idle --> Active(remaining: N, window_expires: T) --> Exhausted --> Cooldown(expires: T) --> Idle
+                       |                                                                    ^
+                       +--- (window expires without exhaustion) ----------------------------+
 ```
 
 - **Idle:** No messages seen for this (sender, channel) pair, or bucket has
-  been fully reset after cooldown. All messages are allowed; first message
-  transitions to Active.
-- **Active(remaining: N):** Messages are being consumed. Each allowed message
-  decrements `remaining` by exactly 1. When `remaining` reaches 0, transitions
-  to Exhausted.
+  been fully reset after cooldown or window expiry. All messages are allowed;
+  first message transitions to Active and starts the window timer.
+- **Active(remaining: N, window_expires: T):** Messages are being consumed.
+  Each allowed message decrements `remaining` by exactly 1. When `remaining`
+  reaches 0, transitions to Exhausted. If the window timer expires before
+  tokens are exhausted, the bucket resets directly to Idle with full tokens
+  (no cooldown needed -- the sender stayed within budget).
 - **Exhausted:** Token budget fully consumed. All messages are rate-limited
   according to the configured overflow policy (drop or buffer). Transitions to
-  Cooldown when the window expires.
+  Cooldown after the cooldown period begins.
 - **Cooldown(expires: T):** Waiting for the cooldown period to elapse. Messages
   remain rate-limited. When `expires` is reached, bucket resets and transitions
   back to Idle.
@@ -89,9 +93,16 @@ struct Participant {
     is_bot: bool,
 }
 
+enum BucketState {
+    Idle,
+    Active { window_expires: Instant },
+    Exhausted,
+    Cooldown { expires: Instant },
+}
+
 struct TokenBucket {
+    state: BucketState,
     remaining: u32,
-    window_start: Instant,
     config: ScopeConfig,
 }
 
@@ -169,12 +180,14 @@ enabled = true
 tokens = 5
 window_seconds = 7200
 cooldown_seconds = 7200
-policy = "notify_and_drop"
+overflow = "drop"
+notify = true
 
 [rate_limit.human]
 tokens = 30
 window_seconds = 3600
-policy = "buffer"
+overflow = "buffer"
+notify = false
 ```
 
 ### Config Resolution
@@ -185,15 +198,17 @@ policy = "buffer"
 
 ## Properties
 
-| # | Kind | Property | Description |
-|---|------|----------|-------------|
-| 1 | Safety | Budget non-negative | `remaining >= 0` at all times |
-| 2 | Safety | No delivery after exhaustion | No `Allowed` decision while bucket is in Exhausted or Cooldown state |
-| 3 | Liveness | Eventual refill | After entering Exhausted, the bucket eventually returns to Idle |
-| 4 | Safety | Isolation | Sender A's messages never modify sender B's bucket |
-| 5 | Safety | Monotonic decrement | `remaining` decreases by exactly 1 per `Allowed` decision |
-| 6 | Safety | Config precedence | Per-channel config overrides global scope config |
-| 7 | Safety | No policy = no limit | Unconfigured sender classes pass through unconditionally |
+| # | Kind | Property | Description | Verified by |
+|---|------|----------|-------------|-------------|
+| 1 | Safety | Budget non-negative | `remaining >= 0` at all times | TLA+ invariant `BudgetNonNegative` |
+| 2 | Safety | No delivery after exhaustion | No `Allowed` decision while bucket is in Exhausted or Cooldown state | TLA+ invariant `NoDeliveryAfterExhaustion` |
+| 3 | Liveness | Eventual refill | After entering Exhausted, the bucket eventually returns to Idle | TLA+ temporal `EventualRefill` |
+| 4 | Safety | Isolation | Sender A's messages never modify sender B's bucket | Structural (TLA+ `ConsumeToken` only writes `buckets[<<s, c>>]`) |
+| 5 | Safety | Monotonic decrement | `remaining` decreases by exactly 1 per `Allowed` decision | Structural (TLA+ `ConsumeToken` sets `remaining - 1`) |
+| 6 | Safety | Delivered bound | Delivered messages per window never exceed `tokens` | TLA+ invariant `DeliveredBound` |
+| 7 | Liveness | Window reset | Active buckets with expired windows eventually reset to Idle | TLA+ temporal `WindowResets` |
+| 8 | Safety | Config precedence | Per-channel config overrides global scope config | Unit test (not in TLA+ -- config is outside the state machine) |
+| 9 | Safety | No policy = no limit | Unconfigured sender classes pass through unconditionally | Unit test (not in TLA+ -- config is outside the state machine) |
 
 ## Test Plan
 
@@ -201,13 +216,43 @@ policy = "buffer"
 |------|------|----------|
 | Consume N+1 messages, Nth allowed, N+1th limited | Unit | Budget enforcement |
 | Wait past window+cooldown, bucket refills | Unit | Liveness |
+| Partial consumption, wait past window, bucket resets to Idle | Unit | Window reset |
 | Sender without matching config always gets Allowed | Unit | No policy = no limit |
 | Per-channel config overrides global config | Unit | Config precedence |
+| Two senders in same channel get independent buckets | Unit | Isolation |
 | Buffer overflow queues messages, delivers on refill | Integration | Buffer policy |
 | Drop overflow silently discards | Integration | Drop policy |
 | notify=true sends exactly one notification on first Limited | Integration | Notification |
 | proptest: arbitrary event sequences maintain remaining >= 0 | Property | Safety |
 | proptest: Allowed count per window never exceeds tokens | Property | Budget ceiling |
+
+## Relationship to Delivery Buffer (#61)
+
+The delivery buffer (#61) and rate limiter solve different problems at
+different layers:
+
+- **Delivery buffer:** Coalescing window that batches incoming messages so a
+  slower bot sees a faster bot's response before deciding to reply. Reduces
+  crosstalk by giving bots shared context. Operates on all messages, not just
+  bot messages.
+- **Rate limiter:** Token-budget throttle that hard-caps how many messages a
+  sender can deliver per time window. Prevents runaway ping-pong by cutting
+  off the feedback loop entirely.
+
+They are complementary. The delivery buffer sits upstream of the rate limiter
+in the pipeline:
+
+```
+Discord gateway event
+  --> event parsing (extract Participant, ChannelRef)
+  --> delivery buffer (coalesce within delay window)
+  --> rate limiter check
+  --> MCP channel forwarding
+```
+
+A coalesced batch from the delivery buffer counts as one rate-limit check per
+message in the batch, not one check per batch. The rate limiter does not need
+to be aware of the delivery buffer.
 
 ## Future Scope
 
