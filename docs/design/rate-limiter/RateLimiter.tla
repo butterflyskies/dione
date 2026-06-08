@@ -14,6 +14,11 @@
 \* NOTE: Liveness holds only when MaxTime is large enough for all cooldowns
 \* and windows to complete. The bounded clock is a modeling artifact for
 \* finite state space -- the real system has unbounded time.
+\*
+\* NOTE: Variables are indexed as [sender][channel] (nested functions)
+\* rather than [<<sender, channel>>] (tuple-keyed functions) because TLC's
+\* temporal property checker crashes with ArrayIndexOutOfBoundsException
+\* on tuple-keyed function access inside ~> formulas.
 
 EXTENDS Integers, FiniteSets, Sequences
 
@@ -31,13 +36,10 @@ ASSUME CooldownLen \in Nat /\ CooldownLen > 0
 ASSUME MaxTime \in Nat /\ MaxTime > 0
 
 VARIABLES
-    buckets,        \* [Senders x Channels] -> bucket record
+    buckets,        \* [Senders][Channels] -> bucket record
     clock,          \* Global logical clock (0..MaxTime)
-    delivered,      \* [Senders x Channels] -> count of delivered messages per window
-    history         \* [Senders x Channels] -> sequence of events (for property checking)
-
-\* Helper: the set of all (sender, channel) keys
-Keys == Senders \X Channels
+    delivered,      \* [Senders][Channels] -> count of delivered messages per window
+    history         \* [Senders][Channels] -> sequence of events (for property checking)
 
 \* Bucket states
 BucketStates == {"Idle", "Active", "Exhausted", "Cooldown"}
@@ -46,12 +48,12 @@ BucketStates == {"Idle", "Active", "Exhausted", "Cooldown"}
 \* so that DeliveredBound can catch violations independently.
 TypeOK ==
     /\ clock \in 0..MaxTime
-    /\ \A k \in Keys :
-        /\ buckets[k].state \in BucketStates
-        /\ buckets[k].remaining \in 0..MaxTokens
-        /\ buckets[k].cooldown_expires \in 0..MaxTime
-        /\ buckets[k].window_expires \in 0..MaxTime
-        /\ delivered[k] \in Nat
+    /\ \A s \in Senders, c \in Channels :
+        /\ buckets[s][c].state \in BucketStates
+        /\ buckets[s][c].remaining \in 0..MaxTokens
+        /\ buckets[s][c].cooldown_expires \in 0..(MaxTime + CooldownLen)
+        /\ buckets[s][c].window_expires \in 0..(MaxTime + WindowLen)
+        /\ delivered[s][c] \in Nat
 
 vars == <<buckets, clock, delivered, history>>
 
@@ -59,14 +61,14 @@ vars == <<buckets, clock, delivered, history>>
 \* Initial state: all buckets idle, clock at 0, no deliveries
 
 Init ==
-    /\ buckets = [k \in Keys |->
+    /\ buckets = [s \in Senders |-> [c \in Channels |->
         [state            |-> "Idle",
          remaining        |-> MaxTokens,
          cooldown_expires |-> 0,
-         window_expires   |-> 0]]
+         window_expires   |-> 0]]]
     /\ clock = 0
-    /\ delivered = [k \in Keys |-> 0]
-    /\ history = [k \in Keys |-> << >>]
+    /\ delivered = [s \in Senders |-> [c \in Channels |-> 0]]
+    /\ history = [s \in Senders |-> [c \in Channels |-> << >>]]
 
 -----------------------------------------------------------------------------
 \* Action: SendMessage(sender, channel)
@@ -75,19 +77,22 @@ Init ==
 \* to allow or limit the message based on bucket state.
 
 ConsumeToken(s, c) ==
-    LET k == <<s, c>>
-        b == buckets[k]
+    LET b == buckets[s][c]
     IN
     \* Precondition: bucket is Idle or Active with tokens remaining
     /\ b.state \in {"Idle", "Active"}
     /\ b.remaining > 0
+    \* Model-checking guard: ensure enough time remains for the full
+    \* lifecycle (window + cooldown) so liveness properties hold.
+    \* The real system has unbounded time; this guards only the model.
+    /\ clock + WindowLen + CooldownLen <= MaxTime
     /\ LET newRemaining == b.remaining - 1
            \* Start the window timer on first message (Idle -> Active)
            newWindowExpires == IF b.state = "Idle"
                                THEN clock + WindowLen
                                ELSE b.window_expires
        IN
-       buckets' = [buckets EXCEPT ![k] =
+       buckets' = [buckets EXCEPT ![s][c] =
             [state            |-> IF newRemaining > 0
                                    THEN "Active"
                                    ELSE "Exhausted",
@@ -96,17 +101,16 @@ ConsumeToken(s, c) ==
                                    THEN clock + CooldownLen
                                    ELSE b.cooldown_expires,
              window_expires   |-> newWindowExpires]]
-    /\ delivered' = [delivered EXCEPT ![k] = delivered[k] + 1]
-    /\ history' = [history EXCEPT ![k] = Append(history[k], "Allowed")]
+    /\ delivered' = [delivered EXCEPT ![s][c] = delivered[s][c] + 1]
+    /\ history' = [history EXCEPT ![s][c] = Append(history[s][c], "Allowed")]
     /\ UNCHANGED clock
 
 DropMessage(s, c) ==
-    LET k == <<s, c>>
-        b == buckets[k]
+    LET b == buckets[s][c]
     IN
     \* Precondition: bucket is Exhausted or in Cooldown
     /\ b.state \in {"Exhausted", "Cooldown"}
-    /\ history' = [history EXCEPT ![k] = Append(history[k], "Limited")]
+    /\ history' = [history EXCEPT ![s][c] = Append(history[s][c], "Limited")]
     /\ UNCHANGED <<buckets, clock, delivered>>
 
 SendMessage(s, c) ==
@@ -122,6 +126,21 @@ Tick ==
     /\ clock' = clock + 1
     /\ UNCHANGED <<buckets, delivered, history>>
 
+\* Action: EnterCooldown
+\*
+\* After a bucket enters Exhausted, transition to Cooldown on the next tick.
+\* The cooldown_expires timer was already set in ConsumeToken; this action
+\* just changes the state label so the bucket is visibly in Cooldown while
+\* waiting for the timer to expire. Without this, Cooldown is unreachable
+\* and CooldownResolves is vacuously true.
+
+EnterCooldown(s, c) ==
+    LET b == buckets[s][c]
+    IN
+    /\ b.state = "Exhausted"
+    /\ buckets' = [buckets EXCEPT ![s][c].state = "Cooldown"]
+    /\ UNCHANGED <<clock, delivered, history>>
+
 \* Action: WindowExpires
 \*
 \* When an Active bucket's window timer expires without exhausting tokens,
@@ -129,37 +148,34 @@ Tick ==
 \* a partially-consumed bucket resets when the time window elapses.
 
 WindowExpires(s, c) ==
-    LET k == <<s, c>>
-        b == buckets[k]
+    LET b == buckets[s][c]
     IN
     /\ b.state = "Active"
     /\ clock >= b.window_expires
-    /\ buckets' = [buckets EXCEPT ![k] =
+    /\ buckets' = [buckets EXCEPT ![s][c] =
         [state            |-> "Idle",
          remaining        |-> MaxTokens,
          cooldown_expires |-> 0,
          window_expires   |-> 0]]
-    /\ delivered' = [delivered EXCEPT ![k] = 0]
+    /\ delivered' = [delivered EXCEPT ![s][c] = 0]
     /\ UNCHANGED <<clock, history>>
 
 \* Action: CooldownExpires
 \*
-\* When a bucket is in Exhausted or Cooldown state and the clock has reached
-\* or passed its cooldown_expires time, reset the bucket to Idle with full
-\* tokens.
+\* When a bucket is in Cooldown state and the clock has reached or passed
+\* its cooldown_expires time, reset the bucket to Idle with full tokens.
 
 CooldownExpires(s, c) ==
-    LET k == <<s, c>>
-        b == buckets[k]
+    LET b == buckets[s][c]
     IN
-    /\ b.state \in {"Exhausted", "Cooldown"}
+    /\ b.state = "Cooldown"
     /\ clock >= b.cooldown_expires
-    /\ buckets' = [buckets EXCEPT ![k] =
+    /\ buckets' = [buckets EXCEPT ![s][c] =
         [state            |-> "Idle",
          remaining        |-> MaxTokens,
          cooldown_expires |-> 0,
          window_expires   |-> 0]]
-    /\ delivered' = [delivered EXCEPT ![k] = 0]
+    /\ delivered' = [delivered EXCEPT ![s][c] = 0]
     /\ UNCHANGED <<clock, history>>
 
 -----------------------------------------------------------------------------
@@ -169,14 +185,16 @@ Next ==
     \/ \E s \in Senders, c \in Channels : SendMessage(s, c)
     \/ Tick
     \/ \E s \in Senders, c \in Channels : WindowExpires(s, c)
+    \/ \E s \in Senders, c \in Channels : EnterCooldown(s, c)
     \/ \E s \in Senders, c \in Channels : CooldownExpires(s, c)
 
-\* Fairness: Tick, WindowExpires, and CooldownExpires must eventually happen
-\* (weak fairness) so that liveness properties hold.
+\* Fairness: Tick, WindowExpires, EnterCooldown, and CooldownExpires must
+\* eventually happen (weak fairness) so that liveness properties hold.
 
 Fairness ==
     /\ WF_vars(Tick)
     /\ \A s \in Senders, c \in Channels : WF_vars(WindowExpires(s, c))
+    /\ \A s \in Senders, c \in Channels : WF_vars(EnterCooldown(s, c))
     /\ \A s \in Senders, c \in Channels : WF_vars(CooldownExpires(s, c))
 
 Spec == Init /\ [][Next]_vars /\ Fairness
@@ -186,7 +204,7 @@ Spec == Init /\ [][Next]_vars /\ Fairness
 
 \* Property 1: Budget never negative
 BudgetNonNegative ==
-    \A k \in Keys : buckets[k].remaining >= 0
+    \A s \in Senders, c \in Channels : buckets[s][c].remaining >= 0
 
 \* Property 2: No delivery after exhaustion -- if a bucket is Exhausted or
 \* in Cooldown, no Allowed decision is possible. Checked as an invariant:
@@ -194,12 +212,12 @@ BudgetNonNegative ==
 \* Equivalently: remaining = 0 implies state is Exhausted or Cooldown,
 \* and in those states no delivery occurs.
 NoDeliveryAfterExhaustion ==
-    \A k \in Keys :
-        buckets[k].state \in {"Exhausted", "Cooldown"} =>
-            buckets[k].remaining = 0
+    \A s \in Senders, c \in Channels :
+        buckets[s][c].state \in {"Exhausted", "Cooldown"} =>
+            buckets[s][c].remaining = 0
 
 \* Property 4: Isolation -- sender A's messages never modify sender B's bucket.
-\* Structural: SendMessage(s, c) only modifies buckets[<<s, c>>].
+\* Structural: SendMessage(s, c) only modifies buckets[s][c].
 \* Verified by inspection. Not expressible as a state invariant without
 \* auxiliary history variables tracking per-action modifications.
 
@@ -211,7 +229,7 @@ NoDeliveryAfterExhaustion ==
 \* This is independently checkable because TypeOK does NOT constrain
 \* delivered to 0..MaxTokens.
 DeliveredBound ==
-    \A k \in Keys : delivered[k] <= MaxTokens
+    \A s \in Senders, c \in Channels : delivered[s][c] <= MaxTokens
 
 \* Combined safety invariant
 SafetyInvariant ==
@@ -233,24 +251,48 @@ SafetyInvariant ==
 
 EventualRefill ==
     \A s \in Senders, c \in Channels :
-        LET k == <<s, c>>
-        IN buckets[k].state = "Exhausted" ~> buckets[k].state = "Idle"
+        buckets[s][c].state = "Exhausted" ~> buckets[s][c].state = "Idle"
 
 \* Every Cooldown eventually resolves
 CooldownResolves ==
     \A s \in Senders, c \in Channels :
-        LET k == <<s, c>>
-        IN buckets[k].state = "Cooldown" ~> buckets[k].state = "Idle"
+        buckets[s][c].state = "Cooldown" ~> buckets[s][c].state = "Idle"
 
 \* Active buckets with expired windows eventually reset
 WindowResets ==
     \A s \in Senders, c \in Channels :
-        LET k == <<s, c>>
-        IN (buckets[k].state = "Active" /\ clock >= buckets[k].window_expires)
-            ~> buckets[k].state = "Idle"
+        (buckets[s][c].state = "Active" /\ clock >= buckets[s][c].window_expires)
+            ~> buckets[s][c].state = "Idle"
+
+-----------------------------------------------------------------------------
+\* VIEW definition for model checking
+\*
+\* history grows without bound (it's an append-only sequence), making the
+\* state space infinite if TLC includes it in state comparison. Define a
+\* view that projects state to only the variables that matter for property
+\* checking. TLC uses VIEW to decide state equality -- two states that
+\* differ only in history are treated as the same state.
+\*
+\* Use this in the .cfg file: VIEW StateView
+
+StateView == <<buckets, clock, delivered>>
 
 =============================================================================
 \* Modification History
+\* Revised 2026-06-08 -- TLC temporal checker fix:
+\*   - Restructured all variables from tuple-keyed [<<s,c>>] to nested
+\*     [s][c] functions to work around TLC ArrayIndexOutOfBoundsException
+\*     in temporal property checker (known TLC limitation with tuple keys
+\*     inside ~> formulas)
+\*   - Fixed TypeOK: timer fields now allow 0..(MaxTime + CooldownLen/WindowLen)
+\*     since timers set near MaxTime can exceed it
+\* Revised 2026-06-08 -- ariadne (review fix round 2):
+\*   - Added StateView (VIEW) to exclude history from state comparison (fixes
+\*     infinite state space caused by unbounded history sequences)
+\*   - Added EnterCooldown action: Exhausted -> Cooldown transition (fixes
+\*     unreachable Cooldown state / vacuously true CooldownResolves)
+\*   - CooldownExpires now only matches Cooldown (not Exhausted)
+\*   - Added MC.tla and RateLimiter.cfg for model checking
 \* Revised 2026-06-08 -- ariadne review:
 \*   - Added WindowLen, CooldownLen constants (cooldown was implicitly 1 tick)
 \*   - Added window_expires field and WindowExpires action for partial-consumption reset

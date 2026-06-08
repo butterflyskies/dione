@@ -20,9 +20,13 @@ before refilling.
 ## State Machine
 
 ```
+                                                  (tokens        (enter         (cooldown
+                                                   exhausted)     cooldown)      expires)
 Idle --> Active(remaining: N, window_expires: T) --> Exhausted --> Cooldown(expires: T) --> Idle
-                       |                                                                    ^
-                       +--- (window expires without exhaustion) ----------------------------+
+  ^                    |                                                                    ^
+  |                    +--- (window expires without exhaustion) ----------------------------+
+  |                                                                                        |
+  +----------------------------------------------------------------------------------------+
 ```
 
 - **Idle:** No messages seen for this (sender, channel) pair, or bucket has
@@ -35,7 +39,8 @@ Idle --> Active(remaining: N, window_expires: T) --> Exhausted --> Cooldown(expi
   (no cooldown needed -- the sender stayed within budget).
 - **Exhausted:** Token budget fully consumed. All messages are rate-limited
   according to the configured overflow policy (drop or buffer). Transitions to
-  Cooldown after the cooldown period begins.
+  Cooldown on the next tick (the cooldown timer was set when the last token
+  was consumed).
 - **Cooldown(expires: T):** Waiting for the cooldown period to elapse. Messages
   remain rate-limited. When `expires` is reached, bucket resets and transitions
   back to Idle.
@@ -207,8 +212,9 @@ notify = false
 | 5 | Safety | Monotonic decrement | `remaining` decreases by exactly 1 per `Allowed` decision | Structural (TLA+ `ConsumeToken` sets `remaining - 1`) |
 | 6 | Safety | Delivered bound | Delivered messages per window never exceed `tokens` | TLA+ invariant `DeliveredBound` |
 | 7 | Liveness | Window reset | Active buckets with expired windows eventually reset to Idle | TLA+ temporal `WindowResets` |
-| 8 | Safety | Config precedence | Per-channel config overrides global scope config | Unit test (not in TLA+ -- config is outside the state machine) |
-| 9 | Safety | No policy = no limit | Unconfigured sender classes pass through unconditionally | Unit test (not in TLA+ -- config is outside the state machine) |
+| 8 | Liveness | Cooldown resolves | Buckets in Cooldown eventually return to Idle | TLA+ temporal `CooldownResolves` |
+| 9 | Safety | Config precedence | Per-channel config overrides global scope config | Unit test (not in TLA+ -- config is outside the state machine) |
+| 10 | Safety | No policy = no limit | Unconfigured sender classes pass through unconditionally | Unit test (not in TLA+ -- config is outside the state machine) |
 
 ## Test Plan
 
@@ -225,6 +231,38 @@ notify = false
 | notify=true sends exactly one notification on first Limited | Integration | Notification |
 | proptest: arbitrary event sequences maintain remaining >= 0 | Property | Safety |
 | proptest: Allowed count per window never exceeds tokens | Property | Budget ceiling |
+
+## Model Checking
+
+The TLA+ model can be checked with TLC using the provided configuration files:
+
+```
+java -jar tla2tools.jar -config RateLimiter.cfg RateLimiter.tla
+```
+
+### Suggested Parameters
+
+| Constant | Value | Rationale |
+|----------|-------|-----------|
+| Senders | {s1, s2} | Two senders exercises isolation; more explodes state space |
+| Channels | {c1} | One channel is sufficient; senders x channels is the scaling factor |
+| MaxTokens | 2 | Smallest value that exercises Active->Active->Exhausted path |
+| WindowLen | 3 | Long enough for partial consumption + window expiry |
+| CooldownLen | 2 | Long enough to see Exhausted->Cooldown->Idle |
+| MaxTime | 8 | Must be >= WindowLen + CooldownLen + slack for liveness |
+
+The `StateView` definition in the TLA+ model excludes the `history` variable
+from state comparison. Without this VIEW, the append-only `history` sequences
+make the state space infinite. The `.cfg` file references `VIEW StateView` to
+enable this projection.
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `RateLimiter.tla` | Main specification module |
+| `MC.tla` | Model-checking constants (extends RateLimiter) |
+| `RateLimiter.cfg` | TLC configuration: constants, spec, view, invariants, properties |
 
 ## Relationship to Delivery Buffer (#61)
 
