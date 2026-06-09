@@ -117,14 +117,14 @@ pub async fn run(
     let stdin = BufReader::new(tokio::io::stdin());
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
 
-    // Load config for rate limiter and delivery buffer initialization.
+    // Rate limiter config is snapshot at startup. Changes to [rate_limit]
+    // in config.toml require a server restart to take effect. Delivery buffer
+    // delays are live-reloadable (read from ArcSwap config cache per event).
     let config = crate::config::load_config(&server.state_dir);
     let rate_limit_config = config.rate_limit.clone().into_runtime();
     let mut rate_limiter = RateLimiter::new(rate_limit_config);
     let mut delivery_buffer = DeliveryBuffer::new();
 
-    // Snapshot per-channel delivery delays for the buffer.
-    // (Re-reads config on each event for channel ID lookup.)
     let state_dir_notif = server.state_dir.clone();
 
     // Notification forwarding task.
@@ -173,7 +173,10 @@ pub async fn run(
                                     "rate limiter: message allowed"
                                 );
                             }
-                            RateLimitDecision::Denied { retry_after, .. } => {
+                            RateLimitDecision::Denied { retry_after, overflow: _ } => {
+                            // All denied messages are dropped for now.
+                            // OverflowPolicy::Buffer is accepted by config but not
+                            // yet implemented — see #79 for sender class wiring.
                                 tracing::info!(
                                     user_id,
                                     chat_id,
@@ -203,8 +206,7 @@ pub async fn run(
         }
 
         // Channel closed — flush any remaining buffered events.
-        let now = tokio::time::Instant::now() + tokio::time::Duration::from_secs(1);
-        let remaining = delivery_buffer.flush_ready(now);
+        let remaining = delivery_buffer.flush_all();
         for event in remaining {
             let notification = event_to_notification(event);
             write_line(&stdout_notif, &notification).await;

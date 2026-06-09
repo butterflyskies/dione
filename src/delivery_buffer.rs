@@ -75,6 +75,15 @@ impl DeliveryBuffer {
             .min()
     }
 
+    /// Drain all buffered events regardless of deadline (used on shutdown).
+    pub fn flush_all(&mut self) -> Vec<NotificationEvent> {
+        let mut flushed = Vec::new();
+        for (_, buf) in self.channels.drain() {
+            flushed.extend(buf.events);
+        }
+        flushed
+    }
+
     /// Drain all events from channels whose deadline has passed.
     pub fn flush_ready(&mut self, now: Instant) -> Vec<NotificationEvent> {
         let mut flushed = Vec::new();
