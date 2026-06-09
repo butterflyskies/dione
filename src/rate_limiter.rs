@@ -103,6 +103,7 @@ pub enum RateLimitDecision {
 
 impl TokenBucket {
     pub fn new(config: ScopeConfig) -> Self {
+        assert!(config.max_tokens > 0, "max_tokens must be > 0");
         Self {
             state: BucketState::Idle,
             remaining: config.max_tokens,
