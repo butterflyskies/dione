@@ -1,6 +1,6 @@
 # Rate Limiter Design
 
-**Status:** Draft
+**Status:** Accepted
 
 Token-bucket rate limiter for bot-to-bot (and eventually human) message gating,
 enforced server-side in dione. Each dione instance runs independently with no

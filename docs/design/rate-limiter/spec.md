@@ -1,6 +1,6 @@
 # Rate Limiter -- Design Specification
 
-**Status:** Draft
+**Status:** Accepted
 
 ## Problem
 
@@ -63,7 +63,8 @@ struct ScopeConfig {
 
 /// A sender class groups participants by category for policy purposes.
 /// Classes may map to Discord guild roles, bot/human distinction, or
-/// any other substrate-specific grouping.
+/// any other substrate-specific grouping. Wraps an arbitrary label
+/// string (e.g. "bot", "moderator"), not a snowflake.
 struct SenderClass(String);
 
 struct RateLimitConfig {
@@ -95,7 +96,9 @@ struct RateLimitPolicy {
     overflow: OverflowPolicy,
 }
 
-// Substrate-agnostic identifiers
+// Substrate-agnostic identifiers. Inner type is a string representation
+// of a platform-specific unique ID. For Discord, these wrap snowflake IDs
+// (u64 serialized as strings per Discord API convention).
 struct ParticipantId(String);
 struct ChannelRef(String);
 
@@ -149,9 +152,9 @@ Discord's identity model.
 
 | Abstract Type | Discord Equivalent | Notes |
 |---|---|---|
-| `ParticipantId` | Discord user ID (snowflake) | Stored as string. Unique across all guilds. |
-| `ChannelRef` | Discord channel ID (snowflake) | Stored as string. Unique across all guilds. |
-| `SenderClass` | Derived from bot flag + guild roles | See below. |
+| `ParticipantId` | Discord user ID (snowflake u64) | Serialized as string per Discord API convention. Unique across all guilds. |
+| `ChannelRef` | Discord channel ID (snowflake u64) | Serialized as string per Discord API convention. Unique across all guilds. |
+| `SenderClass` | Derived from bot flag + guild roles | Arbitrary label string, not a snowflake. See below. |
 
 ### Sender Classification from Discord
 
