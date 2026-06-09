@@ -61,10 +61,21 @@ struct ScopeConfig {
     overflow: OverflowPolicy,
 }
 
+/// A sender class groups participants by category for policy purposes.
+/// Classes may map to Discord guild roles, bot/human distinction, or
+/// any other substrate-specific grouping.
+struct SenderClass(String);
+
 struct RateLimitConfig {
     enabled: bool,
-    bot: ScopeConfig,
-    human: Option<ScopeConfig>,
+    /// Global default applied when no class or individual override matches.
+    default: ScopeConfig,
+    /// Per-class overrides. Classes are arbitrary labels (e.g. "bot",
+    /// "human", or a Discord guild role name like "moderator").
+    classes: HashMap<SenderClass, ScopeConfig>,
+    /// Per-individual overrides, keyed by ParticipantId. Highest priority.
+    individuals: HashMap<ParticipantId, ScopeConfig>,
+    /// Per-channel overrides, applied after sender resolution.
     channels: HashMap<ChannelRef, ScopeConfig>,
 }
 
@@ -95,7 +106,11 @@ struct RateLimitKey {
 
 struct Participant {
     id: ParticipantId,
-    is_bot: bool,
+    /// Classes this participant belongs to (e.g. "bot", "moderator").
+    /// Populated during event parsing from substrate-specific data
+    /// (Discord roles, bot flag, etc.). A participant may belong to
+    /// multiple classes; the first matching class in config order wins.
+    classes: Vec<SenderClass>,
 }
 
 enum BucketState {
@@ -117,12 +132,55 @@ struct RateLimiter {
 }
 ```
 
-## Bot Detection
+## Sender Classification
 
-Use Discord's `author.bot` field to distinguish bots from humans. This avoids
-maintaining a manual bot list and handles new bots automatically. The
-`Participant.is_bot` field is populated from this during Discord event parsing,
-before the rate limiter is consulted.
+Participants are assigned to one or more `SenderClass` values during event
+parsing, before the rate limiter is consulted. Classification is
+substrate-specific -- the core rate limiter only sees the resulting class
+labels. See "Discord Integration" below for how Discord populates classes.
+
+## Discord Integration
+
+The core types are substrate-agnostic, but dione's first (and currently only)
+substrate is Discord. This section defines how the abstract types map to
+Discord's identity model.
+
+### Type Mapping
+
+| Abstract Type | Discord Equivalent | Notes |
+|---|---|---|
+| `ParticipantId` | Discord user ID (snowflake) | Stored as string. Unique across all guilds. |
+| `ChannelRef` | Discord channel ID (snowflake) | Stored as string. Unique across all guilds. |
+| `SenderClass` | Derived from bot flag + guild roles | See below. |
+
+### Sender Classification from Discord
+
+During event parsing, dione populates `Participant.classes` from Discord data:
+
+1. **Bot flag:** If `message.author.bot` is true, the participant gets the
+   `"bot"` class. Otherwise, `"human"`.
+2. **Guild roles:** For each guild role the member holds, the role name is
+   added as a class (e.g. `"moderator"`, `"admin"`). Role names are
+   lowercased for matching.
+
+This means a config entry like `[rate_limit.class.moderator]` will match any
+Discord user with the "Moderator" role in the guild where the message was sent.
+
+### Guild Role Queries
+
+Dione already maintains a Discord gateway connection and caches guild member
+data. Role membership is available from the `GuildMemberUpdate` and
+`MessageCreate` events (the latter includes a partial member object with
+roles). No additional API calls are needed for classification -- the data
+arrives with each message event.
+
+### Multi-Guild Considerations
+
+A participant may have different roles in different guilds. Since the rate
+limiter keys on `(ParticipantId, ChannelRef)` and channels are guild-scoped,
+the class list is populated from the guild where the message originated. A
+user who is "moderator" in guild A but not in guild B will only get the
+moderator class for messages in guild A's channels.
 
 ## Integration Point
 
@@ -163,43 +221,57 @@ This lets the persona layer make informed decisions about pacing.
 3. Buffer size should be bounded to prevent memory exhaustion (future: make
    configurable).
 
-## Behavioral Norms (Persona Layer)
-
-These are not enforced in code -- they are conventions for the persona layer
-that complement the rate limiter:
-
-- **R-07:** Don't defer to another bot as a substitute for reasoning. The rate
-  limiter prevents runaway ping-pong, but the persona should still engage
-  substantively rather than delegating.
-- **R-08:** When both bots can respond to the same human message, one defers.
-  This is a social norm, not a rate limit -- but the rate limiter provides
-  backpressure that makes this norm easier to follow.
-
 ## Configuration (TOML)
 
 ```toml
 [rate_limit]
 enabled = true
 
-[rate_limit.bot]
+# Global default -- applies to any sender without a class or individual match.
+[rate_limit.default]
+tokens = 30
+window_seconds = 3600
+overflow = "buffer"
+notify = false
+
+# Class overrides -- keyed by class name (e.g. "bot", "moderator", or a
+# Discord guild role). Matched against the participant's class list.
+[rate_limit.class.bot]
 tokens = 5
 window_seconds = 7200
 cooldown_seconds = 7200
 overflow = "drop"
 notify = true
 
-[rate_limit.human]
-tokens = 30
-window_seconds = 3600
-overflow = "buffer"
-notify = false
+# Individual overrides -- keyed by ParticipantId. Highest priority.
+[rate_limit.individual."bot:vesper"]
+tokens = 10
+window_seconds = 7200
+cooldown_seconds = 3600
+overflow = "drop"
+notify = true
+
+# Per-channel overrides -- applied after sender resolution.
+# [rate_limit.channel."1234567890"]
+# tokens = 3
+# window_seconds = 3600
+# overflow = "drop"
+# notify = true
 ```
 
 ### Config Resolution
 
-1. Check `channels[channel_ref]` for a per-channel override.
-2. Fall back to `bot` or `human` scope based on `Participant.is_bot`.
-3. If no matching scope config exists, the message passes through with no limit.
+Resolution follows a **default -> class -> individual** hierarchy, with
+per-channel overrides applied as a final layer:
+
+1. Start with `default` as the base policy.
+2. If the participant belongs to any class in `classes`, use the first matching
+   `class.<name>` override. Class matching checks the participant's class list
+   in order against configured classes.
+3. If `individual.<participant_id>` exists, use it instead (highest priority).
+4. If `channel.<channel_ref>` exists, it overrides the sender-resolved config
+   for that specific channel.
+5. If rate limiting is disabled (`enabled = false`), all messages pass through.
 
 ## Properties
 
@@ -213,7 +285,7 @@ notify = false
 | 6 | Safety | Delivered bound | Delivered messages per window never exceed `tokens` | TLA+ invariant `DeliveredBound` |
 | 7 | Liveness | Window reset | Active buckets with expired windows eventually reset to Idle | TLA+ temporal `WindowResets` |
 | 8 | Liveness | Cooldown resolves | Buckets in Cooldown eventually return to Idle | TLA+ temporal `CooldownResolves` |
-| 9 | Safety | Config precedence | Per-channel config overrides global scope config | Unit test (not in TLA+ -- config is outside the state machine) |
+| 9 | Safety | Config precedence | Resolution follows default -> class -> individual -> channel hierarchy | Unit test (not in TLA+ -- config is outside the state machine) |
 | 10 | Safety | No policy = no limit | Unconfigured sender classes pass through unconditionally | Unit test (not in TLA+ -- config is outside the state machine) |
 
 ## Test Plan
@@ -224,7 +296,9 @@ notify = false
 | Wait past window+cooldown, bucket refills | Unit | Liveness |
 | Partial consumption, wait past window, bucket resets to Idle | Unit | Window reset |
 | Sender without matching config always gets Allowed | Unit | No policy = no limit |
-| Per-channel config overrides global config | Unit | Config precedence |
+| Individual override takes precedence over class and default | Unit | Config precedence |
+| Class override takes precedence over default | Unit | Config precedence |
+| Per-channel config overrides sender-resolved config | Unit | Config precedence |
 | Two senders in same channel get independent buckets | Unit | Isolation |
 | Buffer overflow queues messages, delivers on refill | Integration | Buffer policy |
 | Drop overflow silently discards | Integration | Drop policy |
@@ -298,8 +372,6 @@ to be aware of the delivery buffer.
   dione instances (requires a coordination protocol -- out of scope for v1).
 - **Content-aware filtering:** Rate limiting based on message content patterns
   (e.g., detecting repetitive exchanges).
-- **Per-user rate limiting:** Extending the human scope to per-user buckets on a
-  shared substrate.
 
 ## Threat Model Placeholder
 
