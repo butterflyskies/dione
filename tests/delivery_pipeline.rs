@@ -759,15 +759,16 @@ fn config_reload_updates_rate_limiter() {
         RateLimitDecision::Denied { .. }
     ));
 
-    // "Reload" config with higher budget.
+    // "Reload" config with higher budget via update_config (not a new limiter).
     let cfg2 = RateLimitTomlConfig {
         enabled: true,
         max_tokens: Some(10),
         ..Default::default()
     };
-    let mut limiter = RateLimiter::new(cfg2.into_runtime());
+    limiter.update_config(cfg2.into_runtime());
 
-    // New limiter allows 10 messages.
+    // Existing bucket gets replaced on next check (config changed).
+    // New budget allows 10 messages.
     for _ in 0..10 {
         assert!(matches!(
             limiter.check_message(&sender, &channel, &[], now),

@@ -267,6 +267,8 @@ pub struct LoadedConfig {
     pub mention_patterns: Option<RegexSet>,
     /// Parsed timezone for timestamp conversion. None = UTC.
     pub tz: Option<chrono_tz::Tz>,
+    /// Pre-computed runtime rate limit config (avoids per-event `into_runtime()`).
+    rate_limit_runtime: crate::rate_limiter::RateLimitConfig,
 }
 
 /// Pre-parsed per-channel access policy.
@@ -316,6 +318,7 @@ impl LoadedConfig {
                     None
                 }
             });
+        let rate_limit_runtime = raw.rate_limit.clone().into_runtime();
         Self {
             raw,
             allowed_ids,
@@ -323,6 +326,7 @@ impl LoadedConfig {
             channel_policies,
             mention_patterns,
             tz,
+            rate_limit_runtime,
         }
     }
 
@@ -339,6 +343,11 @@ impl LoadedConfig {
     /// O(1) channel policy lookup.
     pub fn channel_policy(&self, channel_id: u64) -> Option<&ChannelPolicy> {
         self.channel_policies.get(&channel_id)
+    }
+
+    /// Returns the pre-computed runtime rate limit config (avoids per-event allocation).
+    pub fn rate_limit_runtime(&self) -> &crate::rate_limiter::RateLimitConfig {
+        &self.rate_limit_runtime
     }
 
     /// Returns the delivery delay (ms) for a channel, or 0 if the channel is

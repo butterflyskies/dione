@@ -121,8 +121,7 @@ pub async fn run(
     // via the ArcSwap config cache. Rate limiter config is refreshed per
     // event; existing bucket state is preserved across config changes.
     let config = crate::config::load_config(&server.state_dir);
-    let rate_limit_config = config.rate_limit.clone().into_runtime();
-    let mut rate_limiter = RateLimiter::new(rate_limit_config);
+    let mut rate_limiter = RateLimiter::new(config.rate_limit_runtime().clone());
     let mut delivery_buffer = DeliveryBuffer::new();
 
     let state_dir_notif = server.state_dir.clone();
@@ -167,6 +166,17 @@ pub async fn run(
                 event = rx.recv() => {
                     let Some(event) = event else { break };
 
+                    // Reload config from ArcSwap (cheap Arc pointer load).
+                    let cfg = crate::config::load_config(&state_dir_notif);
+
+                    // Live-reload rate limiter config before the check so
+                    // changes apply to the current event, not the next one.
+                    let new_rl_config = cfg.rate_limit_runtime();
+                    if new_rl_config != rate_limiter.config_ref() {
+                        tracing::info!("rate limiter config changed, applying");
+                        rate_limiter.update_config(new_rl_config.clone());
+                    }
+
                     // Rate-limit check for message events.
                     if let NotificationEvent::Message { ref user_id, ref chat_id, .. } = event {
                         let sender = ParticipantId::new(user_id.as_str());
@@ -182,9 +192,9 @@ pub async fn run(
                                 );
                             }
                             RateLimitDecision::Denied { retry_after, overflow: _ } => {
-                            // All denied messages are dropped for now.
-                            // OverflowPolicy::Buffer is accepted by config but not
-                            // yet implemented — see #79 for sender class wiring.
+                                // All denied messages are dropped for now.
+                                // OverflowPolicy::Buffer is accepted by config but not
+                                // yet implemented — see #79 for sender class wiring.
                                 tracing::info!(
                                     user_id,
                                     chat_id,
@@ -194,16 +204,6 @@ pub async fn run(
                                 continue;
                             }
                         }
-                    }
-
-                    // Reload config from ArcSwap (cheap Arc load, no clone).
-                    let cfg = crate::config::load_config(&state_dir_notif);
-
-                    // Live-reload rate limiter config if it changed.
-                    let new_rl_config = cfg.rate_limit.clone().into_runtime();
-                    if &new_rl_config != rate_limiter.config_ref() {
-                        tracing::info!("rate limiter config changed, applying");
-                        rate_limiter.update_config(new_rl_config);
                     }
 
                     // Delivery buffer: coalesce channel events per channel.
