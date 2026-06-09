@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-06-09
+
+### Added
+- Per-channel delivery buffer with configurable coalescing delay — messages
+  are batched before forwarding to the MCP client, reducing notification
+  chatter during bursts (#78).
+- Rate limiter with token-bucket state machine derived from TLA+ spec —
+  enforces per-channel send rate limits with automatic backpressure (#78).
+- Live-reloadable config for both delivery buffer and rate limiter (#78).
+- Self-contained `rate_limiter.rs` module with 4 proptest properties and
+  12 unit tests, matching the formally verified TLA+ model (#77).
+- Rate limiter design spec and TLA+ model in `docs/design/` — formal
+  specification with TLC model checking (752,862 states explored) (#59).
+
+### Fixed
+- Permission DMs no longer expire after 5 minutes — the timeout-based
+  expiry is removed entirely (#82).
+- All permission DMs (the clicked button and its siblings) are deleted
+  after the admin responds, instead of being edited to show status (#82).
+
+### Changed
+- 241 tests total including property-based tests for rate limiter and
+  delivery buffer.
+
 ## [0.8.1] - 2026-06-06
 
 ### Fixed
