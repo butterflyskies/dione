@@ -4,13 +4,40 @@ use std::time::{Duration, Instant};
 // ── Newtypes ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ParticipantId(pub String);
+pub struct ParticipantId(String);
+
+impl ParticipantId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ChannelRef(pub String);
+pub struct ChannelRef(String);
+
+impl ChannelRef {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SenderClass(pub String);
+pub struct SenderClass(String);
+
+impl SenderClass {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
@@ -38,6 +65,17 @@ pub struct RateLimitConfig {
 }
 
 impl RateLimitConfig {
+    /// Resolve the effective [`ScopeConfig`] for a message.
+    ///
+    /// Resolution order (first match wins):
+    /// 1. **Individual override** — exact match on `sender` in `self.individuals`.
+    /// 2. **Class override** — the participant's `classes` are checked *in order*;
+    ///    the first class that appears in `self.classes` wins.  This means the
+    ///    caller controls priority by ordering the participant's class list.
+    /// 3. **Default** — `self.default` is used when nothing else matches.
+    ///
+    /// After sender-level resolution, a **channel override** (if present)
+    /// replaces the result entirely.
     fn resolve(
         &self,
         sender: &ParticipantId,
@@ -56,7 +94,7 @@ impl RateLimitConfig {
             cfg.clone()
         } else {
             tracing::debug!(
-                sender = %sender.0,
+                sender = %sender.as_str(),
                 "no individual or class override, using default rate limit config"
             );
             self.default.clone()
@@ -261,11 +299,11 @@ mod tests {
     }
 
     fn sender(id: &str) -> ParticipantId {
-        ParticipantId(id.to_string())
+        ParticipantId::new(id)
     }
 
     fn channel(id: &str) -> ChannelRef {
-        ChannelRef(id.to_string())
+        ChannelRef::new(id)
     }
 
     // ── Unit tests ───────────────────────────────────────────────────────────
@@ -368,7 +406,7 @@ mod tests {
 
         let mut config = default_config(1);
         config.classes.push((
-            SenderClass("bot".to_string()),
+            SenderClass::new("bot"),
             ScopeConfig {
                 max_tokens: 2,
                 ..default_scope(2)
@@ -384,7 +422,7 @@ mod tests {
 
         let mut limiter = RateLimiter::new(config);
         let now = Instant::now();
-        let classes = [SenderClass("bot".to_string())];
+        let classes = [SenderClass::new("bot")];
 
         // Should get 10 tokens (individual), not 2 (class) or 1 (default)
         for i in 0..10 {
@@ -409,7 +447,7 @@ mod tests {
 
         let mut config = default_config(1);
         config.classes.push((
-            SenderClass("bot".to_string()),
+            SenderClass::new("bot"),
             ScopeConfig {
                 max_tokens: 5,
                 ..default_scope(5)
@@ -418,7 +456,7 @@ mod tests {
 
         let mut limiter = RateLimiter::new(config);
         let now = Instant::now();
-        let classes = [SenderClass("bot".to_string())];
+        let classes = [SenderClass::new("bot")];
 
         for i in 0..5 {
             assert!(
@@ -489,7 +527,7 @@ mod tests {
         let now = Instant::now();
         let s = sender("unknown");
         let c = channel("ch1");
-        let classes = [SenderClass("nonexistent_class".to_string())];
+        let classes = [SenderClass::new("nonexistent_class")];
 
         for _ in 0..3 {
             assert!(matches!(
@@ -510,14 +548,14 @@ mod tests {
 
         let mut config = default_config(1);
         config.classes.push((
-            SenderClass("moderator".to_string()),
+            SenderClass::new("moderator"),
             ScopeConfig {
                 max_tokens: 20,
                 ..default_scope(20)
             },
         ));
         config.classes.push((
-            SenderClass("bot".to_string()),
+            SenderClass::new("bot"),
             ScopeConfig {
                 max_tokens: 5,
                 ..default_scope(5)
@@ -529,10 +567,7 @@ mod tests {
 
         // User has both classes; "bot" listed first in their class list -> matches "bot" config
         // because we iterate the user's classes and find first match in config
-        let classes = [
-            SenderClass("bot".to_string()),
-            SenderClass("moderator".to_string()),
-        ];
+        let classes = [SenderClass::new("bot"), SenderClass::new("moderator")];
 
         for i in 0..5 {
             assert!(
@@ -658,9 +693,11 @@ mod proptests {
             Self {
                 limiter: RateLimiter::new(config),
                 senders: (0..3)
-                    .map(|i| ParticipantId(format!("sender_{i}")))
+                    .map(|i| ParticipantId::new(format!("sender_{i}")))
                     .collect(),
-                channels: (0..2).map(|i| ChannelRef(format!("channel_{i}"))).collect(),
+                channels: (0..2)
+                    .map(|i| ChannelRef::new(format!("channel_{i}")))
+                    .collect(),
                 now: Instant::now(),
             }
         }
