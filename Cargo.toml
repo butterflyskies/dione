@@ -39,6 +39,7 @@ tempfile = "3"
 
 [dev-dependencies]
 insta = { version = "1", features = ["json", "redactions"] }
+proptest = "1"
 test-case = "3"
 pretty_assertions = "1"
 tempfile = "3"
