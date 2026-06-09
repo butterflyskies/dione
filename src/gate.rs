@@ -281,6 +281,7 @@ mod tests {
                 id: "500".to_string(),
                 require_mention: true,
                 allow_from: vec![],
+                ..Default::default()
             }],
             ..Default::default()
         }

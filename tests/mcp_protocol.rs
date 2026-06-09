@@ -891,6 +891,7 @@ async fn test_reply_suppress_ping_true_passes_gate_with_configured_channel() {
         id: "100100".to_string(),
         require_mention: false,
         allow_from: vec![],
+        ..Default::default()
     });
     dione::config::store_loaded_config(&dione::config::LoadedConfig::from_raw(config));
     let server = make_server(&state_dir);
@@ -930,6 +931,7 @@ async fn test_reply_suppress_ping_false_passes_gate_with_configured_channel() {
         id: "100101".to_string(),
         require_mention: false,
         allow_from: vec![],
+        ..Default::default()
     });
     dione::config::store_loaded_config(&dione::config::LoadedConfig::from_raw(config));
     let server = make_server(&state_dir);

@@ -12,7 +12,7 @@
 //! - Notification (no id) → `{"jsonrpc":"2.0","method":"...","params":{...}}`
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use camino::Utf8PathBuf;
 use serde_json::{Value, json};
@@ -20,6 +20,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
+use crate::delivery_buffer::{BufferResult, DeliveryBuffer};
 use crate::discord::events::NotificationEvent;
 use crate::mcp::dispatch::call_tool;
 use crate::mcp::notifications::event_to_notification;
@@ -32,6 +33,7 @@ use crate::mcp::tools::{
     management::ManagementCtx,
     messaging::MessagingCtx,
 };
+use crate::rate_limiter::{ChannelRef, ParticipantId, RateLimitDecision, RateLimiter};
 pub use crate::tracing_channel::TraceLevelController;
 
 // ── Server struct ─────────────────────────────────────────────────────────────
@@ -115,12 +117,95 @@ pub async fn run(
     let stdin = BufReader::new(tokio::io::stdin());
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
 
+    // Load config for rate limiter and delivery buffer initialization.
+    let config = crate::config::load_config(&server.state_dir);
+    let rate_limit_config = config.rate_limit.clone().into_runtime();
+    let mut rate_limiter = RateLimiter::new(rate_limit_config);
+    let mut delivery_buffer = DeliveryBuffer::new();
+
+    // Snapshot per-channel delivery delays for the buffer.
+    // (Re-reads config on each event for channel ID lookup.)
+    let state_dir_notif = server.state_dir.clone();
+
     // Notification forwarding task.
     // The task exits naturally when the sender side is dropped (channel closed).
     let stdout_notif = stdout.clone();
     let notif_task = tokio::spawn(async move {
         let mut rx = event_rx;
-        while let Some(event) = rx.recv().await {
+
+        loop {
+            // Compute the next flush deadline for the select! timeout.
+            let flush_deadline = delivery_buffer.next_flush_deadline();
+
+            tokio::select! {
+                biased;
+
+                // Branch 1: flush deadline fires — drain buffered events.
+                _ = async {
+                    match flush_deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    let now = tokio::time::Instant::now();
+                    let flushed = delivery_buffer.flush_ready(now);
+                    for event in flushed {
+                        let notification = event_to_notification(event);
+                        write_line(&stdout_notif, &notification).await;
+                    }
+                }
+
+                // Branch 2: new event arrives from Discord.
+                event = rx.recv() => {
+                    let Some(event) = event else { break };
+
+                    // Rate-limit check for message events.
+                    if let NotificationEvent::Message { ref user_id, ref chat_id, .. } = event {
+                        let sender = ParticipantId::new(user_id.as_str());
+                        let channel = ChannelRef::new(chat_id.as_str());
+                        let now = Instant::now();
+                        match rate_limiter.check_message(&sender, &channel, &[], now) {
+                            RateLimitDecision::Allowed { remaining, .. } => {
+                                tracing::trace!(
+                                    user_id,
+                                    chat_id,
+                                    remaining,
+                                    "rate limiter: message allowed"
+                                );
+                            }
+                            RateLimitDecision::Denied { retry_after, .. } => {
+                                tracing::info!(
+                                    user_id,
+                                    chat_id,
+                                    retry_after_ms = retry_after.as_millis() as u64,
+                                    "rate limiter: message denied, dropping"
+                                );
+                                continue;
+                            }
+                        }
+                    }
+
+                    // Delivery buffer: coalesce message events per channel.
+                    let cfg = crate::config::load_config(&state_dir_notif);
+                    let delay_ms = extract_delay_ms(&event, &cfg);
+
+                    match delivery_buffer.buffer_event(event, delay_ms) {
+                        BufferResult::Immediate(event) => {
+                            let notification = event_to_notification(event);
+                            write_line(&stdout_notif, &notification).await;
+                        }
+                        BufferResult::Buffered => {
+                            // Will be flushed when the deadline fires.
+                        }
+                    }
+                }
+            }
+        }
+
+        // Channel closed — flush any remaining buffered events.
+        let now = tokio::time::Instant::now() + tokio::time::Duration::from_secs(1);
+        let remaining = delivery_buffer.flush_ready(now);
+        for event in remaining {
             let notification = event_to_notification(event);
             write_line(&stdout_notif, &notification).await;
         }
@@ -290,6 +375,22 @@ async fn write_line(stdout: &Arc<Mutex<tokio::io::Stdout>>, value: &Value) {
     }
     if let Err(e) = out.flush().await {
         tracing::warn!(error = %e, "failed to flush stdout");
+    }
+}
+
+// ── Notification helpers ─────────────────────────────────────────────────────
+
+/// Extract the delivery delay (ms) for an event based on its channel ID.
+fn extract_delay_ms(event: &NotificationEvent, config: &crate::config::LoadedConfig) -> u64 {
+    let chat_id = match event {
+        NotificationEvent::Message { chat_id, .. }
+        | NotificationEvent::MessageEdit { chat_id, .. }
+        | NotificationEvent::MessageDelete { chat_id, .. } => Some(chat_id.as_str()),
+        _ => None,
+    };
+    match chat_id.and_then(|id| id.parse::<u64>().ok()) {
+        Some(channel_id) => config.delivery_delay_ms(channel_id),
+        None => 0,
     }
 }
 
