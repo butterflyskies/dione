@@ -98,7 +98,6 @@ async fn main() -> Result<()> {
         .wrap_err("failed to build Discord client")?;
 
     let http = discord_client.http.clone();
-    let prune_http = http.clone();
 
     // Build MCP server.
     let trace_controller = TraceLevelController::new(stderr_reload_handle, channel_reload_handle);
@@ -124,7 +123,6 @@ async fn main() -> Result<()> {
     });
 
     // Spawn background pruning task.
-    let prune_state = state.clone();
     let prune_queue = queue.clone();
     let prune_expiry = Duration::from_secs(config.access_requests.expiry_seconds);
     let cancel_prune = cancel.clone();
@@ -135,18 +133,6 @@ async fn main() -> Result<()> {
                 biased;
                 _ = cancel_prune.cancelled() => break,
                 _ = ticker.tick() => {
-                    let stale = prune_state.write().await.prune_stale_permissions();
-                    for (channel_id, msg_id) in stale {
-                        let edit = serenity::builder::EditMessage::new()
-                            .content("Permission request — **Expired**")
-                            .components(vec![]);
-                        if let Err(e) = prune_http
-                            .edit_message(channel_id, msg_id, &edit, vec![])
-                            .await
-                        {
-                            tracing::warn!(msg_id = msg_id.get(), error = %e, "failed to edit stale permission message");
-                        }
-                    }
                     prune_queue.lock().await.prune_expired(prune_expiry);
                 }
             }

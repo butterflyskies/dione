@@ -480,15 +480,12 @@ impl EventHandler for Handler {
             state.remove_permissions_by_request_id(&request_id)
         };
 
-        // Delete sibling DMs that other admins received (the clicked message was
-        // already updated above, so skip it).
-        let clicked_msg_id = component.message.id;
+        // Delete all permission DMs — siblings from other admins and the
+        // clicked message itself. The interaction response already acknowledged
+        // the click, so the message can be cleaned up.
         for (channel_id, msg_id) in &siblings {
-            if *msg_id == clicked_msg_id {
-                continue;
-            }
             if let Err(e) = ctx.http.delete_message(*channel_id, *msg_id, None).await {
-                tracing::warn!(msg_id = msg_id.get(), error = %e, "failed to delete sibling permission DM");
+                tracing::warn!(msg_id = msg_id.get(), error = %e, "failed to delete permission DM");
             }
         }
 
