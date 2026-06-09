@@ -117,9 +117,9 @@ pub async fn run(
     let stdin = BufReader::new(tokio::io::stdin());
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
 
-    // Rate limiter config is snapshot at startup. Changes to [rate_limit]
-    // in config.toml require a server restart to take effect. Delivery buffer
-    // delays are live-reloadable (read from ArcSwap config cache per event).
+    // Both rate limiter and delivery buffer configs are live-reloadable
+    // via the ArcSwap config cache. Rate limiter config is refreshed per
+    // event; existing bucket state is preserved across config changes.
     let config = crate::config::load_config(&server.state_dir);
     let rate_limit_config = config.rate_limit.clone().into_runtime();
     let mut rate_limiter = RateLimiter::new(rate_limit_config);
@@ -196,8 +196,17 @@ pub async fn run(
                         }
                     }
 
-                    // Delivery buffer: coalesce message events per channel.
+                    // Reload config from ArcSwap (cheap Arc load, no clone).
                     let cfg = crate::config::load_config(&state_dir_notif);
+
+                    // Live-reload rate limiter config if it changed.
+                    let new_rl_config = cfg.rate_limit.clone().into_runtime();
+                    if &new_rl_config != rate_limiter.config_ref() {
+                        tracing::info!("rate limiter config changed, applying");
+                        rate_limiter.update_config(new_rl_config);
+                    }
+
+                    // Delivery buffer: coalesce channel events per channel.
                     let delay_ms = extract_delay_ms(&event, &cfg);
 
                     match delivery_buffer.buffer_event(event, delay_ms) {

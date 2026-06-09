@@ -55,7 +55,7 @@ pub struct ScopeConfig {
     pub overflow: OverflowPolicy,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RateLimitConfig {
     pub enabled: bool,
     pub default: ScopeConfig,
@@ -261,6 +261,18 @@ impl RateLimiter {
             config,
             buckets: HashMap::new(),
         }
+    }
+
+    /// Returns a reference to the current config for comparison.
+    pub fn config_ref(&self) -> &RateLimitConfig {
+        &self.config
+    }
+
+    /// Replace the stored config. Existing buckets are preserved — they will
+    /// be reconfigured on their next `check_message` call when the resolved
+    /// config differs from the bucket's stored config.
+    pub fn update_config(&mut self, config: RateLimitConfig) {
+        self.config = config;
     }
 
     pub fn check_message(
