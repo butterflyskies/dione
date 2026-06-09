@@ -309,6 +309,12 @@ mod tests {
     // ── Unit tests ───────────────────────────────────────────────────────────
 
     #[test]
+    #[should_panic(expected = "max_tokens must be > 0")]
+    fn zero_max_tokens_panics() {
+        TokenBucket::new(default_scope(0));
+    }
+
+    #[test]
     fn consume_n_plus_1_messages() {
         let n = 5u32;
         let mut bucket = TokenBucket::new(default_scope(n));
