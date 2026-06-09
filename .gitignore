@@ -1,3 +1,4 @@
 /target
 .serena/
 *.rlib
+docs/design/rate-limiter/states/
