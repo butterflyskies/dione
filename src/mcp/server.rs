@@ -128,19 +128,25 @@ pub async fn run(
     let state_dir_notif = server.state_dir.clone();
 
     // Notification forwarding task.
-    // The task exits naturally when the sender side is dropped (channel closed).
+    // Exits on cancellation or when the event channel closes.
     let stdout_notif = stdout.clone();
+    let cancel_notif = cancel.clone();
     let notif_task = tokio::spawn(async move {
         let mut rx = event_rx;
 
         loop {
-            // Compute the next flush deadline for the select! timeout.
             let flush_deadline = delivery_buffer.next_flush_deadline();
 
             tokio::select! {
                 biased;
 
-                // Branch 1: flush deadline fires — drain buffered events.
+                // Cancellation takes priority — break to drain path.
+                _ = cancel_notif.cancelled() => {
+                    tracing::debug!("notif_task: cancellation received, draining buffer");
+                    break;
+                }
+
+                // Flush deadline fires — drain buffered events.
                 _ = async {
                     match flush_deadline {
                         Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -155,7 +161,7 @@ pub async fn run(
                     }
                 }
 
-                // Branch 2: new event arrives from Discord.
+                // New event arrives from Discord.
                 event = rx.recv() => {
                     let Some(event) = event else { break };
 
@@ -263,11 +269,9 @@ pub async fn run(
         }
     }
 
-    // Drop the server to close the notification channel sender, signalling the
-    // notif_task to drain remaining events and exit cleanly.
+    // Cancellation signal already sent — notif_task will break out of its
+    // loop and flush_all() any buffered events. Give it a short window.
     drop(server);
-
-    // Give the notification task a short window to drain remaining events.
     let _ = tokio::time::timeout(Duration::from_millis(500), notif_task).await;
 
     Ok(())

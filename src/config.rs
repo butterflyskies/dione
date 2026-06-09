@@ -212,7 +212,14 @@ impl RateLimitTomlConfig {
 
         let overflow = match self.overflow.as_deref() {
             Some("buffer") => OverflowPolicy::Buffer,
-            _ => OverflowPolicy::Drop { notify: true },
+            Some("drop") | None => OverflowPolicy::Drop { notify: true },
+            Some(other) => {
+                tracing::warn!(
+                    value = other,
+                    "unrecognized rate_limit.overflow value, defaulting to \"drop\""
+                );
+                OverflowPolicy::Drop { notify: true }
+            }
         };
 
         let default = ScopeConfig {
