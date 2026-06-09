@@ -1,6 +1,7 @@
 pub mod config;
 pub mod config_store;
 pub mod config_watcher;
+pub mod delivery_buffer;
 pub mod discord;
 pub mod gate;
 pub mod mcp;

@@ -36,7 +36,7 @@ pub(crate) async fn call_tool(
     name: &str,
     args: Value,
 ) -> Result<Value, String> {
-    let config = std::sync::Arc::new(crate::config::load_config(&server.state_dir));
+    let config = crate::config::load_config(&server.state_dir);
 
     let result = match name {
         // Messaging

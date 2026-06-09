@@ -40,6 +40,7 @@ pub struct Config {
     pub delivery: DeliveryConfig,
     pub access_requests: AccessRequestsConfig,
     pub voice: VoiceConfig,
+    pub rate_limit: RateLimitTomlConfig,
 }
 
 /// Access control configuration.
@@ -85,6 +86,12 @@ pub struct ChannelConfig {
     pub id: String,
     pub require_mention: bool,
     pub allow_from: Vec<String>,
+    /// Per-channel coalescing delay for channel events (milliseconds).
+    /// When > 0, channel events (messages, edits, deletes, reactions) are
+    /// buffered and flushed after this delay. Non-channel events (traces,
+    /// permission responses, config errors) pass through immediately.
+    /// Default: 0 (no buffering).
+    pub delivery_delay_ms: u64,
 }
 
 impl Default for ChannelConfig {
@@ -93,6 +100,7 @@ impl Default for ChannelConfig {
             id: String::new(),
             require_mention: true,
             allow_from: Vec::new(),
+            delivery_delay_ms: 0,
         }
     }
 }
@@ -177,6 +185,71 @@ pub struct VoiceConfig {
     pub enabled: bool,
 }
 
+// ── Rate limit config (TOML representation) ────────────────────────────────
+
+/// TOML-level rate limit configuration. Deserialized from `[rate_limit]`.
+///
+/// Maps to the runtime [`crate::rate_limiter::RateLimitConfig`] via
+/// [`RateLimitTomlConfig::into_runtime`].
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct RateLimitTomlConfig {
+    pub enabled: bool,
+    /// Default tokens per window.
+    pub max_tokens: Option<u32>,
+    /// Default window duration in seconds.
+    pub window_secs: Option<u64>,
+    /// Default cooldown duration in seconds.
+    pub cooldown_secs: Option<u64>,
+    /// Default overflow policy: "drop" or "buffer".
+    pub overflow: Option<String>,
+}
+
+impl RateLimitTomlConfig {
+    /// Convert to the runtime rate limit config.
+    pub fn into_runtime(self) -> crate::rate_limiter::RateLimitConfig {
+        use crate::rate_limiter::{OverflowPolicy, RateLimitConfig, ScopeConfig};
+        use std::time::Duration;
+
+        let overflow = match self.overflow.as_deref() {
+            Some("buffer") => OverflowPolicy::Buffer,
+            Some("drop") | None => OverflowPolicy::Drop { notify: true },
+            Some(other) => {
+                tracing::warn!(
+                    value = other,
+                    "unrecognized rate_limit.overflow value, defaulting to \"drop\""
+                );
+                OverflowPolicy::Drop { notify: true }
+            }
+        };
+
+        let window_secs = self.window_secs.unwrap_or(3600);
+        let cooldown_secs = self.cooldown_secs.unwrap_or(3600);
+
+        if self.enabled && window_secs == 0 {
+            tracing::warn!("rate_limit.window_secs is 0, rate limiting is effectively disabled");
+        }
+        if self.enabled && cooldown_secs == 0 {
+            tracing::warn!("rate_limit.cooldown_secs is 0, cooldown is effectively disabled");
+        }
+
+        let default = ScopeConfig {
+            max_tokens: self.max_tokens.unwrap_or(20),
+            window: Duration::from_secs(window_secs),
+            cooldown: Duration::from_secs(cooldown_secs),
+            overflow,
+        };
+
+        RateLimitConfig {
+            enabled: self.enabled,
+            default,
+            classes: Vec::new(),
+            individuals: std::collections::HashMap::new(),
+            channels: std::collections::HashMap::new(),
+        }
+    }
+}
+
 // ── Loaded config (pre-parsed for hot-path performance) ──────────────────────
 
 /// Config with pre-computed O(1) lookup structures.
@@ -194,6 +267,8 @@ pub struct LoadedConfig {
     pub mention_patterns: Option<RegexSet>,
     /// Parsed timezone for timestamp conversion. None = UTC.
     pub tz: Option<chrono_tz::Tz>,
+    /// Pre-computed runtime rate limit config (avoids per-event `into_runtime()`).
+    rate_limit_runtime: crate::rate_limiter::RateLimitConfig,
 }
 
 /// Pre-parsed per-channel access policy.
@@ -201,6 +276,8 @@ pub struct LoadedConfig {
 pub struct ChannelPolicy {
     pub require_mention: bool,
     pub allow_from: HashSet<u64>,
+    /// Per-channel coalescing delay (milliseconds). 0 = immediate.
+    pub delivery_delay_ms: u64,
 }
 
 impl std::ops::Deref for LoadedConfig {
@@ -225,6 +302,7 @@ impl LoadedConfig {
                     ChannelPolicy {
                         require_mention: ch.require_mention,
                         allow_from: parse_id_set(&ch.allow_from),
+                        delivery_delay_ms: ch.delivery_delay_ms,
                     },
                 ))
             })
@@ -240,6 +318,7 @@ impl LoadedConfig {
                     None
                 }
             });
+        let rate_limit_runtime = raw.rate_limit.clone().into_runtime();
         Self {
             raw,
             allowed_ids,
@@ -247,6 +326,7 @@ impl LoadedConfig {
             channel_policies,
             mention_patterns,
             tz,
+            rate_limit_runtime,
         }
     }
 
@@ -263,6 +343,20 @@ impl LoadedConfig {
     /// O(1) channel policy lookup.
     pub fn channel_policy(&self, channel_id: u64) -> Option<&ChannelPolicy> {
         self.channel_policies.get(&channel_id)
+    }
+
+    /// Returns the pre-computed runtime rate limit config (avoids per-event allocation).
+    pub fn rate_limit_runtime(&self) -> &crate::rate_limiter::RateLimitConfig {
+        &self.rate_limit_runtime
+    }
+
+    /// Returns the delivery delay (ms) for a channel, or 0 if the channel is
+    /// not configured or has no delay.
+    pub fn delivery_delay_ms(&self, channel_id: u64) -> u64 {
+        self.channel_policies
+            .get(&channel_id)
+            .map(|p| p.delivery_delay_ms)
+            .unwrap_or(0)
     }
 
     /// Convert a `chrono::DateTime<Utc>` to a [`LocalTimestamp`] in the configured timezone.
@@ -340,12 +434,14 @@ static LAST_VALID_CONFIG: std::sync::LazyLock<ArcSwap<LoadedConfig>> =
 
 /// Returns the current config from the in-memory cache.
 ///
+/// Returns an `Arc<LoadedConfig>` loaded from the ArcSwap without cloning
+/// the inner config. Callers that need ownership can `Arc::clone()`.
+///
 /// If the cache has not been populated by [`reload_config`] yet, returns
 /// defaults. In practice, `reload_config` is called at startup before any
 /// reader.
-pub fn load_config(_state_dir: &Utf8Path) -> LoadedConfig {
-    let guard = LAST_VALID_CONFIG.load();
-    (**guard).clone()
+pub fn load_config(_state_dir: &Utf8Path) -> Arc<LoadedConfig> {
+    LAST_VALID_CONFIG.load_full()
 }
 
 /// Reads config from disk, updates the in-memory cache, and returns the result.
@@ -603,6 +699,7 @@ enabled = true
                 id: "500".to_string(),
                 require_mention: true,
                 allow_from: vec!["333".to_string()],
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -692,6 +789,7 @@ enabled = true
                 id: "not-numeric".to_string(),
                 require_mention: false,
                 allow_from: vec![],
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -716,6 +814,117 @@ enabled = true
             cfg.channel_policies.is_empty(),
             "channel with non-numeric ID must be silently dropped"
         );
+    }
+
+    // ── delivery_delay_ms tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_delivery_delay_ms_from_channel_config() {
+        let raw = Config {
+            channels: vec![ChannelConfig {
+                id: "700".to_string(),
+                delivery_delay_ms: 500,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let cfg = LoadedConfig::from_raw(raw);
+        assert_eq!(cfg.delivery_delay_ms(700), 500);
+        assert_eq!(cfg.delivery_delay_ms(999), 0, "unknown channel returns 0");
+    }
+
+    #[test]
+    fn test_delivery_delay_ms_defaults_to_zero() {
+        let raw = Config {
+            channels: vec![ChannelConfig {
+                id: "800".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let cfg = LoadedConfig::from_raw(raw);
+        assert_eq!(
+            cfg.delivery_delay_ms(800),
+            0,
+            "default delivery_delay_ms should be 0"
+        );
+    }
+
+    // ── rate_limit config tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_rate_limit_toml_parses() {
+        let (_dir, state_dir) = temp_state_dir();
+        let config_path = state_dir.join("config.toml");
+        let toml = r#"
+[rate_limit]
+enabled = true
+max_tokens = 10
+window_secs = 60
+cooldown_secs = 30
+overflow = "buffer"
+"#;
+        fs::write(config_path.as_std_path(), toml.as_bytes()).unwrap();
+        let cfg = reload_config(&state_dir).0;
+        assert!(cfg.rate_limit.enabled);
+        assert_eq!(cfg.rate_limit.max_tokens, Some(10));
+        assert_eq!(cfg.rate_limit.window_secs, Some(60));
+        assert_eq!(cfg.rate_limit.cooldown_secs, Some(30));
+        assert_eq!(cfg.rate_limit.overflow.as_deref(), Some("buffer"));
+    }
+
+    #[test]
+    fn test_rate_limit_toml_defaults() {
+        let cfg = Config::default();
+        assert!(!cfg.rate_limit.enabled);
+        assert_eq!(cfg.rate_limit.max_tokens, None);
+    }
+
+    #[test]
+    fn test_rate_limit_toml_into_runtime() {
+        use crate::rate_limiter::OverflowPolicy;
+        let toml_cfg = RateLimitTomlConfig {
+            enabled: true,
+            max_tokens: Some(5),
+            window_secs: Some(120),
+            cooldown_secs: Some(60),
+            overflow: Some("buffer".to_string()),
+        };
+        let rt = toml_cfg.into_runtime();
+        assert!(rt.enabled);
+        assert_eq!(rt.default.max_tokens, 5);
+        assert_eq!(rt.default.window, std::time::Duration::from_secs(120));
+        assert_eq!(rt.default.cooldown, std::time::Duration::from_secs(60));
+        assert_eq!(rt.default.overflow, OverflowPolicy::Buffer);
+    }
+
+    #[test]
+    fn test_rate_limit_toml_into_runtime_defaults() {
+        use crate::rate_limiter::OverflowPolicy;
+        let toml_cfg = RateLimitTomlConfig::default();
+        let rt = toml_cfg.into_runtime();
+        assert!(!rt.enabled);
+        assert_eq!(rt.default.max_tokens, 20);
+        assert!(matches!(
+            rt.default.overflow,
+            OverflowPolicy::Drop { notify: true }
+        ));
+    }
+
+    #[test]
+    fn test_delivery_delay_ms_toml_parses() {
+        let (_dir, state_dir) = temp_state_dir();
+        let config_path = state_dir.join("config.toml");
+        let toml = r#"
+[[channels]]
+id = "123"
+require_mention = false
+delivery_delay_ms = 750
+"#;
+        fs::write(config_path.as_std_path(), toml.as_bytes()).unwrap();
+        let cfg = reload_config(&state_dir).0;
+        assert_eq!(cfg.channels[0].delivery_delay_ms, 750);
+        assert_eq!(cfg.delivery_delay_ms(123), 750);
     }
 
     // TC-62: Empty allow_from + admins → functional (everything gated).
