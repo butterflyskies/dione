@@ -241,9 +241,10 @@ fn delivery_buffer_coalesces_messages() {
     assert_eq!(contents, vec!["first", "second"]);
 }
 
-/// Non-message events bypass both rate limiter and delivery buffer.
+/// Non-channel events bypass both rate limiter and delivery buffer.
+/// Channel events (including reactions) are subject to the delivery buffer.
 #[test]
-fn non_message_events_bypass_pipeline() {
+fn non_channel_events_bypass_pipeline() {
     let mut limiter = make_limiter(true, 1);
     let mut buffer = DeliveryBuffer::new();
     let now = Instant::now();
@@ -269,19 +270,7 @@ fn non_message_events_bypass_pipeline() {
         "messages should be denied after exhaustion"
     );
 
-    // Non-message events must still pass through, even with a delivery delay.
-    let reaction = pipeline_step(
-        reaction_event("ch1", "100"),
-        &mut limiter,
-        &mut buffer,
-        500,
-        now,
-    );
-    assert!(
-        reaction.is_some(),
-        "reaction must bypass rate limiter and buffer"
-    );
-
+    // Non-channel events must still pass through, even with a delivery delay.
     let trace = pipeline_step(trace_event(), &mut limiter, &mut buffer, 500, now);
     assert!(trace.is_some(), "trace must bypass rate limiter and buffer");
 
@@ -296,6 +285,47 @@ fn non_message_events_bypass_pipeline() {
         cfg_err.is_some(),
         "config error must bypass rate limiter and buffer"
     );
+}
+
+/// Reactions are channel events — they bypass the rate limiter but are
+/// subject to the delivery buffer when a delay is configured.
+#[test]
+fn reactions_buffered_with_delay() {
+    let mut limiter = make_limiter(true, 1);
+    let mut buffer = DeliveryBuffer::new();
+    let now = Instant::now();
+
+    // Reaction with a delivery delay should be buffered.
+    let result = pipeline_step(
+        reaction_event("ch1", "100"),
+        &mut limiter,
+        &mut buffer,
+        500,
+        now,
+    );
+    assert!(
+        result.is_none(),
+        "reaction with delay should be buffered, not immediate"
+    );
+
+    // Reaction with no delay should pass through immediately.
+    let result = pipeline_step(
+        reaction_event("ch2", "100"),
+        &mut limiter,
+        &mut buffer,
+        0,
+        now,
+    );
+    assert!(
+        result.is_some(),
+        "reaction with no delay should pass through immediately"
+    );
+
+    // Flush the buffered reaction.
+    let after_deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(600);
+    let flushed = buffer.flush_ready(after_deadline);
+    assert_eq!(flushed.len(), 1, "buffered reaction should flush");
+    assert!(matches!(flushed[0], NotificationEvent::Reaction { .. }));
 }
 
 /// Edit and delete events bypass rate limiter but are subject to the
@@ -822,7 +852,8 @@ require_mention = true
 }
 
 /// Mixed event types through the pipeline: messages are rate-limited and
-/// buffered, non-message events pass through regardless.
+/// buffered, reactions are buffered (channel events), non-channel events
+/// pass through regardless.
 #[test]
 fn mixed_event_stream() {
     let mut limiter = make_limiter(true, 2);
@@ -844,7 +875,7 @@ fn mixed_event_stream() {
         immediate_results.push("msg1");
     }
 
-    // Reaction: passes through immediately.
+    // Reaction: buffered (channel event with delay).
     let r = pipeline_step(
         reaction_event("ch1", "100"),
         &mut limiter,
@@ -868,7 +899,7 @@ fn mixed_event_stream() {
         immediate_results.push("msg2");
     }
 
-    // Trace: passes through immediately.
+    // Trace: passes through immediately (non-channel event).
     let r = pipeline_step(trace_event(), &mut limiter, &mut buffer, delay, now);
     if r.is_some() {
         immediate_results.push("trace");
@@ -886,32 +917,32 @@ fn mixed_event_stream() {
         immediate_results.push("msg3");
     }
 
-    // Permission response: passes through immediately.
+    // Permission response: passes through immediately (non-channel event).
     let r = pipeline_step(permission_event(), &mut limiter, &mut buffer, delay, now);
     if r.is_some() {
         immediate_results.push("permission");
     }
 
-    // Only non-message events should have passed through immediately.
+    // Only non-channel events should have passed through immediately.
     assert_eq!(
         immediate_results,
-        vec!["reaction", "trace", "permission"],
-        "only non-message events should pass through immediately"
+        vec!["trace", "permission"],
+        "only non-channel events should pass through immediately"
     );
 
-    // Flush: only msg1 and msg2 should be in the buffer (msg3 was denied).
+    // Flush: msg1, reaction, and msg2 should be in the buffer (msg3 was denied).
     let after_deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(600);
     let flushed = buffer.flush_ready(after_deadline);
-    assert_eq!(flushed.len(), 2, "only allowed messages should be buffered");
+    assert_eq!(
+        flushed.len(),
+        3,
+        "allowed messages and reaction should be buffered"
+    );
 
-    let contents: Vec<String> = flushed
-        .iter()
-        .filter_map(|e| match e {
-            NotificationEvent::Message { content, .. } => Some(content.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(contents, vec!["msg1", "msg2"]);
+    // Verify order: msg1, reaction, msg2.
+    assert!(matches!(&flushed[0], NotificationEvent::Message { content, .. } if content == "msg1"));
+    assert!(matches!(&flushed[1], NotificationEvent::Reaction { .. }));
+    assert!(matches!(&flushed[2], NotificationEvent::Message { content, .. } if content == "msg2"));
 }
 
 /// Buffered messages are flushed in order.
@@ -993,4 +1024,242 @@ fn buffer_rearms_after_flush() {
         &flushed2[0],
         NotificationEvent::Message { content, .. } if content == "batch2"
     ));
+}
+
+// ── Async integration tests (tokio::select loop) ──────────────────────────
+
+/// Run the notification forwarding loop (mirrors the logic in server.rs
+/// notif_task) using real channels and deterministic time.
+///
+/// Returns the collected output events.
+async fn run_notif_loop(
+    mut rx: tokio::sync::mpsc::Receiver<NotificationEvent>,
+    cancel: tokio_util::sync::CancellationToken,
+    delay_ms_fn: impl Fn(&NotificationEvent) -> u64 + Send + 'static,
+) -> Vec<NotificationEvent> {
+    let mut delivery_buffer = DeliveryBuffer::new();
+    let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<NotificationEvent>(256);
+
+    let loop_task = tokio::spawn(async move {
+        loop {
+            let flush_deadline = delivery_buffer.next_flush_deadline();
+
+            tokio::select! {
+                biased;
+
+                _ = cancel.cancelled() => {
+                    break;
+                }
+
+                _ = async {
+                    match flush_deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    let now = tokio::time::Instant::now();
+                    let flushed = delivery_buffer.flush_ready(now);
+                    for event in flushed {
+                        let _ = output_tx.send(event).await;
+                    }
+                }
+
+                event = rx.recv() => {
+                    let Some(event) = event else { break };
+                    let delay_ms = delay_ms_fn(&event);
+                    match delivery_buffer.buffer_event(event, delay_ms) {
+                        BufferResult::Immediate(event) => {
+                            let _ = output_tx.send(event).await;
+                        }
+                        BufferResult::Buffered => {}
+                    }
+                }
+            }
+        }
+
+        // Drain remaining buffered events on exit.
+        let remaining = delivery_buffer.flush_all();
+        for event in remaining {
+            let _ = output_tx.send(event).await;
+        }
+    });
+
+    // Wait for the loop task to complete.
+    let _ = loop_task.await;
+
+    // Collect all output events.
+    let mut events = Vec::new();
+    output_rx.close();
+    while let Some(event) = output_rx.recv().await {
+        events.push(event);
+    }
+    events
+}
+
+/// Delayed message events appear only after the delivery delay elapses.
+#[tokio::test(start_paused = true)]
+async fn async_delayed_message_appears_after_delay() {
+    let (tx, rx) = tokio::sync::mpsc::channel::<NotificationEvent>(16);
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let cancel_clone = cancel.clone();
+
+    let handle = tokio::spawn(async move { run_notif_loop(rx, cancel_clone, |_| 500).await });
+
+    // Send a message.
+    tx.send(msg_event("ch1", "100", "delayed-msg"))
+        .await
+        .unwrap();
+
+    // Advance time to just before the deadline — event should not have flushed yet.
+    tokio::time::advance(Duration::from_millis(400)).await;
+    tokio::task::yield_now().await;
+
+    // Advance past the deadline.
+    tokio::time::advance(Duration::from_millis(200)).await;
+    tokio::task::yield_now().await;
+
+    // Cancel to collect results.
+    cancel.cancel();
+    let events = handle.await.unwrap();
+
+    assert_eq!(
+        events.len(),
+        1,
+        "exactly one event should have been emitted"
+    );
+    assert!(matches!(
+        &events[0],
+        NotificationEvent::Message { content, .. } if content == "delayed-msg"
+    ));
+}
+
+/// Reaction events to a delayed channel are buffered along with messages.
+#[tokio::test(start_paused = true)]
+async fn async_reaction_buffered_with_delay() {
+    let (tx, rx) = tokio::sync::mpsc::channel::<NotificationEvent>(16);
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let cancel_clone = cancel.clone();
+
+    let handle = tokio::spawn(async move { run_notif_loop(rx, cancel_clone, |_| 500).await });
+
+    // Send a message, then a reaction to the same channel.
+    tx.send(msg_event("ch1", "100", "hello")).await.unwrap();
+    tx.send(reaction_event("ch1", "200")).await.unwrap();
+
+    // Allow the events to be processed.
+    tokio::task::yield_now().await;
+
+    // Advance past the deadline.
+    tokio::time::advance(Duration::from_millis(600)).await;
+    tokio::task::yield_now().await;
+
+    cancel.cancel();
+    let events = handle.await.unwrap();
+
+    // Both message and reaction should have been buffered and flushed together.
+    assert_eq!(events.len(), 2, "message and reaction should both flush");
+    assert!(matches!(&events[0], NotificationEvent::Message { .. }));
+    assert!(matches!(&events[1], NotificationEvent::Reaction { .. }));
+}
+
+/// Non-channel events pass through immediately even when delay is configured.
+#[tokio::test(start_paused = true)]
+async fn async_trace_bypasses_buffer() {
+    let (tx, rx) = tokio::sync::mpsc::channel::<NotificationEvent>(16);
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let cancel_clone = cancel.clone();
+
+    let handle = tokio::spawn(async move { run_notif_loop(rx, cancel_clone, |_| 500).await });
+
+    // Send a trace event — should pass through immediately.
+    tx.send(trace_event()).await.unwrap();
+    tokio::task::yield_now().await;
+
+    // Don't advance time — trace should already be emitted.
+    cancel.cancel();
+    let events = handle.await.unwrap();
+
+    assert_eq!(
+        events.len(),
+        1,
+        "trace event should pass through immediately"
+    );
+    assert!(matches!(&events[0], NotificationEvent::Trace { .. }));
+}
+
+/// Shutdown drain: when the CancellationToken is cancelled, all buffered
+/// events are flushed via flush_all().
+#[tokio::test(start_paused = true)]
+async fn async_shutdown_drains_buffered_events() {
+    let (tx, rx) = tokio::sync::mpsc::channel::<NotificationEvent>(16);
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let cancel_clone = cancel.clone();
+
+    let handle = tokio::spawn(async move { run_notif_loop(rx, cancel_clone, |_| 5000).await });
+
+    // Buffer several events with a long delay (won't flush naturally).
+    tx.send(msg_event("ch1", "100", "drain-1")).await.unwrap();
+    tx.send(msg_event("ch1", "200", "drain-2")).await.unwrap();
+    tx.send(reaction_event("ch2", "100")).await.unwrap();
+    tx.send(msg_event("ch2", "300", "drain-3")).await.unwrap();
+
+    // Let events be processed by the loop.
+    tokio::task::yield_now().await;
+    // Small advance so events are consumed but deadline hasn't passed.
+    tokio::time::advance(Duration::from_millis(100)).await;
+    tokio::task::yield_now().await;
+
+    // Cancel — should trigger flush_all drain.
+    cancel.cancel();
+    let events = handle.await.unwrap();
+
+    // All 4 events should have been drained on shutdown.
+    assert_eq!(
+        events.len(),
+        4,
+        "all buffered events must be flushed on shutdown, got {}",
+        events.len()
+    );
+
+    // Verify we got the right events (order: ch1 events first, then ch2,
+    // because BTreeMap iterates in sorted key order).
+    assert!(matches!(
+        &events[0],
+        NotificationEvent::Message { content, chat_id, .. }
+        if content == "drain-1" && chat_id == "ch1"
+    ));
+    assert!(matches!(
+        &events[1],
+        NotificationEvent::Message { content, chat_id, .. }
+        if content == "drain-2" && chat_id == "ch1"
+    ));
+    assert!(matches!(
+        &events[2],
+        NotificationEvent::Reaction { chat_id, .. }
+        if chat_id == "ch2"
+    ));
+    assert!(matches!(
+        &events[3],
+        NotificationEvent::Message { content, chat_id, .. }
+        if content == "drain-3" && chat_id == "ch2"
+    ));
+}
+
+/// Shutdown drain with empty buffer produces no events.
+#[tokio::test(start_paused = true)]
+async fn async_shutdown_empty_buffer() {
+    let (_tx, rx) = tokio::sync::mpsc::channel::<NotificationEvent>(16);
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let cancel_clone = cancel.clone();
+
+    let handle = tokio::spawn(async move { run_notif_loop(rx, cancel_clone, |_| 500).await });
+
+    // Cancel immediately with nothing buffered.
+    cancel.cancel();
+    let events = handle.await.unwrap();
+
+    assert!(
+        events.is_empty(),
+        "empty buffer shutdown should produce no events"
+    );
 }

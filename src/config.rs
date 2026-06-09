@@ -86,9 +86,10 @@ pub struct ChannelConfig {
     pub id: String,
     pub require_mention: bool,
     pub allow_from: Vec<String>,
-    /// Per-channel coalescing delay for message events (milliseconds).
-    /// When > 0, message events are buffered and flushed after this delay.
-    /// Non-message events (reactions, traces) pass through immediately.
+    /// Per-channel coalescing delay for channel events (milliseconds).
+    /// When > 0, channel events (messages, edits, deletes, reactions) are
+    /// buffered and flushed after this delay. Non-channel events (traces,
+    /// permission responses, config errors) pass through immediately.
     /// Default: 0 (no buffering).
     pub delivery_delay_ms: u64,
 }
@@ -222,10 +223,20 @@ impl RateLimitTomlConfig {
             }
         };
 
+        let window_secs = self.window_secs.unwrap_or(3600);
+        let cooldown_secs = self.cooldown_secs.unwrap_or(3600);
+
+        if self.enabled && window_secs == 0 {
+            tracing::warn!("rate_limit.window_secs is 0, rate limiting is effectively disabled");
+        }
+        if self.enabled && cooldown_secs == 0 {
+            tracing::warn!("rate_limit.cooldown_secs is 0, cooldown is effectively disabled");
+        }
+
         let default = ScopeConfig {
             max_tokens: self.max_tokens.unwrap_or(20),
-            window: Duration::from_secs(self.window_secs.unwrap_or(3600)),
-            cooldown: Duration::from_secs(self.cooldown_secs.unwrap_or(3600)),
+            window: Duration::from_secs(window_secs),
+            cooldown: Duration::from_secs(cooldown_secs),
             overflow,
         };
 
@@ -414,12 +425,14 @@ static LAST_VALID_CONFIG: std::sync::LazyLock<ArcSwap<LoadedConfig>> =
 
 /// Returns the current config from the in-memory cache.
 ///
+/// Returns an `Arc<LoadedConfig>` loaded from the ArcSwap without cloning
+/// the inner config. Callers that need ownership can `Arc::clone()`.
+///
 /// If the cache has not been populated by [`reload_config`] yet, returns
 /// defaults. In practice, `reload_config` is called at startup before any
 /// reader.
-pub fn load_config(_state_dir: &Utf8Path) -> LoadedConfig {
-    let guard = LAST_VALID_CONFIG.load();
-    (**guard).clone()
+pub fn load_config(_state_dir: &Utf8Path) -> Arc<LoadedConfig> {
+    LAST_VALID_CONFIG.load_full()
 }
 
 /// Reads config from disk, updates the in-memory cache, and returns the result.

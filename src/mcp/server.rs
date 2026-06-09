@@ -396,11 +396,15 @@ async fn write_line(stdout: &Arc<Mutex<tokio::io::Stdout>>, value: &Value) {
 // ── Notification helpers ─────────────────────────────────────────────────────
 
 /// Extract the delivery delay (ms) for an event based on its channel ID.
+///
+/// Returns the configured delay for channel events (Message, MessageEdit,
+/// MessageDelete, Reaction). Non-channel events always return 0.
 fn extract_delay_ms(event: &NotificationEvent, config: &crate::config::LoadedConfig) -> u64 {
     let chat_id = match event {
         NotificationEvent::Message { chat_id, .. }
         | NotificationEvent::MessageEdit { chat_id, .. }
-        | NotificationEvent::MessageDelete { chat_id, .. } => Some(chat_id.as_str()),
+        | NotificationEvent::MessageDelete { chat_id, .. }
+        | NotificationEvent::Reaction { chat_id, .. } => Some(chat_id.as_str()),
         _ => None,
     };
     match chat_id.and_then(|id| id.parse::<u64>().ok()) {

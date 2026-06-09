@@ -1,11 +1,11 @@
 //! Per-channel coalescing buffer for notification events.
 //!
-//! When a channel has `delivery_delay_ms > 0`, incoming message events are
-//! buffered and flushed together after the delay expires. Non-message events
-//! (reactions, traces, permission responses, config errors) pass through
-//! immediately.
+//! When a channel has `delivery_delay_ms > 0`, incoming channel events
+//! (Message, MessageEdit, MessageDelete, Reaction) are buffered and flushed
+//! together after the delay expires. Non-channel events (Trace,
+//! PermissionResponse, ConfigError) pass through immediately.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 
 use tokio::time::Instant;
 
@@ -15,7 +15,8 @@ use crate::discord::events::NotificationEvent;
 #[derive(Default)]
 pub struct DeliveryBuffer {
     /// Buffered events per channel ID, with the flush deadline.
-    channels: HashMap<String, ChannelBuffer>,
+    /// BTreeMap gives deterministic cross-channel ordering in flush_all/flush_ready.
+    channels: BTreeMap<String, ChannelBuffer>,
 }
 
 struct ChannelBuffer {
@@ -37,10 +38,16 @@ impl DeliveryBuffer {
     }
 
     /// Offer an event to the buffer. Returns `Immediate` for events that
-    /// should not be buffered (non-message events, or channels with delay=0).
+    /// should not be buffered (non-channel events, or channels with delay=0).
     pub fn buffer_event(&mut self, event: NotificationEvent, delay_ms: u64) -> BufferResult {
-        // No delay or non-message event → immediate passthrough.
-        if delay_ms == 0 || !is_message_event(&event) {
+        // No delay → immediate passthrough regardless of event type.
+        if delay_ms == 0 {
+            return BufferResult::Immediate(event);
+        }
+
+        // Non-channel events (Trace, PermissionResponse, ConfigError) always
+        // pass through immediately — they have no channel association.
+        if !is_channel_event(&event) {
             return BufferResult::Immediate(event);
         }
 
@@ -76,9 +83,13 @@ impl DeliveryBuffer {
     }
 
     /// Drain all buffered events regardless of deadline (used on shutdown).
+    ///
+    /// Events are returned in deterministic order: sorted by channel ID,
+    /// with intra-channel FIFO preserved.
     pub fn flush_all(&mut self) -> Vec<NotificationEvent> {
         let mut flushed = Vec::new();
-        for (_, buf) in self.channels.drain() {
+        let channels = std::mem::take(&mut self.channels);
+        for (_, buf) in channels {
             flushed.extend(buf.events);
         }
         flushed
@@ -109,13 +120,15 @@ impl DeliveryBuffer {
     }
 }
 
-/// Returns true if the event is a message-type event (should be buffered).
-fn is_message_event(event: &NotificationEvent) -> bool {
+/// Returns true if the event is associated with a channel and should be
+/// buffered when the channel has a delivery delay.
+fn is_channel_event(event: &NotificationEvent) -> bool {
     matches!(
         event,
         NotificationEvent::Message { .. }
             | NotificationEvent::MessageEdit { .. }
             | NotificationEvent::MessageDelete { .. }
+            | NotificationEvent::Reaction { .. }
     )
 }
 
@@ -179,15 +192,30 @@ mod tests {
     }
 
     #[test]
-    fn non_message_events_always_immediate() {
+    fn non_channel_events_always_immediate() {
         let mut buf = DeliveryBuffer::new();
 
-        // Reaction with a delay — should still pass through.
-        let result = buf.buffer_event(reaction_event("ch1"), 1000);
-        assert!(matches!(result, BufferResult::Immediate(_)));
-
-        // Trace event.
+        // Trace event with a delay — should still pass through (not a channel event).
         let result = buf.buffer_event(trace_event(), 1000);
+        assert!(matches!(result, BufferResult::Immediate(_)));
+    }
+
+    #[test]
+    fn reaction_buffered_when_delay_positive() {
+        let mut buf = DeliveryBuffer::new();
+
+        // Reaction with a delay — should be buffered (it's a channel event).
+        let result = buf.buffer_event(reaction_event("ch1"), 1000);
+        assert!(matches!(result, BufferResult::Buffered));
+        assert!(buf.next_flush_deadline().is_some());
+    }
+
+    #[test]
+    fn reaction_immediate_when_no_delay() {
+        let mut buf = DeliveryBuffer::new();
+
+        // Reaction with no delay — passes through immediately.
+        let result = buf.buffer_event(reaction_event("ch1"), 0);
         assert!(matches!(result, BufferResult::Immediate(_)));
     }
 
@@ -266,5 +294,196 @@ mod tests {
         // Buffer again — new deadline should be set.
         buf.buffer_event(msg_event("ch1"), 50);
         assert!(buf.next_flush_deadline().is_some());
+    }
+}
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Strategy: pick a channel ID from a small set.
+    fn channel_id_strategy() -> impl Strategy<Value = String> {
+        prop_oneof!["ch1", "ch2", "ch3"].prop_map(|s| s.to_string())
+    }
+
+    /// Strategy: pick a delay value.
+    fn delay_strategy() -> impl Strategy<Value = u64> {
+        prop_oneof![Just(0u64), Just(50), Just(100), Just(500)]
+    }
+
+    /// Operation in a random buffer/flush sequence.
+    #[derive(Debug, Clone)]
+    enum Op {
+        /// Buffer a channel event with the given delay.
+        Buffer { event_idx: usize, delay_ms: u64 },
+        /// Flush ready events (advance time past all current deadlines).
+        FlushReady,
+    }
+
+    /// Strategy: generate a sequence of operations.
+    fn ops_strategy() -> impl Strategy<Value = Vec<Op>> {
+        let op = prop_oneof![
+            (0..20usize, delay_strategy()).prop_map(|(event_idx, delay_ms)| Op::Buffer {
+                event_idx,
+                delay_ms,
+            }),
+            Just(Op::FlushReady),
+        ];
+        proptest::collection::vec(op, 1..50)
+    }
+
+    proptest! {
+        /// No silent drops: every buffered event eventually comes out of
+        /// flush_ready or flush_all.
+        #[test]
+        fn no_silent_drops(ops in ops_strategy()) {
+            let mut buf = DeliveryBuffer::new();
+            let far_future = Instant::now() + tokio::time::Duration::from_secs(3600);
+
+            // Pre-generate events (indexed by event_idx % pool_size).
+            let pool_size = 20;
+            let events: Vec<NotificationEvent> = (0..pool_size)
+                .map(|i| NotificationEvent::Message {
+                    chat_id: format!("ch{}", i % 3 + 1),
+                    message_id: "1".to_string(),
+                    user: "user".to_string(),
+                    user_id: "100".to_string(),
+                    content: format!("evt-{i}"),
+                    timestamp: "2026-01-01T00:00:00Z".to_string(),
+                    attachments: vec![],
+                    is_voice_message: false,
+                    thread_parent_id: None,
+                })
+                .collect();
+
+            let mut total_buffered = 0usize;
+            let mut total_immediate = 0usize;
+            let mut total_flushed = 0usize;
+
+            for op in &ops {
+                match op {
+                    Op::Buffer { event_idx, delay_ms } => {
+                        let event = events[event_idx % pool_size].clone();
+                        match buf.buffer_event(event, *delay_ms) {
+                            BufferResult::Immediate(_) => total_immediate += 1,
+                            BufferResult::Buffered => total_buffered += 1,
+                        }
+                    }
+                    Op::FlushReady => {
+                        let flushed = buf.flush_ready(far_future);
+                        total_flushed += flushed.len();
+                    }
+                }
+            }
+
+            // Drain remaining.
+            let remaining = buf.flush_all();
+            total_flushed += remaining.len();
+
+            // Every event that went in must come out.
+            let total_in = total_buffered + total_immediate;
+            let total_out = total_flushed + total_immediate;
+            prop_assert_eq!(
+                total_in, total_out,
+                "total_in ({}) != total_out ({}): \
+                 buffered={}, flushed={}, immediate={}",
+                total_in, total_out, total_buffered, total_flushed, total_immediate
+            );
+        }
+
+        /// Intra-channel FIFO: events buffered for the same channel come out
+        /// in the order they went in.
+        #[test]
+        fn intra_channel_fifo(
+            channel in channel_id_strategy(),
+            count in 2..20usize,
+            delay_ms in delay_strategy().prop_filter("need positive delay", |d| *d > 0),
+        ) {
+            let mut buf = DeliveryBuffer::new();
+
+            // Buffer `count` events for the same channel.
+            for i in 0..count {
+                let event = NotificationEvent::Message {
+                    chat_id: channel.clone(),
+                    message_id: "1".to_string(),
+                    user: "user".to_string(),
+                    user_id: "100".to_string(),
+                    content: format!("order-{i}"),
+                    timestamp: "2026-01-01T00:00:00Z".to_string(),
+                    attachments: vec![],
+                    is_voice_message: false,
+                    thread_parent_id: None,
+                };
+                let result = buf.buffer_event(event, delay_ms);
+                prop_assert!(matches!(result, BufferResult::Buffered));
+            }
+
+            // Flush everything.
+            let far_future = Instant::now() + tokio::time::Duration::from_secs(3600);
+            let flushed = buf.flush_ready(far_future);
+
+            prop_assert_eq!(flushed.len(), count);
+
+            // Verify order.
+            for (i, event) in flushed.iter().enumerate() {
+                let content = match event {
+                    NotificationEvent::Message { content, .. } => content.as_str(),
+                    _ => panic!("unexpected event type"),
+                };
+                prop_assert_eq!(content, format!("order-{i}"));
+            }
+        }
+
+        /// flush_all drains everything: after any sequence of operations,
+        /// flush_all returns all remaining events and leaves the buffer empty.
+        #[test]
+        fn flush_all_drains_everything(ops in ops_strategy()) {
+            let mut buf = DeliveryBuffer::new();
+            let far_future = Instant::now() + tokio::time::Duration::from_secs(3600);
+
+            let pool_size = 20;
+            let events: Vec<NotificationEvent> = (0..pool_size)
+                .map(|i| NotificationEvent::Message {
+                    chat_id: format!("ch{}", i % 3 + 1),
+                    message_id: "1".to_string(),
+                    user: "user".to_string(),
+                    user_id: "100".to_string(),
+                    content: format!("evt-{i}"),
+                    timestamp: "2026-01-01T00:00:00Z".to_string(),
+                    attachments: vec![],
+                    is_voice_message: false,
+                    thread_parent_id: None,
+                })
+                .collect();
+
+            let mut total_buffered = 0usize;
+            let mut total_flushed_ready = 0usize;
+
+            for op in &ops {
+                match op {
+                    Op::Buffer { event_idx, delay_ms } => {
+                        let event = events[event_idx % pool_size].clone();
+                        match buf.buffer_event(event, *delay_ms) {
+                            BufferResult::Immediate(_) => {} // not tracked
+                            BufferResult::Buffered => total_buffered += 1,
+                        }
+                    }
+                    Op::FlushReady => {
+                        let flushed = buf.flush_ready(far_future);
+                        total_flushed_ready += flushed.len();
+                    }
+                }
+            }
+
+            // flush_all must return exactly the remaining buffered events.
+            let remaining = buf.flush_all();
+            let total_out = total_flushed_ready + remaining.len();
+            prop_assert_eq!(total_buffered, total_out);
+
+            // Buffer must be completely empty after flush_all.
+            prop_assert!(buf.next_flush_deadline().is_none(), "buffer must be empty after flush_all");
+            prop_assert!(buf.flush_all().is_empty(), "second flush_all must return nothing");
+        }
     }
 }
