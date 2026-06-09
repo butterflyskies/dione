@@ -44,9 +44,6 @@ const SENT_IDS_CAP: usize = 200;
 /// Maximum thread-parent cache entries.
 const THREAD_CACHE_CAP: usize = 200;
 
-/// Stale threshold for pending permissions (5 minutes).
-const PERMISSION_STALE_SECS: i64 = 300;
-
 // ── Implementation ────────────────────────────────────────────────────────────
 
 impl SharedState {
@@ -116,23 +113,6 @@ impl SharedState {
                 break;
             }
         }
-    }
-
-    /// Removes pending permission entries older than 5 minutes and returns
-    /// the pruned `(ChannelId, MessageId)` pairs so callers can clean up
-    /// the corresponding Discord messages.
-    pub fn prune_stale_permissions(&mut self) -> Vec<(ChannelId, MessageId)> {
-        let cutoff = Utc::now() - chrono::Duration::seconds(PERMISSION_STALE_SECS);
-        let mut stale = Vec::new();
-        self.pending_permissions.retain(|&msg_id, p| {
-            if p.created_at > cutoff {
-                true
-            } else {
-                stale.push((p.channel_id, MessageId::new(msg_id)));
-                false
-            }
-        });
-        stale
     }
 
     /// Removes all pending permission entries matching a `request_id` and
@@ -260,111 +240,6 @@ mod tests {
             state.thread_parents.contains_key(&209),
             "newest negative entry (209) should be retained"
         );
-    }
-
-    #[test]
-    fn test_prune_stale_permissions_mixed() {
-        let mut state = SharedState::new();
-
-        let old_time = Utc::now() - chrono::Duration::seconds(PERMISSION_STALE_SECS + 10);
-        let fresh_time = Utc::now() - chrono::Duration::seconds(10);
-
-        state.pending_permissions.insert(
-            1001,
-            PendingPermission {
-                request_id: "old-request".to_string(),
-                channel_id: ChannelId::new(9001),
-                created_at: old_time,
-            },
-        );
-        state.pending_permissions.insert(
-            1002,
-            PendingPermission {
-                request_id: "fresh-request".to_string(),
-                channel_id: ChannelId::new(9002),
-                created_at: fresh_time,
-            },
-        );
-
-        let stale = state.prune_stale_permissions();
-
-        assert!(
-            !state.pending_permissions.contains_key(&1001),
-            "stale permission should be pruned"
-        );
-        assert!(
-            state.pending_permissions.contains_key(&1002),
-            "fresh permission should be retained"
-        );
-        assert_eq!(stale.len(), 1, "should return one stale entry");
-        assert_eq!(
-            stale[0],
-            (ChannelId::new(9001), MessageId::new(1001)),
-            "stale entry should contain typed channel and message IDs"
-        );
-    }
-
-    #[test]
-    fn test_prune_stale_permissions_none_stale() {
-        let mut state = SharedState::new();
-
-        let fresh_time = Utc::now() - chrono::Duration::seconds(10);
-        state.pending_permissions.insert(
-            2001,
-            PendingPermission {
-                request_id: "fresh".to_string(),
-                channel_id: ChannelId::new(9001),
-                created_at: fresh_time,
-            },
-        );
-
-        let stale = state.prune_stale_permissions();
-
-        assert!(stale.is_empty(), "no entries should be pruned");
-        assert_eq!(state.pending_permissions.len(), 1);
-    }
-
-    #[test]
-    fn test_prune_stale_permissions_all_stale() {
-        let mut state = SharedState::new();
-
-        let old_time = Utc::now() - chrono::Duration::seconds(PERMISSION_STALE_SECS + 10);
-        for i in 0u64..3 {
-            state.pending_permissions.insert(
-                3000 + i,
-                PendingPermission {
-                    request_id: format!("req-{i}"),
-                    channel_id: ChannelId::new(9000 + i),
-                    created_at: old_time,
-                },
-            );
-        }
-
-        let stale = state.prune_stale_permissions();
-
-        assert_eq!(stale.len(), 3, "all entries should be pruned");
-        assert!(state.pending_permissions.is_empty());
-    }
-
-    #[test]
-    fn test_prune_stale_permissions_exact_boundary() {
-        let mut state = SharedState::new();
-
-        let exactly_at = Utc::now() - chrono::Duration::seconds(PERMISSION_STALE_SECS);
-        state.pending_permissions.insert(
-            4001,
-            PendingPermission {
-                request_id: "boundary".to_string(),
-                channel_id: ChannelId::new(9001),
-                created_at: exactly_at,
-            },
-        );
-
-        let stale = state.prune_stale_permissions();
-
-        // cutoff uses `>`, so exactly-at-threshold is NOT retained.
-        assert_eq!(stale.len(), 1, "entry at exact boundary should be pruned");
-        assert!(state.pending_permissions.is_empty());
     }
 
     #[test]
