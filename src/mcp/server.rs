@@ -133,6 +133,8 @@ pub async fn run(
     let cancel_notif = cancel.clone();
     let notif_task = tokio::spawn(async move {
         let mut rx = event_rx;
+        let mut events_since_prune: u64 = 0;
+        const PRUNE_INTERVAL: u64 = 100;
 
         loop {
             let flush_deadline = delivery_buffer.next_flush_deadline();
@@ -206,6 +208,13 @@ pub async fn run(
                         BufferResult::Buffered => {
                             // Will be flushed when the deadline fires.
                         }
+                    }
+
+                    // Periodically prune idle rate limiter buckets to bound memory.
+                    events_since_prune += 1;
+                    if events_since_prune >= PRUNE_INTERVAL {
+                        events_since_prune = 0;
+                        rate_limiter.prune_idle(Instant::now());
                     }
                 }
             }

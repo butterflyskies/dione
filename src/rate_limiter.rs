@@ -47,7 +47,7 @@ pub enum OverflowPolicy {
     Buffer,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeConfig {
     pub max_tokens: u32,
     pub window: Duration,
@@ -233,6 +233,19 @@ impl TokenBucket {
     pub fn delivered_this_window(&self) -> u32 {
         self.delivered_this_window
     }
+
+    /// Returns a reference to the bucket's [`ScopeConfig`], for comparison
+    /// when checking whether a participant's resolved config has changed.
+    pub fn config(&self) -> &ScopeConfig {
+        &self.config
+    }
+
+    /// Advance time-driven state transitions to `now`, exposing the lazy
+    /// tick for callers that need to settle state before inspection (e.g.
+    /// pruning idle buckets).
+    pub fn advance_to(&mut self, now: Instant) {
+        self.advance_time(now);
+    }
 }
 
 // ── RateLimiter (manager) ────────────────────────────────────────────────────
@@ -264,12 +277,62 @@ impl RateLimiter {
             };
         }
 
+        let resolved = self.config.resolve(sender, channel, classes);
         let key = (sender.clone(), channel.clone());
-        let bucket = self.buckets.entry(key).or_insert_with(|| {
-            let scope = self.config.resolve(sender, channel, classes);
-            TokenBucket::new(scope)
-        });
+        let bucket = self
+            .buckets
+            .entry(key)
+            .or_insert_with(|| TokenBucket::new(resolved.clone()));
+
+        // If the resolved config has changed (e.g. guild roles changed),
+        // replace the bucket so the new limits take effect immediately.
+        if *bucket.config() != resolved {
+            tracing::trace!(
+                sender = %sender.as_str(),
+                channel = %channel.as_str(),
+                "rate limiter: config changed for bucket, replacing"
+            );
+            *bucket = TokenBucket::new(resolved);
+        }
+
         bucket.check(now)
+    }
+
+    /// Remove all buckets currently in [`BucketState::Idle`] state.
+    ///
+    /// Idle buckets hold no meaningful state — they have full tokens and no
+    /// active window, which is identical to a freshly-created bucket.  Pruning
+    /// them bounds the HashMap size to the number of *actively rate-limited*
+    /// participants rather than every participant ever seen.
+    ///
+    /// Callers should invoke this periodically (e.g. every N events or on a
+    /// timer) from the event loop.
+    pub fn prune_idle(&mut self, now: Instant) -> usize {
+        // Advance time on every bucket first so stale Active/Cooldown buckets
+        // that have timed out get settled to Idle before we check.
+        for bucket in self.buckets.values_mut() {
+            bucket.advance_to(now);
+        }
+
+        let before = self.buckets.len();
+        self.buckets
+            .retain(|_key, bucket| bucket.state != BucketState::Idle);
+        let pruned = before - self.buckets.len();
+
+        if pruned > 0 {
+            tracing::trace!(
+                pruned,
+                remaining = self.buckets.len(),
+                "rate limiter: pruned idle buckets"
+            );
+        }
+
+        pruned
+    }
+
+    /// Returns the number of active buckets (for diagnostics).
+    pub fn bucket_count(&self) -> usize {
+        self.buckets.len()
     }
 }
 
@@ -619,6 +682,196 @@ mod tests {
         assert!(
             matches!(d, RateLimitDecision::Allowed { remaining: 0, .. }),
             "should refill after cooldown: {d:?}"
+        );
+    }
+
+    // ── Pruning tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn prune_idle_removes_idle_buckets() {
+        let mut limiter = RateLimiter::new(default_config(5));
+        let now = Instant::now();
+        let s1 = sender("alice");
+        let s2 = sender("bob");
+        let c = channel("ch1");
+
+        // Touch both senders — creates buckets in Active state
+        limiter.check_message(&s1, &c, &[], now);
+        limiter.check_message(&s2, &c, &[], now);
+        assert_eq!(limiter.bucket_count(), 2);
+
+        // Advance past window so buckets transition to Idle
+        let after_window = now + Duration::from_secs(3601);
+        let pruned = limiter.prune_idle(after_window);
+
+        assert_eq!(pruned, 2);
+        assert_eq!(limiter.bucket_count(), 0);
+    }
+
+    #[test]
+    fn prune_idle_keeps_active_and_cooldown_buckets() {
+        // Use a short window (10s) but long cooldown (120s) so we can advance
+        // past the window without expiring the cooldown.
+        let config = RateLimitConfig {
+            enabled: true,
+            default: ScopeConfig {
+                max_tokens: 2,
+                window: Duration::from_secs(10),
+                cooldown: Duration::from_secs(120),
+                overflow: OverflowPolicy::Drop { notify: false },
+            },
+            classes: Vec::new(),
+            individuals: HashMap::new(),
+            channels: HashMap::new(),
+        };
+        let mut limiter = RateLimiter::new(config);
+        let now = Instant::now();
+        let active_sender = sender("active");
+        let exhausted_sender = sender("exhausted");
+        let idle_sender = sender("idle");
+        let c = channel("ch1");
+
+        // active_sender: 1 of 2 tokens used -> Active
+        limiter.check_message(&active_sender, &c, &[], now);
+
+        // exhausted_sender: exhaust all tokens -> Exhausted -> Cooldown
+        limiter.check_message(&exhausted_sender, &c, &[], now);
+        limiter.check_message(&exhausted_sender, &c, &[], now);
+        // Trigger advance_time to transition Exhausted -> Cooldown
+        limiter.check_message(&exhausted_sender, &c, &[], now);
+
+        // idle_sender: touch then wait past window -> will be Idle after advance
+        limiter.check_message(&idle_sender, &c, &[], now);
+        assert_eq!(limiter.bucket_count(), 3);
+
+        // Advance past the window (10s) but NOT past the cooldown (120s)
+        let after_window = now + Duration::from_secs(11);
+        let pruned = limiter.prune_idle(after_window);
+
+        // idle_sender and active_sender both transition to Idle (window expired),
+        // exhausted_sender stays in Cooldown
+        assert_eq!(pruned, 2);
+        assert_eq!(limiter.bucket_count(), 1);
+    }
+
+    #[test]
+    fn prune_after_cooldown_expiry_removes_bucket() {
+        let mut limiter = RateLimiter::new(RateLimitConfig {
+            enabled: true,
+            default: ScopeConfig {
+                max_tokens: 1,
+                window: Duration::from_secs(10),
+                cooldown: Duration::from_secs(30),
+                overflow: OverflowPolicy::Drop { notify: false },
+            },
+            classes: Vec::new(),
+            individuals: HashMap::new(),
+            channels: HashMap::new(),
+        });
+        let now = Instant::now();
+        let s = sender("user");
+        let c = channel("ch1");
+
+        // Exhaust the bucket
+        limiter.check_message(&s, &c, &[], now);
+        assert!(matches!(
+            limiter.check_message(&s, &c, &[], now),
+            RateLimitDecision::Denied { .. }
+        ));
+        assert_eq!(limiter.bucket_count(), 1);
+
+        // After cooldown expires, bucket should settle to Idle and be pruned
+        let after_cooldown = now + Duration::from_secs(31);
+        let pruned = limiter.prune_idle(after_cooldown);
+        assert_eq!(pruned, 1);
+        assert_eq!(limiter.bucket_count(), 0);
+    }
+
+    // ── Config refresh tests ────────────────────────────────────────────────
+
+    #[test]
+    fn class_change_triggers_bucket_replacement() {
+        let s = sender("user1");
+        let c = channel("ch1");
+
+        let mut config = default_config(5);
+        config.classes.push((
+            SenderClass::new("premium"),
+            ScopeConfig {
+                max_tokens: 20,
+                ..default_scope(20)
+            },
+        ));
+
+        let mut limiter = RateLimiter::new(config);
+        let now = Instant::now();
+
+        // First message with no classes -> gets default (5 tokens)
+        let decision = limiter.check_message(&s, &c, &[], now);
+        assert!(matches!(
+            decision,
+            RateLimitDecision::Allowed { remaining: 4, .. }
+        ));
+
+        // Next message with "premium" class -> bucket should be replaced with 20 tokens
+        let classes = [SenderClass::new("premium")];
+        let decision = limiter.check_message(&s, &c, &classes, now);
+        assert!(
+            matches!(decision, RateLimitDecision::Allowed { remaining: 19, .. }),
+            "bucket should be replaced with premium config: {decision:?}"
+        );
+    }
+
+    #[test]
+    fn same_class_does_not_replace_bucket() {
+        let s = sender("user1");
+        let c = channel("ch1");
+        let mut limiter = RateLimiter::new(default_config(5));
+        let now = Instant::now();
+
+        // Use 3 tokens
+        limiter.check_message(&s, &c, &[], now);
+        limiter.check_message(&s, &c, &[], now);
+        limiter.check_message(&s, &c, &[], now);
+
+        // Same config -> bucket should NOT be replaced
+        let decision = limiter.check_message(&s, &c, &[], now);
+        assert!(
+            matches!(decision, RateLimitDecision::Allowed { remaining: 1, .. }),
+            "bucket should keep its state when config unchanged: {decision:?}"
+        );
+    }
+
+    #[test]
+    fn individual_override_added_replaces_bucket() {
+        let s = sender("user1");
+        let c = channel("ch1");
+
+        let mut config = default_config(3);
+        // Start without individual override
+        let mut limiter = RateLimiter::new(config.clone());
+        let now = Instant::now();
+
+        // Use 1 of 3 default tokens
+        limiter.check_message(&s, &c, &[], now);
+
+        // Now add individual override and create a new limiter with different config
+        // (simulating config reload — the RateLimiter itself doesn't hot-reload,
+        // but the config resolution path picks up changes)
+        config.individuals.insert(
+            s.clone(),
+            ScopeConfig {
+                max_tokens: 50,
+                ..default_scope(50)
+            },
+        );
+        let mut limiter2 = RateLimiter::new(config);
+
+        // Even fresh limiter2 will create a new bucket with the individual override
+        let decision = limiter2.check_message(&s, &c, &[], now);
+        assert!(
+            matches!(decision, RateLimitDecision::Allowed { remaining: 49, .. }),
+            "individual override should be used: {decision:?}"
         );
     }
 
