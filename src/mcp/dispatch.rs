@@ -428,10 +428,7 @@ pub(crate) fn parse_limit(args: &Value, default: u8) -> u8 {
         .unwrap_or(default)
 }
 
-pub(crate) fn parse_optional_id(
-    args: &Value,
-    key: &str,
-) -> Result<Option<u64>, String> {
+pub(crate) fn parse_optional_id(args: &Value, key: &str) -> Result<Option<u64>, String> {
     // A value that parses to zero is explicitly wrong — serenity's Id wrappers
     // panic on NonZeroU64(0). Silently promoting it to "absent" would hide the
     // caller's bug; return an error so they know their ID is invalid.
