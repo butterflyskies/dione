@@ -24,6 +24,42 @@ fn temp_state_dir() -> (TempDir, camino::Utf8PathBuf) {
     (dir, path)
 }
 
+/// Serializes tests that write the process-global config cache.
+///
+/// `store_loaded_config` swaps a process-wide `ArcSwap` (`LAST_VALID_CONFIG`).
+/// Under `cargo test` all tests share one process, so two tests storing
+/// different configs in parallel clobber each other mid-flight (~1/8 flake
+/// rate on the suppress_ping gate tests). nextest masks this by running each
+/// test in its own process.
+///
+/// Any test that needs a non-default global config must go through
+/// [`set_global_config`], which takes this lock for the test's duration and
+/// restores the default config on drop so later tests see a clean slate.
+static CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// RAII guard from [`set_global_config`]: holds [`CONFIG_LOCK`] and restores
+/// the default global config when dropped.
+struct GlobalConfigGuard(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+impl Drop for GlobalConfigGuard {
+    fn drop(&mut self) {
+        // Runs while the lock is still held (fields drop after the drop body).
+        dione::config::store_loaded_config(&dione::config::LoadedConfig::from_raw(
+            dione::config::Config::default(),
+        ));
+    }
+}
+
+/// Installs `config` as the process-global config for the lifetime of the
+/// returned guard. See [`CONFIG_LOCK`] for why this must be serialized.
+fn set_global_config(config: dione::config::Config) -> GlobalConfigGuard {
+    let guard = CONFIG_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    dione::config::store_loaded_config(&dione::config::LoadedConfig::from_raw(config));
+    GlobalConfigGuard(guard)
+}
+
 fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
     let http = Arc::new(serenity::http::Http::new("fake-token-for-tests"));
     let state = new_state();
@@ -469,7 +505,7 @@ async fn test_tools_call_send_dm_disabled_returns_error() {
     let (_dir, state_dir) = temp_state_dir();
     let mut config = dione::config::Config::default();
     config.access.dm_policy = dione::config::DmPolicy::Disabled;
-    dione::config::store_loaded_config(&dione::config::LoadedConfig::from_raw(config));
+    let _config = set_global_config(config);
     let server = make_server(&state_dir);
 
     let req = json!({
@@ -1023,7 +1059,7 @@ async fn test_reply_suppress_ping_true_passes_gate_with_configured_channel() {
         allow_from: vec![],
         ..Default::default()
     });
-    dione::config::store_loaded_config(&dione::config::LoadedConfig::from_raw(config));
+    let _config = set_global_config(config);
     let server = make_server(&state_dir);
 
     // With suppress_ping=true, the reply should pass the gate but fail at the
@@ -1063,7 +1099,7 @@ async fn test_reply_suppress_ping_false_passes_gate_with_configured_channel() {
         allow_from: vec![],
         ..Default::default()
     });
-    dione::config::store_loaded_config(&dione::config::LoadedConfig::from_raw(config));
+    let _config = set_global_config(config);
     let server = make_server(&state_dir);
 
     // With suppress_ping=false (default behavior), same path but without
