@@ -88,6 +88,13 @@ pub(crate) async fn call_tool(
             let ctx = server.messaging_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
             let after_message_id = parse_id(&args, "after_message_id")?;
+            // serenity's `MessageId::new` wraps a `NonZeroU64` and panics on
+            // zero — validate at the MCP boundary instead of crashing.
+            if after_message_id == 0 {
+                return Err(
+                    "invalid after_message_id: must be a nonzero Discord snowflake".to_string(),
+                );
+            }
             let limit = args
                 .get("limit")
                 .and_then(Value::as_u64)

@@ -310,6 +310,35 @@ async fn test_tools_call_fetch_new_since_rejected_unknown_channel() {
 }
 
 #[tokio::test]
+async fn test_tools_call_fetch_new_since_zero_cursor_returns_error() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+
+    // after_message_id = 0 must be rejected at the MCP boundary: serenity's
+    // `MessageId::new` wraps a `NonZeroU64` and panics on zero.
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 34,
+        "method": "tools/call",
+        "params": {
+            "name": "fetch_new_since",
+            "arguments": { "channel_id": "999999", "after_message_id": "0" }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+
+    assert_eq!(resp["id"], 34);
+    let err = resp
+        .get("error")
+        .expect("zero after_message_id should produce a JSON-RPC error, not a panic");
+    let msg = err["message"].as_str().unwrap_or_default();
+    assert!(
+        msg.contains("after_message_id"),
+        "error should name the offending parameter, got: {msg}"
+    );
+}
+
+#[tokio::test]
 async fn test_tools_call_send_file_rejected_unknown_channel() {
     let (_dir, state_dir) = temp_state_dir();
     let server = make_server(&state_dir);
