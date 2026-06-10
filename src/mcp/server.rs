@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use crate::delivery_buffer::{BufferResult, DeliveryBuffer};
 use crate::discord::events::NotificationEvent;
 use crate::mcp::dispatch::call_tool;
-use crate::mcp::notifications::event_to_notification;
+use crate::mcp::notifications::{IntoNotification, batch_notification};
 use crate::mcp::protocol::{initialize_response, tools_list};
 use crate::mcp::tools::{
     access::AccessCtx,
@@ -156,8 +156,8 @@ pub async fn run(
                 } => {
                     let now = tokio::time::Instant::now();
                     let flushed = delivery_buffer.flush_ready(now);
-                    for event in flushed {
-                        let notification = event_to_notification(event);
+                    if !flushed.is_empty() {
+                        let notification = batch_notification(flushed);
                         write_line(&stdout_notif, &notification).await;
                     }
                 }
@@ -211,7 +211,7 @@ pub async fn run(
 
                     match delivery_buffer.buffer_event(event, delay_ms) {
                         BufferResult::Immediate(event) => {
-                            let notification = event_to_notification(event);
+                            let notification = event.into_notification();
                             write_line(&stdout_notif, &notification).await;
                         }
                         BufferResult::Buffered => {
@@ -229,10 +229,10 @@ pub async fn run(
             }
         }
 
-        // Channel closed — flush any remaining buffered events.
+        // Channel closed — flush any remaining buffered events as a single batch.
         let remaining = delivery_buffer.flush_all();
-        for event in remaining {
-            let notification = event_to_notification(event);
+        if !remaining.is_empty() {
+            let notification = batch_notification(remaining);
             write_line(&stdout_notif, &notification).await;
         }
     });
@@ -431,9 +431,15 @@ fn extract_delay_ms(event: &NotificationEvent, config: &crate::config::LoadedCon
 pub mod test_helpers {
     use super::*;
 
-    /// Exposes `event_to_notification` for unit testing notification format.
+    /// Exposes [`IntoNotification::into_notification`] for unit testing notification format.
     pub fn make_notification(event: NotificationEvent) -> Value {
-        crate::mcp::notifications::event_to_notification(event)
+        use crate::mcp::notifications::IntoNotification;
+        event.into_notification()
+    }
+
+    /// Exposes [`batch_notification`] for unit testing batch notification format.
+    pub fn make_batch_notification(events: Vec<NotificationEvent>) -> Value {
+        crate::mcp::notifications::batch_notification(events)
     }
 
     /// Exposes `tools_list` for unit testing tool discovery.

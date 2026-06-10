@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use dione::config::{ChannelConfig, Config, LoadedConfig, RateLimitTomlConfig};
+use dione::config::{ChannelConfig, Config, DeliveryConfig, LoadedConfig, RateLimitTomlConfig};
 use dione::delivery_buffer::{BufferResult, DeliveryBuffer};
 use dione::discord::events::NotificationEvent;
 use dione::mcp::server::test_helpers;
@@ -633,12 +633,12 @@ fn config_delivery_delay_per_channel() {
         channels: vec![
             ChannelConfig {
                 id: "111".to_string(),
-                delivery_delay_ms: 500,
+                delivery_delay_ms: Some(500),
                 ..Default::default()
             },
             ChannelConfig {
                 id: "222".to_string(),
-                delivery_delay_ms: 0,
+                delivery_delay_ms: Some(0),
                 ..Default::default()
             },
             ChannelConfig {
@@ -1263,4 +1263,265 @@ async fn async_shutdown_empty_buffer() {
         events.is_empty(),
         "empty buffer shutdown should produce no events"
     );
+}
+
+// ── Global delivery_delay_ms integration tests ─────────────────────────
+
+/// Global default flows through the full pipeline: unconfigured channels
+/// inherit the global delay.
+#[test]
+fn global_default_flows_through_pipeline() {
+    let raw = Config {
+        delivery: DeliveryConfig {
+            delivery_delay_ms: 500,
+            ..Default::default()
+        },
+        channels: vec![ChannelConfig {
+            id: "100".to_string(),
+            // No per-channel override — inherits global 500ms.
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let loaded = LoadedConfig::from_raw(raw);
+
+    let mut limiter = make_limiter(false, 100);
+    let mut buffer = DeliveryBuffer::new();
+    let now = Instant::now();
+
+    // Use the loaded config delay for channel 100.
+    let delay = loaded.delivery_delay_ms(100);
+    assert_eq!(delay, 500, "channel 100 should inherit global 500ms");
+
+    // Event should be buffered (not immediate) with inherited delay.
+    let result = pipeline_step(
+        msg_event("100", "1", "via-global"),
+        &mut limiter,
+        &mut buffer,
+        delay,
+        now,
+    );
+    assert!(
+        result.is_none(),
+        "message should be buffered with inherited global delay"
+    );
+
+    // Unconfigured channel also inherits global.
+    let delay_unconfigured = loaded.delivery_delay_ms(999);
+    assert_eq!(
+        delay_unconfigured, 500,
+        "unconfigured channel inherits global"
+    );
+    let result2 = pipeline_step(
+        msg_event("999", "2", "unconfigured"),
+        &mut limiter,
+        &mut buffer,
+        delay_unconfigured,
+        now,
+    );
+    assert!(
+        result2.is_none(),
+        "unconfigured channel message should be buffered with global delay"
+    );
+
+    // Flush both.
+    let after_deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(600);
+    let flushed = buffer.flush_ready(after_deadline);
+    assert_eq!(flushed.len(), 2, "both channels should flush");
+}
+
+/// Per-channel override with global default set: override wins.
+#[test]
+fn per_channel_override_with_global_default() {
+    let raw = Config {
+        delivery: DeliveryConfig {
+            delivery_delay_ms: 1000,
+            ..Default::default()
+        },
+        channels: vec![
+            ChannelConfig {
+                id: "100".to_string(),
+                delivery_delay_ms: Some(50),
+                ..Default::default()
+            },
+            ChannelConfig {
+                id: "200".to_string(),
+                // No override — inherits 1000ms.
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let loaded = LoadedConfig::from_raw(raw);
+
+    let mut limiter = make_limiter(false, 100);
+    let mut buffer = DeliveryBuffer::new();
+    let now = Instant::now();
+
+    // Channel 100 has 50ms override.
+    let delay_100 = loaded.delivery_delay_ms(100);
+    assert_eq!(delay_100, 50);
+    pipeline_step(
+        msg_event("100", "1", "fast-channel"),
+        &mut limiter,
+        &mut buffer,
+        delay_100,
+        now,
+    );
+
+    // Channel 200 inherits 1000ms global.
+    let delay_200 = loaded.delivery_delay_ms(200);
+    assert_eq!(delay_200, 1000);
+    pipeline_step(
+        msg_event("200", "2", "slow-channel"),
+        &mut limiter,
+        &mut buffer,
+        delay_200,
+        now,
+    );
+
+    // After 100ms: channel 100 should flush, channel 200 should not.
+    let after_100 = tokio::time::Instant::now() + tokio::time::Duration::from_millis(100);
+    let flushed = buffer.flush_ready(after_100);
+    assert_eq!(
+        flushed.len(),
+        1,
+        "only channel 100 (50ms) should have flushed"
+    );
+    assert!(matches!(
+        &flushed[0],
+        NotificationEvent::Message { content, .. } if content == "fast-channel"
+    ));
+
+    // Channel 200 still pending.
+    assert!(buffer.next_flush_deadline().is_some());
+}
+
+// ── Batch notification output format tests ─────────────────────────────
+
+/// Batch notification output has the correct JSON-RPC structure.
+#[test]
+fn batch_notification_output_format() {
+    let events = vec![
+        msg_event("ch1", "100", "first"),
+        reaction_event("ch1", "200"),
+        msg_event("ch1", "300", "second"),
+    ];
+
+    let batch = test_helpers::make_batch_notification(events);
+
+    // Top-level structure.
+    assert_eq!(batch["jsonrpc"], "2.0");
+    assert_eq!(batch["method"], "notifications/claude/channel/batch");
+    assert!(
+        batch.get("id").is_none(),
+        "notifications must not have an id"
+    );
+
+    // Events array.
+    let items = batch["params"]["events"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+
+    // First item is a message.
+    assert_eq!(items[0]["method"], "notifications/claude/channel");
+    assert_eq!(items[0]["params"]["content"], "first");
+
+    // Second item is a reaction.
+    assert_eq!(items[1]["method"], "notifications/claude/channel");
+    assert!(
+        items[1]["params"]["content"]
+            .as_str()
+            .unwrap()
+            .contains("reacted")
+    );
+
+    // Third item is a message.
+    assert_eq!(items[2]["params"]["content"], "second");
+}
+
+/// Batch notification preserves event ordering.
+#[test]
+fn batch_notification_preserves_order() {
+    let events: Vec<NotificationEvent> = (0..5)
+        .map(|i| msg_event("ch1", &format!("{i}"), &format!("msg-{i}")))
+        .collect();
+
+    let batch = test_helpers::make_batch_notification(events);
+    let items = batch["params"]["events"].as_array().unwrap();
+
+    for (i, item) in items.iter().enumerate() {
+        assert_eq!(
+            item["params"]["content"],
+            format!("msg-{i}"),
+            "event ordering must be preserved in batch"
+        );
+    }
+}
+
+/// Single-event batch still uses batch format.
+#[test]
+fn single_event_batch_format() {
+    let events = vec![msg_event("ch1", "100", "solo")];
+    let batch = test_helpers::make_batch_notification(events);
+
+    assert_eq!(batch["method"], "notifications/claude/channel/batch");
+    let items = batch["params"]["events"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["params"]["content"], "solo");
+}
+
+/// Multi-channel batch: when multiple channels flush simultaneously, events
+/// from different channels are combined into a single batch with correct
+/// per-event chat_id metadata.
+#[test]
+fn multi_channel_batch_preserves_chat_ids() {
+    let mut limiter = make_limiter(false, 100);
+    let mut buffer = DeliveryBuffer::new();
+    let now = Instant::now();
+
+    // Buffer events in two channels with the same delay.
+    pipeline_step(
+        msg_event("ch1", "100", "ch1-first"),
+        &mut limiter,
+        &mut buffer,
+        200,
+        now,
+    );
+    pipeline_step(
+        msg_event("ch2", "200", "ch2-first"),
+        &mut limiter,
+        &mut buffer,
+        200,
+        now,
+    );
+    pipeline_step(
+        msg_event("ch1", "300", "ch1-second"),
+        &mut limiter,
+        &mut buffer,
+        200,
+        now,
+    );
+
+    // Flush both channels (past both deadlines).
+    let after_deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(300);
+    let flushed = buffer.flush_ready(after_deadline);
+    assert_eq!(
+        flushed.len(),
+        3,
+        "all events from both channels should flush"
+    );
+
+    // Build a batch notification from the combined flush.
+    let batch = test_helpers::make_batch_notification(flushed);
+    assert_eq!(batch["method"], "notifications/claude/channel/batch");
+    let items = batch["params"]["events"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+
+    // BTreeMap orders by channel key: "ch1" < "ch2", so ch1 events come first.
+    assert_eq!(items[0]["params"]["meta"]["chat_id"], "ch1");
+    assert_eq!(items[0]["params"]["content"], "ch1-first");
+    assert_eq!(items[1]["params"]["meta"]["chat_id"], "ch1");
+    assert_eq!(items[1]["params"]["content"], "ch1-second");
+    assert_eq!(items[2]["params"]["meta"]["chat_id"], "ch2");
+    assert_eq!(items[2]["params"]["content"], "ch2-first");
 }
