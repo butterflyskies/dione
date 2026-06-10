@@ -460,12 +460,20 @@ mod tests {
 
     use super::*;
 
+    /// Edge-weighted snowflake strategy. A uniform `0u64..` hits 0 with
+    /// probability ~1/2^64, so the zero arms in the tests below were dead
+    /// code — the edge case the tests exist for was never exercised. This
+    /// forces 0 in ~10% of cases.
+    fn id_strategy() -> impl Strategy<Value = u64> {
+        prop_oneof![1 => Just(0u64), 9 => 1u64..]
+    }
+
     proptest! {
         /// Zero IDs are rejected before they can reach serenity's
         /// NonZeroU64-backed Id wrappers (which panic on 0); every other u64
         /// parses, in both numeric and string form.
         #[test]
-        fn parse_id_rejects_zero_accepts_nonzero(id in 0u64.., as_string: bool) {
+        fn parse_id_rejects_zero_accepts_nonzero(id in id_strategy(), as_string: bool) {
             let args = if as_string {
                 json!({ "id": id.to_string() })
             } else {
@@ -482,7 +490,7 @@ mod tests {
         /// Optional IDs treat zero as absent instead of handing serenity a
         /// panicking value.
         #[test]
-        fn parse_optional_id_never_yields_zero(id in 0u64.., as_string: bool) {
+        fn parse_optional_id_never_yields_zero(id in id_strategy(), as_string: bool) {
             let args = if as_string {
                 json!({ "id": id.to_string() })
             } else {
@@ -496,7 +504,14 @@ mod tests {
         /// on an empty page), and an absent limit yields the default.
         #[test]
         fn parse_limit_always_in_range(
-            limit in proptest::option::of(0u64..),
+            // Edge-weighted for the same reason as id_strategy: uniform u64
+            // almost never lands on 0 (clamp-to-1 branch) or in 1..=100
+            // (exact passthrough branch), leaving both untested.
+            limit in proptest::option::of(prop_oneof![
+                1 => Just(0u64),
+                5 => 1u64..=100,
+                4 => 101u64..,
+            ]),
             default in 1u8..=100,
         ) {
             let args = match limit {
