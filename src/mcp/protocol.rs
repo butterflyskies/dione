@@ -60,6 +60,15 @@ pub(crate) fn tools_list() -> Value {
                     "limit": { "type": "integer", "default": 20, "maximum": 100 }
                 }
             })),
+            tool("fetch_new_since", "Fetch only messages newer than a known message ID (cursor-based). Returns messages oldest-first with a count and a has_more pagination hint; the id of the last returned message is the next cursor.", json!({
+                "type": "object",
+                "required": ["channel_id", "after_message_id"],
+                "properties": {
+                    "channel_id": { "type": "string", "description": "Discord channel ID" },
+                    "after_message_id": { "type": "string", "description": "Discord message ID (snowflake); only messages after this ID are returned" },
+                    "limit": { "type": "integer", "default": 20, "maximum": 100 }
+                }
+            })),
             tool("download_attachment", "Download all attachments from a message to the inbox", json!({
                 "type": "object",
                 "required": ["channel_id", "message_id"],

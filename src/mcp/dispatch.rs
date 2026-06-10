@@ -13,8 +13,8 @@ use crate::mcp::tools::{
     },
     management::{create_thread, delete_message, pin_message, unpin_message},
     messaging::{
-        download_attachment, edit_message, fetch_messages, get_message, react as discord_react,
-        reply, send_dm, send_file,
+        download_attachment, edit_message, fetch_messages, fetch_new_since, get_message,
+        react as discord_react, reply, send_dm, send_file,
     },
     render::{render_latex, render_latex_to_channel},
 };
@@ -83,6 +83,17 @@ pub(crate) async fn call_tool(
                 .map(|v| v.min(100) as u8)
                 .unwrap_or(20);
             fetch_messages(&ctx, channel_id, limit).await
+        }
+        "fetch_new_since" => {
+            let ctx = server.messaging_ctx(config.clone());
+            let channel_id = parse_id(&args, "channel_id")?;
+            let after_message_id = parse_id(&args, "after_message_id")?;
+            let limit = args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|v| v.min(100) as u8)
+                .unwrap_or(20);
+            fetch_new_since(&ctx, channel_id, after_message_id, limit).await
         }
         "download_attachment" => {
             let ctx = server.messaging_ctx(config.clone());

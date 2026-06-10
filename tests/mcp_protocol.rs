@@ -121,6 +121,10 @@ async fn test_tools_list_contains_expected_tools() {
         names.contains(&"fetch_messages"),
         "tools/list must include fetch_messages"
     );
+    assert!(
+        names.contains(&"fetch_new_since"),
+        "tools/list must include fetch_new_since"
+    );
 
     // Introspection tools.
     assert!(
@@ -272,6 +276,36 @@ async fn test_tools_call_send_typing_rejected_unknown_channel() {
         result["isError"],
         json!(true),
         "send_typing to unknown channel should return isError: true"
+    );
+}
+
+#[tokio::test]
+async fn test_tools_call_fetch_new_since_rejected_unknown_channel() {
+    let (_dir, state_dir) = temp_state_dir();
+    // Empty config → no opted-in channels, no DM map → gate will reject.
+    let server = make_server(&state_dir);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 33,
+        "method": "tools/call",
+        "params": {
+            "name": "fetch_new_since",
+            "arguments": { "channel_id": "999999", "after_message_id": "123456" }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+
+    assert_eq!(resp["id"], 33);
+    assert_eq!(
+        resp["result"]["isError"],
+        json!(true),
+        "fetch_new_since on an unknown channel should return isError: true"
+    );
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("not a permitted outbound target"),
+        "expected gate rejection, got: {text}"
     );
 }
 

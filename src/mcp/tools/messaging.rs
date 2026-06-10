@@ -3,7 +3,9 @@ use std::sync::Arc;
 use camino::Utf8PathBuf;
 use serde_json::{Value, json};
 use serenity::builder::{CreateAllowedMentions, CreateAttachment, CreateMessage, EditMessage};
+use serenity::http::MessagePagination;
 use serenity::model::Timestamp;
+use serenity::model::channel::Message;
 use serenity::model::id::{ChannelId, MessageId};
 
 use crate::config::{ChunkMode, DmPolicy, LoadedConfig};
@@ -184,25 +186,73 @@ pub async fn fetch_messages(ctx: &MessagingCtx, channel_id: u64, limit: u8) -> V
         Ok(messages) => {
             let msgs: Vec<Value> = messages
                 .iter()
-                .map(|m| {
-                    json!({
-                        "id": m.id.get().to_string(),
-                        "author": m.author.name,
-                        "author_id": m.author.id.get().to_string(),
-                        "content": m.content,
-                        "timestamp": ctx.config.localize_rfc3339(&serenity_ts_to_rfc3339(&m.timestamp)),
-                        "attachments": m.attachments.iter().map(|a| json!({
-                            "name": a.filename,
-                            "url": a.url,
-                            "size": a.size,
-                        })).collect::<Vec<_>>(),
-                    })
-                })
+                .map(|m| message_json(&ctx.config, m))
                 .collect();
             json!({ "messages": msgs })
         }
         Err(e) => json!({ "error": e.to_string() }),
     }
+}
+
+/// Serializes one message into the wire shape shared by `fetch_messages` and
+/// `fetch_new_since`, so the two tools cannot drift apart.
+fn message_json(config: &LoadedConfig, m: &Message) -> Value {
+    json!({
+        "id": m.id.get().to_string(),
+        "author": m.author.name,
+        "author_id": m.author.id.get().to_string(),
+        "content": m.content,
+        "timestamp": config.localize_rfc3339(&serenity_ts_to_rfc3339(&m.timestamp)),
+        "attachments": m.attachments.iter().map(|a| json!({
+            "name": a.filename,
+            "url": a.url,
+            "size": a.size,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+// ── fetch_new_since ───────────────────────────────────────────────────────────
+
+pub async fn fetch_new_since(
+    ctx: &MessagingCtx,
+    channel_id: u64,
+    after_message_id: u64,
+    limit: u8,
+) -> Value {
+    if let Err(e) = check_outbound(ctx, channel_id).await {
+        return e;
+    }
+
+    match ctx
+        .http
+        .get_messages(
+            ChannelId::new(channel_id),
+            Some(MessagePagination::After(MessageId::new(after_message_id))),
+            Some(limit),
+        )
+        .await
+    {
+        Ok(messages) => new_since_response(&ctx.config, messages, limit),
+        Err(e) => json!({ "error": e.to_string() }),
+    }
+}
+
+/// Assembles the `fetch_new_since` response: messages sorted oldest-first,
+/// plus `count` and a `has_more` pagination hint.
+///
+/// Discord returns messages newest-first on the wire. The caller owns the
+/// pagination cursor (the `id` of the last returned message), so chronological
+/// order is part of the tool's contract rather than an accident of the wire
+/// format.
+fn new_since_response(config: &LoadedConfig, mut messages: Vec<Message>, limit: u8) -> Value {
+    messages.sort_unstable_by_key(|m| m.id);
+    let count = messages.len();
+    let msgs: Vec<Value> = messages.iter().map(|m| message_json(config, m)).collect();
+    json!({
+        "messages": msgs,
+        "count": count,
+        "has_more": count == usize::from(limit),
+    })
 }
 
 // ── download_attachment ───────────────────────────────────────────────────────
@@ -470,5 +520,240 @@ fn serenity_ts_to_rfc3339(ts: &Timestamp) -> String {
             );
             fallback
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ChannelConfig, Config};
+
+    fn test_config() -> LoadedConfig {
+        LoadedConfig::from_raw(Config::default())
+    }
+
+    /// One message in the shape Discord's REST API returns from
+    /// `GET /channels/{channel.id}/messages` (captured shape, trimmed to the
+    /// fields serenity requires).
+    fn wire_message(id: u64, content: &str, timestamp: &str, attachments: Value) -> Value {
+        json!({
+            "id": id.to_string(),
+            "type": 0,
+            "channel_id": "1080000000000000001",
+            "author": {
+                "id": "210987654321098765",
+                "username": "miranda",
+                "global_name": "Miranda",
+                "avatar": null,
+                "discriminator": "0",
+                "public_flags": 0,
+                "bot": false
+            },
+            "content": content,
+            "timestamp": timestamp,
+            "edited_timestamp": null,
+            "tts": false,
+            "mention_everyone": false,
+            "mentions": [],
+            "mention_roles": [],
+            "attachments": attachments,
+            "embeds": [],
+            "pinned": false,
+            "flags": 0,
+            "components": []
+        })
+    }
+
+    /// Deserializes a wire payload exactly as serenity's `Http::get_messages`
+    /// does.
+    fn from_wire(payload: Value) -> Vec<Message> {
+        serde_json::from_value(payload).expect("captured payload must deserialize as Vec<Message>")
+    }
+
+    /// Three messages newest-first, as Discord returns them on the wire.
+    fn newest_first_batch() -> Vec<Message> {
+        from_wire(json!([
+            wire_message(3003, "third", "2026-06-09T12:02:00.000000+00:00", json!([])),
+            wire_message(
+                3002,
+                "second",
+                "2026-06-09T12:01:00.000000+00:00",
+                json!([])
+            ),
+            wire_message(3001, "first", "2026-06-09T12:00:00.000000+00:00", json!([])),
+        ]))
+    }
+
+    #[test]
+    fn new_since_sorts_oldest_first() {
+        let resp = new_since_response(&test_config(), newest_first_batch(), 20);
+        let ids: Vec<&str> = resp["messages"]
+            .as_array()
+            .expect("messages array")
+            .iter()
+            .map(|m| m["id"].as_str().expect("string id"))
+            .collect();
+        assert_eq!(
+            ids,
+            ["3001", "3002", "3003"],
+            "messages must be sorted oldest-first regardless of wire order"
+        );
+    }
+
+    #[test]
+    fn new_since_count_matches_returned_messages() {
+        let resp = new_since_response(&test_config(), newest_first_batch(), 20);
+        assert_eq!(resp["count"], 3);
+        assert_eq!(
+            resp["messages"].as_array().expect("messages array").len(),
+            3
+        );
+    }
+
+    #[test]
+    fn new_since_has_more_set_at_exactly_limit() {
+        let resp = new_since_response(&test_config(), newest_first_batch(), 3);
+        assert_eq!(
+            resp["has_more"],
+            json!(true),
+            "a full page (count == limit) must signal that more may follow"
+        );
+    }
+
+    #[test]
+    fn new_since_has_more_unset_below_limit() {
+        let resp = new_since_response(&test_config(), newest_first_batch(), 4);
+        assert_eq!(
+            resp["has_more"],
+            json!(false),
+            "a partial page must signal that the caller is caught up"
+        );
+    }
+
+    #[test]
+    fn new_since_empty_when_caught_up() {
+        let resp = new_since_response(&test_config(), Vec::new(), 20);
+        assert_eq!(resp["messages"], json!([]));
+        assert_eq!(resp["count"], 0);
+        assert_eq!(resp["has_more"], json!(false));
+    }
+
+    #[test]
+    fn new_since_message_shape_matches_fetch_messages() {
+        let batch = from_wire(json!([wire_message(
+            4001,
+            "with attachment",
+            "2026-06-09T12:00:00.000000+00:00",
+            json!([{
+                "id": "111",
+                "filename": "photo.png",
+                "size": 2048,
+                "url": "https://cdn.discordapp.com/attachments/1/111/photo.png",
+                "proxy_url": "https://media.discordapp.net/attachments/1/111/photo.png",
+                "content_type": "image/png",
+                "height": null,
+                "width": null
+            }])
+        )]));
+        let resp = new_since_response(&test_config(), batch, 20);
+        let msg = &resp["messages"][0];
+
+        let mut keys: Vec<&str> = msg
+            .as_object()
+            .expect("message object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "attachments",
+                "author",
+                "author_id",
+                "content",
+                "id",
+                "timestamp"
+            ],
+            "fetch_new_since message objects must keep wire-shape parity with fetch_messages"
+        );
+
+        let mut attachment_keys: Vec<&str> = msg["attachments"][0]
+            .as_object()
+            .expect("attachment object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        attachment_keys.sort_unstable();
+        assert_eq!(attachment_keys, ["name", "size", "url"]);
+
+        assert_eq!(msg["author"], "miranda");
+        assert_eq!(msg["author_id"], "210987654321098765");
+        assert_eq!(msg["attachments"][0]["name"], "photo.png");
+        assert!(
+            msg["timestamp"]
+                .as_str()
+                .expect("string timestamp")
+                .starts_with("2026-06-09T12:00:00"),
+            "timestamp must round-trip from the wire payload"
+        );
+    }
+
+    /// Live smoke test against the real Discord API. Ignored by default; run
+    /// with `cargo nextest run --run-ignored=ignored-only -E 'test(live_fetch_new_since)'`
+    /// after exporting the three environment variables named below.
+    #[tokio::test]
+    #[ignore = "live Discord smoke test; requires DISCORD_BOT_TOKEN, DIONE_TEST_CHANNEL_ID, DIONE_TEST_AFTER_MESSAGE_ID"]
+    async fn live_fetch_new_since_smoke() {
+        let token = std::env::var("DISCORD_BOT_TOKEN").expect("DISCORD_BOT_TOKEN must be set");
+        let channel_id: u64 = std::env::var("DIONE_TEST_CHANNEL_ID")
+            .expect("DIONE_TEST_CHANNEL_ID must be set")
+            .parse()
+            .expect("DIONE_TEST_CHANNEL_ID must be a u64");
+        let after_message_id: u64 = std::env::var("DIONE_TEST_AFTER_MESSAGE_ID")
+            .expect("DIONE_TEST_AFTER_MESSAGE_ID must be set")
+            .parse()
+            .expect("DIONE_TEST_AFTER_MESSAGE_ID must be a u64");
+
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: channel_id.to_string(),
+            require_mention: false,
+            allow_from: vec![],
+            ..Default::default()
+        });
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let state_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf-8 path");
+        let ctx = MessagingCtx {
+            http: Arc::new(serenity::http::Http::new(&token)),
+            state: crate::state::new_state(),
+            config: Arc::new(LoadedConfig::from_raw(raw)),
+            state_dir,
+        };
+
+        let resp = fetch_new_since(&ctx, channel_id, after_message_id, 20).await;
+        assert!(resp.get("error").is_none(), "live fetch failed: {resp}");
+
+        let messages = resp["messages"].as_array().expect("messages array");
+        assert_eq!(resp["count"], messages.len() as u64);
+        let ids: Vec<u64> = messages
+            .iter()
+            .map(|m| {
+                m["id"]
+                    .as_str()
+                    .expect("string id")
+                    .parse()
+                    .expect("u64 id")
+            })
+            .collect();
+        assert!(
+            ids.windows(2).all(|w| w[0] < w[1]),
+            "ids must be strictly ascending: {ids:?}"
+        );
+        assert!(
+            ids.iter().all(|&id| id > after_message_id),
+            "all returned ids must be after the cursor {after_message_id}: {ids:?}"
+        );
     }
 }
