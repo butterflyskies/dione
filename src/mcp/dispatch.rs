@@ -95,11 +95,7 @@ pub(crate) async fn call_tool(
                     "invalid after_message_id: must be a nonzero Discord snowflake".to_string(),
                 );
             }
-            let limit = args
-                .get("limit")
-                .and_then(Value::as_u64)
-                .map(|v| v.min(100) as u8)
-                .unwrap_or(20);
+            let limit = parse_limit(&args, 20);
             fetch_new_since(&ctx, channel_id, after_message_id, limit).await
         }
         "download_attachment" => {
@@ -418,6 +414,19 @@ pub(crate) fn parse_id(args: &Value, key: &str) -> Result<u64, String> {
             .map_err(|_| format!("invalid {key}: not a valid u64"));
     }
     Err(format!("missing required parameter: {key}"))
+}
+
+/// Parses an optional `limit` argument, clamping it into Discord's accepted
+/// `1..=100` range.
+///
+/// Clamping the lower bound matters for cursor-based pagination: a `limit` of
+/// 0 would always satisfy `count == limit`, producing an empty page that
+/// claims `has_more: true` — a pagination dead end.
+pub(crate) fn parse_limit(args: &Value, default: u8) -> u8 {
+    args.get("limit")
+        .and_then(Value::as_u64)
+        .map(|v| v.clamp(1, 100) as u8)
+        .unwrap_or(default)
 }
 
 pub(crate) fn parse_optional_id(args: &Value, key: &str) -> Option<u64> {

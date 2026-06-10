@@ -251,7 +251,10 @@ fn new_since_response(config: &LoadedConfig, mut messages: Vec<Message>, limit: 
     json!({
         "messages": msgs,
         "count": count,
-        "has_more": count == usize::from(limit),
+        // `limit > 0` guards against an empty page claiming more data:
+        // dispatch clamps limit to 1..=100, but this function must not
+        // produce `{count: 0, has_more: true}` even if that ever regresses.
+        "has_more": limit > 0 && count == usize::from(limit),
     })
 }
 
@@ -636,6 +639,20 @@ mod tests {
         assert_eq!(resp["messages"], json!([]));
         assert_eq!(resp["count"], 0);
         assert_eq!(resp["has_more"], json!(false));
+    }
+
+    #[test]
+    fn new_since_zero_limit_never_signals_more() {
+        // Dispatch clamps limit to 1..=100, but the response builder must
+        // stay safe on its own: limit 0 with an empty page would otherwise
+        // satisfy `count == limit` vacuously and claim more data exists.
+        let resp = new_since_response(&test_config(), Vec::new(), 0);
+        assert_eq!(resp["count"], 0);
+        assert_eq!(
+            resp["has_more"],
+            json!(false),
+            "an empty page must never claim more data is available"
+        );
     }
 
     #[test]
