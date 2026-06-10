@@ -179,6 +179,38 @@ pub(crate) fn event_to_notification(event: NotificationEvent) -> Value {
     }
 }
 
+/// Convert a [`NotificationEvent`] into a notification item (params only, no
+/// JSON-RPC envelope). Used as a building block for batch notifications.
+fn event_to_notification_item(event: NotificationEvent) -> Value {
+    let full = event_to_notification(event);
+    // Extract the params and method from the full notification to build
+    // a compact item that preserves the event's method and content.
+    let method = full["method"]
+        .as_str()
+        .unwrap_or("notifications/claude/channel");
+    let mut item = json!({ "method": method });
+    if let Some(params) = full.get("params") {
+        item["params"] = params.clone();
+    }
+    item
+}
+
+/// Convert multiple buffered events into a single batch MCP notification.
+///
+/// Each flush produces exactly one JSON-RPC line on stdout regardless of how
+/// many events were buffered. Single-event flushes use the same batch format
+/// for consistency.
+pub(crate) fn events_to_batch_notification(events: Vec<NotificationEvent>) -> Value {
+    let items: Vec<Value> = events.into_iter().map(event_to_notification_item).collect();
+    json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/claude/channel/batch",
+        "params": {
+            "events": items,
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +307,103 @@ mod tests {
         let json = event_to_notification(event);
         let meta = &json["params"]["meta"];
         assert_eq!(meta["thread_parent_id"], "600");
+    }
+
+    // ── Batch notification tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_batch_notification_single_event() {
+        let events = vec![NotificationEvent::Message {
+            chat_id: "100".into(),
+            message_id: "200".into(),
+            user: "alice".into(),
+            user_id: "300".into(),
+            content: "hello".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            attachments: vec![],
+            is_voice_message: false,
+            thread_parent_id: None,
+        }];
+        let batch = events_to_batch_notification(events);
+        assert_eq!(batch["jsonrpc"], "2.0");
+        assert_eq!(batch["method"], "notifications/claude/channel/batch");
+        let items = batch["params"]["events"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["method"], "notifications/claude/channel");
+        assert_eq!(items[0]["params"]["content"], "hello");
+    }
+
+    #[test]
+    fn test_batch_notification_multiple_events_preserves_order() {
+        let events = vec![
+            NotificationEvent::Message {
+                chat_id: "100".into(),
+                message_id: "1".into(),
+                user: "alice".into(),
+                user_id: "300".into(),
+                content: "first".into(),
+                timestamp: "2026-01-01T00:00:00Z".into(),
+                attachments: vec![],
+                is_voice_message: false,
+                thread_parent_id: None,
+            },
+            NotificationEvent::Reaction {
+                chat_id: "100".into(),
+                message_id: "1".into(),
+                user: "bob".into(),
+                user_id: "400".into(),
+                emoji: "👍".into(),
+            },
+            NotificationEvent::MessageEdit {
+                chat_id: "100".into(),
+                message_id: "1".into(),
+                user: "alice".into(),
+                user_id: "300".into(),
+                new_content: "edited".into(),
+                timestamp: "2026-01-01T00:00:01Z".into(),
+                thread_parent_id: None,
+            },
+        ];
+        let batch = events_to_batch_notification(events);
+        let items = batch["params"]["events"].as_array().unwrap();
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0]["params"]["content"], "first");
+        assert_eq!(items[1]["params"]["content"], "reacted with 👍");
+        assert_eq!(items[2]["params"]["content"], "edited");
+    }
+
+    #[test]
+    fn test_batch_notification_preserves_per_event_method() {
+        let events = vec![
+            NotificationEvent::Message {
+                chat_id: "100".into(),
+                message_id: "1".into(),
+                user: "alice".into(),
+                user_id: "300".into(),
+                content: "msg".into(),
+                timestamp: "2026-01-01T00:00:00Z".into(),
+                attachments: vec![],
+                is_voice_message: false,
+                thread_parent_id: None,
+            },
+            NotificationEvent::MessageDelete {
+                chat_id: "100".into(),
+                message_id: "2".into(),
+                thread_parent_id: None,
+            },
+        ];
+        let batch = events_to_batch_notification(events);
+        let items = batch["params"]["events"].as_array().unwrap();
+        // Both channel events use the same method.
+        assert_eq!(items[0]["method"], "notifications/claude/channel");
+        assert_eq!(items[1]["method"], "notifications/claude/channel");
+    }
+
+    #[test]
+    fn test_batch_notification_empty_events() {
+        let batch = events_to_batch_notification(vec![]);
+        assert_eq!(batch["method"], "notifications/claude/channel/batch");
+        let items = batch["params"]["events"].as_array().unwrap();
+        assert!(items.is_empty());
     }
 }

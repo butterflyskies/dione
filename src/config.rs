@@ -90,8 +90,8 @@ pub struct ChannelConfig {
     /// When > 0, channel events (messages, edits, deletes, reactions) are
     /// buffered and flushed after this delay. Non-channel events (traces,
     /// permission responses, config errors) pass through immediately.
-    /// Default: 0 (no buffering).
-    pub delivery_delay_ms: u64,
+    /// If `None`, inherits from `[delivery] delivery_delay_ms`.
+    pub delivery_delay_ms: Option<u64>,
 }
 
 impl Default for ChannelConfig {
@@ -100,7 +100,7 @@ impl Default for ChannelConfig {
             id: String::new(),
             require_mention: true,
             allow_from: Vec::new(),
-            delivery_delay_ms: 0,
+            delivery_delay_ms: None,
         }
     }
 }
@@ -120,6 +120,9 @@ pub struct DeliveryConfig {
     pub reply_to_mode: ReplyToMode,
     pub text_chunk_limit: usize,
     pub chunk_mode: ChunkMode,
+    /// Global default coalescing delay for channel events (milliseconds).
+    /// Per-channel `delivery_delay_ms` overrides this. Default: 0 (no buffering).
+    pub delivery_delay_ms: u64,
 }
 
 impl Default for DeliveryConfig {
@@ -129,6 +132,7 @@ impl Default for DeliveryConfig {
             reply_to_mode: ReplyToMode::First,
             text_chunk_limit: 2000,
             chunk_mode: ChunkMode::Paragraph,
+            delivery_delay_ms: 0,
         }
     }
 }
@@ -302,7 +306,9 @@ impl LoadedConfig {
                     ChannelPolicy {
                         require_mention: ch.require_mention,
                         allow_from: parse_id_set(&ch.allow_from),
-                        delivery_delay_ms: ch.delivery_delay_ms,
+                        delivery_delay_ms: ch
+                            .delivery_delay_ms
+                            .unwrap_or(raw.delivery.delivery_delay_ms),
                     },
                 ))
             })
@@ -350,13 +356,14 @@ impl LoadedConfig {
         &self.rate_limit_runtime
     }
 
-    /// Returns the delivery delay (ms) for a channel, or 0 if the channel is
-    /// not configured or has no delay.
+    /// Returns the delivery delay (ms) for a channel.
+    ///
+    /// Resolution order: per-channel override → global `[delivery]` default → 0.
     pub fn delivery_delay_ms(&self, channel_id: u64) -> u64 {
         self.channel_policies
             .get(&channel_id)
             .map(|p| p.delivery_delay_ms)
-            .unwrap_or(0)
+            .unwrap_or(self.raw.delivery.delivery_delay_ms)
     }
 
     /// Convert a `chrono::DateTime<Utc>` to a [`LocalTimestamp`] in the configured timezone.
@@ -823,7 +830,7 @@ enabled = true
         let raw = Config {
             channels: vec![ChannelConfig {
                 id: "700".to_string(),
-                delivery_delay_ms: 500,
+                delivery_delay_ms: Some(500),
                 ..Default::default()
             }],
             ..Default::default()
@@ -847,6 +854,130 @@ enabled = true
             cfg.delivery_delay_ms(800),
             0,
             "default delivery_delay_ms should be 0"
+        );
+    }
+
+    // ── global delivery_delay_ms tests ────────────────────────────────────
+
+    #[test]
+    fn test_global_delivery_delay_applies_when_channel_has_no_override() {
+        let raw = Config {
+            delivery: DeliveryConfig {
+                delivery_delay_ms: 850,
+                ..Default::default()
+            },
+            channels: vec![ChannelConfig {
+                id: "100".to_string(),
+                // No per-channel delivery_delay_ms (None) — inherits global.
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let cfg = LoadedConfig::from_raw(raw);
+        assert_eq!(
+            cfg.delivery_delay_ms(100),
+            850,
+            "configured channel without override should inherit global"
+        );
+    }
+
+    #[test]
+    fn test_per_channel_override_takes_precedence_over_global() {
+        let raw = Config {
+            delivery: DeliveryConfig {
+                delivery_delay_ms: 850,
+                ..Default::default()
+            },
+            channels: vec![ChannelConfig {
+                id: "100".to_string(),
+                delivery_delay_ms: Some(200),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let cfg = LoadedConfig::from_raw(raw);
+        assert_eq!(
+            cfg.delivery_delay_ms(100),
+            200,
+            "per-channel override should take precedence over global"
+        );
+    }
+
+    #[test]
+    fn test_per_channel_explicit_zero_overrides_nonzero_global() {
+        let raw = Config {
+            delivery: DeliveryConfig {
+                delivery_delay_ms: 850,
+                ..Default::default()
+            },
+            channels: vec![ChannelConfig {
+                id: "100".to_string(),
+                delivery_delay_ms: Some(0),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let cfg = LoadedConfig::from_raw(raw);
+        assert_eq!(
+            cfg.delivery_delay_ms(100),
+            0,
+            "explicit per-channel 0 should override non-zero global"
+        );
+    }
+
+    #[test]
+    fn test_unconfigured_channel_inherits_global_default() {
+        let raw = Config {
+            delivery: DeliveryConfig {
+                delivery_delay_ms: 750,
+                ..Default::default()
+            },
+            // No channels configured.
+            ..Default::default()
+        };
+        let cfg = LoadedConfig::from_raw(raw);
+        assert_eq!(
+            cfg.delivery_delay_ms(999),
+            750,
+            "unconfigured channel should inherit global default"
+        );
+    }
+
+    #[test]
+    fn test_global_delivery_delay_ms_toml_parses() {
+        let (_dir, state_dir) = temp_state_dir();
+        let config_path = state_dir.join("config.toml");
+        let toml = r#"
+[delivery]
+delivery_delay_ms = 850
+
+[[channels]]
+id = "100"
+require_mention = false
+
+[[channels]]
+id = "200"
+require_mention = false
+delivery_delay_ms = 300
+"#;
+        fs::write(config_path.as_std_path(), toml.as_bytes()).unwrap();
+        let cfg = reload_config(&state_dir).0;
+
+        assert_eq!(cfg.delivery.delivery_delay_ms, 850);
+        assert_eq!(
+            cfg.delivery_delay_ms(100),
+            850,
+            "channel without override inherits global"
+        );
+        assert_eq!(
+            cfg.delivery_delay_ms(200),
+            300,
+            "channel with override uses its own value"
+        );
+        assert_eq!(
+            cfg.delivery_delay_ms(999),
+            850,
+            "unconfigured channel inherits global"
         );
     }
 
@@ -923,7 +1054,7 @@ delivery_delay_ms = 750
 "#;
         fs::write(config_path.as_std_path(), toml.as_bytes()).unwrap();
         let cfg = reload_config(&state_dir).0;
-        assert_eq!(cfg.channels[0].delivery_delay_ms, 750);
+        assert_eq!(cfg.channels[0].delivery_delay_ms, Some(750));
         assert_eq!(cfg.delivery_delay_ms(123), 750);
     }
 

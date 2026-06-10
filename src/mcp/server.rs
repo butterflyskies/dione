@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use crate::delivery_buffer::{BufferResult, DeliveryBuffer};
 use crate::discord::events::NotificationEvent;
 use crate::mcp::dispatch::call_tool;
-use crate::mcp::notifications::event_to_notification;
+use crate::mcp::notifications::{event_to_notification, events_to_batch_notification};
 use crate::mcp::protocol::{initialize_response, tools_list};
 use crate::mcp::tools::{
     access::AccessCtx,
@@ -156,8 +156,8 @@ pub async fn run(
                 } => {
                     let now = tokio::time::Instant::now();
                     let flushed = delivery_buffer.flush_ready(now);
-                    for event in flushed {
-                        let notification = event_to_notification(event);
+                    if !flushed.is_empty() {
+                        let notification = events_to_batch_notification(flushed);
                         write_line(&stdout_notif, &notification).await;
                     }
                 }
@@ -229,10 +229,10 @@ pub async fn run(
             }
         }
 
-        // Channel closed — flush any remaining buffered events.
+        // Channel closed — flush any remaining buffered events as a single batch.
         let remaining = delivery_buffer.flush_all();
-        for event in remaining {
-            let notification = event_to_notification(event);
+        if !remaining.is_empty() {
+            let notification = events_to_batch_notification(remaining);
             write_line(&stdout_notif, &notification).await;
         }
     });
@@ -434,6 +434,11 @@ pub mod test_helpers {
     /// Exposes `event_to_notification` for unit testing notification format.
     pub fn make_notification(event: NotificationEvent) -> Value {
         crate::mcp::notifications::event_to_notification(event)
+    }
+
+    /// Exposes `events_to_batch_notification` for unit testing batch notification format.
+    pub fn make_batch_notification(events: Vec<NotificationEvent>) -> Value {
+        crate::mcp::notifications::events_to_batch_notification(events)
     }
 
     /// Exposes `tools_list` for unit testing tool discovery.
