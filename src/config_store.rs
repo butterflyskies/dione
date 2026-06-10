@@ -247,3 +247,28 @@ impl ConfigStore {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discord_id_rejects_zero() {
+        // Snowflakes are nonzero; serenity's Id wrappers panic on 0, so the
+        // newtype must refuse it at the parse boundary.
+        assert!(DiscordId::parse("0").is_err());
+    }
+
+    #[test]
+    fn discord_id_accepts_valid_snowflake() {
+        let id = DiscordId::parse("1508300070599000225").expect("valid snowflake");
+        assert_eq!(id.to_string(), "1508300070599000225");
+    }
+
+    #[test]
+    fn discord_id_rejects_non_numeric() {
+        assert!(DiscordId::parse("not-a-number").is_err());
+        assert!(DiscordId::parse("").is_err());
+        assert!(DiscordId::parse("-1").is_err());
+    }
+}
