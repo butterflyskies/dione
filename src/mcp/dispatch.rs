@@ -47,7 +47,7 @@ pub(crate) async fn call_tool(
                 .get("content")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing content".to_string())?;
-            let reply_to = parse_optional_id(&args, "reply_to_message_id");
+            let reply_to = parse_optional_id(&args, "reply_to_message_id")?;
             let suppress_ping = args
                 .get("suppress_ping")
                 .and_then(Value::as_bool)
@@ -175,7 +175,7 @@ pub(crate) async fn call_tool(
         "create_thread" => {
             let ctx = server.management_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
-            let message_id = parse_optional_id(&args, "message_id");
+            let message_id = parse_optional_id(&args, "message_id")?;
             let name = args
                 .get("name")
                 .and_then(Value::as_str)
@@ -428,16 +428,36 @@ pub(crate) fn parse_limit(args: &Value, default: u8) -> u8 {
         .unwrap_or(default)
 }
 
-pub(crate) fn parse_optional_id(args: &Value, key: &str) -> Option<u64> {
-    // Zero is not a valid snowflake (serenity's Id wrappers panic on it);
-    // treat it like an absent optional parameter.
+pub(crate) fn parse_optional_id(
+    args: &Value,
+    key: &str,
+) -> Result<Option<u64>, String> {
+    // A value that parses to zero is explicitly wrong — serenity's Id wrappers
+    // panic on NonZeroU64(0). Silently promoting it to "absent" would hide the
+    // caller's bug; return an error so they know their ID is invalid.
     if let Some(n) = args.get(key).and_then(Value::as_u64) {
-        return Some(n).filter(|&n| n != 0);
+        if n == 0 {
+            return Err(format!(
+                "invalid {key}: must be a nonzero Discord snowflake"
+            ));
+        }
+        return Ok(Some(n));
     }
     if let Some(s) = args.get(key).and_then(Value::as_str) {
-        return s.parse::<u64>().ok().filter(|&n| n != 0);
+        if s.is_empty() {
+            return Ok(None);
+        }
+        let n = s
+            .parse::<u64>()
+            .map_err(|_| format!("invalid {key}: not a valid u64"))?;
+        if n == 0 {
+            return Err(format!(
+                "invalid {key}: must be a nonzero Discord snowflake"
+            ));
+        }
+        return Ok(Some(n));
     }
-    None
+    Ok(None)
 }
 
 fn parse_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -487,16 +507,40 @@ mod tests {
             }
         }
 
-        /// Optional IDs treat zero as absent instead of handing serenity a
-        /// panicking value.
+        /// Optional IDs: nonzero values parse successfully; zero is rejected
+        /// (serenity's Id wrappers panic on NonZeroU64(0)).  Absent/empty
+        /// values yield Ok(None).
         #[test]
-        fn parse_optional_id_never_yields_zero(id in id_strategy(), as_string: bool) {
+        fn parse_optional_id_rejects_zero_accepts_nonzero(
+            id in id_strategy(),
+            as_string: bool,
+        ) {
             let args = if as_string {
                 json!({ "id": id.to_string() })
             } else {
                 json!({ "id": id })
             };
-            prop_assert_eq!(parse_optional_id(&args, "id"), (id != 0).then_some(id));
+            let result = parse_optional_id(&args, "id");
+            if id == 0 {
+                prop_assert!(
+                    result.is_err(),
+                    "zero must be an error, got: {:?}",
+                    result
+                );
+            } else {
+                prop_assert_eq!(result, Ok(Some(id)));
+            }
+        }
+
+        /// Absent key yields Ok(None); empty string also yields Ok(None).
+        #[test]
+        fn parse_optional_id_absent_yields_none(_id in id_strategy()) {
+            // Completely absent key
+            let args_absent = json!({});
+            prop_assert_eq!(parse_optional_id(&args_absent, "id"), Ok(None));
+            // Empty string
+            let args_empty = json!({ "id": "" });
+            prop_assert_eq!(parse_optional_id(&args_empty, "id"), Ok(None));
         }
 
         /// The parsed limit always lands in Discord's accepted 1..=100 window
