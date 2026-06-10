@@ -475,6 +475,9 @@ impl EventHandler for Handler {
 
         // Remove all pending entries for this request_id (multi-admin: each admin
         // gets a separate DM, so there may be sibling messages to clean up).
+        // Removal also re-marks the message IDs as bot-sent, so the gateway
+        // message_delete events triggered by the cleanup below are suppressed
+        // rather than delivered to the MCP client.
         let siblings = {
             let mut state = self.state.write().await;
             state.remove_permissions_by_request_id(&request_id)
