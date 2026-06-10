@@ -1469,3 +1469,59 @@ fn single_event_batch_format() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["params"]["content"], "solo");
 }
+
+/// Multi-channel batch: when multiple channels flush simultaneously, events
+/// from different channels are combined into a single batch with correct
+/// per-event chat_id metadata.
+#[test]
+fn multi_channel_batch_preserves_chat_ids() {
+    let mut limiter = make_limiter(false, 100);
+    let mut buffer = DeliveryBuffer::new();
+    let now = Instant::now();
+
+    // Buffer events in two channels with the same delay.
+    pipeline_step(
+        msg_event("ch1", "100", "ch1-first"),
+        &mut limiter,
+        &mut buffer,
+        200,
+        now,
+    );
+    pipeline_step(
+        msg_event("ch2", "200", "ch2-first"),
+        &mut limiter,
+        &mut buffer,
+        200,
+        now,
+    );
+    pipeline_step(
+        msg_event("ch1", "300", "ch1-second"),
+        &mut limiter,
+        &mut buffer,
+        200,
+        now,
+    );
+
+    // Flush both channels (past both deadlines).
+    let after_deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(300);
+    let flushed = buffer.flush_ready(after_deadline);
+    assert_eq!(
+        flushed.len(),
+        3,
+        "all events from both channels should flush"
+    );
+
+    // Build a batch notification from the combined flush.
+    let batch = test_helpers::make_batch_notification(flushed);
+    assert_eq!(batch["method"], "notifications/claude/channel/batch");
+    let items = batch["params"]["events"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+
+    // BTreeMap orders by channel key: "ch1" < "ch2", so ch1 events come first.
+    assert_eq!(items[0]["params"]["meta"]["chat_id"], "ch1");
+    assert_eq!(items[0]["params"]["content"], "ch1-first");
+    assert_eq!(items[1]["params"]["meta"]["chat_id"], "ch1");
+    assert_eq!(items[1]["params"]["content"], "ch1-second");
+    assert_eq!(items[2]["params"]["meta"]["chat_id"], "ch2");
+    assert_eq!(items[2]["params"]["content"], "ch2-first");
+}

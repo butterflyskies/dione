@@ -182,6 +182,20 @@ pub(crate) fn event_to_notification(event: NotificationEvent) -> Value {
 /// Convert a [`NotificationEvent`] into a notification item (params only, no
 /// JSON-RPC envelope). Used as a building block for batch notifications.
 fn event_to_notification_item(event: NotificationEvent) -> Value {
+    // Batch notifications should only contain channel events. Non-channel
+    // events (Trace, PermissionResponse, ConfigError) take the Immediate
+    // path in the delivery buffer and never reach the batch path.
+    debug_assert!(
+        matches!(
+            event,
+            NotificationEvent::Message { .. }
+                | NotificationEvent::MessageEdit { .. }
+                | NotificationEvent::MessageDelete { .. }
+                | NotificationEvent::Reaction { .. }
+        ),
+        "non-channel event in batch path: {event:?}"
+    );
+
     let full = event_to_notification(event);
     // Extract the params and method from the full notification to build
     // a compact item that preserves the event's method and content.

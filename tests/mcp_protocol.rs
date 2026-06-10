@@ -100,6 +100,10 @@ async fn test_initialize_returns_capabilities() {
         "must declare claude/channel experimental capability"
     );
     assert!(
+        experimental.get("claude/channel/batch").is_some(),
+        "must declare claude/channel/batch experimental capability"
+    );
+    assert!(
         experimental.get("claude/channel/permission").is_some(),
         "must declare claude/channel/permission experimental capability"
     );
