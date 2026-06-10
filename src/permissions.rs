@@ -76,6 +76,10 @@ pub async fn send_permission_request(
                         created_at: chrono::Utc::now(),
                     },
                 );
+                // Record the prompt as a bot-sent message so its eventual
+                // cleanup deletion is suppressed by the message_delete handler
+                // instead of being delivered as a useless notification.
+                locked.note_sent(sent_msg.id.get());
             }
             Err(e) => {
                 tracing::warn!(admin_id, error = %e, "failed to send permission request DM");

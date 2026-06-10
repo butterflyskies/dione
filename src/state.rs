@@ -118,6 +118,12 @@ impl SharedState {
     /// Removes all pending permission entries matching a `request_id` and
     /// returns the `(ChannelId, MessageId)` pairs of removed siblings so
     /// callers can clean up the corresponding Discord messages.
+    ///
+    /// The removed message IDs are also re-recorded as bot-sent: callers
+    /// delete these messages immediately after removal, and marking them here
+    /// guarantees the resulting gateway `message_delete` events are suppressed
+    /// even if the original send-time entry was evicted from the capped
+    /// `recent_sent_ids` set in the meantime.
     pub fn remove_permissions_by_request_id(
         &mut self,
         request_id: &str,
@@ -131,6 +137,9 @@ impl SharedState {
                 true
             }
         });
+        for &(_, msg_id) in &removed {
+            self.note_sent(msg_id.get());
+        }
         removed
     }
 }
@@ -287,5 +296,48 @@ mod tests {
             "unrelated entry should survive"
         );
         assert!(state.pending_permissions.contains_key(&5003));
+    }
+
+    /// Removing pending permissions marks the removed message IDs as
+    /// bot-sent, so the cleanup deletions that follow are suppressed by the
+    /// message_delete handler instead of being delivered via MCP.
+    #[test]
+    fn test_remove_permissions_marks_removed_ids_as_sent() {
+        let mut state = SharedState::new();
+
+        let now = Utc::now();
+        for (msg_id, chan_id) in [(5001u64, 9001u64), (5002, 9002)] {
+            state.pending_permissions.insert(
+                msg_id,
+                PendingPermission {
+                    request_id: "shared-req".to_string(),
+                    channel_id: ChannelId::new(chan_id),
+                    created_at: now,
+                },
+            );
+        }
+        state.pending_permissions.insert(
+            5003,
+            PendingPermission {
+                request_id: "other-req".to_string(),
+                channel_id: ChannelId::new(9003),
+                created_at: now,
+            },
+        );
+
+        state.remove_permissions_by_request_id("shared-req");
+
+        assert!(
+            state.recent_sent_ids.contains(&5001),
+            "removed prompt 5001 should be marked sent for delete suppression"
+        );
+        assert!(
+            state.recent_sent_ids.contains(&5002),
+            "removed sibling 5002 should be marked sent for delete suppression"
+        );
+        assert!(
+            !state.recent_sent_ids.contains(&5003),
+            "unrelated pending entry must not be marked sent"
+        );
     }
 }
