@@ -453,3 +453,62 @@ fn parse_string_array(args: &Value, key: &str) -> Option<Vec<String>> {
             .collect()
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    proptest! {
+        /// Zero IDs are rejected before they can reach serenity's
+        /// NonZeroU64-backed Id wrappers (which panic on 0); every other u64
+        /// parses, in both numeric and string form.
+        #[test]
+        fn parse_id_rejects_zero_accepts_nonzero(id in 0u64.., as_string: bool) {
+            let args = if as_string {
+                json!({ "id": id.to_string() })
+            } else {
+                json!({ "id": id })
+            };
+            let result = parse_id(&args, "id");
+            if id == 0 {
+                prop_assert!(result.is_err(), "zero must be rejected, got: {:?}", result);
+            } else {
+                prop_assert_eq!(result, Ok(id));
+            }
+        }
+
+        /// Optional IDs treat zero as absent instead of handing serenity a
+        /// panicking value.
+        #[test]
+        fn parse_optional_id_never_yields_zero(id in 0u64.., as_string: bool) {
+            let args = if as_string {
+                json!({ "id": id.to_string() })
+            } else {
+                json!({ "id": id })
+            };
+            prop_assert_eq!(parse_optional_id(&args, "id"), (id != 0).then_some(id));
+        }
+
+        /// The parsed limit always lands in Discord's accepted 1..=100 window
+        /// (a limit of 0 would make `has_more: count == limit` hold vacuously
+        /// on an empty page), and an absent limit yields the default.
+        #[test]
+        fn parse_limit_always_in_range(
+            limit in proptest::option::of(0u64..),
+            default in 1u8..=100,
+        ) {
+            let args = match limit {
+                Some(l) => json!({ "limit": l }),
+                None => json!({}),
+            };
+            let parsed = parse_limit(&args, default);
+            prop_assert!((1..=100).contains(&parsed));
+            match limit {
+                None => prop_assert_eq!(parsed, default),
+                Some(l) => prop_assert_eq!(u64::from(parsed), l.clamp(1, 100)),
+            }
+        }
+    }
+}

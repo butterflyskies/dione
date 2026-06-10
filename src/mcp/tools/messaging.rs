@@ -773,4 +773,73 @@ mod tests {
             "all returned ids must be after the cursor {after_message_id}: {ids:?}"
         );
     }
+
+    mod proptests {
+        use proptest::prelude::*;
+
+        use super::*;
+
+        /// Unique nonzero snowflakes in arbitrary (shuffled) order, mimicking
+        /// any ordering Discord could put on the wire.
+        fn ids_strategy() -> impl Strategy<Value = Vec<u64>> {
+            prop::collection::hash_set(1u64..=u64::MAX, 0..=8)
+                .prop_map(|set| set.into_iter().collect::<Vec<_>>())
+                .prop_shuffle()
+        }
+
+        fn batch_from_ids(ids: &[u64]) -> Vec<Message> {
+            from_wire(json!(
+                ids.iter()
+                    .map(|&id| wire_message(id, "m", "2026-06-09T12:00:00.000000+00:00", json!([])))
+                    .collect::<Vec<_>>()
+            ))
+        }
+
+        proptest! {
+            /// The full `fetch_new_since` response contract, for any wire
+            /// ordering and any limit (including the 0 edge case):
+            ///
+            /// 1. `count` always equals `messages.len()`
+            /// 2. `has_more` is true iff `count == limit` and `limit >= 1` —
+            ///    an empty page must never claim more data (the limit-0 bug)
+            /// 3. messages are in chronological order (oldest first)
+            /// 4. no messages are invented or dropped
+            #[test]
+            fn new_since_response_invariants(ids in ids_strategy(), limit in 0u8..=100) {
+                let resp = new_since_response(&test_config(), batch_from_ids(&ids), limit);
+
+                let msgs = resp["messages"].as_array().expect("messages array");
+                prop_assert_eq!(
+                    resp["count"].as_u64().expect("count"),
+                    msgs.len() as u64,
+                    "count must equal messages.len()"
+                );
+
+                let expected_more = limit >= 1 && msgs.len() == usize::from(limit);
+                prop_assert_eq!(
+                    resp["has_more"].as_bool().expect("has_more"),
+                    expected_more,
+                    "has_more must be true iff a full page (>= 1) was returned"
+                );
+
+                let out_ids: Vec<u64> = msgs
+                    .iter()
+                    .map(|m| m["id"].as_str().expect("string id").parse().expect("u64 id"))
+                    .collect();
+                prop_assert!(
+                    out_ids.windows(2).all(|w| w[0] < w[1]),
+                    "ids must be strictly ascending (oldest first): {:?}",
+                    out_ids
+                );
+
+                let mut sorted_input = ids.clone();
+                sorted_input.sort_unstable();
+                prop_assert_eq!(
+                    out_ids,
+                    sorted_input,
+                    "response must be a permutation of the input batch"
+                );
+            }
+        }
+    }
 }
