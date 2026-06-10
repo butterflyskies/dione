@@ -128,7 +128,10 @@ pub async fn react(ctx: &MessagingCtx, channel_id: u64, message_id: u64, emoji: 
         return e;
     }
 
-    let reaction = parse_reaction_type(emoji);
+    let reaction = match parse_reaction_type(emoji) {
+        Ok(r) => r,
+        Err(e) => return json!({ "error": e }),
+    };
     match ctx
         .http
         .create_reaction(
@@ -424,7 +427,10 @@ pub async fn send_dm(ctx: &MessagingCtx, user_id: u64, content: &str) -> Value {
 
 /// Parses an emoji string into the appropriate serenity ReactionType.
 /// Handles both Unicode emoji ("👍") and custom Discord emoji ("<:name:id>" or "<a:name:id>").
-fn parse_reaction_type(emoji: &str) -> serenity::model::channel::ReactionType {
+///
+/// Returns an error for custom emoji with a zero ID: snowflakes are nonzero,
+/// and serenity's `EmojiId::new` (NonZeroU64-backed) panics on 0.
+fn parse_reaction_type(emoji: &str) -> Result<serenity::model::channel::ReactionType, String> {
     use serenity::model::channel::ReactionType;
     use serenity::model::id::EmojiId;
 
@@ -437,16 +443,21 @@ fn parse_reaction_type(emoji: &str) -> serenity::model::channel::ReactionType {
             let animated = parts[0] == "a";
             let name = parts[1].to_string();
             if let Ok(id) = parts[2].parse::<u64>() {
-                return ReactionType::Custom {
+                if id == 0 {
+                    return Err(format!(
+                        "invalid custom emoji {trimmed:?}: emoji ID must be nonzero"
+                    ));
+                }
+                return Ok(ReactionType::Custom {
                     animated,
                     id: EmojiId::new(id),
                     name: Some(name),
-                };
+                });
             }
         }
     }
 
-    ReactionType::Unicode(emoji.to_string())
+    Ok(ReactionType::Unicode(emoji.to_string()))
 }
 
 const MAX_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;
@@ -713,6 +724,52 @@ mod tests {
                 .expect("string timestamp")
                 .starts_with("2026-06-09T12:00:00"),
             "timestamp must round-trip from the wire payload"
+        );
+    }
+
+    // ── parse_reaction_type ──────────────────────────────────────────────────
+
+    #[test]
+    fn parse_reaction_type_rejects_zero_custom_emoji_id() {
+        // Regression: `<:name:0>` used to reach `EmojiId::new(0)`, which
+        // panics (serenity Ids are NonZeroU64). It must be a graceful error.
+        let result = parse_reaction_type("<:name:0>");
+        assert!(
+            result.is_err(),
+            "zero emoji ID must be rejected, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn parse_reaction_type_rejects_zero_animated_emoji_id() {
+        let result = parse_reaction_type("<a:party:0>");
+        assert!(
+            result.is_err(),
+            "zero animated emoji ID must be rejected, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn parse_reaction_type_accepts_valid_custom_emoji() {
+        use serenity::model::channel::ReactionType;
+
+        match parse_reaction_type("<:blob:123456789012345678>") {
+            Ok(ReactionType::Custom { animated, id, name }) => {
+                assert!(!animated);
+                assert_eq!(id.get(), 123456789012345678);
+                assert_eq!(name.as_deref(), Some("blob"));
+            }
+            other => panic!("expected Custom reaction, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_reaction_type_passes_unicode_through() {
+        use serenity::model::channel::ReactionType;
+
+        assert_eq!(
+            parse_reaction_type("👍"),
+            Ok(ReactionType::Unicode("👍".to_string()))
         );
     }
 
