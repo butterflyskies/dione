@@ -339,6 +339,73 @@ async fn test_tools_call_fetch_new_since_zero_cursor_returns_error() {
 }
 
 #[tokio::test]
+async fn test_tools_call_zero_snowflake_returns_error_across_tools() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+
+    // Every tool that feeds a parsed ID into serenity's NonZeroU64-backed Id
+    // wrappers must reject zero at the MCP boundary instead of panicking.
+    let cases: Vec<(&str, serde_json::Value)> = vec![
+        (
+            "get_message",
+            json!({ "channel_id": "999999", "message_id": "0" }),
+        ),
+        (
+            "react",
+            json!({ "channel_id": "999999", "message_id": "0", "emoji": "x" }),
+        ),
+        (
+            "pin_message",
+            json!({ "channel_id": "999999", "message_id": "0" }),
+        ),
+        (
+            "unpin_message",
+            json!({ "channel_id": "999999", "message_id": "0" }),
+        ),
+        (
+            "delete_message",
+            json!({ "channel_id": "999999", "message_id": "0" }),
+        ),
+        (
+            "edit_message",
+            json!({ "channel_id": "999999", "message_id": "0", "content": "x" }),
+        ),
+        (
+            "download_attachment",
+            json!({ "channel_id": "999999", "message_id": "0" }),
+        ),
+        ("fetch_messages", json!({ "channel_id": "0" })),
+        (
+            "fetch_new_since",
+            json!({ "channel_id": "0", "after_message_id": "123456" }),
+        ),
+        ("get_channel", json!({ "channel_id": "0" })),
+        ("get_user", json!({ "user_id": "0" })),
+        ("send_typing", json!({ "channel_id": "0" })),
+        ("send_dm", json!({ "user_id": "0", "content": "x" })),
+        ("reply", json!({ "channel_id": "0", "content": "x" })),
+    ];
+
+    for (i, (tool, arguments)) in cases.into_iter().enumerate() {
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": 200 + i,
+            "method": "tools/call",
+            "params": { "name": tool, "arguments": arguments }
+        });
+        let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+        let err = resp.get("error").unwrap_or_else(|| {
+            panic!("{tool} with a zero snowflake should produce a JSON-RPC error, got: {resp}")
+        });
+        let msg = err["message"].as_str().unwrap_or_default();
+        assert!(
+            msg.contains("nonzero Discord snowflake"),
+            "{tool}: error should explain the nonzero requirement, got: {msg}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_tools_call_send_file_rejected_unknown_channel() {
     let (_dir, state_dir) = temp_state_dir();
     let server = make_server(&state_dir);

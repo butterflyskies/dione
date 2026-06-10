@@ -83,14 +83,9 @@ pub(crate) async fn call_tool(
         "fetch_new_since" => {
             let ctx = server.messaging_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
+            // parse_id rejects zero, which serenity's MessageId::new would
+            // otherwise panic on.
             let after_message_id = parse_id(&args, "after_message_id")?;
-            // serenity's `MessageId::new` wraps a `NonZeroU64` and panics on
-            // zero — validate at the MCP boundary instead of crashing.
-            if after_message_id == 0 {
-                return Err(
-                    "invalid after_message_id: must be a nonzero Discord snowflake".to_string(),
-                );
-            }
             let limit = parse_limit(&args, 20);
             fetch_new_since(&ctx, channel_id, after_message_id, limit).await
         }
@@ -401,15 +396,23 @@ pub(crate) async fn call_tool(
 
 pub(crate) fn parse_id(args: &Value, key: &str) -> Result<u64, String> {
     // Accept both numeric and string IDs.
-    if let Some(n) = args.get(key).and_then(Value::as_u64) {
-        return Ok(n);
+    let id = if let Some(n) = args.get(key).and_then(Value::as_u64) {
+        n
+    } else if let Some(s) = args.get(key).and_then(Value::as_str) {
+        s.parse::<u64>()
+            .map_err(|_| format!("invalid {key}: not a valid u64"))?
+    } else {
+        return Err(format!("missing required parameter: {key}"));
+    };
+    // Discord snowflakes are nonzero; serenity's Id wrappers (`ChannelId`,
+    // `MessageId`, `UserId`, ...) hold a `NonZeroU64` and panic on zero, so
+    // reject it at the MCP boundary.
+    if id == 0 {
+        return Err(format!(
+            "invalid {key}: must be a nonzero Discord snowflake"
+        ));
     }
-    if let Some(s) = args.get(key).and_then(Value::as_str) {
-        return s
-            .parse::<u64>()
-            .map_err(|_| format!("invalid {key}: not a valid u64"));
-    }
-    Err(format!("missing required parameter: {key}"))
+    Ok(id)
 }
 
 /// Parses an optional `limit` argument, clamping it into Discord's accepted
@@ -426,11 +429,13 @@ pub(crate) fn parse_limit(args: &Value, default: u8) -> u8 {
 }
 
 pub(crate) fn parse_optional_id(args: &Value, key: &str) -> Option<u64> {
+    // Zero is not a valid snowflake (serenity's Id wrappers panic on it);
+    // treat it like an absent optional parameter.
     if let Some(n) = args.get(key).and_then(Value::as_u64) {
-        return Some(n);
+        return Some(n).filter(|&n| n != 0);
     }
     if let Some(s) = args.get(key).and_then(Value::as_str) {
-        return s.parse::<u64>().ok();
+        return s.parse::<u64>().ok().filter(|&n| n != 0);
     }
     None
 }

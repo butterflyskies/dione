@@ -12,9 +12,15 @@ pub struct DiscordId(u64);
 
 impl DiscordId {
     pub fn parse(s: &str) -> Result<Self, String> {
-        s.parse::<u64>()
-            .map(Self)
-            .map_err(|_| format!("invalid Discord ID: {s}"))
+        let id = s
+            .parse::<u64>()
+            .map_err(|_| format!("invalid Discord ID: {s}"))?;
+        // Snowflakes are nonzero — this is what the doc comment above
+        // promises, and serenity's Id wrappers panic on zero.
+        if id == 0 {
+            return Err(format!("invalid Discord ID: {s}"));
+        }
+        Ok(Self(id))
     }
 }
 
