@@ -77,11 +77,7 @@ pub(crate) async fn call_tool(
         "fetch_messages" => {
             let ctx = server.messaging_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
-            let limit = args
-                .get("limit")
-                .and_then(Value::as_u64)
-                .map(|v| v.min(100) as u8)
-                .unwrap_or(20);
+            let limit = parse_limit(&args, 20);
             fetch_messages(&ctx, channel_id, limit).await
         }
         "fetch_new_since" => {
