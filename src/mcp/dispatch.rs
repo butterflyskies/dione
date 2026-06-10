@@ -13,8 +13,8 @@ use crate::mcp::tools::{
     },
     management::{create_thread, delete_message, pin_message, unpin_message},
     messaging::{
-        download_attachment, edit_message, fetch_messages, get_message, react as discord_react,
-        reply, send_dm, send_file,
+        download_attachment, edit_message, fetch_messages, fetch_new_since, get_message,
+        react as discord_react, reply, send_dm, send_file,
     },
     render::{render_latex, render_latex_to_channel},
 };
@@ -47,7 +47,7 @@ pub(crate) async fn call_tool(
                 .get("content")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing content".to_string())?;
-            let reply_to = parse_optional_id(&args, "reply_to_message_id");
+            let reply_to = parse_optional_id(&args, "reply_to_message_id")?;
             let suppress_ping = args
                 .get("suppress_ping")
                 .and_then(Value::as_bool)
@@ -77,12 +77,17 @@ pub(crate) async fn call_tool(
         "fetch_messages" => {
             let ctx = server.messaging_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
-            let limit = args
-                .get("limit")
-                .and_then(Value::as_u64)
-                .map(|v| v.min(100) as u8)
-                .unwrap_or(20);
+            let limit = parse_limit(&args, 20);
             fetch_messages(&ctx, channel_id, limit).await
+        }
+        "fetch_new_since" => {
+            let ctx = server.messaging_ctx(config.clone());
+            let channel_id = parse_id(&args, "channel_id")?;
+            // parse_id rejects zero, which serenity's MessageId::new would
+            // otherwise panic on.
+            let after_message_id = parse_id(&args, "after_message_id")?;
+            let limit = parse_limit(&args, 20);
+            fetch_new_since(&ctx, channel_id, after_message_id, limit).await
         }
         "download_attachment" => {
             let ctx = server.messaging_ctx(config.clone());
@@ -170,7 +175,7 @@ pub(crate) async fn call_tool(
         "create_thread" => {
             let ctx = server.management_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?;
-            let message_id = parse_optional_id(&args, "message_id");
+            let message_id = parse_optional_id(&args, "message_id")?;
             let name = args
                 .get("name")
                 .and_then(Value::as_str)
@@ -391,25 +396,65 @@ pub(crate) async fn call_tool(
 
 pub(crate) fn parse_id(args: &Value, key: &str) -> Result<u64, String> {
     // Accept both numeric and string IDs.
-    if let Some(n) = args.get(key).and_then(Value::as_u64) {
-        return Ok(n);
+    let id = if let Some(n) = args.get(key).and_then(Value::as_u64) {
+        n
+    } else if let Some(s) = args.get(key).and_then(Value::as_str) {
+        s.parse::<u64>()
+            .map_err(|_| format!("invalid {key}: not a valid u64"))?
+    } else {
+        return Err(format!("missing required parameter: {key}"));
+    };
+    // Discord snowflakes are nonzero; serenity's Id wrappers (`ChannelId`,
+    // `MessageId`, `UserId`, ...) hold a `NonZeroU64` and panic on zero, so
+    // reject it at the MCP boundary.
+    if id == 0 {
+        return Err(format!(
+            "invalid {key}: must be a nonzero Discord snowflake"
+        ));
     }
-    if let Some(s) = args.get(key).and_then(Value::as_str) {
-        return s
-            .parse::<u64>()
-            .map_err(|_| format!("invalid {key}: not a valid u64"));
-    }
-    Err(format!("missing required parameter: {key}"))
+    Ok(id)
 }
 
-pub(crate) fn parse_optional_id(args: &Value, key: &str) -> Option<u64> {
+/// Parses an optional `limit` argument, clamping it into Discord's accepted
+/// `1..=100` range.
+///
+/// Clamping the lower bound matters for cursor-based pagination: a `limit` of
+/// 0 would always satisfy `count == limit`, producing an empty page that
+/// claims `has_more: true` — a pagination dead end.
+pub(crate) fn parse_limit(args: &Value, default: u8) -> u8 {
+    args.get("limit")
+        .and_then(Value::as_u64)
+        .map(|v| v.clamp(1, 100) as u8)
+        .unwrap_or(default)
+}
+
+pub(crate) fn parse_optional_id(args: &Value, key: &str) -> Result<Option<u64>, String> {
+    // A value that parses to zero is explicitly wrong — serenity's Id wrappers
+    // panic on NonZeroU64(0). Silently promoting it to "absent" would hide the
+    // caller's bug; return an error so they know their ID is invalid.
     if let Some(n) = args.get(key).and_then(Value::as_u64) {
-        return Some(n);
+        if n == 0 {
+            return Err(format!(
+                "invalid {key}: must be a nonzero Discord snowflake"
+            ));
+        }
+        return Ok(Some(n));
     }
     if let Some(s) = args.get(key).and_then(Value::as_str) {
-        return s.parse::<u64>().ok();
+        if s.is_empty() {
+            return Ok(None);
+        }
+        let n = s
+            .parse::<u64>()
+            .map_err(|_| format!("invalid {key}: not a valid u64"))?;
+        if n == 0 {
+            return Err(format!(
+                "invalid {key}: must be a nonzero Discord snowflake"
+            ));
+        }
+        return Ok(Some(n));
     }
-    None
+    Ok(None)
 }
 
 fn parse_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -424,4 +469,102 @@ fn parse_string_array(args: &Value, key: &str) -> Option<Vec<String>> {
             .filter_map(|v| v.as_str().map(str::to_owned))
             .collect()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    /// Edge-weighted snowflake strategy. A uniform `0u64..` hits 0 with
+    /// probability ~1/2^64, so the zero arms in the tests below were dead
+    /// code — the edge case the tests exist for was never exercised. This
+    /// forces 0 in ~10% of cases.
+    fn id_strategy() -> impl Strategy<Value = u64> {
+        prop_oneof![1 => Just(0u64), 9 => 1u64..]
+    }
+
+    proptest! {
+        /// Zero IDs are rejected before they can reach serenity's
+        /// NonZeroU64-backed Id wrappers (which panic on 0); every other u64
+        /// parses, in both numeric and string form.
+        #[test]
+        fn parse_id_rejects_zero_accepts_nonzero(id in id_strategy(), as_string: bool) {
+            let args = if as_string {
+                json!({ "id": id.to_string() })
+            } else {
+                json!({ "id": id })
+            };
+            let result = parse_id(&args, "id");
+            if id == 0 {
+                prop_assert!(result.is_err(), "zero must be rejected, got: {:?}", result);
+            } else {
+                prop_assert_eq!(result, Ok(id));
+            }
+        }
+
+        /// Optional IDs: nonzero values parse successfully; zero is rejected
+        /// (serenity's Id wrappers panic on NonZeroU64(0)).  Absent/empty
+        /// values yield Ok(None).
+        #[test]
+        fn parse_optional_id_rejects_zero_accepts_nonzero(
+            id in id_strategy(),
+            as_string: bool,
+        ) {
+            let args = if as_string {
+                json!({ "id": id.to_string() })
+            } else {
+                json!({ "id": id })
+            };
+            let result = parse_optional_id(&args, "id");
+            if id == 0 {
+                prop_assert!(
+                    result.is_err(),
+                    "zero must be an error, got: {:?}",
+                    result
+                );
+            } else {
+                prop_assert_eq!(result, Ok(Some(id)));
+            }
+        }
+
+        /// Absent key yields Ok(None); empty string also yields Ok(None).
+        #[test]
+        fn parse_optional_id_absent_yields_none(_id in id_strategy()) {
+            // Completely absent key
+            let args_absent = json!({});
+            prop_assert_eq!(parse_optional_id(&args_absent, "id"), Ok(None));
+            // Empty string
+            let args_empty = json!({ "id": "" });
+            prop_assert_eq!(parse_optional_id(&args_empty, "id"), Ok(None));
+        }
+
+        /// The parsed limit always lands in Discord's accepted 1..=100 window
+        /// (a limit of 0 would make `has_more: count == limit` hold vacuously
+        /// on an empty page), and an absent limit yields the default.
+        #[test]
+        fn parse_limit_always_in_range(
+            // Edge-weighted for the same reason as id_strategy: uniform u64
+            // almost never lands on 0 (clamp-to-1 branch) or in 1..=100
+            // (exact passthrough branch), leaving both untested.
+            limit in proptest::option::of(prop_oneof![
+                1 => Just(0u64),
+                5 => 1u64..=100,
+                4 => 101u64..,
+            ]),
+            default in 1u8..=100,
+        ) {
+            let args = match limit {
+                Some(l) => json!({ "limit": l }),
+                None => json!({}),
+            };
+            let parsed = parse_limit(&args, default);
+            prop_assert!((1..=100).contains(&parsed));
+            match limit {
+                None => prop_assert_eq!(parsed, default),
+                Some(l) => prop_assert_eq!(u64::from(parsed), l.clamp(1, 100)),
+            }
+        }
+    }
 }
