@@ -10,7 +10,6 @@ pub(crate) fn initialize_response() -> Value {
             "tools": {},
             "experimental": {
                 "claude/channel": {},
-                "claude/channel/batch": {},
                 "claude/channel/permission": {},
             }
         },

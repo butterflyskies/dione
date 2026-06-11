@@ -15,9 +15,9 @@ pub(crate) trait IntoNotification {
     /// Full JSON-RPC 2.0 notification with `jsonrpc`, `method`, and `params`.
     fn into_notification(self) -> Value;
 
-    /// Compact item for batch embedding — just `method` and `params`, no
-    /// JSON-RPC envelope.
-    fn into_notification_item(self) -> Value;
+    /// Extract the `params` payload for batch embedding — just `content` and
+    /// `meta`, no JSON-RPC envelope or method.
+    fn into_batch_params(self) -> Value;
 }
 
 // ── Blanket batch builder ───────────────────────────────────────────────────
@@ -27,14 +27,18 @@ pub(crate) trait IntoNotification {
 /// Each flush produces exactly one JSON-RPC line on stdout regardless of how
 /// many events were buffered. Single-event flushes use the same batch format
 /// for consistency.
+///
+/// Uses the standard `notifications/claude/channel` method (which Claude Code
+/// recognizes) with an `events` array in params. Each array element has the
+/// same shape as a single event's params (`content` + `meta`).
 pub(crate) fn batch_notification(events: impl IntoIterator<Item = impl IntoNotification>) -> Value {
     let items: Vec<Value> = events
         .into_iter()
-        .map(IntoNotification::into_notification_item)
+        .map(IntoNotification::into_batch_params)
         .collect();
     json!({
         "jsonrpc": "2.0",
-        "method": "notifications/claude/channel/batch",
+        "method": "notifications/claude/channel",
         "params": {
             "events": items,
         }
@@ -218,7 +222,7 @@ impl IntoNotification for NotificationEvent {
         }
     }
 
-    fn into_notification_item(self) -> Value {
+    fn into_batch_params(self) -> Value {
         // Batch notifications should only contain channel events. Non-channel
         // events (Trace, PermissionResponse, ConfigError) take the Immediate
         // path in the delivery buffer and never reach the batch path.
@@ -234,16 +238,9 @@ impl IntoNotification for NotificationEvent {
         );
 
         let full = self.into_notification();
-        // Extract the params and method from the full notification to build
-        // a compact item that preserves the event's method and content.
-        let method = full["method"]
-            .as_str()
-            .unwrap_or("notifications/claude/channel");
-        let mut item = json!({ "method": method });
-        if let Some(params) = full.get("params") {
-            item["params"] = params.clone();
-        }
-        item
+        // Extract just the params from the full notification. Each batch
+        // item has the same shape as a single event's params (content + meta).
+        full.get("params").cloned().unwrap_or(json!({}))
     }
 }
 
@@ -362,11 +359,11 @@ mod tests {
         }];
         let batch = batch_notification(events);
         assert_eq!(batch["jsonrpc"], "2.0");
-        assert_eq!(batch["method"], "notifications/claude/channel/batch");
+        assert_eq!(batch["method"], "notifications/claude/channel");
         let items = batch["params"]["events"].as_array().unwrap();
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0]["method"], "notifications/claude/channel");
-        assert_eq!(items[0]["params"]["content"], "hello");
+        assert_eq!(items[0]["content"], "hello");
+        assert_eq!(items[0]["meta"]["chat_id"], "100");
     }
 
     #[test]
@@ -403,13 +400,13 @@ mod tests {
         let batch = batch_notification(events);
         let items = batch["params"]["events"].as_array().unwrap();
         assert_eq!(items.len(), 3);
-        assert_eq!(items[0]["params"]["content"], "first");
-        assert_eq!(items[1]["params"]["content"], "reacted with 👍");
-        assert_eq!(items[2]["params"]["content"], "edited");
+        assert_eq!(items[0]["content"], "first");
+        assert_eq!(items[1]["content"], "reacted with 👍");
+        assert_eq!(items[2]["content"], "edited");
     }
 
     #[test]
-    fn test_batch_notification_preserves_per_event_method() {
+    fn test_batch_notification_items_have_params_shape() {
         let events = vec![
             NotificationEvent::Message {
                 chat_id: "100".into(),
@@ -429,16 +426,20 @@ mod tests {
             },
         ];
         let batch = batch_notification(events);
+        // Batch uses the recognized channel method.
+        assert_eq!(batch["method"], "notifications/claude/channel");
         let items = batch["params"]["events"].as_array().unwrap();
-        // Both channel events use the same method.
-        assert_eq!(items[0]["method"], "notifications/claude/channel");
-        assert_eq!(items[1]["method"], "notifications/claude/channel");
+        // Each item is just params (content + meta), no method wrapper.
+        assert_eq!(items[0]["content"], "msg");
+        assert!(items[0]["meta"]["chat_id"].is_string());
+        assert_eq!(items[1]["content"], "message deleted");
+        assert_eq!(items[1]["meta"]["type"], "message_delete");
     }
 
     #[test]
     fn test_batch_notification_empty_events() {
         let batch = batch_notification(Vec::<NotificationEvent>::new());
-        assert_eq!(batch["method"], "notifications/claude/channel/batch");
+        assert_eq!(batch["method"], "notifications/claude/channel");
         let items = batch["params"]["events"].as_array().unwrap();
         assert!(items.is_empty());
     }
