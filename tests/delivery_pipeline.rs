@@ -1397,82 +1397,43 @@ fn per_channel_override_with_global_default() {
     assert!(buffer.next_flush_deadline().is_some());
 }
 
-// ── Batch notification output format tests ─────────────────────────────
+// ── Individual notification format tests ────────────────────────────────
 
-/// Batch notification output has the correct JSON-RPC structure.
+/// Individual notifications have correct JSON-RPC structure.
 #[test]
-fn batch_notification_output_format() {
+fn individual_notification_jsonrpc_structure() {
     let events = vec![
         msg_event("ch1", "100", "first"),
         reaction_event("ch1", "200"),
         msg_event("ch1", "300", "second"),
     ];
 
-    let batch = test_helpers::make_batch_notification(events);
-
-    // Top-level structure.
-    assert_eq!(batch["jsonrpc"], "2.0");
-    assert_eq!(batch["method"], "notifications/claude/channel");
-    assert!(
-        batch.get("id").is_none(),
-        "notifications must not have an id"
-    );
-
-    // Events array — each item is params (content + meta), no method wrapper.
-    let items = batch["params"]["events"].as_array().unwrap();
-    assert_eq!(items.len(), 3);
-
-    // First item is a message.
-    assert_eq!(items[0]["content"], "first");
-
-    // Second item is a reaction.
-    assert!(items[1]["content"].as_str().unwrap().contains("reacted"));
-
-    // Third item is a message.
-    assert_eq!(items[2]["content"], "second");
-}
-
-/// Batch notification preserves event ordering.
-#[test]
-fn batch_notification_preserves_order() {
-    let events: Vec<NotificationEvent> = (0..5)
-        .map(|i| msg_event("ch1", &format!("{i}"), &format!("msg-{i}")))
+    let notifications: Vec<serde_json::Value> = events
+        .into_iter()
+        .map(test_helpers::make_notification)
         .collect();
 
-    let batch = test_helpers::make_batch_notification(events);
-    let items = batch["params"]["events"].as_array().unwrap();
-
-    for (i, item) in items.iter().enumerate() {
-        assert_eq!(
-            item["content"],
-            format!("msg-{i}"),
-            "event ordering must be preserved in batch"
-        );
+    assert_eq!(notifications.len(), 3);
+    for n in &notifications {
+        assert_eq!(n["jsonrpc"], "2.0");
+        assert_eq!(n["method"], "notifications/claude/channel");
+        assert!(n.get("id").is_none(), "notifications must not have an id");
+        assert!(n["params"]["content"].is_string());
+        assert!(n["params"]["meta"].is_object());
     }
+
+    assert_eq!(notifications[0]["params"]["content"], "first");
+    assert_eq!(notifications[1]["params"]["content"], "reacted with 👍");
+    assert_eq!(notifications[2]["params"]["content"], "second");
 }
 
-/// Single-event batch still uses batch format.
+/// Multi-channel flush preserves per-event chat_id in individual notifications.
 #[test]
-fn single_event_batch_format() {
-    let events = vec![msg_event("ch1", "100", "solo")];
-    let batch = test_helpers::make_batch_notification(events);
-
-    assert_eq!(batch["method"], "notifications/claude/channel");
-    let items = batch["params"]["events"].as_array().unwrap();
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0]["content"], "solo");
-}
-
-/// Multi-channel batch: when multiple channels flush simultaneously, events
-/// from different channels are combined into a single batch with correct
-/// per-event chat_id metadata.
-#[test]
-fn multi_channel_batch_preserves_chat_ids() {
+fn multi_channel_flush_preserves_chat_ids() {
     let mut limiter = make_limiter(false, 100);
     let mut buffer = DeliveryBuffer::new();
     let now = Instant::now();
 
-    // Buffer events in two channels with the same delay.
     pipeline_step(
         msg_event("ch1", "100", "ch1-first"),
         &mut limiter,
@@ -1495,7 +1456,6 @@ fn multi_channel_batch_preserves_chat_ids() {
         now,
     );
 
-    // Flush both channels (past both deadlines).
     let after_deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(300);
     let flushed = buffer.flush_ready(after_deadline);
     assert_eq!(
@@ -1504,17 +1464,16 @@ fn multi_channel_batch_preserves_chat_ids() {
         "all events from both channels should flush"
     );
 
-    // Build a batch notification from the combined flush.
-    let batch = test_helpers::make_batch_notification(flushed);
-    assert_eq!(batch["method"], "notifications/claude/channel");
-    let items = batch["params"]["events"].as_array().unwrap();
-    assert_eq!(items.len(), 3);
+    let notifications: Vec<serde_json::Value> = flushed
+        .into_iter()
+        .map(test_helpers::make_notification)
+        .collect();
 
     // BTreeMap orders by channel key: "ch1" < "ch2", so ch1 events come first.
-    assert_eq!(items[0]["meta"]["chat_id"], "ch1");
-    assert_eq!(items[0]["content"], "ch1-first");
-    assert_eq!(items[1]["meta"]["chat_id"], "ch1");
-    assert_eq!(items[1]["content"], "ch1-second");
-    assert_eq!(items[2]["meta"]["chat_id"], "ch2");
-    assert_eq!(items[2]["content"], "ch2-first");
+    assert_eq!(notifications[0]["params"]["meta"]["chat_id"], "ch1");
+    assert_eq!(notifications[0]["params"]["content"], "ch1-first");
+    assert_eq!(notifications[1]["params"]["meta"]["chat_id"], "ch1");
+    assert_eq!(notifications[1]["params"]["content"], "ch1-second");
+    assert_eq!(notifications[2]["params"]["meta"]["chat_id"], "ch2");
+    assert_eq!(notifications[2]["params"]["content"], "ch2-first");
 }

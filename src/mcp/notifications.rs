@@ -1,8 +1,8 @@
 //! Conversion from Discord [`NotificationEvent`]s to MCP JSON-RPC notifications.
 //!
-//! The [`IntoNotification`] trait defines how a single event becomes either a
-//! full JSON-RPC notification or a compact batch item. The [`batch_notification`]
-//! function composes multiple items into a single batch envelope.
+//! The [`IntoNotification`] trait defines how a single event becomes a
+//! full JSON-RPC notification. Each event is emitted as its own notification
+//! line — no batch wrapping.
 
 use serde_json::{Value, json};
 
@@ -14,35 +14,6 @@ use crate::discord::events::NotificationEvent;
 pub(crate) trait IntoNotification {
     /// Full JSON-RPC 2.0 notification with `jsonrpc`, `method`, and `params`.
     fn into_notification(self) -> Value;
-
-    /// Extract the `params` payload for batch embedding — just `content` and
-    /// `meta`, no JSON-RPC envelope or method.
-    fn into_batch_params(self) -> Value;
-}
-
-// ── Blanket batch builder ───────────────────────────────────────────────────
-
-/// Convert multiple events into a single batch MCP notification.
-///
-/// Each flush produces exactly one JSON-RPC line on stdout regardless of how
-/// many events were buffered. Single-event flushes use the same batch format
-/// for consistency.
-///
-/// Uses the standard `notifications/claude/channel` method (which Claude Code
-/// recognizes) with an `events` array in params. Each array element has the
-/// same shape as a single event's params (`content` + `meta`).
-pub(crate) fn batch_notification(events: impl IntoIterator<Item = impl IntoNotification>) -> Value {
-    let items: Vec<Value> = events
-        .into_iter()
-        .map(IntoNotification::into_batch_params)
-        .collect();
-    json!({
-        "jsonrpc": "2.0",
-        "method": "notifications/claude/channel",
-        "params": {
-            "events": items,
-        }
-    })
 }
 
 // ── Impl for NotificationEvent ──────────────────────────────────────────────
@@ -221,27 +192,6 @@ impl IntoNotification for NotificationEvent {
             }
         }
     }
-
-    fn into_batch_params(self) -> Value {
-        // Batch notifications should only contain channel events. Non-channel
-        // events (Trace, PermissionResponse, ConfigError) take the Immediate
-        // path in the delivery buffer and never reach the batch path.
-        debug_assert!(
-            matches!(
-                self,
-                NotificationEvent::Message { .. }
-                    | NotificationEvent::MessageEdit { .. }
-                    | NotificationEvent::MessageDelete { .. }
-                    | NotificationEvent::Reaction { .. }
-            ),
-            "non-channel event in batch path: {self:?}"
-        );
-
-        let full = self.into_notification();
-        // Extract just the params from the full notification. Each batch
-        // item has the same shape as a single event's params (content + meta).
-        full.get("params").cloned().unwrap_or(json!({}))
-    }
 }
 
 #[cfg(test)]
@@ -340,107 +290,5 @@ mod tests {
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
         assert_eq!(meta["thread_parent_id"], "600");
-    }
-
-    // ── Batch notification tests ─────────────────────────────────────────────
-
-    #[test]
-    fn test_batch_notification_single_event() {
-        let events = vec![NotificationEvent::Message {
-            chat_id: "100".into(),
-            message_id: "200".into(),
-            user: "alice".into(),
-            user_id: "300".into(),
-            content: "hello".into(),
-            timestamp: "2026-01-01T00:00:00Z".into(),
-            attachments: vec![],
-            is_voice_message: false,
-            thread_parent_id: None,
-        }];
-        let batch = batch_notification(events);
-        assert_eq!(batch["jsonrpc"], "2.0");
-        assert_eq!(batch["method"], "notifications/claude/channel");
-        let items = batch["params"]["events"].as_array().unwrap();
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0]["content"], "hello");
-        assert_eq!(items[0]["meta"]["chat_id"], "100");
-    }
-
-    #[test]
-    fn test_batch_notification_multiple_events_preserves_order() {
-        let events = vec![
-            NotificationEvent::Message {
-                chat_id: "100".into(),
-                message_id: "1".into(),
-                user: "alice".into(),
-                user_id: "300".into(),
-                content: "first".into(),
-                timestamp: "2026-01-01T00:00:00Z".into(),
-                attachments: vec![],
-                is_voice_message: false,
-                thread_parent_id: None,
-            },
-            NotificationEvent::Reaction {
-                chat_id: "100".into(),
-                message_id: "1".into(),
-                user: "bob".into(),
-                user_id: "400".into(),
-                emoji: "👍".into(),
-            },
-            NotificationEvent::MessageEdit {
-                chat_id: "100".into(),
-                message_id: "1".into(),
-                user: "alice".into(),
-                user_id: "300".into(),
-                new_content: "edited".into(),
-                timestamp: "2026-01-01T00:00:01Z".into(),
-                thread_parent_id: None,
-            },
-        ];
-        let batch = batch_notification(events);
-        let items = batch["params"]["events"].as_array().unwrap();
-        assert_eq!(items.len(), 3);
-        assert_eq!(items[0]["content"], "first");
-        assert_eq!(items[1]["content"], "reacted with 👍");
-        assert_eq!(items[2]["content"], "edited");
-    }
-
-    #[test]
-    fn test_batch_notification_items_have_params_shape() {
-        let events = vec![
-            NotificationEvent::Message {
-                chat_id: "100".into(),
-                message_id: "1".into(),
-                user: "alice".into(),
-                user_id: "300".into(),
-                content: "msg".into(),
-                timestamp: "2026-01-01T00:00:00Z".into(),
-                attachments: vec![],
-                is_voice_message: false,
-                thread_parent_id: None,
-            },
-            NotificationEvent::MessageDelete {
-                chat_id: "100".into(),
-                message_id: "2".into(),
-                thread_parent_id: None,
-            },
-        ];
-        let batch = batch_notification(events);
-        // Batch uses the recognized channel method.
-        assert_eq!(batch["method"], "notifications/claude/channel");
-        let items = batch["params"]["events"].as_array().unwrap();
-        // Each item is just params (content + meta), no method wrapper.
-        assert_eq!(items[0]["content"], "msg");
-        assert!(items[0]["meta"]["chat_id"].is_string());
-        assert_eq!(items[1]["content"], "message deleted");
-        assert_eq!(items[1]["meta"]["type"], "message_delete");
-    }
-
-    #[test]
-    fn test_batch_notification_empty_events() {
-        let batch = batch_notification(Vec::<NotificationEvent>::new());
-        assert_eq!(batch["method"], "notifications/claude/channel");
-        let items = batch["params"]["events"].as_array().unwrap();
-        assert!(items.is_empty());
     }
 }
