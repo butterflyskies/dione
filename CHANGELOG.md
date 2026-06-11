@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-06-10
+
+### Fixed
+- Batch coalescing now emits `notifications/claude/channel` instead of
+  unrecognized `notifications/claude/channel/batch` method.
+
 ## [0.10.0] - 2026-06-10
 
 ### Added
@@ -28,7 +34,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Prompt message IDs are now tracked via `note_sent` at send time, and sibling IDs
   are re-marked before deletion, guaranteeing suppression even after cache
   eviction (#90).
-
 ## [0.9.0] - 2026-06-09
 
 ### Added
