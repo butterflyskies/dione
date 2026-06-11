@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-06-10
+
+### Added
+- `fetch_new_since` tool — cursor-based message fetch that returns only messages
+  after a given message ID, cutting heartbeat token cost to near zero on quiet
+  channels. Stateless design: caller owns the cursor (#87).
+- Global `delivery_delay_ms` config default in `[delivery]` section — all channels
+  inherit the global delay unless they set a per-channel override. Per-channel
+  `delivery_delay_ms` is now `Option<u64>` (#91).
+- Batch coalescing for buffered notifications — when the delivery buffer flushes,
+  all buffered events are coalesced into a single
+  `notifications/claude/channel/batch` JSON-RPC notification instead of N separate
+  notifications. Single-event flushes also use the batch format (#91).
+- `NotificationSender` and `NotificationFormatter` traits — replace free functions
+  with trait-based notification dispatch for testability and extensibility (#91).
+
+### Fixed
+- Permission prompt cleanup no longer emits spurious `message_delete` notifications.
+  Prompt message IDs are now tracked via `note_sent` at send time, and sibling IDs
+  are re-marked before deletion, guaranteeing suppression even after cache
+  eviction (#90).
+
 ## [0.9.0] - 2026-06-09
 
 ### Added
