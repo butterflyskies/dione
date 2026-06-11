@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use crate::delivery_buffer::{BufferResult, DeliveryBuffer};
 use crate::discord::events::NotificationEvent;
 use crate::mcp::dispatch::call_tool;
-use crate::mcp::notifications::{IntoNotification, batch_notification};
+use crate::mcp::notifications::IntoNotification;
 use crate::mcp::protocol::{initialize_response, tools_list};
 use crate::mcp::tools::{
     access::AccessCtx,
@@ -156,10 +156,11 @@ pub async fn run(
                 } => {
                     let now = tokio::time::Instant::now();
                     let flushed = delivery_buffer.flush_ready(now);
-                    if !flushed.is_empty() {
-                        let notification = batch_notification(flushed);
-                        write_line(&stdout_notif, &notification).await;
-                    }
+                    let notifications: Vec<Value> = flushed
+                        .into_iter()
+                        .map(IntoNotification::into_notification)
+                        .collect();
+                    write_lines(&stdout_notif, &notifications).await;
                 }
 
                 // New event arrives from Discord.
@@ -229,12 +230,13 @@ pub async fn run(
             }
         }
 
-        // Channel closed — flush any remaining buffered events as a single batch.
+        // Channel closed — flush any remaining buffered events.
         let remaining = delivery_buffer.flush_all();
-        if !remaining.is_empty() {
-            let notification = batch_notification(remaining);
-            write_line(&stdout_notif, &notification).await;
-        }
+        let notifications: Vec<Value> = remaining
+            .into_iter()
+            .map(IntoNotification::into_notification)
+            .collect();
+        write_lines(&stdout_notif, &notifications).await;
     });
 
     // Main request loop.
@@ -402,6 +404,26 @@ async fn write_line(stdout: &Arc<Mutex<tokio::io::Stdout>>, value: &Value) {
     }
 }
 
+/// Write multiple JSON-RPC notifications in a single write+flush.
+async fn write_lines(stdout: &Arc<Mutex<tokio::io::Stdout>>, values: &[Value]) {
+    if values.is_empty() {
+        return;
+    }
+    let mut buf = String::new();
+    for value in values {
+        buf.push_str(&serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()));
+        buf.push('\n');
+    }
+    let mut out = stdout.lock().await;
+    if let Err(e) = out.write_all(buf.as_bytes()).await {
+        tracing::warn!(error = %e, "failed to write MCP notifications to stdout");
+        return;
+    }
+    if let Err(e) = out.flush().await {
+        tracing::warn!(error = %e, "failed to flush stdout");
+    }
+}
+
 // ── Notification helpers ─────────────────────────────────────────────────────
 
 /// Extract the delivery delay (ms) for an event based on its channel ID.
@@ -435,11 +457,6 @@ pub mod test_helpers {
     pub fn make_notification(event: NotificationEvent) -> Value {
         use crate::mcp::notifications::IntoNotification;
         event.into_notification()
-    }
-
-    /// Exposes [`batch_notification`] for unit testing batch notification format.
-    pub fn make_batch_notification(events: Vec<NotificationEvent>) -> Value {
-        crate::mcp::notifications::batch_notification(events)
     }
 
     /// Exposes `tools_list` for unit testing tool discovery.

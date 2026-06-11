@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-06-10
+
+### Fixed
+- Reverted batch notification wrapping introduced in 0.10.0 — Claude Code
+  does not understand the `events` array envelope and silently drops batched
+  messages (0.10.1 fixed the method name but not the payload shape). Buffered
+  events are now emitted as individual `notifications/claude/channel`
+  notifications with standard `{ content, meta }` params. Delivery buffering
+  is preserved — flushed events are written as a single stdout chunk so they
+  arrive together.
+
+### Removed
+- `batch_notification()` function, `into_batch_params()` trait method, and
+  `make_batch_notification()` test helper — no longer needed without the
+  batch envelope.
+
 ## [0.10.1] - 2026-06-10
 
 ### Fixed
