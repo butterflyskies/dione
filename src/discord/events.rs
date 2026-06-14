@@ -642,11 +642,13 @@ fn reply_preview(content: &str) -> Option<String> {
     if content.is_empty() {
         return None;
     }
-    let mut preview: String = content.chars().take(REPLY_PREVIEW_MAX_CHARS).collect();
-    if content.chars().count() > REPLY_PREVIEW_MAX_CHARS {
-        preview.push('…');
+    let mut chars = content.chars();
+    let preview: String = chars.by_ref().take(REPLY_PREVIEW_MAX_CHARS).collect();
+    if chars.next().is_some() {
+        Some(format!("{preview}\u{2026}"))
+    } else {
+        Some(preview)
     }
-    Some(preview)
 }
 
 fn build_message_event(
