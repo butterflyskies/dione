@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use camino::Utf8PathBuf;
 use serde_json::{Value, json};
+use serenity::model::id::UserId;
 
 use crate::config::LoadedConfig;
 use crate::config_store::ConfigStore;
@@ -34,17 +35,18 @@ pub async fn list_access_requests(ctx: &AccessCtx) -> Value {
 
 // ── approve_access ────────────────────────────────────────────────────────────
 
-pub async fn approve_access(ctx: &AccessCtx, user_id: u64) -> Value {
+pub async fn approve_access(ctx: &AccessCtx, user_id: UserId) -> Value {
+    let uid = user_id.get();
     let request = {
         let queue = ctx.queue.lock().await;
-        queue.peek(user_id).cloned()
+        queue.peek(uid).cloned()
     };
 
     let Some(request) = request else {
-        return json!({ "error": format!("no pending request for user {user_id}") });
+        return json!({ "error": format!("no pending request for user {uid}") });
     };
 
-    let user_id_str = user_id.to_string();
+    let user_id_str = uid.to_string();
     let result = async {
         let mut editor = ConfigStore::load(&ctx.state_dir).await?;
         editor.ensure_in_allow_from(&user_id_str)?;
@@ -53,7 +55,7 @@ pub async fn approve_access(ctx: &AccessCtx, user_id: u64) -> Value {
     .await;
 
     if let Err(e) = result {
-        tracing::warn!(user_id, error = %e, "failed to persist allow_from update");
+        tracing::warn!(user_id = uid, error = %e, "failed to persist allow_from update");
         return json!({
             "error": format!("failed to persist config: {e}"),
         });
@@ -61,30 +63,31 @@ pub async fn approve_access(ctx: &AccessCtx, user_id: u64) -> Value {
 
     {
         let mut queue = ctx.queue.lock().await;
-        queue.approve(user_id);
+        queue.approve(uid);
     }
 
     json!({
         "ok": true,
         "username": request.username,
-        "user_id": user_id.to_string(),
+        "user_id": user_id_str,
     })
 }
 
 // ── deny_access ───────────────────────────────────────────────────────────────
 
-pub async fn deny_access(ctx: &AccessCtx, user_id: u64) -> Value {
+pub async fn deny_access(ctx: &AccessCtx, user_id: UserId) -> Value {
+    let uid = user_id.get();
     let removed = {
         let mut queue = ctx.queue.lock().await;
-        queue.deny(user_id)
+        queue.deny(uid)
     };
 
     match removed {
         Some(request) => json!({
             "ok": true,
             "username": request.username,
-            "user_id": user_id.to_string(),
+            "user_id": uid.to_string(),
         }),
-        None => json!({ "error": format!("no pending request for user {user_id}") }),
+        None => json!({ "error": format!("no pending request for user {uid}") }),
     }
 }

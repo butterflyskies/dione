@@ -1,4 +1,5 @@
 use serde_json::{Value, json};
+use serenity::model::id::ChannelId;
 use typst::layout::PagedDocument;
 use typst_as_lib::TypstEngine;
 
@@ -106,7 +107,7 @@ pub async fn render_latex(latex: &str) -> Value {
 
 pub async fn render_latex_to_channel(
     ctx: &MessagingCtx,
-    channel_id: u64,
+    channel_id: ChannelId,
     latex: &str,
     caption: Option<&str>,
 ) -> Value {
