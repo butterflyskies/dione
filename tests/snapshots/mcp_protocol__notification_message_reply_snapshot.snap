@@ -1,0 +1,19 @@
+---
+source: tests/mcp_protocol.rs
+expression: notif
+---
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/claude/channel",
+  "params": {
+    "content": "replying to someone",
+    "meta": {
+      "chat_id": "1000",
+      "message_id": "2000",
+      "reply_to_message_id": "9999",
+      "ts": "2026-01-01T00:00:00+00:00",
+      "user": "replyuser",
+      "user_id": "3000"
+    }
+  }
+}

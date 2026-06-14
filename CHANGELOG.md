@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-06-14
+
+### Added
+- `reply_to_message_id` field on inbound `message`, `message_edit`, and
+  `message_delete` notifications — populated when the Discord message is a
+  reply to another message (closes #99).
+- `Snowflake` newtype at the MCP tool boundary — centralizes Discord snowflake
+  validation and rejects `0`, which would panic serenity's typed ID wrappers
+  (#103).
+
+### Changed
+- MCP tool handlers and inbound notification formatting now use serenity typed
+  IDs (`ChannelId`, `MessageId`, `UserId`, `GuildId`) instead of raw `u64` /
+  `String` snowflakes throughout the dispatch and event paths (#103).
+
+### Fixed
+- Box `BufferResult::Immediate` to avoid large stack frames when the delivery
+  buffer bypasses coalescing.
+
 ## [0.10.2] - 2026-06-10
 
 ### Fixed

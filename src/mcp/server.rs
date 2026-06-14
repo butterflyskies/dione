@@ -11,30 +11,38 @@
 //! - Error    → `{"jsonrpc":"2.0","id":N,"error":{"code":-32000,"message":"..."}}`
 //! - Notification (no id) → `{"jsonrpc":"2.0","method":"...","params":{...}}`
 
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use camino::Utf8PathBuf;
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{Mutex, mpsc};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    sync::{Mutex, mpsc},
+};
 use tokio_util::sync::CancellationToken;
 
-use crate::delivery_buffer::{BufferResult, DeliveryBuffer};
-use crate::discord::events::NotificationEvent;
-use crate::mcp::dispatch::call_tool;
-use crate::mcp::notifications::IntoNotification;
-use crate::mcp::protocol::{initialize_response, tools_list};
-use crate::mcp::tools::{
-    access::AccessCtx,
-    bot_state::{BotStateCtx, DiscordCommand},
-    diagnostics::DiagnosticsCtx,
-    introspection::IntrospectionCtx,
-    management::ManagementCtx,
-    messaging::MessagingCtx,
-};
-use crate::rate_limiter::{ChannelRef, ParticipantId, RateLimitDecision, RateLimiter};
 pub use crate::tracing_channel::TraceLevelController;
+use crate::{
+    delivery_buffer::{BufferResult, DeliveryBuffer},
+    discord::events::NotificationEvent,
+    mcp::{
+        dispatch::call_tool,
+        notifications::IntoNotification,
+        protocol::{initialize_response, tools_list},
+        tools::{
+            access::AccessCtx,
+            bot_state::{BotStateCtx, DiscordCommand},
+            diagnostics::DiagnosticsCtx,
+            introspection::IntrospectionCtx,
+            management::ManagementCtx,
+            messaging::MessagingCtx,
+        },
+    },
+    rate_limiter::{ChannelRef, ParticipantId, RateLimitDecision, RateLimiter},
+};
 
 // ── Server struct ─────────────────────────────────────────────────────────────
 
@@ -214,7 +222,7 @@ pub async fn run(
 
                     match delivery_buffer.buffer_event(event, delay_ms) {
                         BufferResult::Immediate(event) => {
-                            let notification = event.into_notification();
+                            let notification = (*event).into_notification();
                             write_line(&stdout_notif, &notification).await;
                         }
                         BufferResult::Buffered => {
@@ -482,7 +490,11 @@ mod tests {
     use serenity::model::id::{ChannelId, MessageId, UserId};
 
     use super::*;
-    use crate::config::{ChannelConfig, Config, LoadedConfig};
+    use crate::{
+        config::{ChannelConfig, Config, LoadedConfig},
+        delivery_buffer::{BufferResult, DeliveryBuffer},
+        mcp::notifications::IntoNotification,
+    };
 
     fn config_with_channel_delay(channel_id: u64, delay_ms: u64) -> LoadedConfig {
         let mut raw = Config::default();
@@ -511,6 +523,7 @@ mod tests {
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
+            reply_to_message_id: None,
         }
     }
 
@@ -544,6 +557,7 @@ mod tests {
             new_content: "edited".into(),
             timestamp: "2026-01-01T00:00:00Z".into(),
             thread_parent_id: None,
+            reply_to_message_id: None,
         };
         assert_eq!(extract_delay_ms(&event, &config), 300);
     }
@@ -572,5 +586,21 @@ mod tests {
     fn extract_delay_unconfigured_channel_falls_back_to_global() {
         let config = config_with_global_delay(750);
         assert_eq!(extract_delay_ms(&message_event(9999), &config), 750);
+    }
+
+    #[test]
+    fn immediate_buffer_result_dereferences_to_notification() {
+        // server.rs consumes a Immediate(Box<event>) as (*event).into_notification().
+        // Verify the dereference-then-consume pattern produces a well-formed notification
+        // with the correct channel ID.
+        let mut buf = DeliveryBuffer::new();
+        let result = buf.buffer_event(message_event(42), 0);
+        let notification = match result {
+            BufferResult::Immediate(event) => (*event).into_notification(),
+            BufferResult::Buffered => panic!("expected Immediate for delay=0"),
+        };
+        assert_eq!(notification["jsonrpc"], "2.0");
+        assert_eq!(notification["method"], "notifications/claude/channel");
+        assert_eq!(notification["params"]["meta"]["chat_id"], "42");
     }
 }

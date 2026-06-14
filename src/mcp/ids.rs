@@ -22,18 +22,22 @@ impl Snowflake {
         self.0.get()
     }
 
+    /// Converts to a serenity [`ChannelId`].
     pub fn channel(self) -> ChannelId {
         ChannelId::new(self.0.get())
     }
 
+    /// Converts to a serenity [`MessageId`].
     pub fn message(self) -> MessageId {
         MessageId::new(self.0.get())
     }
 
+    /// Converts to a serenity [`UserId`].
     pub fn user(self) -> UserId {
         UserId::new(self.0.get())
     }
 
+    /// Converts to a serenity [`GuildId`].
     pub fn guild(self) -> GuildId {
         GuildId::new(self.0.get())
     }

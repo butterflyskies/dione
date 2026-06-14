@@ -38,6 +38,8 @@ pub enum NotificationEvent {
         is_voice_message: bool,
         /// If the message was sent in a thread, the parent channel ID.
         thread_parent_id: Option<ChannelId>,
+        /// If the message is a reply, the ID of the message being replied to.
+        reply_to_message_id: Option<MessageId>,
     },
     Reaction {
         chat_id: ChannelId,
@@ -65,6 +67,8 @@ pub enum NotificationEvent {
         timestamp: String,
         /// If the edit was in a thread, the parent channel ID.
         thread_parent_id: Option<ChannelId>,
+        /// If the edited message is a reply, the ID of the message being replied to.
+        reply_to_message_id: Option<MessageId>,
     },
     MessageDelete {
         chat_id: ChannelId,
@@ -370,6 +374,14 @@ impl EventHandler for Handler {
             .localize_rfc3339(&serenity_ts_to_rfc3339("edited_ts", &edited_ts))
             .into();
 
+        // message_reference is Option<Option<MessageReference>> in update events:
+        // outer Option = field present in update, inner Option = nullable value.
+        let reply_to_message_id = event
+            .message_reference
+            .as_ref()
+            .and_then(|outer| outer.as_ref())
+            .and_then(reply_to_id);
+
         let ev = NotificationEvent::MessageEdit {
             chat_id: event.channel_id,
             message_id: event.id,
@@ -378,6 +390,7 @@ impl EventHandler for Handler {
             new_content,
             timestamp,
             thread_parent_id: resolved.thread_parent_id.map(ChannelId::new),
+            reply_to_message_id,
         };
 
         if let Err(e) = self.tx.send(ev).await {
@@ -575,6 +588,16 @@ fn serenity_ts_to_rfc3339(field: &str, ts: &serenity::model::Timestamp) -> Strin
     }
 }
 
+/// Extracts the replied-to message ID from a Discord message reference.
+///
+/// A reference can exist without a message ID (for example a channel-only
+/// forward or crosspost), so the inner `message_id` is itself optional.
+fn reply_to_id(reference: &MessageReference) -> Option<MessageId> {
+    matches!(reference.kind, MessageReferenceKind::Default)
+        .then(|| reference.message_id)
+        .flatten()
+}
+
 fn build_message_event(
     msg: &Message,
     config: &crate::config::LoadedConfig,
@@ -595,6 +618,8 @@ fn build_message_event(
         .map(|f| f.contains(MessageFlags::IS_VOICE_MESSAGE))
         .unwrap_or(false);
 
+    let reply_to_message_id = msg.message_reference.as_ref().and_then(reply_to_id);
+
     NotificationEvent::Message {
         chat_id: msg.channel_id,
         message_id: msg.id,
@@ -607,6 +632,7 @@ fn build_message_event(
         attachments,
         is_voice_message,
         thread_parent_id: thread_parent_id.map(ChannelId::new),
+        reply_to_message_id,
     }
 }
 
@@ -773,5 +799,41 @@ mod tests {
             should_drop_bot_message(true, 42, &config),
             "bot must be dropped when allow_from is empty"
         );
+    }
+
+    // ── reply_to_id tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn reply_to_id_returns_message_id_when_present() {
+        use serenity::model::channel::{MessageReference, MessageReferenceKind};
+        use serenity::model::id::{ChannelId, MessageId};
+
+        let message_id = MessageId::new(42);
+        let reference = MessageReference::new(MessageReferenceKind::Default, ChannelId::new(1))
+            .message_id(message_id);
+
+        assert_eq!(reply_to_id(&reference), Some(message_id));
+    }
+
+    #[test]
+    fn reply_to_id_returns_none_when_message_id_absent() {
+        use serenity::model::channel::{MessageReference, MessageReferenceKind};
+        use serenity::model::id::ChannelId;
+
+        let reference = MessageReference::new(MessageReferenceKind::Default, ChannelId::new(1));
+
+        assert_eq!(reply_to_id(&reference), None);
+    }
+
+    #[test]
+    fn reply_to_id_returns_none_for_forward_reference() {
+        use serenity::model::channel::{MessageReference, MessageReferenceKind};
+        use serenity::model::id::{ChannelId, MessageId};
+
+        let message_id = MessageId::new(99);
+        let reference = MessageReference::new(MessageReferenceKind::Forward, ChannelId::new(1))
+            .message_id(message_id);
+
+        assert_eq!(reply_to_id(&reference), None);
     }
 }

@@ -27,7 +27,7 @@ struct ChannelBuffer {
 /// Result of offering an event to the buffer.
 pub enum BufferResult {
     /// Event should be forwarded immediately (not buffered).
-    Immediate(NotificationEvent),
+    Immediate(Box<NotificationEvent>),
     /// Event was buffered; will be flushed at the channel's deadline.
     Buffered,
 }
@@ -42,13 +42,13 @@ impl DeliveryBuffer {
     pub fn buffer_event(&mut self, event: NotificationEvent, delay_ms: u64) -> BufferResult {
         // No delay → immediate passthrough regardless of event type.
         if delay_ms == 0 {
-            return BufferResult::Immediate(event);
+            return BufferResult::Immediate(Box::new(event));
         }
 
         // Non-channel events (Trace, PermissionResponse, ConfigError) always
         // pass through immediately — they have no channel association.
         if !is_channel_event(&event) {
-            return BufferResult::Immediate(event);
+            return BufferResult::Immediate(Box::new(event));
         }
 
         let channel_id = extract_channel_id(&event);
@@ -165,6 +165,7 @@ mod tests {
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
+            reply_to_message_id: None,
         }
     }
 
@@ -269,6 +270,7 @@ mod tests {
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
+            reply_to_message_id: None,
         };
         buf.buffer_event(ch2_event, 500);
 
@@ -304,10 +306,10 @@ mod tests {
 
 #[cfg(test)]
 mod proptests {
+    use proptest::prelude::*;
     use serenity::model::id::{ChannelId, MessageId, UserId};
 
     use super::*;
-    use proptest::prelude::*;
 
     /// Strategy: pick a channel ID from a small set.
     fn channel_id_strategy() -> impl Strategy<Value = u64> {
@@ -317,6 +319,11 @@ mod proptests {
     /// Strategy: pick a delay value.
     fn delay_strategy() -> impl Strategy<Value = u64> {
         prop_oneof![Just(0u64), Just(50), Just(100), Just(500)]
+    }
+
+    /// Strategy: optional reply-to message ID.
+    fn reply_to_strategy() -> impl Strategy<Value = Option<MessageId>> {
+        prop_oneof![Just(None), Just(Some(MessageId::new(42)))]
     }
 
     /// Operation in a random buffer/flush sequence.
@@ -361,6 +368,11 @@ mod proptests {
                     attachments: vec![],
                     is_voice_message: false,
                     thread_parent_id: None,
+                    reply_to_message_id: if i % 2 == 0 {
+                        None
+                    } else {
+                        Some(MessageId::new(42))
+                    },
                 })
                 .collect();
 
@@ -406,6 +418,7 @@ mod proptests {
             channel in channel_id_strategy(),
             count in 2..20usize,
             delay_ms in delay_strategy().prop_filter("need positive delay", |d| *d > 0),
+            reply_to in reply_to_strategy(),
         ) {
             let mut buf = DeliveryBuffer::new();
 
@@ -421,6 +434,7 @@ mod proptests {
                     attachments: vec![],
                     is_voice_message: false,
                     thread_parent_id: None,
+                    reply_to_message_id: reply_to,
                 };
                 let result = buf.buffer_event(event, delay_ms);
                 prop_assert!(matches!(result, BufferResult::Buffered));
@@ -461,6 +475,11 @@ mod proptests {
                     attachments: vec![],
                     is_voice_message: false,
                     thread_parent_id: None,
+                    reply_to_message_id: if i % 2 == 0 {
+                        None
+                    } else {
+                        Some(MessageId::new(42))
+                    },
                 })
                 .collect();
 
