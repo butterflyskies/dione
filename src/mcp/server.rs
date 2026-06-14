@@ -603,5 +603,4 @@ mod tests {
         assert_eq!(notification["method"], "notifications/claude/channel");
         assert_eq!(notification["params"]["meta"]["chat_id"], "42");
     }
-
 }

@@ -818,8 +818,7 @@ mod tests {
         use serenity::model::channel::{MessageReference, MessageReferenceKind};
         use serenity::model::id::ChannelId;
 
-        let reference =
-            MessageReference::new(MessageReferenceKind::Default, ChannelId::new(1));
+        let reference = MessageReference::new(MessageReferenceKind::Default, ChannelId::new(1));
 
         assert_eq!(reply_to_id(&reference), None);
     }
