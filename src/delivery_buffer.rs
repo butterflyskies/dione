@@ -27,7 +27,7 @@ struct ChannelBuffer {
 /// Result of offering an event to the buffer.
 pub enum BufferResult {
     /// Event should be forwarded immediately (not buffered).
-    Immediate(NotificationEvent),
+    Immediate(Box<NotificationEvent>),
     /// Event was buffered; will be flushed at the channel's deadline.
     Buffered,
 }
@@ -42,13 +42,13 @@ impl DeliveryBuffer {
     pub fn buffer_event(&mut self, event: NotificationEvent, delay_ms: u64) -> BufferResult {
         // No delay → immediate passthrough regardless of event type.
         if delay_ms == 0 {
-            return BufferResult::Immediate(event);
+            return BufferResult::Immediate(Box::new(event));
         }
 
         // Non-channel events (Trace, PermissionResponse, ConfigError) always
         // pass through immediately — they have no channel association.
         if !is_channel_event(&event) {
-            return BufferResult::Immediate(event);
+            return BufferResult::Immediate(Box::new(event));
         }
 
         let channel_id = extract_channel_id(&event);

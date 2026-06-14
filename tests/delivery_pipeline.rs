@@ -133,7 +133,7 @@ fn pipeline_step(
 
     // Delivery buffer: coalesce message events per channel.
     match delivery_buffer.buffer_event(event, delay_ms) {
-        BufferResult::Immediate(event) => Some(event),
+        BufferResult::Immediate(event) => Some(*event),
         BufferResult::Buffered => None,
     }
 }
@@ -1037,7 +1037,7 @@ async fn run_notif_loop(
                     let delay_ms = delay_ms_fn(&event);
                     match delivery_buffer.buffer_event(event, delay_ms) {
                         BufferResult::Immediate(event) => {
-                            let _ = output_tx.send(event).await;
+                            let _ = output_tx.send(*event).await;
                         }
                         BufferResult::Buffered => {}
                     }

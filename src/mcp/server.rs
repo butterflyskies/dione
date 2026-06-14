@@ -214,7 +214,7 @@ pub async fn run(
 
                     match delivery_buffer.buffer_event(event, delay_ms) {
                         BufferResult::Immediate(event) => {
-                            let notification = event.into_notification();
+                            let notification = (*event).into_notification();
                             write_line(&stdout_notif, &notification).await;
                         }
                         BufferResult::Buffered => {
