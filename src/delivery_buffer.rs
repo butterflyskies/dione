@@ -165,6 +165,7 @@ mod tests {
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
+            reply_to_message_id: None,
         }
     }
 
@@ -269,6 +270,7 @@ mod tests {
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
+            reply_to_message_id: None,
         };
         buf.buffer_event(ch2_event, 500);
 
@@ -361,6 +363,7 @@ mod proptests {
                     attachments: vec![],
                     is_voice_message: false,
                     thread_parent_id: None,
+                    reply_to_message_id: None,
                 })
                 .collect();
 
@@ -421,6 +424,7 @@ mod proptests {
                     attachments: vec![],
                     is_voice_message: false,
                     thread_parent_id: None,
+                    reply_to_message_id: None,
                 };
                 let result = buf.buffer_event(event, delay_ms);
                 prop_assert!(matches!(result, BufferResult::Buffered));
@@ -461,6 +465,7 @@ mod proptests {
                     attachments: vec![],
                     is_voice_message: false,
                     thread_parent_id: None,
+                    reply_to_message_id: None,
                 })
                 .collect();
 

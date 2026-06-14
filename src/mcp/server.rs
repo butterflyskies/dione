@@ -544,6 +544,7 @@ mod tests {
             new_content: "edited".into(),
             timestamp: "2026-01-01T00:00:00Z".into(),
             thread_parent_id: None,
+            reply_to_message_id: None,
         };
         assert_eq!(extract_delay_ms(&event, &config), 300);
     }

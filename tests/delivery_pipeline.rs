@@ -30,6 +30,7 @@ fn msg_event(chat_id: u64, user_id: u64, content: &str) -> NotificationEvent {
         attachments: vec![],
         is_voice_message: false,
         thread_parent_id: None,
+        reply_to_message_id: None,
     }
 }
 
@@ -74,6 +75,7 @@ fn edit_event(chat_id: u64, user_id: u64) -> NotificationEvent {
         new_content: "edited content".to_string(),
         timestamp: "2026-01-01T00:00:01Z".to_string(),
         thread_parent_id: None,
+        reply_to_message_id: None,
     }
 }
 
@@ -682,6 +684,7 @@ fn notification_format_preserved_through_pipeline() {
         attachments: vec![],
         is_voice_message: false,
         thread_parent_id: Some(ChannelId::new(9001)),
+        reply_to_message_id: None,
     };
 
     let result = pipeline_step(event, &mut limiter, &mut buffer, 0, now);

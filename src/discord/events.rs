@@ -38,6 +38,8 @@ pub enum NotificationEvent {
         is_voice_message: bool,
         /// If the message was sent in a thread, the parent channel ID.
         thread_parent_id: Option<ChannelId>,
+        /// If the message is a reply, the ID of the message being replied to.
+        reply_to_message_id: Option<String>,
     },
     Reaction {
         chat_id: ChannelId,
@@ -65,6 +67,8 @@ pub enum NotificationEvent {
         timestamp: String,
         /// If the edit was in a thread, the parent channel ID.
         thread_parent_id: Option<ChannelId>,
+        /// If the edited message is a reply, the ID of the message being replied to.
+        reply_to_message_id: Option<String>,
     },
     MessageDelete {
         chat_id: ChannelId,
@@ -370,6 +374,16 @@ impl EventHandler for Handler {
             .localize_rfc3339(&serenity_ts_to_rfc3339("edited_ts", &edited_ts))
             .into();
 
+        // message_reference is Option<Option<MessageReference>> in update events:
+        // outer Option = field present in update, inner Option = nullable value.
+        // Flatten to get the actual reference, then extract the replied-to message ID.
+        let reply_to_message_id = event
+            .message_reference
+            .as_ref()
+            .and_then(|outer| outer.as_ref())
+            .and_then(|r| r.message_id)
+            .map(|id| id.get().to_string());
+
         let ev = NotificationEvent::MessageEdit {
             chat_id: event.channel_id,
             message_id: event.id,
@@ -378,6 +392,7 @@ impl EventHandler for Handler {
             new_content,
             timestamp,
             thread_parent_id: resolved.thread_parent_id.map(ChannelId::new),
+            reply_to_message_id,
         };
 
         if let Err(e) = self.tx.send(ev).await {
@@ -595,6 +610,12 @@ fn build_message_event(
         .map(|f| f.contains(MessageFlags::IS_VOICE_MESSAGE))
         .unwrap_or(false);
 
+    let reply_to_message_id = msg
+        .message_reference
+        .as_ref()
+        .and_then(|r| r.message_id)
+        .map(|id| id.get().to_string());
+
     NotificationEvent::Message {
         chat_id: msg.channel_id,
         message_id: msg.id,
@@ -607,6 +628,7 @@ fn build_message_event(
         attachments,
         is_voice_message,
         thread_parent_id: thread_parent_id.map(ChannelId::new),
+        reply_to_message_id,
     }
 }
 

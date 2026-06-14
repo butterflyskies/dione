@@ -642,6 +642,7 @@ fn test_notification_has_no_id_field() {
         attachments: vec![],
         is_voice_message: false,
         thread_parent_id: None,
+        reply_to_message_id: None,
     };
     let notif = test_helpers::make_notification(event);
     assert!(
@@ -666,6 +667,7 @@ fn test_notification_attachment_metadata_present() {
         }],
         is_voice_message: false,
         thread_parent_id: None,
+        reply_to_message_id: None,
     };
     let notif = test_helpers::make_notification(event);
     let meta = &notif["params"]["meta"];
@@ -685,6 +687,7 @@ fn test_notification_voice_flag_in_meta() {
         attachments: vec![],
         is_voice_message: true,
         thread_parent_id: None,
+        reply_to_message_id: None,
     };
     let notif = test_helpers::make_notification(event);
     assert_eq!(notif["params"]["meta"]["is_voice_message"], true);
@@ -715,6 +718,7 @@ fn test_notification_message_snapshot() {
         attachments: vec![],
         is_voice_message: false,
         thread_parent_id: None,
+        reply_to_message_id: None,
     };
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
@@ -753,6 +757,7 @@ fn test_notification_message_edit_snapshot() {
         new_content: "fixed a typo".to_string(),
         timestamp: "2026-01-01T00:01:00+00:00".to_string(),
         thread_parent_id: None,
+        reply_to_message_id: None,
     };
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
@@ -783,6 +788,7 @@ fn test_notification_message_in_thread_snapshot() {
         attachments: vec![],
         is_voice_message: false,
         thread_parent_id: Some(ChannelId::new(700)),
+        reply_to_message_id: None,
     };
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
