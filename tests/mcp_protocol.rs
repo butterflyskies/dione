@@ -5,15 +5,16 @@
 //! a real Discord connection.  Tool calls that require Discord HTTP are tested
 //! only up to the gate-rejection path.
 
-use std::sync::Arc;
-
-use dione::discord::events::{AttachmentMeta, NotificationEvent};
-use dione::mcp::server::{DioneServer, test_helpers};
-use dione::queue::AccessQueue;
-use dione::state::new_state;
-use dione::tracing_channel::TraceLevelController;
+use dione::{
+    discord::events::{AttachmentMeta, NotificationEvent},
+    mcp::server::{DioneServer, test_helpers},
+    queue::AccessQueue,
+    state::new_state,
+    tracing_channel::TraceLevelController,
+};
 use serde_json::json;
 use serenity::model::id::{ChannelId, MessageId, UserId};
+use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::{Mutex, mpsc};
 
@@ -643,6 +644,9 @@ fn test_notification_has_no_id_field() {
         is_voice_message: false,
         thread_parent_id: None,
         reply_to_message_id: None,
+        reply_to_user_id: None,
+        reply_to_user: None,
+        reply_to_content_preview: None,
     };
     let notif = test_helpers::make_notification(event);
     assert!(
@@ -668,6 +672,9 @@ fn test_notification_attachment_metadata_present() {
         is_voice_message: false,
         thread_parent_id: None,
         reply_to_message_id: None,
+        reply_to_user_id: None,
+        reply_to_user: None,
+        reply_to_content_preview: None,
     };
     let notif = test_helpers::make_notification(event);
     let meta = &notif["params"]["meta"];
@@ -688,6 +695,9 @@ fn test_notification_voice_flag_in_meta() {
         is_voice_message: true,
         thread_parent_id: None,
         reply_to_message_id: None,
+        reply_to_user_id: None,
+        reply_to_user: None,
+        reply_to_content_preview: None,
     };
     let notif = test_helpers::make_notification(event);
     assert_eq!(notif["params"]["meta"]["is_voice_message"], true);
@@ -719,6 +729,9 @@ fn test_notification_message_snapshot() {
         is_voice_message: false,
         thread_parent_id: None,
         reply_to_message_id: None,
+        reply_to_user_id: None,
+        reply_to_user: None,
+        reply_to_content_preview: None,
     };
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
@@ -805,6 +818,9 @@ fn test_notification_message_in_thread_snapshot() {
         is_voice_message: false,
         thread_parent_id: Some(ChannelId::new(700)),
         reply_to_message_id: None,
+        reply_to_user_id: None,
+        reply_to_user: None,
+        reply_to_content_preview: None,
     };
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
@@ -825,6 +841,9 @@ fn test_notification_message_reply_snapshot() {
         is_voice_message: false,
         thread_parent_id: None,
         reply_to_message_id: Some(MessageId::new(9999)),
+        reply_to_user_id: Some(UserId::new(4444)),
+        reply_to_user: Some("parentuser".to_string()),
+        reply_to_content_preview: Some("the original message".to_string()),
     };
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
@@ -843,6 +862,9 @@ fn test_notification_message_reply_in_thread_snapshot() {
         is_voice_message: false,
         thread_parent_id: Some(ChannelId::new(700)),
         reply_to_message_id: Some(MessageId::new(5555)),
+        reply_to_user_id: None,
+        reply_to_user: None,
+        reply_to_content_preview: None,
     };
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
