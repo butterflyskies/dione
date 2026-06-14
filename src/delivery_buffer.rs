@@ -321,6 +321,11 @@ mod proptests {
         prop_oneof![Just(0u64), Just(50), Just(100), Just(500)]
     }
 
+    /// Strategy: optional reply-to message ID.
+    fn reply_to_strategy() -> impl Strategy<Value = Option<MessageId>> {
+        prop_oneof![Just(None), Just(Some(MessageId::new(42)))]
+    }
+
     /// Operation in a random buffer/flush sequence.
     #[derive(Debug, Clone)]
     enum Op {
@@ -363,7 +368,11 @@ mod proptests {
                     attachments: vec![],
                     is_voice_message: false,
                     thread_parent_id: None,
-                    reply_to_message_id: None,
+                    reply_to_message_id: if i % 2 == 0 {
+                        None
+                    } else {
+                        Some(MessageId::new(42))
+                    },
                 })
                 .collect();
 
@@ -409,6 +418,7 @@ mod proptests {
             channel in channel_id_strategy(),
             count in 2..20usize,
             delay_ms in delay_strategy().prop_filter("need positive delay", |d| *d > 0),
+            reply_to in reply_to_strategy(),
         ) {
             let mut buf = DeliveryBuffer::new();
 
@@ -424,7 +434,7 @@ mod proptests {
                     attachments: vec![],
                     is_voice_message: false,
                     thread_parent_id: None,
-                    reply_to_message_id: None,
+                    reply_to_message_id: reply_to,
                 };
                 let result = buf.buffer_event(event, delay_ms);
                 prop_assert!(matches!(result, BufferResult::Buffered));
@@ -465,7 +475,11 @@ mod proptests {
                     attachments: vec![],
                     is_voice_message: false,
                     thread_parent_id: None,
-                    reply_to_message_id: None,
+                    reply_to_message_id: if i % 2 == 0 {
+                        None
+                    } else {
+                        Some(MessageId::new(42))
+                    },
                 })
                 .collect();
 

@@ -764,6 +764,22 @@ fn test_notification_message_edit_snapshot() {
 }
 
 #[test]
+fn test_notification_message_edit_reply_snapshot() {
+    let event = NotificationEvent::MessageEdit {
+        chat_id: ChannelId::new(1002),
+        message_id: MessageId::new(2002),
+        user: "editor".to_string(),
+        user_id: UserId::new(3002),
+        new_content: "fixed a typo".to_string(),
+        timestamp: "2026-01-01T00:01:00+00:00".to_string(),
+        thread_parent_id: None,
+        reply_to_message_id: Some(MessageId::new(8888)),
+    };
+    let notif = test_helpers::make_notification(event);
+    insta::assert_json_snapshot!(notif);
+}
+
+#[test]
 fn test_notification_message_delete_snapshot() {
     let event = NotificationEvent::MessageDelete {
         chat_id: ChannelId::new(1003),
@@ -809,6 +825,24 @@ fn test_notification_message_reply_snapshot() {
         is_voice_message: false,
         thread_parent_id: None,
         reply_to_message_id: Some(MessageId::new(9999)),
+    };
+    let notif = test_helpers::make_notification(event);
+    insta::assert_json_snapshot!(notif);
+}
+
+#[test]
+fn test_notification_message_reply_in_thread_snapshot() {
+    let event = NotificationEvent::Message {
+        chat_id: ChannelId::new(1000),
+        message_id: MessageId::new(2000),
+        user: "threaduser".to_string(),
+        user_id: UserId::new(3000),
+        content: "reply in thread".to_string(),
+        timestamp: "2026-01-01T00:00:00+00:00".to_string(),
+        attachments: vec![],
+        is_voice_message: false,
+        thread_parent_id: Some(ChannelId::new(700)),
+        reply_to_message_id: Some(MessageId::new(5555)),
     };
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);

@@ -684,7 +684,7 @@ fn notification_format_preserved_through_pipeline() {
         attachments: vec![],
         is_voice_message: false,
         thread_parent_id: Some(ChannelId::new(9001)),
-        reply_to_message_id: None,
+        reply_to_message_id: Some(MessageId::new(777)),
     };
 
     let result = pipeline_step(event, &mut limiter, &mut buffer, 0, now);
@@ -699,6 +699,7 @@ fn notification_format_preserved_through_pipeline() {
     assert_eq!(notification["params"]["meta"]["user"], "alice");
     assert_eq!(notification["params"]["meta"]["user_id"], "100");
     assert_eq!(notification["params"]["meta"]["thread_parent_id"], "9001");
+    assert_eq!(notification["params"]["meta"]["reply_to_message_id"], "777");
 }
 
 /// Config reload updates rate limiter behavior (simulated by creating a

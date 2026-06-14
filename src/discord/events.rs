@@ -593,7 +593,9 @@ fn serenity_ts_to_rfc3339(field: &str, ts: &serenity::model::Timestamp) -> Strin
 /// A reference can exist without a message ID (for example a channel-only
 /// forward or crosspost), so the inner `message_id` is itself optional.
 fn reply_to_id(reference: &MessageReference) -> Option<MessageId> {
-    reference.message_id
+    matches!(reference.kind, MessageReferenceKind::Default)
+        .then(|| reference.message_id)
+        .flatten()
 }
 
 fn build_message_event(
@@ -819,6 +821,18 @@ mod tests {
         use serenity::model::id::ChannelId;
 
         let reference = MessageReference::new(MessageReferenceKind::Default, ChannelId::new(1));
+
+        assert_eq!(reply_to_id(&reference), None);
+    }
+
+    #[test]
+    fn reply_to_id_returns_none_for_forward_reference() {
+        use serenity::model::channel::{MessageReference, MessageReferenceKind};
+        use serenity::model::id::{ChannelId, MessageId};
+
+        let message_id = MessageId::new(99);
+        let reference = MessageReference::new(MessageReferenceKind::Forward, ChannelId::new(1))
+            .message_id(message_id);
 
         assert_eq!(reply_to_id(&reference), None);
     }
