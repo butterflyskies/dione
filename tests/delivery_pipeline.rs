@@ -4,18 +4,21 @@
 //! output, verifying coalescing, rate limiting, bypass behavior, and config
 //! integration.
 
-use std::collections::HashMap;
-use std::time::{Duration, Instant};
-
-use dione::config::{ChannelConfig, Config, DeliveryConfig, LoadedConfig, RateLimitTomlConfig};
-use dione::delivery_buffer::{BufferResult, DeliveryBuffer};
-use dione::discord::events::NotificationEvent;
-use dione::mcp::server::test_helpers;
-use dione::rate_limiter::{
-    ChannelRef, OverflowPolicy, ParticipantId, RateLimitConfig, RateLimitDecision, RateLimiter,
-    ScopeConfig,
+use dione::{
+    config::{ChannelConfig, Config, DeliveryConfig, LoadedConfig, RateLimitTomlConfig},
+    delivery_buffer::{BufferResult, DeliveryBuffer},
+    discord::events::NotificationEvent,
+    mcp::server::test_helpers,
+    rate_limiter::{
+        ChannelRef, OverflowPolicy, ParticipantId, RateLimitConfig, RateLimitDecision, RateLimiter,
+        ScopeConfig,
+    },
 };
 use serenity::model::id::{ChannelId, MessageId, UserId};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -31,6 +34,9 @@ fn msg_event(chat_id: u64, user_id: u64, content: &str) -> NotificationEvent {
         is_voice_message: false,
         thread_parent_id: None,
         reply_to_message_id: None,
+        reply_to_user_id: None,
+        reply_to_user: None,
+        reply_to_content_preview: None,
     }
 }
 
@@ -685,6 +691,9 @@ fn notification_format_preserved_through_pipeline() {
         is_voice_message: false,
         thread_parent_id: Some(ChannelId::new(9001)),
         reply_to_message_id: Some(MessageId::new(777)),
+        reply_to_user_id: None,
+        reply_to_user: None,
+        reply_to_content_preview: None,
     };
 
     let result = pipeline_step(event, &mut limiter, &mut buffer, 0, now);

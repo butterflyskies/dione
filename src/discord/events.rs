@@ -1,17 +1,18 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-use serenity::async_trait;
-use serenity::builder::{
-    CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage,
+use crate::{
+    gate::{GateDecision, InboundGate, MentionDetector},
+    mcp::tools::messaging::create_dm_channel,
+    queue::AccessRequest,
 };
-use serenity::model::event::MessageUpdateEvent;
-use serenity::model::prelude::*;
-use serenity::prelude::*;
-
-use crate::gate::{GateDecision, InboundGate, MentionDetector};
-use crate::mcp::tools::messaging::create_dm_channel;
-use crate::queue::AccessRequest;
+use serenity::{
+    async_trait,
+    builder::{CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage},
+    model::{event::MessageUpdateEvent, prelude::*},
+    prelude::*,
+};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 // ── Event types ───────────────────────────────────────────────────────────────
 
@@ -40,6 +41,12 @@ pub enum NotificationEvent {
         thread_parent_id: Option<ChannelId>,
         /// If the message is a reply, the ID of the message being replied to.
         reply_to_message_id: Option<MessageId>,
+        /// If the message is a reply, the author ID of the replied-to message.
+        reply_to_user_id: Option<UserId>,
+        /// If the message is a reply, the author name of the replied-to message.
+        reply_to_user: Option<String>,
+        /// If the message is a reply, a short preview of the replied-to content.
+        reply_to_content_preview: Option<String>,
     },
     Reaction {
         chat_id: ChannelId,
@@ -588,14 +595,60 @@ fn serenity_ts_to_rfc3339(field: &str, ts: &serenity::model::Timestamp) -> Strin
     }
 }
 
+/// True when the reference denotes a genuine reply (not a forward/crosspost).
+fn is_reply_reference(reference: &MessageReference) -> bool {
+    matches!(reference.kind, MessageReferenceKind::Default)
+}
+
 /// Extracts the replied-to message ID from a Discord message reference.
 ///
 /// A reference can exist without a message ID (for example a channel-only
 /// forward or crosspost), so the inner `message_id` is itself optional.
 fn reply_to_id(reference: &MessageReference) -> Option<MessageId> {
-    matches!(reference.kind, MessageReferenceKind::Default)
-        .then(|| reference.message_id)
+    is_reply_reference(reference)
+        .then_some(reference.message_id)
         .flatten()
+}
+
+/// Max characters retained from a replied-to message preview.
+const REPLY_PREVIEW_MAX_CHARS: usize = 100;
+
+/// Best-effort extraction of reply author + content preview from the parent
+/// message embedded by Discord. Returns `(user_id, user, content_preview)`,
+/// each independently optional. Only populated for genuine replies
+/// (`MessageReferenceKind::Default`); forwards/crossposts yield all `None`.
+fn reply_context(msg: &Message) -> (Option<UserId>, Option<String>, Option<String>) {
+    let is_reply = msg
+        .message_reference
+        .as_ref()
+        .is_some_and(is_reply_reference);
+    if !is_reply {
+        return (None, None, None);
+    }
+    let Some(parent) = msg.referenced_message.as_deref() else {
+        return (None, None, None);
+    };
+    let preview = reply_preview(&parent.content);
+    (
+        Some(parent.author.id),
+        Some(parent.author.name.clone()),
+        preview,
+    )
+}
+
+/// UTF-8-safe truncation to `REPLY_PREVIEW_MAX_CHARS` chars, with an ellipsis
+/// when truncated. Returns `None` for empty content (e.g. attachment-only parent).
+fn reply_preview(content: &str) -> Option<String> {
+    if content.is_empty() {
+        return None;
+    }
+    let mut chars = content.chars();
+    let preview: String = chars.by_ref().take(REPLY_PREVIEW_MAX_CHARS).collect();
+    if chars.next().is_some() {
+        Some(format!("{preview}\u{2026}"))
+    } else {
+        Some(preview)
+    }
 }
 
 fn build_message_event(
@@ -619,6 +672,7 @@ fn build_message_event(
         .unwrap_or(false);
 
     let reply_to_message_id = msg.message_reference.as_ref().and_then(reply_to_id);
+    let (reply_to_user_id, reply_to_user, reply_to_content_preview) = reply_context(msg);
 
     NotificationEvent::Message {
         chat_id: msg.channel_id,
@@ -633,6 +687,9 @@ fn build_message_event(
         is_voice_message,
         thread_parent_id: thread_parent_id.map(ChannelId::new),
         reply_to_message_id,
+        reply_to_user_id,
+        reply_to_user,
+        reply_to_content_preview,
     }
 }
 
@@ -805,8 +862,10 @@ mod tests {
 
     #[test]
     fn reply_to_id_returns_message_id_when_present() {
-        use serenity::model::channel::{MessageReference, MessageReferenceKind};
-        use serenity::model::id::{ChannelId, MessageId};
+        use serenity::model::{
+            channel::{MessageReference, MessageReferenceKind},
+            id::{ChannelId, MessageId},
+        };
 
         let message_id = MessageId::new(42);
         let reference = MessageReference::new(MessageReferenceKind::Default, ChannelId::new(1))
@@ -817,8 +876,10 @@ mod tests {
 
     #[test]
     fn reply_to_id_returns_none_when_message_id_absent() {
-        use serenity::model::channel::{MessageReference, MessageReferenceKind};
-        use serenity::model::id::ChannelId;
+        use serenity::model::{
+            channel::{MessageReference, MessageReferenceKind},
+            id::ChannelId,
+        };
 
         let reference = MessageReference::new(MessageReferenceKind::Default, ChannelId::new(1));
 
@@ -827,13 +888,217 @@ mod tests {
 
     #[test]
     fn reply_to_id_returns_none_for_forward_reference() {
-        use serenity::model::channel::{MessageReference, MessageReferenceKind};
-        use serenity::model::id::{ChannelId, MessageId};
+        use serenity::model::{
+            channel::{MessageReference, MessageReferenceKind},
+            id::{ChannelId, MessageId},
+        };
 
         let message_id = MessageId::new(99);
         let reference = MessageReference::new(MessageReferenceKind::Forward, ChannelId::new(1))
             .message_id(message_id);
 
         assert_eq!(reply_to_id(&reference), None);
+    }
+
+    // ── reply_preview tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn reply_preview_returns_none_for_empty() {
+        assert_eq!(reply_preview(""), None);
+    }
+
+    #[test]
+    fn reply_preview_passes_through_short_content() {
+        assert_eq!(reply_preview("hello"), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn reply_preview_truncates_and_appends_ellipsis() {
+        let content: String = "a".repeat(100);
+        let preview = reply_preview(&content).expect("non-empty content");
+        assert_eq!(preview.chars().count(), 100);
+        assert!(!preview.ends_with('…'));
+
+        let long: String = "b".repeat(101);
+        let preview = reply_preview(&long).expect("non-empty content");
+        assert_eq!(preview.chars().count(), 101);
+        assert!(preview.ends_with('…'));
+
+        let emoji: String = "🐌".repeat(101);
+        let preview = reply_preview(&emoji).expect("emoji content");
+        assert_eq!(preview.chars().count(), 101);
+        assert!(preview.ends_with('…'));
+    }
+
+    // ── reply_context tests ───────────────────────────────────────────────────
+
+    fn wire_author(id: u64, username: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id.to_string(),
+            "username": username,
+            "discriminator": "0",
+        })
+    }
+
+    fn wire_message_body(id: u64, author: serde_json::Value, content: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id.to_string(),
+            "type": 0,
+            "channel_id": "1",
+            "author": author,
+            "content": content,
+            "timestamp": "2026-01-01T00:00:00.000000+00:00",
+            "edited_timestamp": null,
+            "tts": false,
+            "mention_everyone": false,
+            "mentions": [],
+            "mention_roles": [],
+            "attachments": [],
+            "embeds": [],
+            "pinned": false,
+            "flags": 0,
+            "components": [],
+        })
+    }
+
+    fn message_from_wire(payload: serde_json::Value) -> Message {
+        serde_json::from_value(payload).expect("valid Message JSON")
+    }
+
+    fn wire_reply_message(
+        content: &str,
+        reference: serde_json::Value,
+        referenced_message: Option<serde_json::Value>,
+    ) -> Message {
+        let mut payload = wire_message_body(100, wire_author(1, "alice"), content);
+        payload["message_reference"] = reference;
+        if let Some(parent) = referenced_message {
+            payload["referenced_message"] = parent;
+        }
+        message_from_wire(payload)
+    }
+
+    #[test]
+    fn reply_context_returns_none_for_non_reply() {
+        let msg = message_from_wire(wire_message_body(
+            100,
+            wire_author(1, "alice"),
+            "not a reply",
+        ));
+        assert_eq!(reply_context(&msg), (None, None, None));
+    }
+
+    #[test]
+    fn reply_context_returns_none_for_forward() {
+        let msg = wire_reply_message(
+            "forwarded",
+            serde_json::json!({
+                "type": 1,
+                "channel_id": "1",
+                "message_id": "999",
+            }),
+            Some(wire_message_body(
+                999,
+                wire_author(500, "parent"),
+                "parent text",
+            )),
+        );
+        assert_eq!(reply_context(&msg), (None, None, None));
+    }
+
+    #[test]
+    fn reply_context_returns_none_when_referenced_message_absent() {
+        let msg = wire_reply_message(
+            "reply without parent body",
+            serde_json::json!({
+                "type": 0,
+                "channel_id": "1",
+                "message_id": "999",
+            }),
+            None,
+        );
+        assert_eq!(reply_context(&msg), (None, None, None));
+    }
+
+    #[test]
+    fn reply_context_extracts_author_and_preview_for_reply() {
+        let msg = wire_reply_message(
+            "my reply",
+            serde_json::json!({
+                "type": 0,
+                "channel_id": "1",
+                "message_id": "999",
+            }),
+            Some(wire_message_body(
+                999,
+                wire_author(500, "parentuser"),
+                "parent message content",
+            )),
+        );
+        let (uid, user, preview) = reply_context(&msg);
+        assert_eq!(uid, Some(UserId::new(500)));
+        assert_eq!(user.as_deref(), Some("parentuser"));
+        assert_eq!(preview.as_deref(), Some("parent message content"));
+    }
+
+    #[test]
+    fn reply_context_omits_preview_for_empty_parent_content() {
+        let msg = wire_reply_message(
+            "my reply",
+            serde_json::json!({
+                "type": 0,
+                "channel_id": "1",
+                "message_id": "999",
+            }),
+            Some(wire_message_body(999, wire_author(500, "parentuser"), "")),
+        );
+        let (uid, user, preview) = reply_context(&msg);
+        assert_eq!(uid, Some(UserId::new(500)));
+        assert_eq!(user.as_deref(), Some("parentuser"));
+        assert_eq!(preview, None);
+    }
+
+    // ── build_message_event tests ─────────────────────────────────────────────
+
+    #[test]
+    fn build_message_event_populates_reply_context_for_reply() {
+        let config = LoadedConfig::from_raw(Config::default());
+        let msg = wire_reply_message(
+            "my reply",
+            serde_json::json!({
+                "type": 0,
+                "channel_id": "1",
+                "message_id": "999",
+            }),
+            Some(wire_message_body(
+                999,
+                wire_author(500, "parentuser"),
+                "parent message content",
+            )),
+        );
+
+        let event = build_message_event(&msg, &config, None);
+        let NotificationEvent::Message {
+            reply_to_message_id,
+            reply_to_user_id,
+            reply_to_user,
+            reply_to_content_preview,
+            content,
+            user,
+            ..
+        } = event
+        else {
+            panic!("expected Message event");
+        };
+
+        assert_eq!(reply_to_message_id, Some(MessageId::new(999)));
+        assert_eq!(reply_to_user_id, Some(UserId::new(500)));
+        assert_eq!(reply_to_user.as_deref(), Some("parentuser"));
+        assert_eq!(
+            reply_to_content_preview.as_deref(),
+            Some("parent message content")
+        );
+        assert_eq!(content, "my reply");
+        assert_eq!(user, "alice");
     }
 }

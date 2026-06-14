@@ -5,11 +5,9 @@
 //! together after the delay expires. Non-channel events (Trace,
 //! PermissionResponse, ConfigError) pass through immediately.
 
-use std::collections::{BTreeMap, VecDeque};
-
-use tokio::time::Instant;
-
 use crate::discord::events::NotificationEvent;
+use std::collections::{BTreeMap, VecDeque};
+use tokio::time::Instant;
 
 /// Per-channel coalescing buffer.
 #[derive(Default)]
@@ -150,9 +148,8 @@ fn extract_channel_id(event: &NotificationEvent) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use serenity::model::id::{ChannelId, MessageId, UserId};
-
     use super::*;
+    use serenity::model::id::{ChannelId, MessageId, UserId};
 
     fn msg_event(chat_id: u64) -> NotificationEvent {
         NotificationEvent::Message {
@@ -166,6 +163,9 @@ mod tests {
             is_voice_message: false,
             thread_parent_id: None,
             reply_to_message_id: None,
+            reply_to_user_id: None,
+            reply_to_user: None,
+            reply_to_content_preview: None,
         }
     }
 
@@ -271,6 +271,9 @@ mod tests {
             is_voice_message: false,
             thread_parent_id: None,
             reply_to_message_id: None,
+            reply_to_user_id: None,
+            reply_to_user: None,
+            reply_to_content_preview: None,
         };
         buf.buffer_event(ch2_event, 500);
 
@@ -306,10 +309,9 @@ mod tests {
 
 #[cfg(test)]
 mod proptests {
+    use super::*;
     use proptest::prelude::*;
     use serenity::model::id::{ChannelId, MessageId, UserId};
-
-    use super::*;
 
     /// Strategy: pick a channel ID from a small set.
     fn channel_id_strategy() -> impl Strategy<Value = u64> {
@@ -373,6 +375,9 @@ mod proptests {
                     } else {
                         Some(MessageId::new(42))
                     },
+                    reply_to_user_id: None,
+                    reply_to_user: None,
+                    reply_to_content_preview: None,
                 })
                 .collect();
 
@@ -435,6 +440,9 @@ mod proptests {
                     is_voice_message: false,
                     thread_parent_id: None,
                     reply_to_message_id: reply_to,
+                    reply_to_user_id: None,
+                    reply_to_user: None,
+                    reply_to_content_preview: None,
                 };
                 let result = buf.buffer_event(event, delay_ms);
                 prop_assert!(matches!(result, BufferResult::Buffered));
@@ -480,6 +488,9 @@ mod proptests {
                     } else {
                         Some(MessageId::new(42))
                     },
+                    reply_to_user_id: None,
+                    reply_to_user: None,
+                    reply_to_content_preview: None,
                 })
                 .collect();
 

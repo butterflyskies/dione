@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-06-14
+
+### Added
+- `reply_to_user_id`, `reply_to_user`, and `reply_to_content_preview` fields on
+  inbound `message` notifications — best-effort reply context from Discord's
+  embedded `referenced_message` (author ID, author name, and a 100-character
+  content preview with ellipsis when truncated). Omitted when the message is not
+  a reply, the parent is unavailable, or the reference is a forward/crosspost.
+  Not emitted on `message_edit` notifications (closes #100).
+
 ## [0.11.0] - 2026-06-14
 
 ### Added

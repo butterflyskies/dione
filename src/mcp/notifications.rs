@@ -4,9 +4,8 @@
 //! full JSON-RPC notification. Each event is emitted as its own notification
 //! line — no batch wrapping.
 
-use serde_json::{Value, json};
-
 use crate::discord::events::NotificationEvent;
+use serde_json::{Value, json};
 
 // ── Trait ────────────────────────────────────────────────────────────────────
 
@@ -32,6 +31,9 @@ impl IntoNotification for NotificationEvent {
                 is_voice_message,
                 thread_parent_id,
                 reply_to_message_id,
+                reply_to_user_id,
+                reply_to_user,
+                reply_to_content_preview,
             } => {
                 let mut meta = json!({
                     "chat_id": chat_id.get().to_string(),
@@ -48,6 +50,15 @@ impl IntoNotification for NotificationEvent {
                 }
                 if let Some(reply_id) = reply_to_message_id {
                     meta["reply_to_message_id"] = json!(reply_id.get().to_string());
+                }
+                if let Some(reply_uid) = reply_to_user_id {
+                    meta["reply_to_user_id"] = json!(reply_uid.get().to_string());
+                }
+                if let Some(reply_user) = reply_to_user {
+                    meta["reply_to_user"] = json!(reply_user);
+                }
+                if let Some(preview) = reply_to_content_preview {
+                    meta["reply_to_content_preview"] = json!(preview);
                 }
                 if !attachments.is_empty() {
                     meta["attachment_count"] = json!(attachments.len().to_string());
@@ -204,9 +215,8 @@ impl IntoNotification for NotificationEvent {
 
 #[cfg(test)]
 mod tests {
-    use serenity::model::id::{ChannelId, MessageId, UserId};
-
     use super::*;
+    use serenity::model::id::{ChannelId, MessageId, UserId};
 
     #[test]
     fn test_message_edit_includes_thread_parent_id() {
@@ -281,6 +291,9 @@ mod tests {
             is_voice_message: false,
             thread_parent_id: None,
             reply_to_message_id: None,
+            reply_to_user_id: None,
+            reply_to_user: None,
+            reply_to_content_preview: None,
         };
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -300,6 +313,9 @@ mod tests {
             is_voice_message: false,
             thread_parent_id: Some(ChannelId::new(600)),
             reply_to_message_id: None,
+            reply_to_user_id: None,
+            reply_to_user: None,
+            reply_to_content_preview: None,
         };
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -321,6 +337,9 @@ mod tests {
             is_voice_message: false,
             thread_parent_id: None,
             reply_to_message_id: Some(MessageId::new(999)),
+            reply_to_user_id: None,
+            reply_to_user: None,
+            reply_to_content_preview: None,
         };
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -340,10 +359,110 @@ mod tests {
             is_voice_message: false,
             thread_parent_id: None,
             reply_to_message_id: None,
+            reply_to_user_id: None,
+            reply_to_user: None,
+            reply_to_content_preview: None,
         };
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
         assert!(meta.get("reply_to_message_id").is_none());
+    }
+
+    #[test]
+    fn test_message_includes_reply_context() {
+        let event = NotificationEvent::Message {
+            chat_id: ChannelId::new(100),
+            message_id: MessageId::new(200),
+            user: "alice".into(),
+            user_id: UserId::new(300),
+            content: "replying to you".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            attachments: vec![],
+            is_voice_message: false,
+            thread_parent_id: None,
+            reply_to_message_id: Some(MessageId::new(999)),
+            reply_to_user_id: Some(UserId::new(888)),
+            reply_to_user: Some("bob".into()),
+            reply_to_content_preview: Some("original message".into()),
+        };
+        let json = event.into_notification();
+        let meta = &json["params"]["meta"];
+        assert_eq!(meta["reply_to_user_id"], "888");
+        assert_eq!(meta["reply_to_user"], "bob");
+        assert_eq!(meta["reply_to_content_preview"], "original message");
+    }
+
+    #[test]
+    fn test_message_omits_reply_context_when_none() {
+        let event = NotificationEvent::Message {
+            chat_id: ChannelId::new(100),
+            message_id: MessageId::new(200),
+            user: "alice".into(),
+            user_id: UserId::new(300),
+            content: "not a reply".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            attachments: vec![],
+            is_voice_message: false,
+            thread_parent_id: None,
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            reply_to_user: None,
+            reply_to_content_preview: None,
+        };
+        let json = event.into_notification();
+        let meta = &json["params"]["meta"];
+        assert!(meta.get("reply_to_user_id").is_none());
+        assert!(meta.get("reply_to_user").is_none());
+        assert!(meta.get("reply_to_content_preview").is_none());
+    }
+
+    #[test]
+    fn test_message_omits_reply_context_but_keeps_reply_to_message_id() {
+        let event = NotificationEvent::Message {
+            chat_id: ChannelId::new(100),
+            message_id: MessageId::new(200),
+            user: "alice".into(),
+            user_id: UserId::new(300),
+            content: "reply without hydrated parent".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            attachments: vec![],
+            is_voice_message: false,
+            thread_parent_id: None,
+            reply_to_message_id: Some(MessageId::new(999)),
+            reply_to_user_id: None,
+            reply_to_user: None,
+            reply_to_content_preview: None,
+        };
+        let json = event.into_notification();
+        let meta = &json["params"]["meta"];
+        assert_eq!(meta["reply_to_message_id"], "999");
+        assert!(meta.get("reply_to_user_id").is_none());
+        assert!(meta.get("reply_to_user").is_none());
+        assert!(meta.get("reply_to_content_preview").is_none());
+    }
+
+    #[test]
+    fn test_message_omits_preview_but_keeps_author() {
+        let event = NotificationEvent::Message {
+            chat_id: ChannelId::new(100),
+            message_id: MessageId::new(200),
+            user: "alice".into(),
+            user_id: UserId::new(300),
+            content: "reply to attachment-only parent".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            attachments: vec![],
+            is_voice_message: false,
+            thread_parent_id: None,
+            reply_to_message_id: Some(MessageId::new(999)),
+            reply_to_user_id: Some(UserId::new(888)),
+            reply_to_user: Some("bob".into()),
+            reply_to_content_preview: None,
+        };
+        let json = event.into_notification();
+        let meta = &json["params"]["meta"];
+        assert_eq!(meta["reply_to_user_id"], "888");
+        assert_eq!(meta["reply_to_user"], "bob");
+        assert!(meta.get("reply_to_content_preview").is_none());
     }
 
     #[test]

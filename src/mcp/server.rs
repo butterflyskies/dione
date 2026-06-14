@@ -11,19 +11,6 @@
 //! - Error    → `{"jsonrpc":"2.0","id":N,"error":{"code":-32000,"message":"..."}}`
 //! - Notification (no id) → `{"jsonrpc":"2.0","method":"...","params":{...}}`
 
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
-
-use camino::Utf8PathBuf;
-use serde_json::{Value, json};
-use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    sync::{Mutex, mpsc},
-};
-use tokio_util::sync::CancellationToken;
-
 pub use crate::tracing_channel::TraceLevelController;
 use crate::{
     delivery_buffer::{BufferResult, DeliveryBuffer},
@@ -43,6 +30,17 @@ use crate::{
     },
     rate_limiter::{ChannelRef, ParticipantId, RateLimitDecision, RateLimiter},
 };
+use camino::Utf8PathBuf;
+use serde_json::{Value, json};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    sync::{Mutex, mpsc},
+};
+use tokio_util::sync::CancellationToken;
 
 // ── Server struct ─────────────────────────────────────────────────────────────
 
@@ -487,14 +485,13 @@ pub mod test_helpers {
 
 #[cfg(test)]
 mod tests {
-    use serenity::model::id::{ChannelId, MessageId, UserId};
-
     use super::*;
     use crate::{
         config::{ChannelConfig, Config, LoadedConfig},
         delivery_buffer::{BufferResult, DeliveryBuffer},
         mcp::notifications::IntoNotification,
     };
+    use serenity::model::id::{ChannelId, MessageId, UserId};
 
     fn config_with_channel_delay(channel_id: u64, delay_ms: u64) -> LoadedConfig {
         let mut raw = Config::default();
@@ -524,6 +521,9 @@ mod tests {
             is_voice_message: false,
             thread_parent_id: None,
             reply_to_message_id: None,
+            reply_to_user_id: None,
+            reply_to_user: None,
+            reply_to_content_preview: None,
         }
     }
 
