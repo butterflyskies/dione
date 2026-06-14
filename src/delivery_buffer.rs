@@ -141,6 +141,9 @@ fn extract_channel_id(event: &NotificationEvent) -> u64 {
         | NotificationEvent::Reaction { chat_id, .. } => chat_id.get(),
         // Unreachable in practice (non-channel events bypass the buffer path),
         // but kept for exhaustiveness.
+        // 0 is an impossible Discord snowflake (snowflakes start at epoch
+        // 2015-01-01, so the minimum valid value is >> 0), making it safe as a
+        // sentinel that will never collide with a real channel.
         _ => 0,
     }
 }
