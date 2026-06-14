@@ -16,7 +16,7 @@ use crate::discord::events::NotificationEvent;
 pub struct DeliveryBuffer {
     /// Buffered events per channel ID, with the flush deadline.
     /// BTreeMap gives deterministic cross-channel ordering in flush_all/flush_ready.
-    channels: BTreeMap<String, ChannelBuffer>,
+    channels: BTreeMap<u64, ChannelBuffer>,
 }
 
 struct ChannelBuffer {
@@ -100,11 +100,11 @@ impl DeliveryBuffer {
         let mut flushed = Vec::new();
 
         // Collect channel IDs that are ready to flush to avoid borrow issues.
-        let ready_channels: Vec<String> = self
+        let ready_channels: Vec<u64> = self
             .channels
             .iter()
             .filter(|(_, b)| !b.events.is_empty() && now >= b.flush_at)
-            .map(|(k, _)| k.clone())
+            .map(|(k, _)| *k)
             .collect();
 
         for channel_id in ready_channels {
@@ -132,29 +132,34 @@ fn is_channel_event(event: &NotificationEvent) -> bool {
     )
 }
 
-/// Extract the channel ID string from a notification event.
-fn extract_channel_id(event: &NotificationEvent) -> String {
+/// Extract the channel ID from a notification event.
+fn extract_channel_id(event: &NotificationEvent) -> u64 {
     match event {
         NotificationEvent::Message { chat_id, .. }
         | NotificationEvent::MessageEdit { chat_id, .. }
-        | NotificationEvent::MessageDelete { chat_id, .. } => chat_id.clone(),
-        NotificationEvent::Reaction { chat_id, .. } => chat_id.clone(),
-        // Events without a channel ID get a synthetic key (shouldn't reach
-        // the buffer path, but be safe).
-        _ => "__no_channel__".to_string(),
+        | NotificationEvent::MessageDelete { chat_id, .. }
+        | NotificationEvent::Reaction { chat_id, .. } => chat_id.get(),
+        // Unreachable in practice (non-channel events bypass the buffer path),
+        // but kept for exhaustiveness.
+        // 0 is an impossible Discord snowflake (snowflakes start at epoch
+        // 2015-01-01, so the minimum valid value is >> 0), making it safe as a
+        // sentinel that will never collide with a real channel.
+        _ => 0,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use serenity::model::id::{ChannelId, MessageId, UserId};
+
     use super::*;
 
-    fn msg_event(chat_id: &str) -> NotificationEvent {
+    fn msg_event(chat_id: u64) -> NotificationEvent {
         NotificationEvent::Message {
-            chat_id: chat_id.to_string(),
-            message_id: "1".to_string(),
+            chat_id: ChannelId::new(chat_id),
+            message_id: MessageId::new(1),
             user: "alice".to_string(),
-            user_id: "100".to_string(),
+            user_id: UserId::new(100),
             content: "hello".to_string(),
             timestamp: "2026-01-01T00:00:00Z".to_string(),
             attachments: vec![],
@@ -163,12 +168,12 @@ mod tests {
         }
     }
 
-    fn reaction_event(chat_id: &str) -> NotificationEvent {
+    fn reaction_event(chat_id: u64) -> NotificationEvent {
         NotificationEvent::Reaction {
-            chat_id: chat_id.to_string(),
-            message_id: "1".to_string(),
+            chat_id: ChannelId::new(chat_id),
+            message_id: MessageId::new(1),
             user: "bob".to_string(),
-            user_id: "200".to_string(),
+            user_id: UserId::new(200),
             emoji: "👍".to_string(),
         }
     }
@@ -185,7 +190,7 @@ mod tests {
     #[test]
     fn immediate_passthrough_when_delay_zero() {
         let mut buf = DeliveryBuffer::new();
-        let event = msg_event("ch1");
+        let event = msg_event(1);
         let result = buf.buffer_event(event, 0);
         assert!(matches!(result, BufferResult::Immediate(_)));
         assert!(buf.next_flush_deadline().is_none());
@@ -205,7 +210,7 @@ mod tests {
         let mut buf = DeliveryBuffer::new();
 
         // Reaction with a delay — should be buffered (it's a channel event).
-        let result = buf.buffer_event(reaction_event("ch1"), 1000);
+        let result = buf.buffer_event(reaction_event(1), 1000);
         assert!(matches!(result, BufferResult::Buffered));
         assert!(buf.next_flush_deadline().is_some());
     }
@@ -215,14 +220,14 @@ mod tests {
         let mut buf = DeliveryBuffer::new();
 
         // Reaction with no delay — passes through immediately.
-        let result = buf.buffer_event(reaction_event("ch1"), 0);
+        let result = buf.buffer_event(reaction_event(1), 0);
         assert!(matches!(result, BufferResult::Immediate(_)));
     }
 
     #[test]
     fn message_events_buffered_when_delay_positive() {
         let mut buf = DeliveryBuffer::new();
-        let result = buf.buffer_event(msg_event("ch1"), 500);
+        let result = buf.buffer_event(msg_event(1), 500);
         assert!(matches!(result, BufferResult::Buffered));
         assert!(buf.next_flush_deadline().is_some());
     }
@@ -232,8 +237,8 @@ mod tests {
         let mut buf = DeliveryBuffer::new();
 
         // Buffer two messages for the same channel.
-        buf.buffer_event(msg_event("ch1"), 100);
-        buf.buffer_event(msg_event("ch1"), 100);
+        buf.buffer_event(msg_event(1), 100);
+        buf.buffer_event(msg_event(1), 100);
 
         // Before deadline: nothing flushed.
         let now = Instant::now();
@@ -252,13 +257,13 @@ mod tests {
         let mut buf = DeliveryBuffer::new();
 
         // Channel 1 has a short delay.
-        buf.buffer_event(msg_event("ch1"), 50);
+        buf.buffer_event(msg_event(1), 50);
         // Channel 2 has a longer delay.
         let ch2_event = NotificationEvent::Message {
-            chat_id: "ch2".to_string(),
-            message_id: "2".to_string(),
+            chat_id: ChannelId::new(2),
+            message_id: MessageId::new(2),
             user: "carol".to_string(),
-            user_id: "300".to_string(),
+            user_id: UserId::new(300),
             content: "world".to_string(),
             timestamp: "2026-01-01T00:00:00Z".to_string(),
             attachments: vec![],
@@ -286,25 +291,27 @@ mod tests {
         let mut buf = DeliveryBuffer::new();
 
         // Buffer and flush.
-        buf.buffer_event(msg_event("ch1"), 50);
+        buf.buffer_event(msg_event(1), 50);
         let later = Instant::now() + tokio::time::Duration::from_millis(100);
         let flushed = buf.flush_ready(later);
         assert_eq!(flushed.len(), 1);
 
         // Buffer again — new deadline should be set.
-        buf.buffer_event(msg_event("ch1"), 50);
+        buf.buffer_event(msg_event(1), 50);
         assert!(buf.next_flush_deadline().is_some());
     }
 }
 
 #[cfg(test)]
 mod proptests {
+    use serenity::model::id::{ChannelId, MessageId, UserId};
+
     use super::*;
     use proptest::prelude::*;
 
     /// Strategy: pick a channel ID from a small set.
-    fn channel_id_strategy() -> impl Strategy<Value = String> {
-        prop_oneof!["ch1", "ch2", "ch3"].prop_map(|s| s.to_string())
+    fn channel_id_strategy() -> impl Strategy<Value = u64> {
+        prop_oneof![Just(1u64), Just(2u64), Just(3u64)]
     }
 
     /// Strategy: pick a delay value.
@@ -345,10 +352,10 @@ mod proptests {
             let pool_size = 20;
             let events: Vec<NotificationEvent> = (0..pool_size)
                 .map(|i| NotificationEvent::Message {
-                    chat_id: format!("ch{}", i % 3 + 1),
-                    message_id: "1".to_string(),
+                    chat_id: ChannelId::new((i % 3 + 1) as u64),
+                    message_id: MessageId::new(1),
                     user: "user".to_string(),
-                    user_id: "100".to_string(),
+                    user_id: UserId::new(100),
                     content: format!("evt-{i}"),
                     timestamp: "2026-01-01T00:00:00Z".to_string(),
                     attachments: vec![],
@@ -405,10 +412,10 @@ mod proptests {
             // Buffer `count` events for the same channel.
             for i in 0..count {
                 let event = NotificationEvent::Message {
-                    chat_id: channel.clone(),
-                    message_id: "1".to_string(),
+                    chat_id: ChannelId::new(channel),
+                    message_id: MessageId::new(1),
                     user: "user".to_string(),
-                    user_id: "100".to_string(),
+                    user_id: UserId::new(100),
                     content: format!("order-{i}"),
                     timestamp: "2026-01-01T00:00:00Z".to_string(),
                     attachments: vec![],
@@ -445,10 +452,10 @@ mod proptests {
             let pool_size = 20;
             let events: Vec<NotificationEvent> = (0..pool_size)
                 .map(|i| NotificationEvent::Message {
-                    chat_id: format!("ch{}", i % 3 + 1),
-                    message_id: "1".to_string(),
+                    chat_id: ChannelId::new((i % 3 + 1) as u64),
+                    message_id: MessageId::new(1),
                     user: "user".to_string(),
-                    user_id: "100".to_string(),
+                    user_id: UserId::new(100),
                     content: format!("evt-{i}"),
                     timestamp: "2026-01-01T00:00:00Z".to_string(),
                     attachments: vec![],

@@ -28,22 +28,22 @@ pub struct AttachmentMeta {
 #[derive(Debug, Clone)]
 pub enum NotificationEvent {
     Message {
-        chat_id: String,
-        message_id: String,
+        chat_id: ChannelId,
+        message_id: MessageId,
         user: String,
-        user_id: String,
+        user_id: UserId,
         content: String,
         timestamp: String,
         attachments: Vec<AttachmentMeta>,
         is_voice_message: bool,
         /// If the message was sent in a thread, the parent channel ID.
-        thread_parent_id: Option<String>,
+        thread_parent_id: Option<ChannelId>,
     },
     Reaction {
-        chat_id: String,
-        message_id: String,
+        chat_id: ChannelId,
+        message_id: MessageId,
         user: String,
-        user_id: String,
+        user_id: UserId,
         emoji: String,
     },
     PermissionResponse {
@@ -57,20 +57,20 @@ pub enum NotificationEvent {
         fields: Vec<(String, String)>,
     },
     MessageEdit {
-        chat_id: String,
-        message_id: String,
+        chat_id: ChannelId,
+        message_id: MessageId,
         user: String,
-        user_id: String,
+        user_id: UserId,
         new_content: String,
         timestamp: String,
         /// If the edit was in a thread, the parent channel ID.
-        thread_parent_id: Option<String>,
+        thread_parent_id: Option<ChannelId>,
     },
     MessageDelete {
-        chat_id: String,
-        message_id: String,
+        chat_id: ChannelId,
+        message_id: MessageId,
         /// If the delete was in a thread, the parent channel ID.
-        thread_parent_id: Option<String>,
+        thread_parent_id: Option<ChannelId>,
     },
     ConfigError {
         error: String,
@@ -228,6 +228,15 @@ impl EventHandler for Handler {
         let channel_id = reaction.channel_id;
         let bot_id = self.bot_user_id.load(Ordering::Relaxed);
 
+        // Discard reactions with no user attribution or from the bot itself
+        // before the potentially-expensive message authorship lookup.
+        let Some(user_id) = reaction.user_id else {
+            return;
+        };
+        if user_id.get() == bot_id {
+            return;
+        }
+
         let cached = {
             let state = self.state.read().await;
             if state.recent_sent_ids.contains(&message_id) {
@@ -263,11 +272,6 @@ impl EventHandler for Handler {
             },
         }
 
-        let user_id = reaction.user_id.map(|u| u.get()).unwrap_or(0);
-        if user_id == 0 || user_id == bot_id {
-            return;
-        }
-
         let emoji = match &reaction.emoji {
             ReactionType::Unicode(s) => s.clone(),
             ReactionType::Custom { name, id, .. } => {
@@ -278,14 +282,18 @@ impl EventHandler for Handler {
 
         let user_name = {
             let state = self.state.read().await;
-            state.user_names.get(&user_id).cloned().unwrap_or_default()
+            state
+                .user_names
+                .get(&user_id.get())
+                .cloned()
+                .unwrap_or_default()
         };
 
         let event = NotificationEvent::Reaction {
-            chat_id: channel_id.get().to_string(),
-            message_id: message_id.to_string(),
+            chat_id: channel_id,
+            message_id: reaction.message_id,
             user: user_name,
-            user_id: user_id.to_string(),
+            user_id,
             emoji,
         };
 
@@ -363,13 +371,13 @@ impl EventHandler for Handler {
             .into();
 
         let ev = NotificationEvent::MessageEdit {
-            chat_id: channel_id.to_string(),
-            message_id: event.id.get().to_string(),
+            chat_id: event.channel_id,
+            message_id: event.id,
             user: author.name.clone(),
-            user_id: author.id.get().to_string(),
+            user_id: author.id,
             new_content,
             timestamp,
-            thread_parent_id: resolved.thread_parent_id.map(|id| id.to_string()),
+            thread_parent_id: resolved.thread_parent_id.map(ChannelId::new),
         };
 
         if let Err(e) = self.tx.send(ev).await {
@@ -413,9 +421,9 @@ impl EventHandler for Handler {
         }
 
         let ev = NotificationEvent::MessageDelete {
-            chat_id: cid.to_string(),
-            message_id: mid.to_string(),
-            thread_parent_id: resolved.thread_parent_id.map(|id| id.to_string()),
+            chat_id: channel_id,
+            message_id: deleted_message_id,
+            thread_parent_id: resolved.thread_parent_id.map(ChannelId::new),
         };
 
         if let Err(e) = self.tx.send(ev).await {
@@ -588,17 +596,17 @@ fn build_message_event(
         .unwrap_or(false);
 
     NotificationEvent::Message {
-        chat_id: msg.channel_id.get().to_string(),
-        message_id: msg.id.get().to_string(),
+        chat_id: msg.channel_id,
+        message_id: msg.id,
         user: msg.author.name.clone(),
-        user_id: msg.author.id.get().to_string(),
+        user_id: msg.author.id,
         content: msg.content.clone(),
         timestamp: config
             .localize_rfc3339(&serenity_ts_to_rfc3339("msg.timestamp", &msg.timestamp))
             .into(),
         attachments,
         is_voice_message,
-        thread_parent_id: thread_parent_id.map(|id| id.to_string()),
+        thread_parent_id: thread_parent_id.map(ChannelId::new),
     }
 }
 
@@ -659,7 +667,11 @@ async fn notify_admin_dm(
     message_preview: &str,
 ) {
     // Create DM channel with admin.
-    let channel = match create_dm_channel(http, admin_id).await {
+    let Some(admin_uid) = crate::mcp::ids::Snowflake::new(admin_id) else {
+        tracing::warn!(admin_id, "skipping admin DM notification: admin_id is zero");
+        return;
+    };
+    let channel = match create_dm_channel(http, admin_uid.user()).await {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(

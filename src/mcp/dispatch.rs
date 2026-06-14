@@ -3,6 +3,7 @@
 use serde_json::{Value, json};
 
 use crate::config_store::{ConfigStore, DiscordId};
+use crate::mcp::ids::Snowflake;
 use crate::mcp::server::DioneServer;
 use crate::mcp::tools::{
     access::{approve_access, deny_access, list_access_requests},
@@ -42,12 +43,12 @@ pub(crate) async fn call_tool(
         // Messaging
         "reply" => {
             let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?;
+            let channel_id = parse_id(&args, "channel_id")?.channel();
             let content = args
                 .get("content")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing content".to_string())?;
-            let reply_to = parse_optional_id(&args, "reply_to_message_id")?;
+            let reply_to = parse_optional_id(&args, "reply_to_message_id")?.map(Snowflake::message);
             let suppress_ping = args
                 .get("suppress_ping")
                 .and_then(Value::as_bool)
@@ -56,8 +57,8 @@ pub(crate) async fn call_tool(
         }
         "react" => {
             let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?;
-            let message_id = parse_id(&args, "message_id")?;
+            let channel_id = parse_id(&args, "channel_id")?.channel();
+            let message_id = parse_id(&args, "message_id")?.message();
             let emoji = args
                 .get("emoji")
                 .and_then(Value::as_str)
@@ -66,8 +67,8 @@ pub(crate) async fn call_tool(
         }
         "edit_message" => {
             let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?;
-            let message_id = parse_id(&args, "message_id")?;
+            let channel_id = parse_id(&args, "channel_id")?.channel();
+            let message_id = parse_id(&args, "message_id")?.message();
             let content = args
                 .get("content")
                 .and_then(Value::as_str)
@@ -76,34 +77,32 @@ pub(crate) async fn call_tool(
         }
         "fetch_messages" => {
             let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?;
+            let channel_id = parse_id(&args, "channel_id")?.channel();
             let limit = parse_limit(&args, 20);
             fetch_messages(&ctx, channel_id, limit).await
         }
         "fetch_new_since" => {
             let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?;
-            // parse_id rejects zero, which serenity's MessageId::new would
-            // otherwise panic on.
-            let after_message_id = parse_id(&args, "after_message_id")?;
+            let channel_id = parse_id(&args, "channel_id")?.channel();
+            let after_message_id = parse_id(&args, "after_message_id")?.message();
             let limit = parse_limit(&args, 20);
             fetch_new_since(&ctx, channel_id, after_message_id, limit).await
         }
         "download_attachment" => {
             let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?;
-            let message_id = parse_id(&args, "message_id")?;
+            let channel_id = parse_id(&args, "channel_id")?.channel();
+            let message_id = parse_id(&args, "message_id")?.message();
             download_attachment(&ctx, channel_id, message_id).await
         }
         "get_message" => {
             let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?;
-            let message_id = parse_id(&args, "message_id")?;
+            let channel_id = parse_id(&args, "channel_id")?.channel();
+            let message_id = parse_id(&args, "message_id")?.message();
             get_message(&ctx, channel_id, message_id).await
         }
         "send_file" => {
             let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?;
+            let channel_id = parse_id(&args, "channel_id")?.channel();
             let file_path = args
                 .get("file_path")
                 .and_then(Value::as_str)
@@ -114,7 +113,7 @@ pub(crate) async fn call_tool(
 
         "send_dm" => {
             let ctx = server.messaging_ctx(config.clone());
-            let user_id = parse_id(&args, "user_id")?;
+            let user_id = parse_id(&args, "user_id")?.user();
             let content = args
                 .get("content")
                 .and_then(Value::as_str)
@@ -129,53 +128,53 @@ pub(crate) async fn call_tool(
         }
         "list_channels" => {
             let ctx = server.introspection_ctx(config.clone());
-            let guild_id = parse_id(&args, "guild_id")?;
+            let guild_id = parse_id(&args, "guild_id")?.guild();
             list_channels(&ctx, guild_id).await
         }
         "get_channel" => {
             let ctx = server.introspection_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?;
+            let channel_id = parse_id(&args, "channel_id")?.channel();
             get_channel(&ctx, channel_id).await
         }
         "get_user" => {
             let ctx = server.introspection_ctx(config.clone());
-            let user_id = parse_id(&args, "user_id")?;
+            let user_id = parse_id(&args, "user_id")?.user();
             get_user(&ctx, user_id).await
         }
         "get_member" => {
             let ctx = server.introspection_ctx(config.clone());
-            let guild_id = parse_id(&args, "guild_id")?;
-            let user_id = parse_id(&args, "user_id")?;
+            let guild_id = parse_id(&args, "guild_id")?.guild();
+            let user_id = parse_id(&args, "user_id")?.user();
             get_member(&ctx, guild_id, user_id).await
         }
         "list_roles" => {
             let ctx = server.introspection_ctx(config.clone());
-            let guild_id = parse_id(&args, "guild_id")?;
+            let guild_id = parse_id(&args, "guild_id")?.guild();
             list_roles(&ctx, guild_id).await
         }
         "list_emojis" => {
             let ctx = server.introspection_ctx(config.clone());
-            let guild_id = parse_id(&args, "guild_id")?;
+            let guild_id = parse_id(&args, "guild_id")?.guild();
             list_emojis(&ctx, guild_id).await
         }
 
         // Management
         "pin_message" => {
             let ctx = server.management_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?;
-            let message_id = parse_id(&args, "message_id")?;
+            let channel_id = parse_id(&args, "channel_id")?.channel();
+            let message_id = parse_id(&args, "message_id")?.message();
             pin_message(&ctx, channel_id, message_id).await
         }
         "unpin_message" => {
             let ctx = server.management_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?;
-            let message_id = parse_id(&args, "message_id")?;
+            let channel_id = parse_id(&args, "channel_id")?.channel();
+            let message_id = parse_id(&args, "message_id")?.message();
             unpin_message(&ctx, channel_id, message_id).await
         }
         "create_thread" => {
             let ctx = server.management_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?;
-            let message_id = parse_optional_id(&args, "message_id")?;
+            let channel_id = parse_id(&args, "channel_id")?.channel();
+            let message_id = parse_optional_id(&args, "message_id")?.map(Snowflake::message);
             let name = args
                 .get("name")
                 .and_then(Value::as_str)
@@ -184,8 +183,8 @@ pub(crate) async fn call_tool(
         }
         "delete_message" => {
             let ctx = server.management_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?;
-            let message_id = parse_id(&args, "message_id")?;
+            let channel_id = parse_id(&args, "channel_id")?.channel();
+            let message_id = parse_id(&args, "message_id")?.message();
             delete_message(&ctx, channel_id, message_id).await
         }
 
@@ -197,13 +196,13 @@ pub(crate) async fn call_tool(
         "approve_access" => {
             check_admin_gate(&config)?;
             let ctx = server.access_ctx(config.clone());
-            let user_id = parse_id(&args, "user_id")?;
+            let user_id = parse_id(&args, "user_id")?.user();
             approve_access(&ctx, user_id).await
         }
         "deny_access" => {
             check_admin_gate(&config)?;
             let ctx = server.access_ctx(config.clone());
-            let user_id = parse_id(&args, "user_id")?;
+            let user_id = parse_id(&args, "user_id")?.user();
             deny_access(&ctx, user_id).await
         }
 
@@ -325,7 +324,7 @@ pub(crate) async fn call_tool(
         // Bot state
         "send_typing" => {
             let ctx = server.bot_state_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?;
+            let channel_id = parse_id(&args, "channel_id")?.channel();
             send_typing(&ctx, channel_id).await
         }
 
@@ -339,7 +338,7 @@ pub(crate) async fn call_tool(
         }
         "render_latex_to_channel" => {
             let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?;
+            let channel_id = parse_id(&args, "channel_id")?.channel();
             let latex = args
                 .get("latex")
                 .and_then(Value::as_str)
@@ -394,25 +393,19 @@ pub(crate) async fn call_tool(
 
 // ── Parameter parsing helpers ─────────────────────────────────────────────────
 
-pub(crate) fn parse_id(args: &Value, key: &str) -> Result<u64, String> {
+pub(crate) fn parse_id(args: &Value, key: &str) -> Result<Snowflake, String> {
     // Accept both numeric and string IDs.
     let id = if let Some(n) = args.get(key).and_then(Value::as_u64) {
         n
     } else if let Some(s) = args.get(key).and_then(Value::as_str) {
         s.parse::<u64>()
             .map_err(|_| format!("invalid {key}: not a valid u64"))?
+    } else if args.get(key).is_some() {
+        return Err(format!("invalid {key}: expected a numeric or string ID"));
     } else {
-        return Err(format!("missing required parameter: {key}"));
+        return Err(format!("missing {key}"));
     };
-    // Discord snowflakes are nonzero; serenity's Id wrappers (`ChannelId`,
-    // `MessageId`, `UserId`, ...) hold a `NonZeroU64` and panic on zero, so
-    // reject it at the MCP boundary.
-    if id == 0 {
-        return Err(format!(
-            "invalid {key}: must be a nonzero Discord snowflake"
-        ));
-    }
-    Ok(id)
+    Snowflake::new(id).ok_or_else(|| format!("invalid {key}: must be a nonzero Discord snowflake"))
 }
 
 /// Parses an optional `limit` argument, clamping it into Discord's accepted
@@ -428,17 +421,13 @@ pub(crate) fn parse_limit(args: &Value, default: u8) -> u8 {
         .unwrap_or(default)
 }
 
-pub(crate) fn parse_optional_id(args: &Value, key: &str) -> Result<Option<u64>, String> {
-    // A value that parses to zero is explicitly wrong — serenity's Id wrappers
-    // panic on NonZeroU64(0). Silently promoting it to "absent" would hide the
-    // caller's bug; return an error so they know their ID is invalid.
+pub(crate) fn parse_optional_id(args: &Value, key: &str) -> Result<Option<Snowflake>, String> {
+    // A value of zero is explicitly wrong — silently promoting it to "absent"
+    // would hide the caller's bug; return an error so they know their ID is invalid.
     if let Some(n) = args.get(key).and_then(Value::as_u64) {
-        if n == 0 {
-            return Err(format!(
-                "invalid {key}: must be a nonzero Discord snowflake"
-            ));
-        }
-        return Ok(Some(n));
+        return Snowflake::new(n)
+            .map(Some)
+            .ok_or_else(|| format!("invalid {key}: must be a nonzero Discord snowflake"));
     }
     if let Some(s) = args.get(key).and_then(Value::as_str) {
         if s.is_empty() {
@@ -447,12 +436,9 @@ pub(crate) fn parse_optional_id(args: &Value, key: &str) -> Result<Option<u64>, 
         let n = s
             .parse::<u64>()
             .map_err(|_| format!("invalid {key}: not a valid u64"))?;
-        if n == 0 {
-            return Err(format!(
-                "invalid {key}: must be a nonzero Discord snowflake"
-            ));
-        }
-        return Ok(Some(n));
+        return Snowflake::new(n)
+            .map(Some)
+            .ok_or_else(|| format!("invalid {key}: must be a nonzero Discord snowflake"));
     }
     Ok(None)
 }
@@ -500,7 +486,7 @@ mod tests {
             if id == 0 {
                 prop_assert!(result.is_err(), "zero must be rejected, got: {:?}", result);
             } else {
-                prop_assert_eq!(result, Ok(id));
+                prop_assert_eq!(result.map(|s| s.get()), Ok(id));
             }
         }
 
@@ -525,7 +511,7 @@ mod tests {
                     result
                 );
             } else {
-                prop_assert_eq!(result, Ok(Some(id)));
+                prop_assert_eq!(result.map(|opt| opt.map(|s| s.get())), Ok(Some(id)));
             }
         }
 
@@ -534,10 +520,10 @@ mod tests {
         fn parse_optional_id_absent_yields_none(_id in id_strategy()) {
             // Completely absent key
             let args_absent = json!({});
-            prop_assert_eq!(parse_optional_id(&args_absent, "id"), Ok(None));
+            prop_assert_eq!(parse_optional_id(&args_absent, "id").map(|opt| opt.map(|s| s.get())), Ok(None));
             // Empty string
             let args_empty = json!({ "id": "" });
-            prop_assert_eq!(parse_optional_id(&args_empty, "id"), Ok(None));
+            prop_assert_eq!(parse_optional_id(&args_empty, "id").map(|opt| opt.map(|s| s.get())), Ok(None));
         }
 
         /// The parsed limit always lands in Discord's accepted 1..=100 window

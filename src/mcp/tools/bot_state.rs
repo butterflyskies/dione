@@ -47,12 +47,12 @@ pub async fn set_presence(ctx: &BotStateCtx, status: &str, activity_name: Option
 
 // ── send_typing ───────────────────────────────────────────────────────────────
 
-pub async fn send_typing(ctx: &BotStateCtx, channel_id: u64) -> Value {
+pub async fn send_typing(ctx: &BotStateCtx, channel_id: ChannelId) -> Value {
     let allowed = {
         let state = ctx.state.read().await;
         OutboundGate::check_channel_with_threads(
             &ctx.config,
-            channel_id,
+            channel_id.get(),
             &state.dm_channel_ids,
             &state.thread_parents,
         )
@@ -61,7 +61,7 @@ pub async fn send_typing(ctx: &BotStateCtx, channel_id: u64) -> Value {
         return json!({ "error": "channel not in allowlist" });
     }
 
-    match ctx.http.broadcast_typing(ChannelId::new(channel_id)).await {
+    match ctx.http.broadcast_typing(channel_id).await {
         Ok(()) => json!({ "ok": true }),
         Err(e) => json!({ "error": e.to_string() }),
     }

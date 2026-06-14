@@ -6,7 +6,7 @@ use serenity::builder::{CreateAllowedMentions, CreateAttachment, CreateMessage, 
 use serenity::http::MessagePagination;
 use serenity::model::Timestamp;
 use serenity::model::channel::Message;
-use serenity::model::id::{ChannelId, MessageId};
+use serenity::model::id::{ChannelId, MessageId, UserId};
 
 use crate::config::{ChunkMode, DmPolicy, LoadedConfig};
 use crate::discord::chunk;
@@ -24,11 +24,11 @@ pub struct MessagingCtx {
 // ── Gate helper ───────────────────────────────────────────────────────────────
 
 /// Returns `Ok(())` if the channel is permitted, or `Err(json_error)` if not.
-pub(crate) async fn check_outbound(ctx: &MessagingCtx, channel_id: u64) -> Result<(), Value> {
+pub(crate) async fn check_outbound(ctx: &MessagingCtx, channel_id: ChannelId) -> Result<(), Value> {
     let state = ctx.state.read().await;
     if !OutboundGate::check_channel_with_threads(
         &ctx.config,
-        channel_id,
+        channel_id.get(),
         &state.dm_channel_ids,
         &state.thread_parents,
     ) {
@@ -43,16 +43,16 @@ pub(crate) async fn check_outbound(ctx: &MessagingCtx, channel_id: u64) -> Resul
 
 pub async fn reply(
     ctx: &MessagingCtx,
-    channel_id: u64,
+    channel_id: ChannelId,
     content: &str,
-    reply_to_message_id: Option<u64>,
+    reply_to_message_id: Option<MessageId>,
     suppress_ping: bool,
 ) -> Value {
     if let Err(e) = check_outbound(ctx, channel_id).await {
         return e;
     }
 
-    let ch = ChannelId::new(channel_id);
+    let ch = channel_id;
 
     // Fire typing indicator now that we've committed to sending a reply.
     let _ = ctx.http.broadcast_typing(ch).await;
@@ -86,7 +86,7 @@ pub async fn reply(
         if should_reply {
             if i == 0 {
                 if let Some(mid) = reply_to_message_id {
-                    builder = builder.reference_message((ch, MessageId::new(mid)));
+                    builder = builder.reference_message((ch, mid));
                 }
             } else if let Some(prev_id) = first_msg_id {
                 builder = builder.reference_message((ch, prev_id));
@@ -109,7 +109,7 @@ pub async fn reply(
                 state.note_sent(mid);
             }
             Err(e) => {
-                tracing::warn!(channel_id, chunk = i, error = %e, "failed to send chunk");
+                tracing::warn!(channel_id = channel_id.get(), chunk = i, error = %e, "failed to send chunk");
                 return json!({ "error": format!("failed to send chunk {i}: {e}") });
             }
         }
@@ -123,7 +123,12 @@ pub async fn reply(
 
 // ── react ─────────────────────────────────────────────────────────────────────
 
-pub async fn react(ctx: &MessagingCtx, channel_id: u64, message_id: u64, emoji: &str) -> Value {
+pub async fn react(
+    ctx: &MessagingCtx,
+    channel_id: ChannelId,
+    message_id: MessageId,
+    emoji: &str,
+) -> Value {
     if let Err(e) = check_outbound(ctx, channel_id).await {
         return e;
     }
@@ -134,11 +139,7 @@ pub async fn react(ctx: &MessagingCtx, channel_id: u64, message_id: u64, emoji: 
     };
     match ctx
         .http
-        .create_reaction(
-            ChannelId::new(channel_id),
-            MessageId::new(message_id),
-            &reaction,
-        )
+        .create_reaction(channel_id, message_id, &reaction)
         .await
     {
         Ok(()) => json!({ "ok": true }),
@@ -150,8 +151,8 @@ pub async fn react(ctx: &MessagingCtx, channel_id: u64, message_id: u64, emoji: 
 
 pub async fn edit_message(
     ctx: &MessagingCtx,
-    channel_id: u64,
-    message_id: u64,
+    channel_id: ChannelId,
+    message_id: MessageId,
     new_content: &str,
 ) -> Value {
     if let Err(e) = check_outbound(ctx, channel_id).await {
@@ -161,12 +162,7 @@ pub async fn edit_message(
     let builder = EditMessage::new().content(new_content);
     match ctx
         .http
-        .edit_message(
-            ChannelId::new(channel_id),
-            MessageId::new(message_id),
-            &builder,
-            vec![],
-        )
+        .edit_message(channel_id, message_id, &builder, vec![])
         .await
     {
         Ok(msg) => json!({ "ok": true, "message_id": msg.id.get().to_string() }),
@@ -176,16 +172,12 @@ pub async fn edit_message(
 
 // ── fetch_messages ────────────────────────────────────────────────────────────
 
-pub async fn fetch_messages(ctx: &MessagingCtx, channel_id: u64, limit: u8) -> Value {
+pub async fn fetch_messages(ctx: &MessagingCtx, channel_id: ChannelId, limit: u8) -> Value {
     if let Err(e) = check_outbound(ctx, channel_id).await {
         return e;
     }
 
-    match ctx
-        .http
-        .get_messages(ChannelId::new(channel_id), None, Some(limit))
-        .await
-    {
+    match ctx.http.get_messages(channel_id, None, Some(limit)).await {
         Ok(messages) => {
             let msgs: Vec<Value> = messages
                 .iter()
@@ -218,8 +210,8 @@ fn message_json(config: &LoadedConfig, m: &Message) -> Value {
 
 pub async fn fetch_new_since(
     ctx: &MessagingCtx,
-    channel_id: u64,
-    after_message_id: u64,
+    channel_id: ChannelId,
+    after_message_id: MessageId,
     limit: u8,
 ) -> Value {
     if let Err(e) = check_outbound(ctx, channel_id).await {
@@ -229,8 +221,8 @@ pub async fn fetch_new_since(
     match ctx
         .http
         .get_messages(
-            ChannelId::new(channel_id),
-            Some(MessagePagination::After(MessageId::new(after_message_id))),
+            channel_id,
+            Some(MessagePagination::After(after_message_id)),
             Some(limit),
         )
         .await
@@ -263,17 +255,17 @@ fn new_since_response(config: &LoadedConfig, mut messages: Vec<Message>, limit: 
 
 // ── download_attachment ───────────────────────────────────────────────────────
 
-pub async fn download_attachment(ctx: &MessagingCtx, channel_id: u64, message_id: u64) -> Value {
+pub async fn download_attachment(
+    ctx: &MessagingCtx,
+    channel_id: ChannelId,
+    message_id: MessageId,
+) -> Value {
     if let Err(e) = check_outbound(ctx, channel_id).await {
         return e;
     }
 
     // Fetch the message to get attachment URLs.
-    let msg = match ctx
-        .http
-        .get_message(ChannelId::new(channel_id), MessageId::new(message_id))
-        .await
-    {
+    let msg = match ctx.http.get_message(channel_id, message_id).await {
         Ok(m) => m,
         Err(e) => return json!({ "error": format!("failed to fetch message: {e}") }),
     };
@@ -327,17 +319,16 @@ pub async fn download_attachment(ctx: &MessagingCtx, channel_id: u64, message_id
 
 pub(crate) async fn send_attachment(
     ctx: &MessagingCtx,
-    channel_id: u64,
+    channel_id: ChannelId,
     attachment: CreateAttachment,
     caption: Option<&str>,
 ) -> Value {
-    let ch = ChannelId::new(channel_id);
-    let _ = ctx.http.broadcast_typing(ch).await;
+    let _ = ctx.http.broadcast_typing(channel_id).await;
     let mut builder = CreateMessage::new().add_file(attachment);
     if let Some(text) = caption {
         builder = builder.content(text);
     }
-    match ch.send_message(&ctx.http, builder).await {
+    match channel_id.send_message(&ctx.http, builder).await {
         Ok(msg) => {
             let mid = msg.id.get();
             let mut state = ctx.state.write().await;
@@ -352,7 +343,7 @@ pub(crate) async fn send_attachment(
 
 pub async fn send_file(
     ctx: &MessagingCtx,
-    channel_id: u64,
+    channel_id: ChannelId,
     file_path: &str,
     caption: Option<&str>,
 ) -> Value {
@@ -382,9 +373,9 @@ pub async fn send_file(
 
 pub(crate) async fn create_dm_channel(
     http: &serenity::http::Http,
-    user_id: u64,
+    user_id: UserId,
 ) -> Result<serenity::model::channel::PrivateChannel, String> {
-    let dm_body = json!({ "recipient_id": user_id.to_string() });
+    let dm_body = json!({ "recipient_id": user_id.get().to_string() });
     http.create_private_channel(&dm_body)
         .await
         .map_err(|e| format!("failed to create DM channel: {e}"))
@@ -392,7 +383,7 @@ pub(crate) async fn create_dm_channel(
 
 // ── send_dm ──────────────────────────────────────────────────────────────────
 
-pub async fn send_dm(ctx: &MessagingCtx, user_id: u64, content: &str) -> Value {
+pub async fn send_dm(ctx: &MessagingCtx, user_id: UserId, content: &str) -> Value {
     if ctx.config.access.dm_policy == DmPolicy::Disabled {
         return json!({ "error": "dm_policy is set to disabled; cannot initiate DMs" });
     }
@@ -402,11 +393,11 @@ pub async fn send_dm(ctx: &MessagingCtx, user_id: u64, content: &str) -> Value {
         Err(e) => return json!({ "error": e }),
     };
 
-    let channel_id = channel.id.get();
+    let channel_id = channel.id;
 
     {
         let mut state = ctx.state.write().await;
-        state.record_dm_channel(user_id, channel_id);
+        state.record_dm_channel(user_id.get(), channel_id.get());
     }
 
     let result = reply(ctx, channel_id, content, None, false).await;
@@ -418,7 +409,7 @@ pub async fn send_dm(ctx: &MessagingCtx, user_id: u64, content: &str) -> Value {
     let message_ids = result["message_ids"].clone();
     json!({
         "ok": true,
-        "channel_id": channel_id.to_string(),
+        "channel_id": channel_id.get().to_string(),
         "message_ids": message_ids,
     })
 }
@@ -487,16 +478,16 @@ async fn download_url(url: &str) -> Result<Vec<u8>, Box<dyn std::error::Error + 
 
 // ── get_message ───────────────────────────────────────────────────────────────
 
-pub async fn get_message(ctx: &MessagingCtx, channel_id: u64, message_id: u64) -> Value {
+pub async fn get_message(
+    ctx: &MessagingCtx,
+    channel_id: ChannelId,
+    message_id: MessageId,
+) -> Value {
     if let Err(e) = check_outbound(ctx, channel_id).await {
         return e;
     }
 
-    match ctx
-        .http
-        .get_message(ChannelId::new(channel_id), MessageId::new(message_id))
-        .await
-    {
+    match ctx.http.get_message(channel_id, message_id).await {
         Ok(m) => {
             json!({
                 "id": m.id.get().to_string(),
@@ -541,9 +532,64 @@ fn serenity_ts_to_rfc3339(ts: &Timestamp) -> String {
 mod tests {
     use super::*;
     use crate::config::{ChannelConfig, Config};
+    use crate::state::new_state;
 
     fn test_config() -> LoadedConfig {
         LoadedConfig::from_raw(Config::default())
+    }
+
+    fn messaging_ctx(config: LoadedConfig) -> MessagingCtx {
+        MessagingCtx {
+            http: Arc::new(serenity::http::Http::new("fake")),
+            state: new_state(),
+            config: Arc::new(config),
+            state_dir: "/tmp".into(),
+        }
+    }
+
+    // ── check_outbound ───────────────────────────────────────────────────────
+
+    /// Mirrors the state write that `send_dm` performs on success:
+    ///   `state.record_dm_channel(user_id.get(), channel_id.get())`
+    /// After that write, outbound traffic to the DM channel must be permitted.
+    #[tokio::test]
+    async fn dm_channel_allowed_via_record_dm_channel() {
+        let user_id = 1000u64;
+        let dm_channel = 2000u64;
+        let ctx = messaging_ctx(test_config());
+        {
+            let mut state = ctx.state.write().await;
+            state.record_dm_channel(user_id, dm_channel);
+        }
+        assert!(
+            check_outbound(&ctx, ChannelId::new(dm_channel))
+                .await
+                .is_ok(),
+            "DM channel must be allowed after record_dm_channel"
+        );
+    }
+
+    #[tokio::test]
+    async fn channel_not_in_config_or_state_is_denied() {
+        let ctx = messaging_ctx(test_config());
+        assert!(
+            check_outbound(&ctx, ChannelId::new(999)).await.is_err(),
+            "channel absent from config and state must be denied"
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_channel_is_allowed() {
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
+        assert!(
+            check_outbound(&ctx, ChannelId::new(42)).await.is_ok(),
+            "channel present in config must be allowed"
+        );
     }
 
     /// One message in the shape Discord's REST API returns from
@@ -780,18 +826,22 @@ mod tests {
     #[ignore = "live Discord smoke test; requires DISCORD_BOT_TOKEN, DIONE_TEST_CHANNEL_ID, DIONE_TEST_AFTER_MESSAGE_ID"]
     async fn live_fetch_new_since_smoke() {
         let token = std::env::var("DISCORD_BOT_TOKEN").expect("DISCORD_BOT_TOKEN must be set");
-        let channel_id: u64 = std::env::var("DIONE_TEST_CHANNEL_ID")
-            .expect("DIONE_TEST_CHANNEL_ID must be set")
-            .parse()
-            .expect("DIONE_TEST_CHANNEL_ID must be a u64");
-        let after_message_id: u64 = std::env::var("DIONE_TEST_AFTER_MESSAGE_ID")
-            .expect("DIONE_TEST_AFTER_MESSAGE_ID must be set")
-            .parse()
-            .expect("DIONE_TEST_AFTER_MESSAGE_ID must be a u64");
+        let channel_id = ChannelId::new(
+            std::env::var("DIONE_TEST_CHANNEL_ID")
+                .expect("DIONE_TEST_CHANNEL_ID must be set")
+                .parse::<u64>()
+                .expect("DIONE_TEST_CHANNEL_ID must be a u64"),
+        );
+        let after_message_id = MessageId::new(
+            std::env::var("DIONE_TEST_AFTER_MESSAGE_ID")
+                .expect("DIONE_TEST_AFTER_MESSAGE_ID must be set")
+                .parse::<u64>()
+                .expect("DIONE_TEST_AFTER_MESSAGE_ID must be a u64"),
+        );
 
         let mut raw = Config::default();
         raw.channels.push(ChannelConfig {
-            id: channel_id.to_string(),
+            id: channel_id.get().to_string(),
             require_mention: false,
             allow_from: vec![],
             ..Default::default()
@@ -826,8 +876,9 @@ mod tests {
             "ids must be strictly ascending: {ids:?}"
         );
         assert!(
-            ids.iter().all(|&id| id > after_message_id),
-            "all returned ids must be after the cursor {after_message_id}: {ids:?}"
+            ids.iter().all(|&id| id > after_message_id.get()),
+            "all returned ids must be after the cursor {}: {ids:?}",
+            after_message_id.get()
         );
     }
 

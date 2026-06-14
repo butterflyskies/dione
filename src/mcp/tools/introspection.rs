@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use serenity::model::id::{GuildId, UserId};
+use serenity::model::id::{ChannelId, GuildId, UserId};
 
 use crate::config::LoadedConfig;
 
@@ -33,8 +33,8 @@ pub async fn list_guilds(ctx: &IntrospectionCtx) -> Value {
 
 // ── list_channels ─────────────────────────────────────────────────────────────
 
-pub async fn list_channels(ctx: &IntrospectionCtx, guild_id: u64) -> Value {
-    match ctx.http.get_channels(GuildId::new(guild_id)).await {
+pub async fn list_channels(ctx: &IntrospectionCtx, guild_id: GuildId) -> Value {
+    match ctx.http.get_channels(guild_id).await {
         Ok(channels) => {
             let list: Vec<Value> = channels
                 .iter()
@@ -54,10 +54,8 @@ pub async fn list_channels(ctx: &IntrospectionCtx, guild_id: u64) -> Value {
 
 // ── get_channel ───────────────────────────────────────────────────────────────
 
-pub async fn get_channel(ctx: &IntrospectionCtx, channel_id: u64) -> Value {
-    use serenity::model::id::ChannelId;
-
-    match ctx.http.get_channel(ChannelId::new(channel_id)).await {
+pub async fn get_channel(ctx: &IntrospectionCtx, channel_id: ChannelId) -> Value {
+    match ctx.http.get_channel(channel_id).await {
         Ok(channel) => {
             json!({
                 "id": channel.id().get().to_string(),
@@ -71,8 +69,8 @@ pub async fn get_channel(ctx: &IntrospectionCtx, channel_id: u64) -> Value {
 
 // ── get_user ──────────────────────────────────────────────────────────────────
 
-pub async fn get_user(ctx: &IntrospectionCtx, user_id: u64) -> Value {
-    match ctx.http.get_user(UserId::new(user_id)).await {
+pub async fn get_user(ctx: &IntrospectionCtx, user_id: UserId) -> Value {
+    match ctx.http.get_user(user_id).await {
         Ok(user) => json!({
             "id": user.id.get().to_string(),
             "name": user.name,
@@ -85,12 +83,8 @@ pub async fn get_user(ctx: &IntrospectionCtx, user_id: u64) -> Value {
 
 // ── get_member ────────────────────────────────────────────────────────────────
 
-pub async fn get_member(ctx: &IntrospectionCtx, guild_id: u64, user_id: u64) -> Value {
-    match ctx
-        .http
-        .get_member(GuildId::new(guild_id), UserId::new(user_id))
-        .await
-    {
+pub async fn get_member(ctx: &IntrospectionCtx, guild_id: GuildId, user_id: UserId) -> Value {
+    match ctx.http.get_member(guild_id, user_id).await {
         Ok(member) => {
             json!({
                 "user_id": member.user.id.get().to_string(),
@@ -102,7 +96,7 @@ pub async fn get_member(ctx: &IntrospectionCtx, guild_id: u64, user_id: u64) -> 
                         Some(ts) => Some(ctx.config.localize_rfc3339(&ts)),
                         None => {
                             tracing::warn!(
-                                user_id,
+                                user_id = user_id.get(),
                                 "joined_at Timestamp failed to_rfc3339(); omitting field"
                             );
                             None
@@ -117,8 +111,8 @@ pub async fn get_member(ctx: &IntrospectionCtx, guild_id: u64, user_id: u64) -> 
 
 // ── list_roles ────────────────────────────────────────────────────────────────
 
-pub async fn list_roles(ctx: &IntrospectionCtx, guild_id: u64) -> Value {
-    match ctx.http.get_guild_roles(GuildId::new(guild_id)).await {
+pub async fn list_roles(ctx: &IntrospectionCtx, guild_id: GuildId) -> Value {
+    match ctx.http.get_guild_roles(guild_id).await {
         Ok(roles) => {
             let list: Vec<Value> = roles
                 .iter()
@@ -159,8 +153,8 @@ fn channel_kind_str(channel: &serenity::model::channel::Channel) -> &'static str
 
 // ── list_emojis ──────────────────────────────────────────────────────────────
 
-pub async fn list_emojis(ctx: &IntrospectionCtx, guild_id: u64) -> Value {
-    match ctx.http.get_emojis(GuildId::new(guild_id)).await {
+pub async fn list_emojis(ctx: &IntrospectionCtx, guild_id: GuildId) -> Value {
+    match ctx.http.get_emojis(guild_id).await {
         Ok(emojis) => {
             let list: Vec<Value> = emojis
                 .iter()

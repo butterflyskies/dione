@@ -180,14 +180,16 @@ pub async fn run(
 
                     // Rate-limit check for message events.
                     if let NotificationEvent::Message { ref user_id, ref chat_id, .. } = event {
-                        let sender = ParticipantId::new(user_id.as_str());
-                        let channel = ChannelRef::new(chat_id.as_str());
+                        let user_id_str = user_id.get().to_string();
+                        let chat_id_str = chat_id.get().to_string();
+                        let sender = ParticipantId::new(&user_id_str);
+                        let channel = ChannelRef::new(&chat_id_str);
                         let now = Instant::now();
                         match rate_limiter.check_message(&sender, &channel, &[], now) {
                             RateLimitDecision::Allowed { remaining, .. } => {
                                 tracing::trace!(
-                                    user_id,
-                                    chat_id,
+                                    user_id = user_id.get(),
+                                    chat_id = chat_id.get(),
                                     remaining,
                                     "rate limiter: message allowed"
                                 );
@@ -197,8 +199,8 @@ pub async fn run(
                                 // OverflowPolicy::Buffer is accepted by config but not
                                 // yet implemented — see #79 for sender class wiring.
                                 tracing::info!(
-                                    user_id,
-                                    chat_id,
+                                    user_id = user_id.get(),
+                                    chat_id = chat_id.get(),
                                     retry_after_ms = retry_after.as_millis() as u64,
                                     "rate limiter: message denied, dropping"
                                 );
@@ -431,15 +433,15 @@ async fn write_lines(stdout: &Arc<Mutex<tokio::io::Stdout>>, values: &[Value]) {
 /// Returns the configured delay for channel events (Message, MessageEdit,
 /// MessageDelete, Reaction). Non-channel events always return 0.
 fn extract_delay_ms(event: &NotificationEvent, config: &crate::config::LoadedConfig) -> u64 {
-    let chat_id = match event {
+    let channel_id = match event {
         NotificationEvent::Message { chat_id, .. }
         | NotificationEvent::MessageEdit { chat_id, .. }
         | NotificationEvent::MessageDelete { chat_id, .. }
-        | NotificationEvent::Reaction { chat_id, .. } => Some(chat_id.as_str()),
+        | NotificationEvent::Reaction { chat_id, .. } => Some(chat_id.get()),
         _ => None,
     };
-    match chat_id.and_then(|id| id.parse::<u64>().ok()) {
-        Some(channel_id) => config.delivery_delay_ms(channel_id),
+    match channel_id {
+        Some(id) => config.delivery_delay_ms(id),
         None => 0,
     }
 }
@@ -472,5 +474,103 @@ pub mod test_helpers {
     /// Exposes `handle_request` for unit testing request dispatch.
     pub async fn dispatch_request(server: &DioneServer, req: Value) -> Option<Value> {
         handle_request(server, req).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serenity::model::id::{ChannelId, MessageId, UserId};
+
+    use super::*;
+    use crate::config::{ChannelConfig, Config, LoadedConfig};
+
+    fn config_with_channel_delay(channel_id: u64, delay_ms: u64) -> LoadedConfig {
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: channel_id.to_string(),
+            delivery_delay_ms: Some(delay_ms),
+            ..Default::default()
+        });
+        LoadedConfig::from_raw(raw)
+    }
+
+    fn config_with_global_delay(delay_ms: u64) -> LoadedConfig {
+        let mut raw = Config::default();
+        raw.delivery.delivery_delay_ms = delay_ms;
+        LoadedConfig::from_raw(raw)
+    }
+
+    fn message_event(channel: u64) -> NotificationEvent {
+        NotificationEvent::Message {
+            chat_id: ChannelId::new(channel),
+            message_id: MessageId::new(1),
+            user: "u".into(),
+            user_id: UserId::new(1),
+            content: "c".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            attachments: vec![],
+            is_voice_message: false,
+            thread_parent_id: None,
+        }
+    }
+
+    #[test]
+    fn extract_delay_message_uses_channel_config() {
+        let config = config_with_channel_delay(42, 500);
+        assert_eq!(extract_delay_ms(&message_event(42), &config), 500);
+    }
+
+    #[test]
+    fn extract_delay_reaction_uses_channel_config() {
+        let config = config_with_channel_delay(7, 200);
+        let event = NotificationEvent::Reaction {
+            chat_id: ChannelId::new(7),
+            message_id: MessageId::new(1),
+            user: "u".into(),
+            user_id: UserId::new(1),
+            emoji: "👍".into(),
+        };
+        assert_eq!(extract_delay_ms(&event, &config), 200);
+    }
+
+    #[test]
+    fn extract_delay_message_edit_uses_channel_config() {
+        let config = config_with_channel_delay(99, 300);
+        let event = NotificationEvent::MessageEdit {
+            chat_id: ChannelId::new(99),
+            message_id: MessageId::new(1),
+            user: "u".into(),
+            user_id: UserId::new(1),
+            new_content: "edited".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            thread_parent_id: None,
+        };
+        assert_eq!(extract_delay_ms(&event, &config), 300);
+    }
+
+    #[test]
+    fn extract_delay_message_delete_uses_channel_config() {
+        let config = config_with_channel_delay(55, 100);
+        let event = NotificationEvent::MessageDelete {
+            chat_id: ChannelId::new(55),
+            message_id: MessageId::new(1),
+            thread_parent_id: None,
+        };
+        assert_eq!(extract_delay_ms(&event, &config), 100);
+    }
+
+    #[test]
+    fn extract_delay_non_channel_event_is_zero() {
+        let config = config_with_channel_delay(1, 999);
+        let event = NotificationEvent::ConfigError {
+            error: "oops".into(),
+        };
+        assert_eq!(extract_delay_ms(&event, &config), 0);
+    }
+
+    #[test]
+    fn extract_delay_unconfigured_channel_falls_back_to_global() {
+        let config = config_with_global_delay(750);
+        assert_eq!(extract_delay_ms(&message_event(9999), &config), 750);
     }
 }
