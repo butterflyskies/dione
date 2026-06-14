@@ -511,6 +511,7 @@ mod tests {
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
+            reply_to_message_id: None,
         }
     }
 
