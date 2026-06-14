@@ -15,15 +15,16 @@ use dione::rate_limiter::{
     ChannelRef, OverflowPolicy, ParticipantId, RateLimitConfig, RateLimitDecision, RateLimiter,
     ScopeConfig,
 };
+use serenity::model::id::{ChannelId, MessageId, UserId};
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-fn msg_event(chat_id: &str, user_id: &str, content: &str) -> NotificationEvent {
+fn msg_event(chat_id: u64, user_id: u64, content: &str) -> NotificationEvent {
     NotificationEvent::Message {
-        chat_id: chat_id.to_string(),
-        message_id: "1".to_string(),
+        chat_id: ChannelId::new(chat_id),
+        message_id: MessageId::new(1),
         user: format!("user-{user_id}"),
-        user_id: user_id.to_string(),
+        user_id: UserId::new(user_id),
         content: content.to_string(),
         timestamp: "2026-01-01T00:00:00Z".to_string(),
         attachments: vec![],
@@ -32,12 +33,12 @@ fn msg_event(chat_id: &str, user_id: &str, content: &str) -> NotificationEvent {
     }
 }
 
-fn reaction_event(chat_id: &str, user_id: &str) -> NotificationEvent {
+fn reaction_event(chat_id: u64, user_id: u64) -> NotificationEvent {
     NotificationEvent::Reaction {
-        chat_id: chat_id.to_string(),
-        message_id: "1".to_string(),
+        chat_id: ChannelId::new(chat_id),
+        message_id: MessageId::new(1),
         user: format!("user-{user_id}"),
-        user_id: user_id.to_string(),
+        user_id: UserId::new(user_id),
         emoji: "👍".to_string(),
     }
 }
@@ -64,22 +65,22 @@ fn config_error_event() -> NotificationEvent {
     }
 }
 
-fn edit_event(chat_id: &str, user_id: &str) -> NotificationEvent {
+fn edit_event(chat_id: u64, user_id: u64) -> NotificationEvent {
     NotificationEvent::MessageEdit {
-        chat_id: chat_id.to_string(),
-        message_id: "1".to_string(),
+        chat_id: ChannelId::new(chat_id),
+        message_id: MessageId::new(1),
         user: format!("user-{user_id}"),
-        user_id: user_id.to_string(),
+        user_id: UserId::new(user_id),
         new_content: "edited content".to_string(),
         timestamp: "2026-01-01T00:00:01Z".to_string(),
         thread_parent_id: None,
     }
 }
 
-fn delete_event(chat_id: &str) -> NotificationEvent {
+fn delete_event(chat_id: u64) -> NotificationEvent {
     NotificationEvent::MessageDelete {
-        chat_id: chat_id.to_string(),
-        message_id: "1".to_string(),
+        chat_id: ChannelId::new(chat_id),
+        message_id: MessageId::new(1),
         thread_parent_id: None,
     }
 }
@@ -118,8 +119,10 @@ fn pipeline_step(
         ..
     } = event
     {
-        let sender = ParticipantId::new(user_id.as_str());
-        let channel = ChannelRef::new(chat_id.as_str());
+        let user_id_str = user_id.get().to_string();
+        let chat_id_str = chat_id.get().to_string();
+        let sender = ParticipantId::new(&user_id_str);
+        let channel = ChannelRef::new(&chat_id_str);
         match rate_limiter.check_message(&sender, &channel, &[], now) {
             RateLimitDecision::Allowed { .. } => {}
             RateLimitDecision::Denied { .. } => return None,
@@ -143,7 +146,7 @@ fn full_pipeline_message_allowed_no_delay() {
     let mut buffer = DeliveryBuffer::new();
     let now = Instant::now();
 
-    let event = msg_event("ch1", "100", "hello");
+    let event = msg_event(1, 100, "hello");
     let result = pipeline_step(event, &mut limiter, &mut buffer, 0, now);
 
     assert!(result.is_some(), "message should pass through immediately");
@@ -159,31 +162,13 @@ fn rate_limiter_drops_messages_after_exhaustion() {
     let now = Instant::now();
 
     // First two messages pass.
-    let r1 = pipeline_step(
-        msg_event("ch1", "100", "msg1"),
-        &mut limiter,
-        &mut buffer,
-        0,
-        now,
-    );
-    let r2 = pipeline_step(
-        msg_event("ch1", "100", "msg2"),
-        &mut limiter,
-        &mut buffer,
-        0,
-        now,
-    );
+    let r1 = pipeline_step(msg_event(1, 100, "msg1"), &mut limiter, &mut buffer, 0, now);
+    let r2 = pipeline_step(msg_event(1, 100, "msg2"), &mut limiter, &mut buffer, 0, now);
     assert!(r1.is_some(), "first message must be allowed");
     assert!(r2.is_some(), "second message must be allowed (budget=2)");
 
     // Third message is denied.
-    let r3 = pipeline_step(
-        msg_event("ch1", "100", "msg3"),
-        &mut limiter,
-        &mut buffer,
-        0,
-        now,
-    );
+    let r3 = pipeline_step(msg_event(1, 100, "msg3"), &mut limiter, &mut buffer, 0, now);
     assert!(
         r3.is_none(),
         "third message must be dropped after exhaustion"
@@ -200,14 +185,14 @@ fn delivery_buffer_coalesces_messages() {
 
     // Buffer two messages with 500ms delay.
     let r1 = pipeline_step(
-        msg_event("ch1", "100", "first"),
+        msg_event(1, 100, "first"),
         &mut limiter,
         &mut buffer,
         500,
         now,
     );
     let r2 = pipeline_step(
-        msg_event("ch1", "200", "second"),
+        msg_event(1, 200, "second"),
         &mut limiter,
         &mut buffer,
         500,
@@ -251,7 +236,7 @@ fn non_channel_events_bypass_pipeline() {
 
     // Exhaust the rate limiter for this sender/channel.
     let _ = pipeline_step(
-        msg_event("ch1", "100", "exhaust"),
+        msg_event(1, 100, "exhaust"),
         &mut limiter,
         &mut buffer,
         0,
@@ -259,7 +244,7 @@ fn non_channel_events_bypass_pipeline() {
     );
     // Verify messages are now denied.
     let denied = pipeline_step(
-        msg_event("ch1", "100", "denied"),
+        msg_event(1, 100, "denied"),
         &mut limiter,
         &mut buffer,
         0,
@@ -296,26 +281,14 @@ fn reactions_buffered_with_delay() {
     let now = Instant::now();
 
     // Reaction with a delivery delay should be buffered.
-    let result = pipeline_step(
-        reaction_event("ch1", "100"),
-        &mut limiter,
-        &mut buffer,
-        500,
-        now,
-    );
+    let result = pipeline_step(reaction_event(1, 100), &mut limiter, &mut buffer, 500, now);
     assert!(
         result.is_none(),
         "reaction with delay should be buffered, not immediate"
     );
 
     // Reaction with no delay should pass through immediately.
-    let result = pipeline_step(
-        reaction_event("ch2", "100"),
-        &mut limiter,
-        &mut buffer,
-        0,
-        now,
-    );
+    let result = pipeline_step(reaction_event(2, 100), &mut limiter, &mut buffer, 0, now);
     assert!(
         result.is_some(),
         "reaction with no delay should pass through immediately"
@@ -338,7 +311,7 @@ fn edit_and_delete_bypass_rate_limiter_but_buffer() {
 
     // Exhaust the rate limiter.
     let _ = pipeline_step(
-        msg_event("ch1", "100", "exhaust"),
+        msg_event(1, 100, "exhaust"),
         &mut limiter,
         &mut buffer,
         0,
@@ -347,20 +320,14 @@ fn edit_and_delete_bypass_rate_limiter_but_buffer() {
 
     // Edit events are not rate-limited (the rate limiter only checks
     // NotificationEvent::Message). With a delivery delay, they get buffered.
-    let edit = pipeline_step(
-        edit_event("ch1", "100"),
-        &mut limiter,
-        &mut buffer,
-        500,
-        now,
-    );
+    let edit = pipeline_step(edit_event(1, 100), &mut limiter, &mut buffer, 500, now);
     assert!(
         edit.is_none(),
         "edit event with delay should be buffered, not immediately forwarded"
     );
 
     // Delete events similarly bypass rate limiter.
-    let delete = pipeline_step(delete_event("ch1"), &mut limiter, &mut buffer, 500, now);
+    let delete = pipeline_step(delete_event(1), &mut limiter, &mut buffer, 500, now);
     assert!(
         delete.is_none(),
         "delete event with delay should be buffered"
@@ -384,10 +351,10 @@ fn edit_and_delete_immediate_when_no_delay() {
     let mut buffer = DeliveryBuffer::new();
     let now = Instant::now();
 
-    let edit = pipeline_step(edit_event("ch1", "100"), &mut limiter, &mut buffer, 0, now);
+    let edit = pipeline_step(edit_event(1, 100), &mut limiter, &mut buffer, 0, now);
     assert!(edit.is_some(), "edit with no delay should pass immediately");
 
-    let delete = pipeline_step(delete_event("ch1"), &mut limiter, &mut buffer, 0, now);
+    let delete = pipeline_step(delete_event(1), &mut limiter, &mut buffer, 0, now);
     assert!(
         delete.is_some(),
         "delete with no delay should pass immediately"
@@ -404,7 +371,7 @@ fn disabled_rate_limiter_passthrough() {
     // With max_tokens=1 but disabled, all messages should pass.
     for i in 0..10 {
         let result = pipeline_step(
-            msg_event("ch1", "100", &format!("msg{i}")),
+            msg_event(1, 100, &format!("msg{i}")),
             &mut limiter,
             &mut buffer,
             0,
@@ -425,7 +392,7 @@ fn no_delay_means_immediate() {
     let now = Instant::now();
 
     let result = pipeline_step(
-        msg_event("ch1", "100", "instant"),
+        msg_event(1, 100, "instant"),
         &mut limiter,
         &mut buffer,
         0,
@@ -450,7 +417,7 @@ fn rate_limiter_per_sender_per_channel_isolation() {
 
     // User 100 in ch1: allowed.
     let r1 = pipeline_step(
-        msg_event("ch1", "100", "u100-ch1"),
+        msg_event(1, 100, "u100-ch1"),
         &mut limiter,
         &mut buffer,
         0,
@@ -460,7 +427,7 @@ fn rate_limiter_per_sender_per_channel_isolation() {
 
     // User 100 in ch1: denied (exhausted).
     let r2 = pipeline_step(
-        msg_event("ch1", "100", "u100-ch1-again"),
+        msg_event(1, 100, "u100-ch1-again"),
         &mut limiter,
         &mut buffer,
         0,
@@ -470,7 +437,7 @@ fn rate_limiter_per_sender_per_channel_isolation() {
 
     // User 200 in ch1: allowed (different sender).
     let r3 = pipeline_step(
-        msg_event("ch1", "200", "u200-ch1"),
+        msg_event(1, 200, "u200-ch1"),
         &mut limiter,
         &mut buffer,
         0,
@@ -483,7 +450,7 @@ fn rate_limiter_per_sender_per_channel_isolation() {
 
     // User 100 in ch2: allowed (different channel).
     let r4 = pipeline_step(
-        msg_event("ch2", "100", "u100-ch2"),
+        msg_event(2, 100, "u100-ch2"),
         &mut limiter,
         &mut buffer,
         0,
@@ -504,7 +471,7 @@ fn multiple_channels_buffer_independently() {
 
     // Buffer a message in ch1 with short delay.
     pipeline_step(
-        msg_event("ch1", "100", "ch1-msg"),
+        msg_event(1, 100, "ch1-msg"),
         &mut limiter,
         &mut buffer,
         50,
@@ -513,7 +480,7 @@ fn multiple_channels_buffer_independently() {
 
     // Buffer a message in ch2 with longer delay.
     pipeline_step(
-        msg_event("ch2", "200", "ch2-msg"),
+        msg_event(2, 200, "ch2-msg"),
         &mut limiter,
         &mut buffer,
         500,
@@ -551,7 +518,7 @@ fn rate_limited_messages_dont_reach_buffer() {
 
     // First message passes (buffered due to delay).
     pipeline_step(
-        msg_event("ch1", "100", "allowed"),
+        msg_event(1, 100, "allowed"),
         &mut limiter,
         &mut buffer,
         500,
@@ -560,7 +527,7 @@ fn rate_limited_messages_dont_reach_buffer() {
 
     // Second message is rate-limited — should never enter the buffer.
     pipeline_step(
-        msg_event("ch1", "100", "denied"),
+        msg_event(1, 100, "denied"),
         &mut limiter,
         &mut buffer,
         500,
@@ -706,15 +673,15 @@ fn notification_format_preserved_through_pipeline() {
     let now = Instant::now();
 
     let event = NotificationEvent::Message {
-        chat_id: "ch1".to_string(),
-        message_id: "msg-42".to_string(),
+        chat_id: ChannelId::new(1),
+        message_id: MessageId::new(42),
         user: "alice".to_string(),
-        user_id: "100".to_string(),
+        user_id: UserId::new(100),
         content: "hello world".to_string(),
         timestamp: "2026-06-08T12:00:00Z".to_string(),
         attachments: vec![],
         is_voice_message: false,
-        thread_parent_id: Some("parent-1".to_string()),
+        thread_parent_id: Some(ChannelId::new(9001)),
     };
 
     let result = pipeline_step(event, &mut limiter, &mut buffer, 0, now);
@@ -724,14 +691,11 @@ fn notification_format_preserved_through_pipeline() {
     let notification = test_helpers::make_notification(event);
     assert_eq!(notification["method"], "notifications/claude/channel");
     assert_eq!(notification["params"]["content"], "hello world");
-    assert_eq!(notification["params"]["meta"]["chat_id"], "ch1");
-    assert_eq!(notification["params"]["meta"]["message_id"], "msg-42");
+    assert_eq!(notification["params"]["meta"]["chat_id"], "1");
+    assert_eq!(notification["params"]["meta"]["message_id"], "42");
     assert_eq!(notification["params"]["meta"]["user"], "alice");
     assert_eq!(notification["params"]["meta"]["user_id"], "100");
-    assert_eq!(
-        notification["params"]["meta"]["thread_parent_id"],
-        "parent-1"
-    );
+    assert_eq!(notification["params"]["meta"]["thread_parent_id"], "9001");
 }
 
 /// Config reload updates rate limiter behavior (simulated by creating a
@@ -866,7 +830,7 @@ fn mixed_event_stream() {
 
     // Message 1: allowed, buffered.
     let r = pipeline_step(
-        msg_event("ch1", "100", "msg1"),
+        msg_event(1, 100, "msg1"),
         &mut limiter,
         &mut buffer,
         delay,
@@ -878,7 +842,7 @@ fn mixed_event_stream() {
 
     // Reaction: buffered (channel event with delay).
     let r = pipeline_step(
-        reaction_event("ch1", "100"),
+        reaction_event(1, 100),
         &mut limiter,
         &mut buffer,
         delay,
@@ -890,7 +854,7 @@ fn mixed_event_stream() {
 
     // Message 2: allowed, buffered.
     let r = pipeline_step(
-        msg_event("ch1", "100", "msg2"),
+        msg_event(1, 100, "msg2"),
         &mut limiter,
         &mut buffer,
         delay,
@@ -908,7 +872,7 @@ fn mixed_event_stream() {
 
     // Message 3: denied (rate limit exhausted), never buffered.
     let r = pipeline_step(
-        msg_event("ch1", "100", "msg3"),
+        msg_event(1, 100, "msg3"),
         &mut limiter,
         &mut buffer,
         delay,
@@ -955,7 +919,7 @@ fn buffer_preserves_message_order() {
 
     for i in 0..5 {
         pipeline_step(
-            msg_event("ch1", &format!("{i}"), &format!("msg-{i}")),
+            msg_event(1, i as u64 + 1, &format!("msg-{i}")),
             &mut limiter,
             &mut buffer,
             500,
@@ -995,7 +959,7 @@ fn buffer_rearms_after_flush() {
 
     // First batch.
     pipeline_step(
-        msg_event("ch1", "100", "batch1"),
+        msg_event(1, 100, "batch1"),
         &mut limiter,
         &mut buffer,
         50,
@@ -1007,7 +971,7 @@ fn buffer_rearms_after_flush() {
 
     // Second batch — new deadline should be set.
     pipeline_step(
-        msg_event("ch1", "200", "batch2"),
+        msg_event(1, 200, "batch2"),
         &mut limiter,
         &mut buffer,
         50,
@@ -1107,9 +1071,7 @@ async fn async_delayed_message_appears_after_delay() {
     let handle = tokio::spawn(async move { run_notif_loop(rx, cancel_clone, |_| 500).await });
 
     // Send a message.
-    tx.send(msg_event("ch1", "100", "delayed-msg"))
-        .await
-        .unwrap();
+    tx.send(msg_event(1, 100, "delayed-msg")).await.unwrap();
 
     // Advance time to just before the deadline — event should not have flushed yet.
     tokio::time::advance(Duration::from_millis(400)).await;
@@ -1144,8 +1106,8 @@ async fn async_reaction_buffered_with_delay() {
     let handle = tokio::spawn(async move { run_notif_loop(rx, cancel_clone, |_| 500).await });
 
     // Send a message, then a reaction to the same channel.
-    tx.send(msg_event("ch1", "100", "hello")).await.unwrap();
-    tx.send(reaction_event("ch1", "200")).await.unwrap();
+    tx.send(msg_event(1, 100, "hello")).await.unwrap();
+    tx.send(reaction_event(1, 200)).await.unwrap();
 
     // Allow the events to be processed.
     tokio::task::yield_now().await;
@@ -1199,10 +1161,10 @@ async fn async_shutdown_drains_buffered_events() {
     let handle = tokio::spawn(async move { run_notif_loop(rx, cancel_clone, |_| 5000).await });
 
     // Buffer several events with a long delay (won't flush naturally).
-    tx.send(msg_event("ch1", "100", "drain-1")).await.unwrap();
-    tx.send(msg_event("ch1", "200", "drain-2")).await.unwrap();
-    tx.send(reaction_event("ch2", "100")).await.unwrap();
-    tx.send(msg_event("ch2", "300", "drain-3")).await.unwrap();
+    tx.send(msg_event(1, 100, "drain-1")).await.unwrap();
+    tx.send(msg_event(1, 200, "drain-2")).await.unwrap();
+    tx.send(reaction_event(2, 100)).await.unwrap();
+    tx.send(msg_event(2, 300, "drain-3")).await.unwrap();
 
     // Let events be processed by the loop.
     tokio::task::yield_now().await;
@@ -1227,22 +1189,22 @@ async fn async_shutdown_drains_buffered_events() {
     assert!(matches!(
         &events[0],
         NotificationEvent::Message { content, chat_id, .. }
-        if content == "drain-1" && chat_id == "ch1"
+        if content == "drain-1" && *chat_id == 1
     ));
     assert!(matches!(
         &events[1],
         NotificationEvent::Message { content, chat_id, .. }
-        if content == "drain-2" && chat_id == "ch1"
+        if content == "drain-2" && *chat_id == 1
     ));
     assert!(matches!(
         &events[2],
         NotificationEvent::Reaction { chat_id, .. }
-        if chat_id == "ch2"
+        if *chat_id == 2
     ));
     assert!(matches!(
         &events[3],
         NotificationEvent::Message { content, chat_id, .. }
-        if content == "drain-3" && chat_id == "ch2"
+        if content == "drain-3" && *chat_id == 2
     ));
 }
 
@@ -1295,7 +1257,7 @@ fn global_default_flows_through_pipeline() {
 
     // Event should be buffered (not immediate) with inherited delay.
     let result = pipeline_step(
-        msg_event("100", "1", "via-global"),
+        msg_event(100, 1, "via-global"),
         &mut limiter,
         &mut buffer,
         delay,
@@ -1313,7 +1275,7 @@ fn global_default_flows_through_pipeline() {
         "unconfigured channel inherits global"
     );
     let result2 = pipeline_step(
-        msg_event("999", "2", "unconfigured"),
+        msg_event(999, 2, "unconfigured"),
         &mut limiter,
         &mut buffer,
         delay_unconfigured,
@@ -1362,7 +1324,7 @@ fn per_channel_override_with_global_default() {
     let delay_100 = loaded.delivery_delay_ms(100);
     assert_eq!(delay_100, 50);
     pipeline_step(
-        msg_event("100", "1", "fast-channel"),
+        msg_event(100, 1, "fast-channel"),
         &mut limiter,
         &mut buffer,
         delay_100,
@@ -1373,7 +1335,7 @@ fn per_channel_override_with_global_default() {
     let delay_200 = loaded.delivery_delay_ms(200);
     assert_eq!(delay_200, 1000);
     pipeline_step(
-        msg_event("200", "2", "slow-channel"),
+        msg_event(200, 2, "slow-channel"),
         &mut limiter,
         &mut buffer,
         delay_200,
@@ -1403,9 +1365,9 @@ fn per_channel_override_with_global_default() {
 #[test]
 fn individual_notification_jsonrpc_structure() {
     let events = vec![
-        msg_event("ch1", "100", "first"),
-        reaction_event("ch1", "200"),
-        msg_event("ch1", "300", "second"),
+        msg_event(1, 100, "first"),
+        reaction_event(1, 200),
+        msg_event(1, 300, "second"),
     ];
 
     let notifications: Vec<serde_json::Value> = events
@@ -1435,21 +1397,21 @@ fn multi_channel_flush_preserves_chat_ids() {
     let now = Instant::now();
 
     pipeline_step(
-        msg_event("ch1", "100", "ch1-first"),
+        msg_event(1, 100, "ch1-first"),
         &mut limiter,
         &mut buffer,
         200,
         now,
     );
     pipeline_step(
-        msg_event("ch2", "200", "ch2-first"),
+        msg_event(2, 200, "ch2-first"),
         &mut limiter,
         &mut buffer,
         200,
         now,
     );
     pipeline_step(
-        msg_event("ch1", "300", "ch1-second"),
+        msg_event(1, 300, "ch1-second"),
         &mut limiter,
         &mut buffer,
         200,
@@ -1469,11 +1431,11 @@ fn multi_channel_flush_preserves_chat_ids() {
         .map(test_helpers::make_notification)
         .collect();
 
-    // BTreeMap orders by channel key: "ch1" < "ch2", so ch1 events come first.
-    assert_eq!(notifications[0]["params"]["meta"]["chat_id"], "ch1");
+    // BTreeMap orders by channel key: "1" < "2", so ch1 events come first.
+    assert_eq!(notifications[0]["params"]["meta"]["chat_id"], "1");
     assert_eq!(notifications[0]["params"]["content"], "ch1-first");
-    assert_eq!(notifications[1]["params"]["meta"]["chat_id"], "ch1");
+    assert_eq!(notifications[1]["params"]["meta"]["chat_id"], "1");
     assert_eq!(notifications[1]["params"]["content"], "ch1-second");
-    assert_eq!(notifications[2]["params"]["meta"]["chat_id"], "ch2");
+    assert_eq!(notifications[2]["params"]["meta"]["chat_id"], "2");
     assert_eq!(notifications[2]["params"]["content"], "ch2-first");
 }

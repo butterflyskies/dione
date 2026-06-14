@@ -13,6 +13,7 @@ use dione::queue::AccessQueue;
 use dione::state::new_state;
 use dione::tracing_channel::TraceLevelController;
 use serde_json::json;
+use serenity::model::id::{ChannelId, MessageId, UserId};
 use tempfile::TempDir;
 use tokio::sync::{Mutex, mpsc};
 
@@ -632,10 +633,10 @@ async fn test_tools_call_list_access_requests_empty() {
 #[test]
 fn test_notification_has_no_id_field() {
     let event = NotificationEvent::Message {
-        chat_id: "1".to_string(),
-        message_id: "2".to_string(),
+        chat_id: ChannelId::new(1),
+        message_id: MessageId::new(2),
         user: "x".to_string(),
-        user_id: "3".to_string(),
+        user_id: UserId::new(3),
         content: "hi".to_string(),
         timestamp: "2026-01-01T00:00:00Z".to_string(),
         attachments: vec![],
@@ -652,10 +653,10 @@ fn test_notification_has_no_id_field() {
 #[test]
 fn test_notification_attachment_metadata_present() {
     let event = NotificationEvent::Message {
-        chat_id: "1".to_string(),
-        message_id: "2".to_string(),
+        chat_id: ChannelId::new(1),
+        message_id: MessageId::new(2),
         user: "x".to_string(),
-        user_id: "3".to_string(),
+        user_id: UserId::new(3),
         content: "see file".to_string(),
         timestamp: "2026-01-01T00:00:00Z".to_string(),
         attachments: vec![AttachmentMeta {
@@ -675,10 +676,10 @@ fn test_notification_attachment_metadata_present() {
 #[test]
 fn test_notification_voice_flag_in_meta() {
     let event = NotificationEvent::Message {
-        chat_id: "1".to_string(),
-        message_id: "2".to_string(),
+        chat_id: ChannelId::new(1),
+        message_id: MessageId::new(2),
         user: "x".to_string(),
-        user_id: "3".to_string(),
+        user_id: UserId::new(3),
         content: String::new(),
         timestamp: "2026-01-01T00:00:00Z".to_string(),
         attachments: vec![],
@@ -705,10 +706,10 @@ fn test_permission_deny_uses_deny_behavior() {
 #[test]
 fn test_notification_message_snapshot() {
     let event = NotificationEvent::Message {
-        chat_id: "1000".to_string(),
-        message_id: "2000".to_string(),
+        chat_id: ChannelId::new(1000),
+        message_id: MessageId::new(2000),
         user: "snapuser".to_string(),
-        user_id: "3000".to_string(),
+        user_id: UserId::new(3000),
         content: "snapshot content".to_string(),
         timestamp: "2026-01-01T00:00:00+00:00".to_string(),
         attachments: vec![],
@@ -722,10 +723,10 @@ fn test_notification_message_snapshot() {
 #[test]
 fn test_notification_reaction_snapshot() {
     let event = NotificationEvent::Reaction {
-        chat_id: "1001".to_string(),
-        message_id: "2001".to_string(),
+        chat_id: ChannelId::new(1001),
+        message_id: MessageId::new(2001),
         user: "reactor".to_string(),
-        user_id: "3001".to_string(),
+        user_id: UserId::new(3001),
         emoji: "🎉".to_string(),
     };
     let notif = test_helpers::make_notification(event);
@@ -745,10 +746,10 @@ fn test_notification_permission_response_snapshot() {
 #[test]
 fn test_notification_message_edit_snapshot() {
     let event = NotificationEvent::MessageEdit {
-        chat_id: "1002".to_string(),
-        message_id: "2002".to_string(),
+        chat_id: ChannelId::new(1002),
+        message_id: MessageId::new(2002),
         user: "editor".to_string(),
-        user_id: "3002".to_string(),
+        user_id: UserId::new(3002),
         new_content: "fixed a typo".to_string(),
         timestamp: "2026-01-01T00:01:00+00:00".to_string(),
         thread_parent_id: None,
@@ -760,8 +761,8 @@ fn test_notification_message_edit_snapshot() {
 #[test]
 fn test_notification_message_delete_snapshot() {
     let event = NotificationEvent::MessageDelete {
-        chat_id: "1003".to_string(),
-        message_id: "2003".to_string(),
+        chat_id: ChannelId::new(1003),
+        message_id: MessageId::new(2003),
         thread_parent_id: None,
     };
     let notif = test_helpers::make_notification(event);
@@ -773,15 +774,15 @@ fn test_notification_message_delete_snapshot() {
 #[test]
 fn test_notification_message_in_thread_snapshot() {
     let event = NotificationEvent::Message {
-        chat_id: "1000".to_string(),
-        message_id: "2000".to_string(),
+        chat_id: ChannelId::new(1000),
+        message_id: MessageId::new(2000),
         user: "threaduser".to_string(),
-        user_id: "3000".to_string(),
+        user_id: UserId::new(3000),
         content: "reply in thread".to_string(),
         timestamp: "2026-01-01T00:00:00+00:00".to_string(),
         attachments: vec![],
         is_voice_message: false,
-        thread_parent_id: Some("700".into()),
+        thread_parent_id: Some(ChannelId::new(700)),
     };
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
