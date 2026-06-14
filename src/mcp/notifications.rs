@@ -47,7 +47,7 @@ impl IntoNotification for NotificationEvent {
                     meta["thread_parent_id"] = json!(parent_id.get().to_string());
                 }
                 if let Some(reply_id) = reply_to_message_id {
-                    meta["reply_to_message_id"] = json!(reply_id);
+                    meta["reply_to_message_id"] = json!(reply_id.get().to_string());
                 }
                 if !attachments.is_empty() {
                     meta["attachment_count"] = json!(attachments.len().to_string());
@@ -153,7 +153,7 @@ impl IntoNotification for NotificationEvent {
                     meta["thread_parent_id"] = json!(parent_id.get().to_string());
                 }
                 if let Some(reply_id) = reply_to_message_id {
-                    meta["reply_to_message_id"] = json!(reply_id);
+                    meta["reply_to_message_id"] = json!(reply_id.get().to_string());
                 }
                 json!({
                     "jsonrpc": "2.0",
@@ -320,7 +320,7 @@ mod tests {
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
-            reply_to_message_id: Some("999".into()),
+            reply_to_message_id: Some(MessageId::new(999)),
         };
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -356,7 +356,7 @@ mod tests {
             new_content: "edited reply".into(),
             timestamp: "2026-01-01T00:00:00Z".into(),
             thread_parent_id: None,
-            reply_to_message_id: Some("888".into()),
+            reply_to_message_id: Some(MessageId::new(888)),
         };
         let json = event.into_notification();
         let meta = &json["params"]["meta"];

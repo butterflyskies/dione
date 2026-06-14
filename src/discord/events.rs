@@ -39,7 +39,7 @@ pub enum NotificationEvent {
         /// If the message was sent in a thread, the parent channel ID.
         thread_parent_id: Option<ChannelId>,
         /// If the message is a reply, the ID of the message being replied to.
-        reply_to_message_id: Option<String>,
+        reply_to_message_id: Option<MessageId>,
     },
     Reaction {
         chat_id: ChannelId,
@@ -68,7 +68,7 @@ pub enum NotificationEvent {
         /// If the edit was in a thread, the parent channel ID.
         thread_parent_id: Option<ChannelId>,
         /// If the edited message is a reply, the ID of the message being replied to.
-        reply_to_message_id: Option<String>,
+        reply_to_message_id: Option<MessageId>,
     },
     MessageDelete {
         chat_id: ChannelId,
@@ -592,8 +592,8 @@ fn serenity_ts_to_rfc3339(field: &str, ts: &serenity::model::Timestamp) -> Strin
 ///
 /// A reference can exist without a message ID (for example a channel-only
 /// forward or crosspost), so the inner `message_id` is itself optional.
-fn reply_to_id(reference: &MessageReference) -> Option<String> {
-    reference.message_id.map(|id| id.get().to_string())
+fn reply_to_id(reference: &MessageReference) -> Option<MessageId> {
+    reference.message_id
 }
 
 fn build_message_event(
