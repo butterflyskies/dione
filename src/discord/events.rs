@@ -798,4 +798,29 @@ mod tests {
             "bot must be dropped when allow_from is empty"
         );
     }
+
+    // ── reply_to_id tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn reply_to_id_returns_message_id_when_present() {
+        use serenity::model::channel::{MessageReference, MessageReferenceKind};
+        use serenity::model::id::{ChannelId, MessageId};
+
+        let message_id = MessageId::new(42);
+        let reference = MessageReference::new(MessageReferenceKind::Default, ChannelId::new(1))
+            .message_id(message_id);
+
+        assert_eq!(reply_to_id(&reference), Some(message_id));
+    }
+
+    #[test]
+    fn reply_to_id_returns_none_when_message_id_absent() {
+        use serenity::model::channel::{MessageReference, MessageReferenceKind};
+        use serenity::model::id::ChannelId;
+
+        let reference =
+            MessageReference::new(MessageReferenceKind::Default, ChannelId::new(1));
+
+        assert_eq!(reply_to_id(&reference), None);
+    }
 }

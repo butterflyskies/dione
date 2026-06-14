@@ -306,10 +306,10 @@ mod tests {
 
 #[cfg(test)]
 mod proptests {
+    use proptest::prelude::*;
     use serenity::model::id::{ChannelId, MessageId, UserId};
 
     use super::*;
-    use proptest::prelude::*;
 
     /// Strategy: pick a channel ID from a small set.
     fn channel_id_strategy() -> impl Strategy<Value = u64> {
