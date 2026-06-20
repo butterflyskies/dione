@@ -7,7 +7,7 @@
 use dione::{
     config::{ChannelConfig, Config, DeliveryConfig, LoadedConfig, RateLimitTomlConfig},
     delivery_buffer::{BufferResult, DeliveryBuffer},
-    discord::events::NotificationEvent,
+    discord::events::{MessageEvent, NotificationEvent},
     mcp::server::test_helpers,
     rate_limiter::{
         ChannelRef, OverflowPolicy, ParticipantId, RateLimitConfig, RateLimitDecision, RateLimiter,
@@ -23,7 +23,7 @@ use std::{
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 fn msg_event(chat_id: u64, user_id: u64, content: &str) -> NotificationEvent {
-    NotificationEvent::Message {
+    NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(chat_id),
         message_id: MessageId::new(1),
         user: format!("user-{user_id}"),
@@ -37,7 +37,7 @@ fn msg_event(chat_id: u64, user_id: u64, content: &str) -> NotificationEvent {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-    }
+    })
 }
 
 fn reaction_event(chat_id: u64, user_id: u64) -> NotificationEvent {
@@ -121,11 +121,11 @@ fn pipeline_step(
     now: Instant,
 ) -> Option<NotificationEvent> {
     // Rate-limit check for message events only.
-    if let NotificationEvent::Message {
+    if let NotificationEvent::Message(MessageEvent {
         ref user_id,
         ref chat_id,
         ..
-    } = event
+    }) = event
     {
         let user_id_str = user_id.get().to_string();
         let chat_id_str = chat_id.get().to_string();
@@ -159,7 +159,9 @@ fn full_pipeline_message_allowed_no_delay() {
 
     assert!(result.is_some(), "message should pass through immediately");
     let event = result.unwrap();
-    assert!(matches!(event, NotificationEvent::Message { ref content, .. } if content == "hello"));
+    assert!(
+        matches!(event, NotificationEvent::Message(MessageEvent { ref content, .. }) if content == "hello")
+    );
 }
 
 /// Rate limiting drops messages after token exhaustion.
@@ -227,7 +229,7 @@ fn delivery_buffer_coalesces_messages() {
     let contents: Vec<String> = flushed
         .iter()
         .filter_map(|e| match e {
-            NotificationEvent::Message { content, .. } => Some(content.clone()),
+            NotificationEvent::Message(MessageEvent { content, .. }) => Some(content.clone()),
             _ => None,
         })
         .collect();
@@ -501,7 +503,7 @@ fn multiple_channels_buffer_independently() {
     assert_eq!(flushed.len(), 1, "only ch1 should have flushed");
     assert!(matches!(
         &flushed[0],
-        NotificationEvent::Message { content, .. } if content == "ch1-msg"
+        NotificationEvent::Message(MessageEvent { content, .. }) if content == "ch1-msg"
     ));
 
     // ch2 still pending.
@@ -513,7 +515,7 @@ fn multiple_channels_buffer_independently() {
     assert_eq!(flushed2.len(), 1, "ch2 should have flushed");
     assert!(matches!(
         &flushed2[0],
-        NotificationEvent::Message { content, .. } if content == "ch2-msg"
+        NotificationEvent::Message(MessageEvent { content, .. }) if content == "ch2-msg"
     ));
 }
 
@@ -552,7 +554,7 @@ fn rate_limited_messages_dont_reach_buffer() {
     );
     assert!(matches!(
         &flushed[0],
-        NotificationEvent::Message { content, .. } if content == "allowed"
+        NotificationEvent::Message(MessageEvent { content, .. }) if content == "allowed"
     ));
 }
 
@@ -680,7 +682,7 @@ fn notification_format_preserved_through_pipeline() {
     let mut buffer = DeliveryBuffer::new();
     let now = Instant::now();
 
-    let event = NotificationEvent::Message {
+    let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1),
         message_id: MessageId::new(42),
         user: "alice".to_string(),
@@ -694,7 +696,7 @@ fn notification_format_preserved_through_pipeline() {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-    };
+    });
 
     let result = pipeline_step(event, &mut limiter, &mut buffer, 0, now);
     let event = result.expect("message should pass through");
@@ -918,9 +920,13 @@ fn mixed_event_stream() {
     );
 
     // Verify order: msg1, reaction, msg2.
-    assert!(matches!(&flushed[0], NotificationEvent::Message { content, .. } if content == "msg1"));
+    assert!(
+        matches!(&flushed[0], NotificationEvent::Message(MessageEvent { content, .. }) if content == "msg1")
+    );
     assert!(matches!(&flushed[1], NotificationEvent::Reaction { .. }));
-    assert!(matches!(&flushed[2], NotificationEvent::Message { content, .. } if content == "msg2"));
+    assert!(
+        matches!(&flushed[2], NotificationEvent::Message(MessageEvent { content, .. }) if content == "msg2")
+    );
 }
 
 /// Buffered messages are flushed in order.
@@ -947,7 +953,7 @@ fn buffer_preserves_message_order() {
     let contents: Vec<String> = flushed
         .iter()
         .filter_map(|e| match e {
-            NotificationEvent::Message { content, .. } => Some(content.clone()),
+            NotificationEvent::Message(MessageEvent { content, .. }) => Some(content.clone()),
             _ => None,
         })
         .collect();
@@ -1000,7 +1006,7 @@ fn buffer_rearms_after_flush() {
     assert_eq!(flushed2.len(), 1);
     assert!(matches!(
         &flushed2[0],
-        NotificationEvent::Message { content, .. } if content == "batch2"
+        NotificationEvent::Message(MessageEvent { content, .. }) if content == "batch2"
     ));
 }
 
@@ -1105,7 +1111,7 @@ async fn async_delayed_message_appears_after_delay() {
     );
     assert!(matches!(
         &events[0],
-        NotificationEvent::Message { content, .. } if content == "delayed-msg"
+        NotificationEvent::Message(MessageEvent { content, .. }) if content == "delayed-msg"
     ));
 }
 
@@ -1134,7 +1140,10 @@ async fn async_reaction_buffered_with_delay() {
 
     // Both message and reaction should have been buffered and flushed together.
     assert_eq!(events.len(), 2, "message and reaction should both flush");
-    assert!(matches!(&events[0], NotificationEvent::Message { .. }));
+    assert!(matches!(
+        &events[0],
+        NotificationEvent::Message(MessageEvent { .. })
+    ));
     assert!(matches!(&events[1], NotificationEvent::Reaction { .. }));
 }
 
@@ -1201,12 +1210,12 @@ async fn async_shutdown_drains_buffered_events() {
     // because BTreeMap iterates in sorted key order).
     assert!(matches!(
         &events[0],
-        NotificationEvent::Message { content, chat_id, .. }
+        NotificationEvent::Message(MessageEvent { content, chat_id, .. })
         if content == "drain-1" && *chat_id == 1
     ));
     assert!(matches!(
         &events[1],
-        NotificationEvent::Message { content, chat_id, .. }
+        NotificationEvent::Message(MessageEvent { content, chat_id, .. })
         if content == "drain-2" && *chat_id == 1
     ));
     assert!(matches!(
@@ -1216,7 +1225,7 @@ async fn async_shutdown_drains_buffered_events() {
     ));
     assert!(matches!(
         &events[3],
-        NotificationEvent::Message { content, chat_id, .. }
+        NotificationEvent::Message(MessageEvent { content, chat_id, .. })
         if content == "drain-3" && *chat_id == 2
     ));
 }
@@ -1365,7 +1374,7 @@ fn per_channel_override_with_global_default() {
     );
     assert!(matches!(
         &flushed[0],
-        NotificationEvent::Message { content, .. } if content == "fast-channel"
+        NotificationEvent::Message(MessageEvent { content, .. }) if content == "fast-channel"
     ));
 
     // Channel 200 still pending.

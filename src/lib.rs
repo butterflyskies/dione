@@ -1,3 +1,4 @@
+pub mod batch;
 pub mod config;
 pub mod config_store;
 pub mod config_watcher;

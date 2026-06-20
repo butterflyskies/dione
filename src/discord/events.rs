@@ -24,30 +24,34 @@ pub struct AttachmentMeta {
     pub size: u64,
 }
 
+/// A Discord message forwarded from the gateway to the MCP notification stream.
+#[derive(Debug, Clone)]
+pub struct MessageEvent {
+    pub chat_id: ChannelId,
+    pub message_id: MessageId,
+    pub user: String,
+    pub user_id: UserId,
+    pub content: String,
+    pub timestamp: String,
+    pub attachments: Vec<AttachmentMeta>,
+    pub is_voice_message: bool,
+    /// If the message was sent in a thread, the parent channel ID.
+    pub thread_parent_id: Option<ChannelId>,
+    /// If the message is a reply, the ID of the message being replied to.
+    pub reply_to_message_id: Option<MessageId>,
+    /// If the message is a reply, the author ID of the replied-to message.
+    pub reply_to_user_id: Option<UserId>,
+    /// If the message is a reply, the author name of the replied-to message.
+    pub reply_to_user: Option<String>,
+    /// If the message is a reply, a short preview of the replied-to content.
+    pub reply_to_content_preview: Option<String>,
+}
+
 /// Events forwarded from the Discord gateway to the MCP notification stream.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum NotificationEvent {
-    Message {
-        chat_id: ChannelId,
-        message_id: MessageId,
-        user: String,
-        user_id: UserId,
-        content: String,
-        timestamp: String,
-        attachments: Vec<AttachmentMeta>,
-        is_voice_message: bool,
-        /// If the message was sent in a thread, the parent channel ID.
-        thread_parent_id: Option<ChannelId>,
-        /// If the message is a reply, the ID of the message being replied to.
-        reply_to_message_id: Option<MessageId>,
-        /// If the message is a reply, the author ID of the replied-to message.
-        reply_to_user_id: Option<UserId>,
-        /// If the message is a reply, the author name of the replied-to message.
-        reply_to_user: Option<String>,
-        /// If the message is a reply, a short preview of the replied-to content.
-        reply_to_content_preview: Option<String>,
-    },
+    Message(MessageEvent),
     Reaction {
         chat_id: ChannelId,
         message_id: MessageId,
@@ -674,7 +678,7 @@ fn build_message_event(
     let reply_to_message_id = msg.message_reference.as_ref().and_then(reply_to_id);
     let (reply_to_user_id, reply_to_user, reply_to_content_preview) = reply_context(msg);
 
-    NotificationEvent::Message {
+    NotificationEvent::Message(MessageEvent {
         chat_id: msg.channel_id,
         message_id: msg.id,
         user: msg.author.name.clone(),
@@ -690,7 +694,7 @@ fn build_message_event(
         reply_to_user_id,
         reply_to_user,
         reply_to_content_preview,
-    }
+    })
 }
 
 /// Resolves the parent channel ID for a thread channel.
@@ -1078,7 +1082,7 @@ mod tests {
         );
 
         let event = build_message_event(&msg, &config, None);
-        let NotificationEvent::Message {
+        let NotificationEvent::Message(MessageEvent {
             reply_to_message_id,
             reply_to_user_id,
             reply_to_user,
@@ -1086,7 +1090,7 @@ mod tests {
             content,
             user,
             ..
-        } = event
+        }) = event
         else {
             panic!("expected Message event");
         };

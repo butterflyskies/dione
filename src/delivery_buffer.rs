@@ -123,7 +123,7 @@ impl DeliveryBuffer {
 fn is_channel_event(event: &NotificationEvent) -> bool {
     matches!(
         event,
-        NotificationEvent::Message { .. }
+        NotificationEvent::Message(_)
             | NotificationEvent::MessageEdit { .. }
             | NotificationEvent::MessageDelete { .. }
             | NotificationEvent::Reaction { .. }
@@ -133,8 +133,8 @@ fn is_channel_event(event: &NotificationEvent) -> bool {
 /// Extract the channel ID from a notification event.
 fn extract_channel_id(event: &NotificationEvent) -> u64 {
     match event {
-        NotificationEvent::Message { chat_id, .. }
-        | NotificationEvent::MessageEdit { chat_id, .. }
+        NotificationEvent::Message(msg) => msg.chat_id.get(),
+        NotificationEvent::MessageEdit { chat_id, .. }
         | NotificationEvent::MessageDelete { chat_id, .. }
         | NotificationEvent::Reaction { chat_id, .. } => chat_id.get(),
         // Unreachable in practice (non-channel events bypass the buffer path),
@@ -149,10 +149,11 @@ fn extract_channel_id(event: &NotificationEvent) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::discord::events::MessageEvent;
     use serenity::model::id::{ChannelId, MessageId, UserId};
 
     fn msg_event(chat_id: u64) -> NotificationEvent {
-        NotificationEvent::Message {
+        NotificationEvent::Message(MessageEvent {
             chat_id: ChannelId::new(chat_id),
             message_id: MessageId::new(1),
             user: "alice".to_string(),
@@ -166,7 +167,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
-        }
+        })
     }
 
     fn reaction_event(chat_id: u64) -> NotificationEvent {
@@ -260,7 +261,7 @@ mod tests {
         // Channel 1 has a short delay.
         buf.buffer_event(msg_event(1), 50);
         // Channel 2 has a longer delay.
-        let ch2_event = NotificationEvent::Message {
+        let ch2_event = NotificationEvent::Message(MessageEvent {
             chat_id: ChannelId::new(2),
             message_id: MessageId::new(2),
             user: "carol".to_string(),
@@ -274,7 +275,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
-        };
+        });
         buf.buffer_event(ch2_event, 500);
 
         // After 100ms: ch1 should flush, ch2 should not.
@@ -310,6 +311,7 @@ mod tests {
 #[cfg(test)]
 mod proptests {
     use super::*;
+    use crate::discord::events::MessageEvent;
     use proptest::prelude::*;
     use serenity::model::id::{ChannelId, MessageId, UserId};
 
@@ -360,7 +362,7 @@ mod proptests {
             // Pre-generate events (indexed by event_idx % pool_size).
             let pool_size = 20;
             let events: Vec<NotificationEvent> = (0..pool_size)
-                .map(|i| NotificationEvent::Message {
+                .map(|i| NotificationEvent::Message(MessageEvent {
                     chat_id: ChannelId::new((i % 3 + 1) as u64),
                     message_id: MessageId::new(1),
                     user: "user".to_string(),
@@ -378,7 +380,7 @@ mod proptests {
                     reply_to_user_id: None,
                     reply_to_user: None,
                     reply_to_content_preview: None,
-                })
+                }))
                 .collect();
 
             let mut total_buffered = 0usize;
@@ -429,7 +431,7 @@ mod proptests {
 
             // Buffer `count` events for the same channel.
             for i in 0..count {
-                let event = NotificationEvent::Message {
+                let event = NotificationEvent::Message(MessageEvent {
                     chat_id: ChannelId::new(channel),
                     message_id: MessageId::new(1),
                     user: "user".to_string(),
@@ -443,7 +445,7 @@ mod proptests {
                     reply_to_user_id: None,
                     reply_to_user: None,
                     reply_to_content_preview: None,
-                };
+                });
                 let result = buf.buffer_event(event, delay_ms);
                 prop_assert!(matches!(result, BufferResult::Buffered));
             }
@@ -457,7 +459,7 @@ mod proptests {
             // Verify order.
             for (i, event) in flushed.iter().enumerate() {
                 let content = match event {
-                    NotificationEvent::Message { content, .. } => content.as_str(),
+                    NotificationEvent::Message(msg) => msg.content.as_str(),
                     _ => panic!("unexpected event type"),
                 };
                 prop_assert_eq!(content, format!("order-{i}"));
@@ -473,7 +475,7 @@ mod proptests {
 
             let pool_size = 20;
             let events: Vec<NotificationEvent> = (0..pool_size)
-                .map(|i| NotificationEvent::Message {
+                .map(|i| NotificationEvent::Message(MessageEvent {
                     chat_id: ChannelId::new((i % 3 + 1) as u64),
                     message_id: MessageId::new(1),
                     user: "user".to_string(),
@@ -491,7 +493,7 @@ mod proptests {
                     reply_to_user_id: None,
                     reply_to_user: None,
                     reply_to_content_preview: None,
-                })
+                }))
                 .collect();
 
             let mut total_buffered = 0usize;

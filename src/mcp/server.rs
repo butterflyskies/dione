@@ -14,7 +14,7 @@
 pub use crate::tracing_channel::TraceLevelController;
 use crate::{
     delivery_buffer::{BufferResult, DeliveryBuffer},
-    discord::events::NotificationEvent,
+    discord::events::{MessageEvent, NotificationEvent},
     mcp::{
         dispatch::call_tool,
         notifications::IntoNotification,
@@ -185,7 +185,7 @@ pub async fn run(
                     }
 
                     // Rate-limit check for message events.
-                    if let NotificationEvent::Message { ref user_id, ref chat_id, .. } = event {
+                    if let NotificationEvent::Message(MessageEvent { ref user_id, ref chat_id, .. }) = event {
                         let user_id_str = user_id.get().to_string();
                         let chat_id_str = chat_id.get().to_string();
                         let sender = ParticipantId::new(&user_id_str);
@@ -440,8 +440,8 @@ async fn write_lines(stdout: &Arc<Mutex<tokio::io::Stdout>>, values: &[Value]) {
 /// MessageDelete, Reaction). Non-channel events always return 0.
 fn extract_delay_ms(event: &NotificationEvent, config: &crate::config::LoadedConfig) -> u64 {
     let channel_id = match event {
-        NotificationEvent::Message { chat_id, .. }
-        | NotificationEvent::MessageEdit { chat_id, .. }
+        NotificationEvent::Message(msg) => Some(msg.chat_id.get()),
+        NotificationEvent::MessageEdit { chat_id, .. }
         | NotificationEvent::MessageDelete { chat_id, .. }
         | NotificationEvent::Reaction { chat_id, .. } => Some(chat_id.get()),
         _ => None,
@@ -510,7 +510,7 @@ mod tests {
     }
 
     fn message_event(channel: u64) -> NotificationEvent {
-        NotificationEvent::Message {
+        NotificationEvent::Message(MessageEvent {
             chat_id: ChannelId::new(channel),
             message_id: MessageId::new(1),
             user: "u".into(),
@@ -524,7 +524,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
-        }
+        })
     }
 
     #[test]

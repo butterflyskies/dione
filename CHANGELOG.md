@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-06-19
+
+### Added
+- `batch` module (`src/batch.rs`) with `serialize_batch()` — converts coalesced
+  `NotificationEvent::Message` vectors into a compact, human-readable text format
+  that uses far fewer tokens than individual JSON-RPC notifications. Format uses
+  a `[batch]` envelope header, a `[users]` roster for short-name-to-ID mapping,
+  and `|`-delimited message lines with optional reply-to and attachment count
+  suffixes. Extracted `MessageEvent` struct from `NotificationEvent` for cleaner
+  field access. 14 tests covering round-trip serialization, edge cases, and
+  timezone localization (#114).
+
 ## [0.12.0] - 2026-06-14
 
 ### Added
