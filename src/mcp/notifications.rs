@@ -216,6 +216,7 @@ impl IntoNotification for NotificationEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::timestamp::Timestamp;
     use serenity::model::id::{ChannelId, MessageId, UserId};
 
     #[test]
@@ -226,7 +227,7 @@ mod tests {
             user: "alice".into(),
             user_id: UserId::new(300),
             new_content: "edited text".into(),
-            timestamp: "2026-01-01T00:00:00Z".into(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             thread_parent_id: Some(ChannelId::new(400)),
             reply_to_message_id: None,
         };
@@ -244,7 +245,7 @@ mod tests {
             user: "alice".into(),
             user_id: UserId::new(300),
             new_content: "edited text".into(),
-            timestamp: "2026-01-01T00:00:00Z".into(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             thread_parent_id: None,
             reply_to_message_id: None,
         };
@@ -286,7 +287,7 @@ mod tests {
             user: "bob".into(),
             user_id: UserId::new(300),
             content: "hello from channel".into(),
-            timestamp: "2026-01-01T00:00:00Z".into(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
@@ -308,7 +309,7 @@ mod tests {
             user: "bob".into(),
             user_id: UserId::new(300),
             content: "hello from thread".into(),
-            timestamp: "2026-01-01T00:00:00Z".into(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: Some(ChannelId::new(600)),
@@ -332,7 +333,7 @@ mod tests {
             user: "alice".into(),
             user_id: UserId::new(300),
             content: "replying to you".into(),
-            timestamp: "2026-01-01T00:00:00Z".into(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
@@ -354,7 +355,7 @@ mod tests {
             user: "alice".into(),
             user_id: UserId::new(300),
             content: "not a reply".into(),
-            timestamp: "2026-01-01T00:00:00Z".into(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
@@ -376,7 +377,7 @@ mod tests {
             user: "alice".into(),
             user_id: UserId::new(300),
             content: "replying to you".into(),
-            timestamp: "2026-01-01T00:00:00Z".into(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
@@ -400,7 +401,7 @@ mod tests {
             user: "alice".into(),
             user_id: UserId::new(300),
             content: "not a reply".into(),
-            timestamp: "2026-01-01T00:00:00Z".into(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
@@ -424,7 +425,7 @@ mod tests {
             user: "alice".into(),
             user_id: UserId::new(300),
             content: "reply without hydrated parent".into(),
-            timestamp: "2026-01-01T00:00:00Z".into(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
@@ -449,7 +450,7 @@ mod tests {
             user: "alice".into(),
             user_id: UserId::new(300),
             content: "reply to attachment-only parent".into(),
-            timestamp: "2026-01-01T00:00:00Z".into(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
@@ -473,7 +474,7 @@ mod tests {
             user: "alice".into(),
             user_id: UserId::new(300),
             new_content: "edited reply".into(),
-            timestamp: "2026-01-01T00:00:00Z".into(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             thread_parent_id: None,
             reply_to_message_id: Some(MessageId::new(888)),
         };
@@ -490,7 +491,7 @@ mod tests {
             user: "alice".into(),
             user_id: UserId::new(300),
             new_content: "edited non-reply".into(),
-            timestamp: "2026-01-01T00:00:00Z".into(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             thread_parent_id: None,
             reply_to_message_id: None,
         };

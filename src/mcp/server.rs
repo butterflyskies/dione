@@ -499,6 +499,7 @@ mod tests {
         config::{ChannelConfig, Config, LoadedConfig},
         delivery_buffer::{BufferResult, DeliveryBuffer},
         mcp::notifications::IntoNotification,
+        timestamp::Timestamp,
     };
     use serenity::model::id::{ChannelId, MessageId, UserId};
 
@@ -525,7 +526,7 @@ mod tests {
             user: "u".into(),
             user_id: UserId::new(1),
             content: "c".into(),
-            timestamp: "2026-01-01T00:00:00Z".into(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
@@ -564,7 +565,7 @@ mod tests {
             user: "u".into(),
             user_id: UserId::new(1),
             new_content: "edited".into(),
-            timestamp: "2026-01-01T00:00:00Z".into(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             thread_parent_id: None,
             reply_to_message_id: None,
         };

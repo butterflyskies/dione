@@ -21,7 +21,7 @@
 //! ```
 
 use crate::discord::events::{MessageEvent, NotificationEvent};
-use crate::timestamp::format_compact;
+use crate::timestamp::{Timestamp, format_compact};
 use chrono_tz::Tz;
 use serenity::model::id::{ChannelId, UserId};
 use std::collections::BTreeMap;
@@ -47,11 +47,6 @@ pub enum BatchError {
     Empty,
     #[error("event is not a Message variant")]
     NotAMessage,
-    #[error("failed to parse timestamp `{ts}`: {source}")]
-    TimestampParse {
-        ts: String,
-        source: chrono::ParseError,
-    },
     #[error("event channel {event_channel} does not match batch channel {batch_channel}")]
     ChannelMismatch {
         event_channel: ChannelId,
@@ -168,15 +163,12 @@ fn build_roster<'a>(messages: &[&'a MessageEvent]) -> Roster<'a> {
 
 // ── Timestamp formatting ─────────────────────────────────────────────────────
 
-/// Format a timestamp string for batch output.
+/// Format a [`Timestamp`] for batch output.
 ///
 /// Delegates to [`crate::timestamp::format_compact`] for the shared compact
-/// `HH:MM` / `HH:MM:SS` logic, wrapping parse errors into [`BatchError`].
-fn format_timestamp(raw: &str, tz: Option<Tz>) -> Result<String, BatchError> {
-    format_compact(raw, tz).map_err(|e| BatchError::TimestampParse {
-        ts: raw.to_owned(),
-        source: e,
-    })
+/// `HH:MM` / `HH:MM:SS` logic.
+fn format_timestamp(ts: &Timestamp, tz: Option<Tz>) -> String {
+    format_compact(ts, tz)
 }
 
 // ── Writers ──────────────────────────────────────────────────────────────────
@@ -254,7 +246,7 @@ impl BatchSerialize for MessageEvent {
         roster: &Roster<'_>,
         tz: Option<Tz>,
     ) -> Result<(), BatchError> {
-        let ts = format_timestamp(&self.timestamp, tz)?;
+        let ts = format_timestamp(&self.timestamp, tz);
 
         // Direct lookup — roster is keyed by UserId.
         let short_name = roster

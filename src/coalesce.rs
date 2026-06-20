@@ -29,7 +29,7 @@
 
 use crate::batch::{BatchContext, serialize_batch};
 use crate::discord::events::{MessageEvent, NotificationEvent};
-use crate::timestamp::format_compact;
+use crate::timestamp::{Timestamp, format_compact};
 use chrono_tz::Tz;
 use serde_json::{Value, json};
 use serenity::model::id::{ChannelId, UserId};
@@ -399,12 +399,12 @@ fn coalesce_non_channel_events(events: Vec<NotificationEvent>) -> Value {
 
 // ── Timestamp formatting ────────────────────────────────────────────────────
 
-/// Format a timestamp for events_v1 output.
+/// Format a [`Timestamp`] for events_v1 output.
 ///
-/// Delegates to [`crate::timestamp::format_compact`]; falls back to the raw
-/// string on parse failure (events_v1 is best-effort, not Result-based).
-fn format_timestamp(raw: &str, tz: Option<Tz>) -> String {
-    format_compact(raw, tz).unwrap_or_else(|_| raw.to_string())
+/// Delegates to [`crate::timestamp::format_compact`] for the shared compact
+/// `HH:MM` / `HH:MM:SS` logic.
+fn format_timestamp(ts: &Timestamp, tz: Option<Tz>) -> String {
+    format_compact(ts, tz)
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -422,7 +422,7 @@ mod tests {
             user: user.to_string(),
             user_id: UserId::new(100),
             content: content.to_string(),
-            timestamp: "2026-06-19T15:30:00+00:00".to_string(),
+            timestamp: Timestamp::parse("2026-06-19T15:30:00+00:00").unwrap(),
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
@@ -450,7 +450,7 @@ mod tests {
             user: "alice".to_string(),
             user_id: UserId::new(100),
             new_content: "edited content".to_string(),
-            timestamp: "2026-06-19T15:31:00+00:00".to_string(),
+            timestamp: Timestamp::parse("2026-06-19T15:31:00+00:00").unwrap(),
             thread_parent_id: None,
             reply_to_message_id: None,
         }
@@ -574,11 +574,10 @@ mod tests {
 
     #[test]
     fn timestamp_formatting() {
-        assert_eq!(format_timestamp("2026-06-19T15:30:00+00:00", None), "15:30");
-        assert_eq!(
-            format_timestamp("2026-06-19T15:30:45+00:00", None),
-            "15:30:45"
-        );
+        let ts1 = Timestamp::parse("2026-06-19T15:30:00+00:00").unwrap();
+        assert_eq!(format_timestamp(&ts1, None), "15:30");
+        let ts2 = Timestamp::parse("2026-06-19T15:30:45+00:00").unwrap();
+        assert_eq!(format_timestamp(&ts2, None), "15:30:45");
     }
 
     #[test]
@@ -623,7 +622,7 @@ mod tests {
                 user: "lina".to_string(),
                 user_id: UserId::new(10),
                 content: "hey everyone".to_string(),
-                timestamp: "2026-06-19T20:00:00+00:00".to_string(),
+                timestamp: Timestamp::parse("2026-06-19T20:00:00+00:00").unwrap(),
                 attachments: vec![],
                 is_voice_message: false,
                 thread_parent_id: Some(ChannelId::new(666)),
@@ -645,7 +644,7 @@ mod tests {
                 user: "lina".to_string(),
                 user_id: UserId::new(10),
                 new_content: "hey everyone!".to_string(),
-                timestamp: "2026-06-19T20:01:00+00:00".to_string(),
+                timestamp: Timestamp::parse("2026-06-19T20:01:00+00:00").unwrap(),
                 thread_parent_id: Some(ChannelId::new(666)),
                 reply_to_message_id: None,
             },
