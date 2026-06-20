@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-06-20
+
+### Fixed
+- Coalesced batch notifications now use the standard `notifications/claude/channel`
+  method instead of the custom `notifications/claude/channel/batch` method that
+  Claude Code's MCP client silently drops. Batch content is packed into the
+  standard `{ content, meta }` params structure. This fixes message loss when
+  multiple Discord messages arrive within the coalesce window. Regression
+  introduced in #122; same root cause as the reverts in #91 and #94.
+
 ## [0.14.0] - 2026-06-20
 
 ### Added

@@ -85,12 +85,38 @@ pub fn coalesce(events: Vec<NotificationEvent>, tz: Option<Tz>) -> Option<Coales
         ));
     }
 
-    // Multiple channel groups: wrap in a multi-channel envelope.
+    // Multiple channel groups: concatenate all content sections into a single
+    // standard notification. Each per-channel content block is already self-
+    // describing (has its own [events]/[batch] header with channel ID), so they
+    // can be concatenated with a newline separator. (Each content block already
+    // ends with a trailing newline, so a single `\n` produces a blank line
+    // between blocks.)
+    let mut combined_content = String::new();
+    for (i, notification) in notifications.iter().enumerate() {
+        if i > 0 {
+            combined_content.push('\n');
+        }
+        if let Some(content) = notification["params"]["content"].as_str() {
+            combined_content.push_str(content);
+        }
+    }
+
+    // Use the first channel's ID as the primary; meta signals multi-channel.
+    let first_channel_id = notifications
+        .first()
+        .and_then(|n| n["params"]["meta"]["chat_id"].as_str())
+        .unwrap_or("0");
+
     let combined = json!({
         "jsonrpc": "2.0",
-        "method": "notifications/claude/channel/batch",
+        "method": "notifications/claude/channel",
         "params": {
-            "envelopes": notifications.into_iter().map(|n| n["params"].clone()).collect::<Vec<_>>(),
+            "content": combined_content,
+            "meta": {
+                "chat_id": first_channel_id,
+                "type": "batch",
+                "format": "multi_channel",
+            },
         }
     });
     Some(CoalesceResult::Coalesced(combined))
@@ -178,11 +204,14 @@ fn coalesce_channel_group(events: Vec<NotificationEvent>, tz: Option<Tz>) -> Val
             Ok(batch_text) => {
                 return json!({
                     "jsonrpc": "2.0",
-                    "method": "notifications/claude/channel/batch",
+                    "method": "notifications/claude/channel",
                     "params": {
-                        "channel_id": channel_id.to_string(),
-                        "format": "batch_v1",
                         "content": batch_text,
+                        "meta": {
+                            "chat_id": channel_id.to_string(),
+                            "type": "batch",
+                            "format": "batch_v1",
+                        },
                     }
                 });
             }
@@ -198,11 +227,14 @@ fn coalesce_channel_group(events: Vec<NotificationEvent>, tz: Option<Tz>) -> Val
 
     json!({
         "jsonrpc": "2.0",
-        "method": "notifications/claude/channel/batch",
+        "method": "notifications/claude/channel",
         "params": {
-            "channel_id": channel_id.to_string(),
-            "format": "events_v1",
             "content": content,
+            "meta": {
+                "chat_id": channel_id.to_string(),
+                "type": "batch",
+                "format": "events_v1",
+            },
         }
     })
 }
@@ -381,12 +413,34 @@ fn coalesce_non_channel_events(events: Vec<NotificationEvent>) -> Value {
         return notifications.into_iter().next().unwrap();
     }
 
+    // Pack non-channel events into a single standard notification.
+    // Extract `content` from each notification. Events without a `content`
+    // field (e.g. PermissionResponse, which uses `request_id`/`behavior`)
+    // get a compact JSON fallback so their data isn't silently dropped.
+    let mut combined_content = String::new();
+    for (i, n) in notifications.iter().enumerate() {
+        if i > 0 {
+            combined_content.push('\n');
+        }
+        if let Some(content) = n["params"]["content"].as_str() {
+            combined_content.push_str(content);
+        } else {
+            // Fallback: serialize the params object as compact JSON so
+            // no event data is silently lost during coalescing.
+            let params = &n["params"];
+            combined_content.push_str(&serde_json::to_string(params).unwrap_or_default());
+        }
+    }
+
     json!({
         "jsonrpc": "2.0",
-        "method": "notifications/claude/channel/batch",
+        "method": "notifications/claude/channel",
         "params": {
-            "format": "multi",
-            "notifications": notifications.into_iter().map(|n| n["params"].clone()).collect::<Vec<_>>(),
+            "content": combined_content,
+            "meta": {
+                "type": "batch",
+                "format": "multi",
+            },
         }
     })
 }
@@ -479,9 +533,10 @@ mod tests {
         let result = coalesce(events, None);
         match result {
             Some(CoalesceResult::Coalesced(v)) => {
-                assert_eq!(v["method"], "notifications/claude/channel/batch");
-                assert_eq!(v["params"]["channel_id"], "1");
-                assert_eq!(v["params"]["format"], "batch_v1");
+                assert_eq!(v["method"], "notifications/claude/channel");
+                assert_eq!(v["params"]["meta"]["chat_id"], "1");
+                assert_eq!(v["params"]["meta"]["format"], "batch_v1");
+                assert_eq!(v["params"]["meta"]["type"], "batch");
                 // Content should contain the batch format.
                 let content = v["params"]["content"].as_str().unwrap();
                 assert!(content.contains("[batch ch=1"));
@@ -499,7 +554,9 @@ mod tests {
         let result = coalesce(events, None);
         match result {
             Some(CoalesceResult::Coalesced(v)) => {
-                assert_eq!(v["params"]["format"], "events_v1");
+                assert_eq!(v["method"], "notifications/claude/channel");
+                assert_eq!(v["params"]["meta"]["format"], "events_v1");
+                assert_eq!(v["params"]["meta"]["type"], "batch");
                 let content = v["params"]["content"].as_str().unwrap();
                 assert!(content.contains("[events ch=1"));
                 assert!(content.contains("hello"));
@@ -531,7 +588,7 @@ mod tests {
     }
 
     #[test]
-    fn different_channels_produce_multi_envelope() {
+    fn different_channels_produce_multi_channel_batch() {
         let events = vec![
             msg_event(1, 100, "alice", "in channel 1"),
             msg_event(2, 200, "bob", "in channel 2"),
@@ -539,9 +596,16 @@ mod tests {
         let result = coalesce(events, None);
         match result {
             Some(CoalesceResult::Coalesced(v)) => {
-                // Multiple channels = multi-envelope wrapper.
-                assert!(v["params"]["envelopes"].is_array());
-                assert_eq!(v["params"]["envelopes"].as_array().unwrap().len(), 2);
+                // Multiple channels packed into a single standard notification.
+                assert_eq!(v["method"], "notifications/claude/channel");
+                assert_eq!(v["params"]["meta"]["type"], "batch");
+                assert_eq!(v["params"]["meta"]["format"], "multi_channel");
+                // Content should contain both channels' batch text.
+                let content = v["params"]["content"].as_str().unwrap();
+                assert!(content.contains("ch=1"));
+                assert!(content.contains("ch=2"));
+                assert!(content.contains("in channel 1"));
+                assert!(content.contains("in channel 2"));
             }
             other => panic!("expected Coalesced, got {other:?}"),
         }
@@ -593,8 +657,14 @@ mod tests {
         let result = coalesce(events, None);
         match result {
             Some(CoalesceResult::Coalesced(v)) => {
-                // Non-channel events get wrapped in multi format.
-                assert_eq!(v["params"]["format"], "multi");
+                // Non-channel events use standard method with multi format.
+                assert_eq!(v["method"], "notifications/claude/channel");
+                assert_eq!(v["params"]["meta"]["format"], "multi");
+                assert_eq!(v["params"]["meta"]["type"], "batch");
+                // Content should contain both trace messages.
+                let content = v["params"]["content"].as_str().unwrap();
+                assert!(content.contains("trace1"));
+                assert!(content.contains("trace2"));
             }
             other => panic!("expected Coalesced, got {other:?}"),
         }
@@ -655,9 +725,10 @@ mod tests {
             other => panic!("expected Coalesced, got {other:?}"),
         };
 
-        assert_eq!(v["params"]["format"], "events_v1");
-        assert_eq!(v["params"]["channel_id"], "555");
-        assert_eq!(v["method"], "notifications/claude/channel/batch");
+        assert_eq!(v["method"], "notifications/claude/channel");
+        assert_eq!(v["params"]["meta"]["chat_id"], "555");
+        assert_eq!(v["params"]["meta"]["format"], "events_v1");
+        assert_eq!(v["params"]["meta"]["type"], "batch");
 
         let content = v["params"]["content"].as_str().unwrap();
         let expected = "\
@@ -700,22 +771,23 @@ hey everyone!
             other => panic!("expected Coalesced, got {other:?}"),
         };
 
-        assert_eq!(v["method"], "notifications/claude/channel/batch");
-        assert_eq!(v["params"]["format"], "multi");
+        assert_eq!(v["method"], "notifications/claude/channel");
+        assert_eq!(v["params"]["meta"]["format"], "multi");
+        assert_eq!(v["params"]["meta"]["type"], "batch");
 
-        let notifications = v["params"]["notifications"].as_array().unwrap();
-        assert_eq!(notifications.len(), 2);
-
-        // First: trace notification params (extracted from full notification).
-        let trace = &notifications[0];
-        assert_eq!(trace["content"], "channel 555 passed gate");
-        assert_eq!(trace["meta"]["type"], "trace");
-        assert_eq!(trace["meta"]["level"], "info");
-        assert_eq!(trace["meta"]["target"], "dione::gate");
-
-        // Second: permission response params.
-        let perm = &notifications[1];
-        assert_eq!(perm["request_id"], "req-42");
-        assert_eq!(perm["behavior"], "allow");
+        // Content should contain both non-channel event texts.
+        let content = v["params"]["content"].as_str().unwrap();
+        assert!(content.contains("channel 555 passed gate"));
+        // PermissionResponse has no `content` field in its notification format
+        // (it uses `request_id`/`behavior`), so the coalescer falls back to
+        // compact JSON serialization of the params to avoid data loss.
+        assert!(
+            content.contains("req-42"),
+            "PermissionResponse request_id must survive coalescing"
+        );
+        assert!(
+            content.contains("allow"),
+            "PermissionResponse behavior must survive coalescing"
+        );
     }
 }
