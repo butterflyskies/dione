@@ -7,17 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.13.0] - 2026-06-19
+## [0.14.0] - 2026-06-20
 
 ### Added
-- `batch` module (`src/batch.rs`) with `serialize_batch()` — converts coalesced
-  `NotificationEvent::Message` vectors into a compact, human-readable text format
-  that uses far fewer tokens than individual JSON-RPC notifications. Format uses
-  a `[batch]` envelope header, a `[users]` roster for short-name-to-ID mapping,
-  and `|`-delimited message lines with optional reply-to and attachment count
-  suffixes. Extracted `MessageEvent` struct from `NotificationEvent` for cleaner
-  field access. 14 tests covering round-trip serialization, edge cases, and
-  timezone localization (#114).
 - `coalesce` module (`src/coalesce.rs`) — top-level event coalescing layer that
   sits between `DeliveryBuffer` and stdout. Routes flushed event batches into
   the optimal wire format: single events pass through as individual notifications,
@@ -37,6 +29,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `deliver_flushed()` integration in `mcp/server.rs` — replaces the old
   per-event stdout loop with a single `coalesce()` call that emits one
   JSON-RPC line per flush, regardless of how many events were buffered (#122).
+
+### Changed
+- `Timestamp` newtype replaces raw `String` timestamps throughout the codebase —
+  parsing happens once at construction, formatting is deferred to display (#122).
+- Timezone resolution lifted to startup — `deliver_flushed()` receives a
+  pre-resolved `Tz` instead of re-parsing the timezone string on every flush
+  (#122).
+
+### Fixed
+- Clippy lint cleanup across coalesce and event modules (#122).
+
+## [0.13.0] - 2026-06-19
+
+### Added
+- `batch` module (`src/batch.rs`) with `serialize_batch()` — converts coalesced
+  `NotificationEvent::Message` vectors into a compact, human-readable text format
+  that uses far fewer tokens than individual JSON-RPC notifications. Format uses
+  a `[batch]` envelope header, a `[users]` roster for short-name-to-ID mapping,
+  and `|`-delimited message lines with optional reply-to and attachment count
+  suffixes. Extracted `MessageEvent` struct from `NotificationEvent` for cleaner
+  field access. 14 tests covering round-trip serialization, edge cases, and
+  timezone localization (#114).
 
 ## [0.12.0] - 2026-06-14
 
