@@ -116,9 +116,16 @@ impl EventHandler for Handler {
     async fn message(&self, ctx: Context, msg: Message) {
         let config = crate::config::load_config(&self.state_dir);
 
-        // Allow bot messages only if the bot's user ID is in the allow_from list.
+        // Webhook messages from proxy bots (e.g. PluralKit) have author.bot=true
+        // but represent human speech. Check the webhook creator before dropping.
         if should_drop_bot_message(msg.author.bot, msg.author.id.get(), &config) {
-            return;
+            let dominated_by_proxy = match msg.webhook_id {
+                Some(wh_id) => is_proxy_webhook(&ctx.http, &self.state, wh_id.get()).await,
+                None => false,
+            };
+            if !dominated_by_proxy {
+                return;
+            }
         }
         let bot_user_id = self.bot_user_id.load(Ordering::Relaxed);
 
@@ -335,9 +342,21 @@ impl EventHandler for Handler {
 
         let config = crate::config::load_config(&self.state_dir);
 
-        // Allow bot messages only if the bot's user ID is in the allow_from list.
+        // Proxy bot webhook edits: same logic as message(), but webhook_id
+        // must be resolved from the full Message objects since
+        // MessageUpdateEvent doesn't carry it.
         if should_drop_bot_message(author.bot, author.id.get(), &config) {
-            return;
+            let webhook_id = new
+                .as_ref()
+                .and_then(|m| m.webhook_id)
+                .or_else(|| old_if_available.as_ref().and_then(|m| m.webhook_id));
+            let dominated_by_proxy = match webhook_id {
+                Some(wh_id) => is_proxy_webhook(&ctx.http, &self.state, wh_id.get()).await,
+                None => false,
+            };
+            if !dominated_by_proxy {
+                return;
+            }
         }
 
         let new_content = event
@@ -792,6 +811,56 @@ fn should_drop_bot_message(
     is_bot && !config.is_allowed(user_id)
 }
 
+/// Bot user IDs of known proxy bots (e.g. PluralKit) whose webhook messages
+/// should be treated as human-authored.
+const PROXY_BOT_IDS: &[u64] = &[
+    466378653216014359, // PluralKit
+];
+
+/// Checks whether a webhook was created by a known proxy bot.
+///
+/// First checks the in-memory cache, then falls back to a Discord API call
+/// to fetch the webhook's creator. Caches the result either way. PluralKit
+/// reuses webhooks per-channel, so the cache is very effective — typically
+/// one API call per channel, ever.
+async fn is_proxy_webhook(
+    http: &serenity::http::Http,
+    state: &crate::state::State,
+    webhook_id: u64,
+) -> bool {
+    // Check cache first.
+    {
+        let state = state.read().await;
+        if let Some(&is_proxy) = state.proxy_webhooks.get(&webhook_id) {
+            return is_proxy;
+        }
+    }
+
+    // Cache miss — ask Discord for the webhook's creator.
+    let is_proxy = match http.get_webhook(WebhookId::new(webhook_id)).await {
+        Ok(webhook) => webhook
+            .user
+            .as_ref()
+            .is_some_and(|u| PROXY_BOT_IDS.contains(&u.id.get())),
+        Err(e) => {
+            tracing::debug!(
+                webhook_id,
+                error = %e,
+                "failed to look up webhook for proxy bot detection"
+            );
+            false
+        }
+    };
+
+    // Cache the result.
+    {
+        let mut state = state.write().await;
+        state.record_proxy_webhook(webhook_id, is_proxy);
+    }
+
+    is_proxy
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -855,6 +924,26 @@ mod tests {
         assert!(
             should_drop_bot_message(true, 42, &config),
             "bot must be dropped when allow_from is empty"
+        );
+    }
+
+    // ── proxy bot constant tests ───────────────────────────────────────────────
+
+    /// PluralKit's bot ID is in the proxy bot list.
+    #[test]
+    fn test_pluralkit_is_in_proxy_bot_ids() {
+        assert!(
+            PROXY_BOT_IDS.contains(&466378653216014359),
+            "PluralKit bot ID must be in PROXY_BOT_IDS"
+        );
+    }
+
+    /// An arbitrary bot ID is not in the proxy bot list.
+    #[test]
+    fn test_random_bot_not_in_proxy_bot_ids() {
+        assert!(
+            !PROXY_BOT_IDS.contains(&123456789),
+            "arbitrary bot ID must not be in PROXY_BOT_IDS"
         );
     }
 
