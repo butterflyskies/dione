@@ -1,3 +1,4 @@
+pub mod branch_tracking;
 pub mod config;
 pub mod config_store;
 pub mod config_watcher;
