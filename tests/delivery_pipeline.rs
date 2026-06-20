@@ -5,6 +5,7 @@
 //! integration.
 
 use dione::{
+    coalesce::{CoalesceResult, coalesce},
     config::{ChannelConfig, Config, DeliveryConfig, LoadedConfig, RateLimitTomlConfig},
     delivery_buffer::{BufferResult, DeliveryBuffer},
     discord::events::{MessageEvent, NotificationEvent},
@@ -24,9 +25,13 @@ use std::{
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 fn msg_event(chat_id: u64, user_id: u64, content: &str) -> NotificationEvent {
+    msg_event_with_id(chat_id, user_id, 1, content)
+}
+
+fn msg_event_with_id(chat_id: u64, user_id: u64, msg_id: u64, content: &str) -> NotificationEvent {
     NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(chat_id),
-        message_id: MessageId::new(1),
+        message_id: MessageId::new(msg_id),
         user: format!("user-{user_id}"),
         user_id: UserId::new(user_id),
         content: content.to_string(),
@@ -1461,4 +1466,72 @@ fn multi_channel_flush_preserves_chat_ids() {
     assert_eq!(notifications[1]["params"]["content"], "ch1-second");
     assert_eq!(notifications[2]["params"]["meta"]["chat_id"], "2");
     assert_eq!(notifications[2]["params"]["content"], "ch2-first");
+}
+
+// ── Coalesced batch uses standard notification method ─────────────────────
+
+/// Regression test: 4 messages sent within the coalesce window must all
+/// arrive in a single coalesced notification using the standard
+/// `notifications/claude/channel` method — NOT `notifications/claude/channel/batch`
+/// which Claude Code silently drops.
+///
+/// Verifies the fix for the regression introduced in #122 (previously hit
+/// in #91/#94).
+#[test]
+fn coalesced_batch_uses_standard_method_and_contains_all_messages() {
+    let mut limiter = make_limiter(false, 100);
+    let mut buffer = DeliveryBuffer::new();
+    let now = Instant::now();
+
+    // Buffer 4 messages in the same channel within a 500ms window.
+    for i in 1..=4 {
+        let result = pipeline_step(
+            msg_event_with_id(42, 100 + i, i, &format!("message {i}")),
+            &mut limiter,
+            &mut buffer,
+            500,
+            now,
+        );
+        assert!(result.is_none(), "message {i} must be buffered with delay");
+    }
+
+    // Flush after the delay window expires.
+    let after_deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(600);
+    let flushed = buffer.flush_ready(after_deadline);
+    assert_eq!(flushed.len(), 4, "all 4 messages must flush together");
+
+    // Coalesce the flushed events into a single notification.
+    let result = coalesce(flushed, None);
+    let notification = match result {
+        Some(CoalesceResult::Coalesced(v)) => v,
+        other => panic!("expected Coalesced for 4 events, got {other:?}"),
+    };
+
+    // Critical assertion: the method MUST be the standard one that Claude Code
+    // recognizes. Using `notifications/claude/channel/batch` causes silent drops.
+    assert_eq!(
+        notification["method"], "notifications/claude/channel",
+        "coalesced batch must use standard notification method, not a custom one"
+    );
+
+    // Verify the standard params structure (content + meta).
+    assert!(
+        notification["params"]["content"].is_string(),
+        "coalesced notification must have a content string"
+    );
+    assert!(
+        notification["params"]["meta"].is_object(),
+        "coalesced notification must have a meta object"
+    );
+    assert_eq!(notification["params"]["meta"]["chat_id"], "42");
+    assert_eq!(notification["params"]["meta"]["type"], "batch");
+
+    // All 4 messages must be present in the content.
+    let content = notification["params"]["content"].as_str().unwrap();
+    for i in 1..=4 {
+        assert!(
+            content.contains(&format!("message {i}")),
+            "content must contain 'message {i}' but was:\n{content}"
+        );
+    }
 }
