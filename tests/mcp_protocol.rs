@@ -6,7 +6,7 @@
 //! only up to the gate-rejection path.
 
 use dione::{
-    discord::events::{AttachmentMeta, NotificationEvent},
+    discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
     mcp::server::{DioneServer, test_helpers},
     queue::AccessQueue,
     state::new_state,
@@ -633,7 +633,7 @@ async fn test_tools_call_list_access_requests_empty() {
 
 #[test]
 fn test_notification_has_no_id_field() {
-    let event = NotificationEvent::Message {
+    let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1),
         message_id: MessageId::new(2),
         user: "x".to_string(),
@@ -647,7 +647,7 @@ fn test_notification_has_no_id_field() {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-    };
+    });
     let notif = test_helpers::make_notification(event);
     assert!(
         notif.get("id").is_none(),
@@ -657,7 +657,7 @@ fn test_notification_has_no_id_field() {
 
 #[test]
 fn test_notification_attachment_metadata_present() {
-    let event = NotificationEvent::Message {
+    let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1),
         message_id: MessageId::new(2),
         user: "x".to_string(),
@@ -675,7 +675,7 @@ fn test_notification_attachment_metadata_present() {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-    };
+    });
     let notif = test_helpers::make_notification(event);
     let meta = &notif["params"]["meta"];
     assert_eq!(meta["attachment_count"], "1");
@@ -684,7 +684,7 @@ fn test_notification_attachment_metadata_present() {
 
 #[test]
 fn test_notification_voice_flag_in_meta() {
-    let event = NotificationEvent::Message {
+    let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1),
         message_id: MessageId::new(2),
         user: "x".to_string(),
@@ -698,7 +698,7 @@ fn test_notification_voice_flag_in_meta() {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-    };
+    });
     let notif = test_helpers::make_notification(event);
     assert_eq!(notif["params"]["meta"]["is_voice_message"], true);
 }
@@ -718,7 +718,7 @@ fn test_permission_deny_uses_deny_behavior() {
 
 #[test]
 fn test_notification_message_snapshot() {
-    let event = NotificationEvent::Message {
+    let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1000),
         message_id: MessageId::new(2000),
         user: "snapuser".to_string(),
@@ -732,7 +732,7 @@ fn test_notification_message_snapshot() {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-    };
+    });
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
 }
@@ -807,7 +807,7 @@ fn test_notification_message_delete_snapshot() {
 
 #[test]
 fn test_notification_message_in_thread_snapshot() {
-    let event = NotificationEvent::Message {
+    let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1000),
         message_id: MessageId::new(2000),
         user: "threaduser".to_string(),
@@ -821,7 +821,7 @@ fn test_notification_message_in_thread_snapshot() {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-    };
+    });
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
 }
@@ -830,7 +830,7 @@ fn test_notification_message_in_thread_snapshot() {
 
 #[test]
 fn test_notification_message_reply_snapshot() {
-    let event = NotificationEvent::Message {
+    let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1000),
         message_id: MessageId::new(2000),
         user: "replyuser".to_string(),
@@ -844,14 +844,14 @@ fn test_notification_message_reply_snapshot() {
         reply_to_user_id: Some(UserId::new(4444)),
         reply_to_user: Some("parentuser".to_string()),
         reply_to_content_preview: Some("the original message".to_string()),
-    };
+    });
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
 }
 
 #[test]
 fn test_notification_message_reply_in_thread_snapshot() {
-    let event = NotificationEvent::Message {
+    let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1000),
         message_id: MessageId::new(2000),
         user: "threaduser".to_string(),
@@ -865,7 +865,7 @@ fn test_notification_message_reply_in_thread_snapshot() {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-    };
+    });
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
 }
