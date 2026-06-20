@@ -131,6 +131,11 @@ pub async fn run(
     let mut rate_limiter = RateLimiter::new(config.rate_limit_runtime().clone());
     let mut delivery_buffer = DeliveryBuffer::new();
 
+    // Resolve timezone once at startup so `deliver_flushed` doesn't need to
+    // load config just for the tz. Updated opportunistically when we already
+    // load config per-event for the rate limiter.
+    let initial_tz = config.tz;
+
     let state_dir_notif = server.state_dir.clone();
 
     // Notification forwarding task.
@@ -140,6 +145,7 @@ pub async fn run(
     let notif_task = tokio::spawn(async move {
         let mut rx = event_rx;
         let mut events_since_prune: u64 = 0;
+        let mut tz = initial_tz;
         const PRUNE_INTERVAL: u64 = 100;
 
         loop {
@@ -163,8 +169,7 @@ pub async fn run(
                 } => {
                     let now = tokio::time::Instant::now();
                     let flushed = delivery_buffer.flush_ready(now);
-                    let cfg = crate::config::load_config(&state_dir_notif);
-                    deliver_flushed(&stdout_notif, flushed, cfg.tz).await;
+                    deliver_flushed(&stdout_notif, flushed, tz).await;
                 }
 
                 // New event arrives from Discord.
@@ -173,6 +178,10 @@ pub async fn run(
 
                     // Reload config from ArcSwap (cheap Arc pointer load).
                     let cfg = crate::config::load_config(&state_dir_notif);
+
+                    // Keep tz in sync with config changes so flushes use
+                    // the current value without a separate config load.
+                    tz = cfg.tz;
 
                     // Live-reload rate limiter config before the check so
                     // changes apply to the current event, not the next one.
@@ -238,8 +247,7 @@ pub async fn run(
 
         // Channel closed — flush any remaining buffered events.
         let remaining = delivery_buffer.flush_all();
-        let cfg = crate::config::load_config(&state_dir_notif);
-        deliver_flushed(&stdout_notif, remaining, cfg.tz).await;
+        deliver_flushed(&stdout_notif, remaining, tz).await;
     });
 
     // Main request loop.
