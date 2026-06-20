@@ -50,6 +50,7 @@ pub trait Embedder {
 /// Each field is `Option<f64>` — `None` means the signal is absent (e.g. no
 /// reply chain exists), and its weight is excluded from normalization.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct FeatureVector {
     /// 1.0 if the message replies to a message in this branch, 0.0 otherwise.
     pub reply_chain: Option<f64>,
@@ -91,10 +92,9 @@ impl FeatureVector {
         if pairs.is_empty() {
             return None;
         }
-        let (weighted_sum, weight_total) =
-            pairs.iter().fold((0.0, 0.0), |(ws, wt), &(val, w)| {
-                (ws + val * w, wt + w)
-            });
+        let (weighted_sum, weight_total) = pairs
+            .iter()
+            .fold((0.0, 0.0), |(ws, wt), &(val, w)| (ws + val * w, wt + w));
         if weight_total == 0.0 {
             None
         } else {
@@ -128,12 +128,16 @@ impl FeatureVector {
         if core_pairs.is_empty() {
             // No core signals — fall through to tiebreakers only.
             let bonus = self.tiebreaker_bonus(weights);
-            return if bonus > 0.0 { Some(bonus.min(1.0)) } else { None };
+            return if bonus > 0.0 {
+                Some(bonus.min(1.0))
+            } else {
+                None
+            };
         }
 
-        let (core_sum, core_weight) = core_pairs.iter().fold((0.0, 0.0), |(s, w), &(v, wt)| {
-            (s + v * wt, w + wt)
-        });
+        let (core_sum, core_weight) = core_pairs
+            .iter()
+            .fold((0.0, 0.0), |(s, w), &(v, wt)| (s + v * wt, w + wt));
         let base = if core_weight > 0.0 {
             core_sum / core_weight
         } else {
@@ -167,6 +171,7 @@ impl FeatureVector {
 
 /// Configurable weights for each signal in the feature vector.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ScoringWeights {
     pub reply_chain: f64,
     pub topic_similarity: f64,
@@ -202,6 +207,7 @@ impl Default for ScoringWeights {
 
 /// Configuration for the branch scoring system.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ScoringConfig {
     pub weights: ScoringWeights,
     /// Minimum score for a message to be assigned to an existing branch.
@@ -221,6 +227,7 @@ impl Default for ScoringConfig {
 
 /// A scored candidate branch.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct BranchScore {
     pub branch_id: u64,
     /// Normalized score in 0.0..=1.0.
@@ -231,6 +238,7 @@ pub struct BranchScore {
 
 /// How confident we are about a branch assignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AssignmentConfidence {
     /// Deterministic match (e.g. reply chain or thread shortcut).
     Deterministic,
@@ -390,10 +398,7 @@ pub fn temporal_decay(elapsed_secs: f64, half_life_secs: f64) -> f64 {
 ///
 /// Returns the fraction of `message_participants` that appear in
 /// `branch_participants`. Returns 0.0 if `message_participants` is empty.
-pub fn participant_overlap_ratio(
-    message_participants: &[u64],
-    branch_participants: &[u64],
-) -> f64 {
+pub fn participant_overlap_ratio(message_participants: &[u64], branch_participants: &[u64]) -> f64 {
     if message_participants.is_empty() {
         return 0.0;
     }
@@ -566,10 +571,7 @@ mod tests {
         // Manually: (1.0*0.8 + 0.8*0.4 + 0.5*0.3 + 0.7*0.3 + 1.0*0.2) / (0.8+0.4+0.3+0.3+0.2)
         //         = (0.8 + 0.32 + 0.15 + 0.21 + 0.2) / 2.0
         //         = 1.68 / 2.0 = 0.84
-        assert!(
-            (score - 0.84).abs() < 1e-9,
-            "expected 0.84, got {score}"
-        );
+        assert!((score - 0.84).abs() < 1e-9, "expected 0.84, got {score}");
     }
 
     #[test]
@@ -901,10 +903,7 @@ mod tests {
         let cascade = classify_cascade(&config, false, None, &candidates);
 
         match (&linear, &cascade) {
-            (
-                ClassificationResult::Assigned(a),
-                ClassificationResult::Assigned(b),
-            ) => {
+            (ClassificationResult::Assigned(a), ClassificationResult::Assigned(b)) => {
                 assert_eq!(a.branch_id, b.branch_id, "both should pick same branch");
                 assert_eq!(a.branch_id, 1);
             }
@@ -938,18 +937,12 @@ mod tests {
 
     #[test]
     fn confidence_levels() {
-        assert_eq!(
-            confidence_from_score(0.95, 0.6),
-            AssignmentConfidence::High
-        );
+        assert_eq!(confidence_from_score(0.95, 0.6), AssignmentConfidence::High);
         assert_eq!(
             confidence_from_score(0.75, 0.6),
             AssignmentConfidence::Moderate
         );
-        assert_eq!(
-            confidence_from_score(0.4, 0.6),
-            AssignmentConfidence::Low
-        );
+        assert_eq!(confidence_from_score(0.4, 0.6), AssignmentConfidence::Low);
     }
 
     // ── Custom threshold ─────────────────────────────────────────────────────
@@ -1078,7 +1071,10 @@ mod tests {
 
     #[test]
     fn confidence_display() {
-        assert_eq!(format!("{}", AssignmentConfidence::Deterministic), "deterministic");
+        assert_eq!(
+            format!("{}", AssignmentConfidence::Deterministic),
+            "deterministic"
+        );
         assert_eq!(format!("{}", AssignmentConfidence::High), "high");
         assert_eq!(format!("{}", AssignmentConfidence::Moderate), "moderate");
         assert_eq!(format!("{}", AssignmentConfidence::Low), "low");
