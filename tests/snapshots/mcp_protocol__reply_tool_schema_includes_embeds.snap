@@ -1,0 +1,63 @@
+---
+source: tests/mcp_protocol.rs
+expression: "props[\"embeds\"]"
+---
+{
+  "description": "Optional array of Discord embed objects (max 10)",
+  "items": {
+    "properties": {
+      "author": {
+        "description": "Author name (string) or object with name, optional url and icon_url"
+      },
+      "color": {
+        "description": "Embed color as integer or hex string (e.g. 3447003, \"#3498DB\", \"FF0000\")"
+      },
+      "description": {
+        "type": "string"
+      },
+      "fields": {
+        "items": {
+          "properties": {
+            "inline": {
+              "default": false,
+              "type": "boolean"
+            },
+            "name": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "value"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "footer": {
+        "description": "Footer text (string) or object with text and optional icon_url"
+      },
+      "image": {
+        "description": "Image URL (string) or object with url"
+      },
+      "thumbnail": {
+        "description": "Thumbnail URL (string) or object with url"
+      },
+      "timestamp": {
+        "description": "ISO 8601 timestamp",
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "url": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "type": "array"
+}

@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use camino::Utf8PathBuf;
 use serde_json::{Value, json};
-use serenity::builder::{CreateAllowedMentions, CreateAttachment, CreateMessage, EditMessage};
+use serenity::builder::{
+    CreateAllowedMentions, CreateAttachment, CreateEmbed, CreateMessage, EditMessage,
+};
 use serenity::http::MessagePagination;
 use serenity::model::Timestamp;
 use serenity::model::channel::Message;
@@ -47,6 +49,7 @@ pub async fn reply(
     content: &str,
     reply_to_message_id: Option<MessageId>,
     suppress_ping: bool,
+    embeds: Vec<CreateEmbed>,
 ) -> Value {
     if let Err(e) = check_outbound(ctx, channel_id).await {
         return e;
@@ -75,6 +78,13 @@ pub async fn reply(
 
     for (i, chunk_text) in chunks.iter().enumerate() {
         let mut builder = CreateMessage::new().content(*chunk_text);
+
+        // Attach embeds to the first chunk only — Discord renders them
+        // below the message text, so attaching to every chunk would
+        // duplicate them visually.
+        if i == 0 && !embeds.is_empty() {
+            builder = builder.embeds(embeds.clone());
+        }
 
         // Reply threading.
         let should_reply = match reply_mode {
@@ -383,7 +393,12 @@ pub(crate) async fn create_dm_channel(
 
 // ── send_dm ──────────────────────────────────────────────────────────────────
 
-pub async fn send_dm(ctx: &MessagingCtx, user_id: UserId, content: &str) -> Value {
+pub async fn send_dm(
+    ctx: &MessagingCtx,
+    user_id: UserId,
+    content: &str,
+    embeds: Vec<CreateEmbed>,
+) -> Value {
     if ctx.config.access.dm_policy == DmPolicy::Disabled {
         return json!({ "error": "dm_policy is set to disabled; cannot initiate DMs" });
     }
@@ -400,7 +415,7 @@ pub async fn send_dm(ctx: &MessagingCtx, user_id: UserId, content: &str) -> Valu
         state.record_dm_channel(user_id.get(), channel_id.get());
     }
 
-    let result = reply(ctx, channel_id, content, None, false).await;
+    let result = reply(ctx, channel_id, content, None, false, embeds).await;
 
     if result.get("error").is_some() {
         return result;

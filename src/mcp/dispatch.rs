@@ -9,6 +9,7 @@ use crate::mcp::tools::{
     access::{approve_access, deny_access, list_access_requests},
     bot_state::send_typing,
     diagnostics::{get_version, set_stderr_level, set_trace_level},
+    embed::parse_embeds,
     introspection::{
         get_channel, get_member, get_user, list_channels, list_emojis, list_guilds, list_roles,
     },
@@ -53,7 +54,11 @@ pub(crate) async fn call_tool(
                 .get("suppress_ping")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            reply(&ctx, channel_id, content, reply_to, suppress_ping).await
+            let embeds = match args.get("embeds") {
+                Some(v) => parse_embeds(v).map_err(|e| format!("invalid embeds: {e}"))?,
+                None => Vec::new(),
+            };
+            reply(&ctx, channel_id, content, reply_to, suppress_ping, embeds).await
         }
         "react" => {
             let ctx = server.messaging_ctx(config.clone());
@@ -118,7 +123,11 @@ pub(crate) async fn call_tool(
                 .get("content")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing content".to_string())?;
-            send_dm(&ctx, user_id, content).await
+            let embeds = match args.get("embeds") {
+                Some(v) => parse_embeds(v).map_err(|e| format!("invalid embeds: {e}"))?,
+                None => Vec::new(),
+            };
+            send_dm(&ctx, user_id, content, embeds).await
         }
 
         // Introspection

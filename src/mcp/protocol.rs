@@ -24,16 +24,20 @@ pub(crate) fn initialize_response() -> Value {
 pub(crate) fn tools_list() -> Value {
     json!({
         "tools": [
-            tool("reply", "Send a reply to a Discord channel or DM", json!({
-                "type": "object",
-                "required": ["channel_id", "content"],
-                "properties": {
+            tool("reply", "Send a reply to a Discord channel or DM. Supports optional rich embeds.", {
+                let mut props = json!({
                     "channel_id": { "type": "string", "description": "Discord channel ID" },
-                    "content": { "type": "string", "description": "Message content" },
+                    "content": { "type": "string", "description": "Message content (plain text)" },
                     "reply_to_message_id": { "type": "string", "description": "Optional message ID to reply to" },
                     "suppress_ping": { "type": "boolean", "description": "When true, the reply will not ping the user being replied to (default: false)" }
-                }
-            })),
+                });
+                props.as_object_mut().unwrap().insert("embeds".into(), embed_schema());
+                json!({
+                    "type": "object",
+                    "required": ["channel_id", "content"],
+                    "properties": props
+                })
+            }),
             tool("react", "Add a reaction to a message", json!({
                 "type": "object",
                 "required": ["channel_id", "message_id", "emoji"],
@@ -94,14 +98,18 @@ pub(crate) fn tools_list() -> Value {
                     "caption": { "type": "string", "description": "Optional message text to accompany the file" }
                 }
             })),
-            tool("send_dm", "Initiate a DM conversation with a Discord user and send a message", json!({
-                "type": "object",
-                "required": ["user_id", "content"],
-                "properties": {
+            tool("send_dm", "Initiate a DM conversation with a Discord user and send a message. Supports optional rich embeds.", {
+                let mut props = json!({
                     "user_id": { "type": "string", "description": "Discord user ID to send the DM to" },
                     "content": { "type": "string", "description": "Message content to send" }
-                }
-            })),
+                });
+                props.as_object_mut().unwrap().insert("embeds".into(), embed_schema());
+                json!({
+                    "type": "object",
+                    "required": ["user_id", "content"],
+                    "properties": props
+                })
+            }),
             tool("list_guilds", "List guilds the bot is in", json!({
                 "type": "object",
                 "properties": {}
@@ -312,5 +320,43 @@ pub(crate) fn tool(name: &str, description: &str, input_schema: Value) -> Value 
         "name": name,
         "description": description,
         "inputSchema": input_schema,
+    })
+}
+
+/// JSON Schema for the `embeds` parameter shared by `reply` and `send_dm`.
+///
+/// Built programmatically to avoid hitting the `json!` macro recursion limit
+/// on deeply nested schemas.
+fn embed_schema() -> Value {
+    let field_schema = json!({
+        "type": "object",
+        "required": ["name", "value"],
+        "properties": {
+            "name": { "type": "string" },
+            "value": { "type": "string" },
+            "inline": { "type": "boolean", "default": false }
+        }
+    });
+
+    let item_schema = json!({
+        "type": "object",
+        "properties": {
+            "title": { "type": "string" },
+            "description": { "type": "string" },
+            "url": { "type": "string" },
+            "color": { "description": "Embed color as integer or hex string (e.g. 3447003, \"#3498DB\", \"FF0000\")" },
+            "timestamp": { "type": "string", "description": "ISO 8601 timestamp" },
+            "footer": { "description": "Footer text (string) or object with text and optional icon_url" },
+            "author": { "description": "Author name (string) or object with name, optional url and icon_url" },
+            "thumbnail": { "description": "Thumbnail URL (string) or object with url" },
+            "image": { "description": "Image URL (string) or object with url" },
+            "fields": { "type": "array", "items": field_schema }
+        }
+    });
+
+    json!({
+        "type": "array",
+        "description": "Optional array of Discord embed objects (max 10)",
+        "items": item_schema
     })
 }

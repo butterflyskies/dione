@@ -1210,3 +1210,142 @@ async fn test_reply_suppress_ping_false_passes_gate_with_configured_channel() {
     );
     insta::assert_json_snapshot!(resp["result"]);
 }
+
+// ── embed tests ─────────────────────────────────────────────────────────────
+
+#[test]
+fn test_reply_tool_schema_includes_embeds() {
+    let list = test_helpers::get_tools_list();
+    let tools = list["tools"].as_array().expect("tools must be an array");
+
+    let reply_tool = tools
+        .iter()
+        .find(|t| t["name"] == "reply")
+        .expect("reply tool must exist in tools/list");
+
+    let props = &reply_tool["inputSchema"]["properties"];
+    assert!(
+        props.get("embeds").is_some(),
+        "reply tool schema must include embeds property"
+    );
+    insta::assert_json_snapshot!(props["embeds"]);
+}
+
+#[test]
+fn test_send_dm_tool_schema_includes_embeds() {
+    let list = test_helpers::get_tools_list();
+    let tools = list["tools"].as_array().expect("tools must be an array");
+
+    let send_dm_tool = tools
+        .iter()
+        .find(|t| t["name"] == "send_dm")
+        .expect("send_dm tool must exist in tools/list");
+
+    let props = &send_dm_tool["inputSchema"]["properties"];
+    assert!(
+        props.get("embeds").is_some(),
+        "send_dm tool schema must include embeds property"
+    );
+}
+
+#[tokio::test]
+async fn test_reply_with_embeds_passes_gate_with_configured_channel() {
+    let (_dir, state_dir) = temp_state_dir();
+
+    let mut config = dione::config::Config::default();
+    config.channels.push(dione::config::ChannelConfig {
+        id: "100101".to_string(),
+        require_mention: false,
+        allow_from: vec![],
+        ..Default::default()
+    });
+    let _config = set_global_config(config);
+    let server = make_server(&state_dir);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 60,
+        "method": "tools/call",
+        "params": {
+            "name": "reply",
+            "arguments": {
+                "channel_id": "100101",
+                "content": "check out this embed",
+                "embeds": [{
+                    "title": "Test Embed",
+                    "description": "Embed description",
+                    "color": 3447003,
+                    "fields": [
+                        { "name": "Field 1", "value": "Value 1", "inline": true }
+                    ]
+                }]
+            }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    // Should pass the gate (fail at Discord HTTP, not at gate rejection).
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        !text.contains("not a permitted outbound target"),
+        "reply with embeds should have passed the outbound gate, got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn test_reply_with_invalid_embeds_returns_error() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+
+    // embeds must be an array, not a string.
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 61,
+        "method": "tools/call",
+        "params": {
+            "name": "reply",
+            "arguments": {
+                "channel_id": "999999",
+                "content": "hello",
+                "embeds": "not an array"
+            }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    // Dispatch should return an error about invalid embeds.
+    assert!(
+        resp.get("error").is_some(),
+        "invalid embeds should produce an error response: {resp}"
+    );
+    let error_msg = resp["error"]["message"].as_str().unwrap_or("");
+    assert!(
+        error_msg.contains("embeds"),
+        "error message should mention embeds: {error_msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_reply_without_embeds_still_works() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+
+    // Reply without embeds — backward compatibility.
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 62,
+        "method": "tools/call",
+        "params": {
+            "name": "reply",
+            "arguments": {
+                "channel_id": "999999",
+                "content": "just text"
+            }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    // Should reach the gate (not a parsing error).
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("not a permitted outbound target"),
+        "reply without embeds should reach the gate check, got: {text}"
+    );
+}
