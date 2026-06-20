@@ -1,4 +1,5 @@
 pub mod batch;
+pub mod branch_tracking;
 pub mod coalesce;
 pub mod config;
 pub mod config_store;
