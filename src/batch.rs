@@ -21,7 +21,7 @@
 //! ```
 
 use crate::discord::events::{MessageEvent, NotificationEvent};
-use chrono::{DateTime, Timelike, Utc};
+use crate::timestamp::format_compact;
 use chrono_tz::Tz;
 use serenity::model::id::{ChannelId, UserId};
 use std::collections::BTreeMap;
@@ -170,35 +170,13 @@ fn build_roster<'a>(messages: &[&'a MessageEvent]) -> Roster<'a> {
 
 /// Format a timestamp string for batch output.
 ///
-/// Converts to the given timezone (or UTC if `None`) and emits a compact
-/// `HH:MM` or `HH:MM:SS` format depending on whether seconds are zero.
+/// Delegates to [`crate::timestamp::format_compact`] for the shared compact
+/// `HH:MM` / `HH:MM:SS` logic, wrapping parse errors into [`BatchError`].
 fn format_timestamp(raw: &str, tz: Option<Tz>) -> Result<String, BatchError> {
-    let dt =
-        raw.parse::<DateTime<chrono::FixedOffset>>()
-            .map_err(|e| BatchError::TimestampParse {
-                ts: raw.to_owned(),
-                source: e,
-            })?;
-
-    // Convert to the target timezone. Both branches produce a type that
-    // implements `Timelike`, so we unify through (hour, minute, second).
-    let (h, m, s) = match tz {
-        Some(tz) => {
-            let local = dt.with_timezone(&tz);
-            (local.hour(), local.minute(), local.second())
-        }
-        None => {
-            let utc = dt.with_timezone(&Utc);
-            (utc.hour(), utc.minute(), utc.second())
-        }
-    };
-
-    // Compact format: HH:MM if seconds are zero, HH:MM:SS otherwise.
-    if s == 0 {
-        Ok(format!("{h:02}:{m:02}"))
-    } else {
-        Ok(format!("{h:02}:{m:02}:{s:02}"))
-    }
+    format_compact(raw, tz).map_err(|e| BatchError::TimestampParse {
+        ts: raw.to_owned(),
+        source: e,
+    })
 }
 
 // ── Writers ──────────────────────────────────────────────────────────────────
@@ -245,12 +223,12 @@ impl MessageEvent {
     /// Without this, `"text\n".lines()` returns 1 but `writeln!("{}", "text\n")`
     /// emits 2 lines (off-by-one), and `"".lines()` returns 0 but
     /// `writeln!("{}", "")` emits a line (desync).
-    fn normalized_content(&self) -> &str {
+    pub(crate) fn normalized_content(&self) -> &str {
         self.content.trim_end_matches('\n')
     }
 
     /// Number of lines in the normalized content. Returns 0 for empty content.
-    fn content_line_count(&self) -> usize {
+    pub(crate) fn content_line_count(&self) -> usize {
         let content = self.normalized_content();
         if content.is_empty() {
             0

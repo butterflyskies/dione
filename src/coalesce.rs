@@ -29,7 +29,7 @@
 
 use crate::batch::{BatchContext, serialize_batch};
 use crate::discord::events::{MessageEvent, NotificationEvent};
-use chrono::{DateTime, Timelike, Utc};
+use crate::timestamp::format_compact;
 use chrono_tz::Tz;
 use serde_json::{Value, json};
 use serenity::model::id::{ChannelId, UserId};
@@ -215,6 +215,20 @@ fn coalesce_channel_group(events: Vec<NotificationEvent>, tz: Option<Tz>) -> Val
 
 // ── Heterogeneous serialization ─────────────────────────────────────────────
 
+/// Normalize content for serialization: strip trailing newlines.
+///
+/// Mirrors [`MessageEvent::normalized_content`] for non-message content strings.
+fn normalize_content(s: &str) -> &str {
+    s.trim_end_matches('\n')
+}
+
+/// Count lines in normalized content. Returns 0 for empty strings.
+///
+/// Mirrors [`MessageEvent::content_line_count`] for non-message content strings.
+fn count_lines(s: &str) -> usize {
+    if s.is_empty() { 0 } else { s.lines().count() }
+}
+
 /// User roster for heterogeneous batches.
 type Roster = BTreeMap<UserId, String>;
 
@@ -305,12 +319,8 @@ fn write_event_entry(out: &mut String, event: &NotificationEvent, roster: &Roste
         } => {
             let name = roster.get(user_id).map(|s| s.as_str()).unwrap_or("?");
             let ts = format_timestamp(timestamp, tz);
-            let content = new_content.trim_end_matches('\n');
-            let line_count = if content.is_empty() {
-                0
-            } else {
-                content.lines().count()
-            };
+            let content = normalize_content(new_content);
+            let line_count = count_lines(content);
             writeln!(out, "!edit|{message_id}|{ts}|{name}|L={line_count}").unwrap();
             if !content.is_empty() {
                 writeln!(out, "{content}").unwrap();
@@ -342,12 +352,8 @@ fn write_message_entry(out: &mut String, msg: &MessageEvent, roster: &Roster, tz
         .get(&msg.user_id)
         .map(|s| s.as_str())
         .unwrap_or(msg.user.as_str());
-    let content = msg.content.trim_end_matches('\n');
-    let line_count = if content.is_empty() {
-        0
-    } else {
-        content.lines().count()
-    };
+    let content = msg.normalized_content();
+    let line_count = msg.content_line_count();
 
     // Header: MSG_ID|TS|NAME|L=LINES[|>REPLY_TO][|+ATTACHMENTS]
     write!(out, "{}|{}|{}|L={}", msg.message_id, ts, name, line_count).unwrap();
@@ -393,28 +399,12 @@ fn coalesce_non_channel_events(events: Vec<NotificationEvent>) -> Value {
 
 // ── Timestamp formatting ────────────────────────────────────────────────────
 
-/// Format a timestamp for batch output. Mirrors `batch::format_timestamp`.
+/// Format a timestamp for events_v1 output.
+///
+/// Delegates to [`crate::timestamp::format_compact`]; falls back to the raw
+/// string on parse failure (events_v1 is best-effort, not Result-based).
 fn format_timestamp(raw: &str, tz: Option<Tz>) -> String {
-    let Ok(dt) = raw.parse::<DateTime<chrono::FixedOffset>>() else {
-        return raw.to_string();
-    };
-
-    let (h, m, s) = match tz {
-        Some(tz) => {
-            let local = dt.with_timezone(&tz);
-            (local.hour(), local.minute(), local.second())
-        }
-        None => {
-            let utc = dt.with_timezone(&Utc);
-            (utc.hour(), utc.minute(), utc.second())
-        }
-    };
-
-    if s == 0 {
-        format!("{h:02}:{m:02}")
-    } else {
-        format!("{h:02}:{m:02}:{s:02}")
-    }
+    format_compact(raw, tz).unwrap_or_else(|_| raw.to_string())
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -615,5 +605,124 @@ mod tests {
             }
             other => panic!("expected Coalesced, got {other:?}"),
         }
+    }
+
+    // ── Wire-contract snapshots ─────────────────────────────────────────
+
+    #[test]
+    fn wire_format_snapshot_events_v1() {
+        // Pin the events_v1 heterogeneous envelope format.
+        // A message, a reaction, an edit, and a delete — the four event types
+        // that appear in a mixed-event batch for a single channel.
+        let tz: chrono_tz::Tz = "US/Eastern".parse().expect("valid tz");
+
+        let events = vec![
+            NotificationEvent::Message(MessageEvent {
+                chat_id: ChannelId::new(555),
+                message_id: MessageId::new(3001),
+                user: "lina".to_string(),
+                user_id: UserId::new(10),
+                content: "hey everyone".to_string(),
+                timestamp: "2026-06-19T20:00:00+00:00".to_string(),
+                attachments: vec![],
+                is_voice_message: false,
+                thread_parent_id: Some(ChannelId::new(666)),
+                reply_to_message_id: None,
+                reply_to_user_id: None,
+                reply_to_user: None,
+                reply_to_content_preview: None,
+            }),
+            NotificationEvent::Reaction {
+                chat_id: ChannelId::new(555),
+                message_id: MessageId::new(3001),
+                user: "ros".to_string(),
+                user_id: UserId::new(20),
+                emoji: "\u{2764}\u{fe0f}".to_string(),
+            },
+            NotificationEvent::MessageEdit {
+                chat_id: ChannelId::new(555),
+                message_id: MessageId::new(3001),
+                user: "lina".to_string(),
+                user_id: UserId::new(10),
+                new_content: "hey everyone!".to_string(),
+                timestamp: "2026-06-19T20:01:00+00:00".to_string(),
+                thread_parent_id: Some(ChannelId::new(666)),
+                reply_to_message_id: None,
+            },
+            NotificationEvent::MessageDelete {
+                chat_id: ChannelId::new(555),
+                message_id: MessageId::new(2999),
+                thread_parent_id: Some(ChannelId::new(666)),
+            },
+        ];
+
+        let result = coalesce(events, Some(tz));
+        let v = match result {
+            Some(CoalesceResult::Coalesced(v)) => v,
+            other => panic!("expected Coalesced, got {other:?}"),
+        };
+
+        assert_eq!(v["params"]["format"], "events_v1");
+        assert_eq!(v["params"]["channel_id"], "555");
+        assert_eq!(v["method"], "notifications/claude/channel/batch");
+
+        let content = v["params"]["content"].as_str().unwrap();
+        let expected = "\
+[events ch=555 thread=666 n=4 tz=US/Eastern]
+[users 10=lina 20=ros]
+
+3001|16:00|lina|L=1
+hey everyone
+
+!react|3001|ros|\u{2764}\u{fe0f}
+
+!edit|3001|16:01|lina|L=1
+hey everyone!
+
+!delete|2999
+";
+        assert_eq!(content, expected);
+    }
+
+    #[test]
+    fn wire_format_snapshot_multi() {
+        // Pin the multi-envelope format: two trace events wrapped as
+        // individual notifications inside a "multi" batch.
+        let events = vec![
+            NotificationEvent::Trace {
+                level: "info".to_string(),
+                target: "dione::gate".to_string(),
+                message: "channel 555 passed gate".to_string(),
+                fields: vec![],
+            },
+            NotificationEvent::PermissionResponse {
+                request_id: "req-42".to_string(),
+                granted: true,
+            },
+        ];
+
+        let result = coalesce(events, None);
+        let v = match result {
+            Some(CoalesceResult::Coalesced(v)) => v,
+            other => panic!("expected Coalesced, got {other:?}"),
+        };
+
+        assert_eq!(v["method"], "notifications/claude/channel/batch");
+        assert_eq!(v["params"]["format"], "multi");
+
+        let notifications = v["params"]["notifications"].as_array().unwrap();
+        assert_eq!(notifications.len(), 2);
+
+        // First: trace notification params (extracted from full notification).
+        let trace = &notifications[0];
+        assert_eq!(trace["content"], "channel 555 passed gate");
+        assert_eq!(trace["meta"]["type"], "trace");
+        assert_eq!(trace["meta"]["level"], "info");
+        assert_eq!(trace["meta"]["target"], "dione::gate");
+
+        // Second: permission response params.
+        let perm = &notifications[1];
+        assert_eq!(perm["request_id"], "req-42");
+        assert_eq!(perm["behavior"], "allow");
     }
 }

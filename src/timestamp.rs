@@ -1,3 +1,33 @@
+use chrono::{DateTime, Timelike, Utc};
+use chrono_tz::Tz;
+
+// ── Compact batch timestamp ─────────────────────────────────────────────────
+
+/// Format an RFC3339 timestamp as compact `HH:MM` (or `HH:MM:SS` when seconds
+/// are non-zero), converted to `tz` (or UTC when `None`).
+///
+/// Used by both `batch.rs` and `coalesce.rs` for wire-format timestamps.
+pub(crate) fn format_compact(raw: &str, tz: Option<Tz>) -> Result<String, chrono::ParseError> {
+    let dt = raw.parse::<DateTime<chrono::FixedOffset>>()?;
+
+    let (h, m, s) = match tz {
+        Some(tz) => {
+            let local = dt.with_timezone(&tz);
+            (local.hour(), local.minute(), local.second())
+        }
+        None => {
+            let utc = dt.with_timezone(&Utc);
+            (utc.hour(), utc.minute(), utc.second())
+        }
+    };
+
+    if s == 0 {
+        Ok(format!("{h:02}:{m:02}"))
+    } else {
+        Ok(format!("{h:02}:{m:02}:{s:02}"))
+    }
+}
+
 // ── LocalTimestamp newtype ───────────────────────────────────────────────────
 
 /// An RFC3339 timestamp string that has already been converted to the
