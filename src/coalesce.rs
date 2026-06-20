@@ -133,24 +133,18 @@ fn all_messages(events: &[NotificationEvent]) -> bool {
 fn find_thread_parent(events: &[NotificationEvent]) -> Option<ChannelId> {
     for event in events {
         match event {
-            NotificationEvent::Message(msg) => {
-                if msg.thread_parent_id.is_some() {
-                    return msg.thread_parent_id;
-                }
+            NotificationEvent::Message(msg) if msg.thread_parent_id.is_some() => {
+                return msg.thread_parent_id;
             }
             NotificationEvent::MessageEdit {
                 thread_parent_id, ..
-            } => {
-                if thread_parent_id.is_some() {
-                    return *thread_parent_id;
-                }
+            } if thread_parent_id.is_some() => {
+                return *thread_parent_id;
             }
             NotificationEvent::MessageDelete {
                 thread_parent_id, ..
-            } => {
-                if thread_parent_id.is_some() {
-                    return *thread_parent_id;
-                }
+            } if thread_parent_id.is_some() => {
+                return *thread_parent_id;
             }
             _ => {}
         }
