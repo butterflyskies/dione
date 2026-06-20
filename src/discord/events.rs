@@ -2,6 +2,7 @@ use crate::{
     gate::{GateDecision, InboundGate, MentionDetector},
     mcp::tools::messaging::create_dm_channel,
     queue::AccessRequest,
+    timestamp::Timestamp,
 };
 use serenity::{
     async_trait,
@@ -32,7 +33,7 @@ pub struct MessageEvent {
     pub user: String,
     pub user_id: UserId,
     pub content: String,
-    pub timestamp: String,
+    pub timestamp: Timestamp,
     pub attachments: Vec<AttachmentMeta>,
     pub is_voice_message: bool,
     /// If the message was sent in a thread, the parent channel ID.
@@ -75,7 +76,7 @@ pub enum NotificationEvent {
         user: String,
         user_id: UserId,
         new_content: String,
-        timestamp: String,
+        timestamp: Timestamp,
         /// If the edit was in a thread, the parent channel ID.
         thread_parent_id: Option<ChannelId>,
         /// If the edited message is a reply, the ID of the message being replied to.
@@ -381,9 +382,7 @@ impl EventHandler for Handler {
             state.cache_username(author.id.get(), author.name.clone());
         }
 
-        let timestamp = config
-            .localize_rfc3339(&serenity_ts_to_rfc3339("edited_ts", &edited_ts))
-            .into();
+        let timestamp = config.localize_rfc3339(&serenity_ts_to_rfc3339("edited_ts", &edited_ts));
 
         // message_reference is Option<Option<MessageReference>> in update events:
         // outer Option = field present in update, inner Option = nullable value.
@@ -685,8 +684,7 @@ fn build_message_event(
         user_id: msg.author.id,
         content: msg.content.clone(),
         timestamp: config
-            .localize_rfc3339(&serenity_ts_to_rfc3339("msg.timestamp", &msg.timestamp))
-            .into(),
+            .localize_rfc3339(&serenity_ts_to_rfc3339("msg.timestamp", &msg.timestamp)),
         attachments,
         is_voice_message,
         thread_parent_id: thread_parent_id.map(ChannelId::new),

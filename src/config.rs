@@ -9,7 +9,7 @@ use regex::RegexSet;
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::timestamp::LocalTimestamp;
+use crate::timestamp::Timestamp;
 
 // ── Error type ───────────────────────────────────────────────────────────────
 
@@ -366,25 +366,36 @@ impl LoadedConfig {
             .unwrap_or(self.raw.delivery.delivery_delay_ms)
     }
 
-    /// Convert a `chrono::DateTime<Utc>` to a [`LocalTimestamp`] in the configured timezone.
-    pub fn localize_utc(&self, utc: &chrono::DateTime<chrono::Utc>) -> LocalTimestamp {
-        let s = match self.tz {
-            Some(tz) => utc.with_timezone(&tz).to_rfc3339(),
-            None => utc.to_rfc3339(),
+    /// Convert a `chrono::DateTime<Utc>` to a [`Timestamp`] in the configured timezone.
+    pub fn localize_utc(&self, utc: &chrono::DateTime<chrono::Utc>) -> Timestamp {
+        let dt = match self.tz {
+            Some(tz) => utc.with_timezone(&tz).fixed_offset(),
+            None => utc.fixed_offset(),
         };
-        LocalTimestamp(s)
+        Timestamp(dt)
     }
 
-    /// Convert an RFC3339 timestamp string to a [`LocalTimestamp`] in the configured timezone.
-    pub fn localize_rfc3339(&self, rfc3339: &str) -> LocalTimestamp {
-        let s = match self.tz {
-            Some(tz) => match chrono::DateTime::parse_from_rfc3339(rfc3339) {
-                Ok(dt) => dt.with_timezone(&tz).to_rfc3339(),
-                Err(_) => rfc3339.to_owned(),
-            },
-            None => rfc3339.to_owned(),
+    /// Convert an RFC3339 timestamp string to a [`Timestamp`] in the configured timezone.
+    ///
+    /// If parsing fails, falls back to the current UTC time (localized to the
+    /// configured timezone). Callers should ensure input is valid — the fallback
+    /// exists only as a safety net.
+    pub fn localize_rfc3339(&self, rfc3339: &str) -> Timestamp {
+        let dt = match chrono::DateTime::parse_from_rfc3339(rfc3339) {
+            Ok(dt) => dt,
+            Err(_) => {
+                tracing::warn!(
+                    input = rfc3339,
+                    "failed to parse RFC3339 timestamp; falling back to current UTC"
+                );
+                chrono::Utc::now().fixed_offset()
+            }
         };
-        LocalTimestamp(s)
+        let localized = match self.tz {
+            Some(tz) => dt.with_timezone(&tz).fixed_offset(),
+            None => dt,
+        };
+        Timestamp(localized)
     }
 }
 

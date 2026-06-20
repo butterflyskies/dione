@@ -150,6 +150,7 @@ fn extract_channel_id(event: &NotificationEvent) -> u64 {
 mod tests {
     use super::*;
     use crate::discord::events::MessageEvent;
+    use crate::timestamp::Timestamp;
     use serenity::model::id::{ChannelId, MessageId, UserId};
 
     fn msg_event(chat_id: u64) -> NotificationEvent {
@@ -159,7 +160,7 @@ mod tests {
             user: "alice".to_string(),
             user_id: UserId::new(100),
             content: "hello".to_string(),
-            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
@@ -267,7 +268,7 @@ mod tests {
             user: "carol".to_string(),
             user_id: UserId::new(300),
             content: "world".to_string(),
-            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
@@ -312,6 +313,7 @@ mod tests {
 mod proptests {
     use super::*;
     use crate::discord::events::MessageEvent;
+    use crate::timestamp::Timestamp;
     use proptest::prelude::*;
     use serenity::model::id::{ChannelId, MessageId, UserId};
 
@@ -368,7 +370,7 @@ mod proptests {
                     user: "user".to_string(),
                     user_id: UserId::new(100),
                     content: format!("evt-{i}"),
-                    timestamp: "2026-01-01T00:00:00Z".to_string(),
+                    timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                     attachments: vec![],
                     is_voice_message: false,
                     thread_parent_id: None,
@@ -437,7 +439,7 @@ mod proptests {
                     user: "user".to_string(),
                     user_id: UserId::new(100),
                     content: format!("order-{i}"),
-                    timestamp: "2026-01-01T00:00:00Z".to_string(),
+                    timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                     attachments: vec![],
                     is_voice_message: false,
                     thread_parent_id: None,
@@ -481,7 +483,7 @@ mod proptests {
                     user: "user".to_string(),
                     user_id: UserId::new(100),
                     content: format!("evt-{i}"),
-                    timestamp: "2026-01-01T00:00:00Z".to_string(),
+                    timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                     attachments: vec![],
                     is_voice_message: false,
                     thread_parent_id: None,

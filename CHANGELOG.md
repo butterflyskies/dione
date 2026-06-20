@@ -18,6 +18,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   suffixes. Extracted `MessageEvent` struct from `NotificationEvent` for cleaner
   field access. 14 tests covering round-trip serialization, edge cases, and
   timezone localization (#114).
+- `coalesce` module (`src/coalesce.rs`) — top-level event coalescing layer that
+  sits between `DeliveryBuffer` and stdout. Routes flushed event batches into
+  the optimal wire format: single events pass through as individual notifications,
+  homogeneous message batches use the `batch_v1` compact format, and mixed-type
+  batches (messages + edits + reactions + deletes) use the new `events_v1`
+  heterogeneous format. Cross-channel flushes produce a multi-envelope wrapper
+  that groups per-channel envelopes (#122).
+- `events_v1` wire format — heterogeneous event serialization with `[events]`
+  header, `[users]` roster, and typed event lines (`!edit`, `!react`, `!delete`)
+  interspersed with message entries. Covers the full event taxonomy: messages,
+  edits, reactions, deletes, and graceful fallback for trace/config/permission
+  events (#122).
+- `multi` envelope format for non-channel events (Trace, PermissionResponse,
+  ConfigError) — wraps individual notification params in a
+  `{ format: "multi", notifications: [...] }` batch when 2+ non-channel events
+  flush together (#122).
+- `deliver_flushed()` integration in `mcp/server.rs` — replaces the old
+  per-event stdout loop with a single `coalesce()` call that emits one
+  JSON-RPC line per flush, regardless of how many events were buffered (#122).
 
 ## [0.12.0] - 2026-06-14
 

@@ -13,6 +13,7 @@ use dione::{
         ChannelRef, OverflowPolicy, ParticipantId, RateLimitConfig, RateLimitDecision, RateLimiter,
         ScopeConfig,
     },
+    timestamp::Timestamp,
 };
 use serenity::model::id::{ChannelId, MessageId, UserId};
 use std::{
@@ -29,7 +30,7 @@ fn msg_event(chat_id: u64, user_id: u64, content: &str) -> NotificationEvent {
         user: format!("user-{user_id}"),
         user_id: UserId::new(user_id),
         content: content.to_string(),
-        timestamp: "2026-01-01T00:00:00Z".to_string(),
+        timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: false,
         thread_parent_id: None,
@@ -79,7 +80,7 @@ fn edit_event(chat_id: u64, user_id: u64) -> NotificationEvent {
         user: format!("user-{user_id}"),
         user_id: UserId::new(user_id),
         new_content: "edited content".to_string(),
-        timestamp: "2026-01-01T00:00:01Z".to_string(),
+        timestamp: Timestamp::parse("2026-01-01T00:00:01Z").unwrap(),
         thread_parent_id: None,
         reply_to_message_id: None,
     }
@@ -688,7 +689,7 @@ fn notification_format_preserved_through_pipeline() {
         user: "alice".to_string(),
         user_id: UserId::new(100),
         content: "hello world".to_string(),
-        timestamp: "2026-06-08T12:00:00Z".to_string(),
+        timestamp: Timestamp::parse("2026-06-08T12:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: false,
         thread_parent_id: Some(ChannelId::new(9001)),
