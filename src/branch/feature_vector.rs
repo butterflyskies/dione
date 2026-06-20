@@ -50,7 +50,6 @@ pub trait Embedder {
 /// Each field is `Option<f64>` — `None` means the signal is absent (e.g. no
 /// reply chain exists), and its weight is excluded from normalization.
 #[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
 pub struct FeatureVector {
     /// 1.0 if the message replies to a message in this branch, 0.0 otherwise.
     pub reply_chain: Option<f64>,
@@ -171,7 +170,6 @@ impl FeatureVector {
 
 /// Configurable weights for each signal in the feature vector.
 #[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
 pub struct ScoringWeights {
     pub reply_chain: f64,
     pub topic_similarity: f64,
@@ -207,7 +205,6 @@ impl Default for ScoringWeights {
 
 /// Configuration for the branch scoring system.
 #[derive(Debug, Clone)]
-#[non_exhaustive]
 pub struct ScoringConfig {
     pub weights: ScoringWeights,
     /// Minimum score for a message to be assigned to an existing branch.
@@ -227,7 +224,6 @@ impl Default for ScoringConfig {
 
 /// A scored candidate branch.
 #[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
 pub struct BranchScore {
     pub branch_id: u64,
     /// Normalized score in 0.0..=1.0.
@@ -238,7 +234,6 @@ pub struct BranchScore {
 
 /// How confident we are about a branch assignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum AssignmentConfidence {
     /// Deterministic match (e.g. reply chain or thread shortcut).
     Deterministic,
@@ -262,7 +257,6 @@ impl fmt::Display for AssignmentConfidence {
 }
 
 /// Result of classifying a message into a branch.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClassificationResult {
     /// The message is assigned to an existing branch.
