@@ -42,21 +42,6 @@ impl std::fmt::Display for Probability {
     }
 }
 
-/// A positive rate parameter (messages per second or expected gap).
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-pub struct PositiveRate(f64);
-
-impl PositiveRate {
-    /// Create a positive rate, clamping to `[f64::MIN_POSITIVE, f64::MAX]`.
-    pub fn new(r: f64) -> Self {
-        Self(r.max(f64::MIN_POSITIVE))
-    }
-
-    pub fn value(self) -> f64 {
-        self.0
-    }
-}
-
 // ── Configuration ───────────────────────────────────────────────────────────
 
 /// Configuration for the CPD layer, shared by both detector implementations.
@@ -540,20 +525,6 @@ mod tests {
     fn probability_constants() {
         assert_eq!(Probability::ONE.value(), 1.0);
         assert_eq!(Probability::ZERO.value(), 0.0);
-    }
-
-    // ── PositiveRate newtype ───────────────────────────────────────────
-
-    #[test]
-    fn positive_rate_clamps_zero() {
-        let r = PositiveRate::new(0.0);
-        assert!(r.value() > 0.0);
-    }
-
-    #[test]
-    fn positive_rate_preserves_positive() {
-        let r = PositiveRate::new(42.0);
-        assert_eq!(r.value(), 42.0);
     }
 
     // ── RunLengthDistribution ─────────────────────────────────────────

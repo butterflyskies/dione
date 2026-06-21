@@ -240,17 +240,17 @@ impl Branch {
     }
 
     /// Check and update dormancy state based on elapsed time.
+    ///
+    /// Only transitions Active -> Dormant. Dormant -> Active transitions
+    /// happen exclusively in `record_message` when a new message arrives.
     pub(crate) fn update_dormancy(&mut self, now: Instant, dormancy_multiplier: f64) {
-        if self.state == BranchState::New {
-            return; // Don't transition New -> Dormant.
+        if self.state != BranchState::Active {
+            return; // Only Active branches can go Dormant via time elapsed.
         }
         let elapsed = now.duration_since(self.last_active_at).as_secs_f64();
         let threshold = self.rate.estimate() * dormancy_multiplier;
         if elapsed > threshold {
             self.state = BranchState::Dormant;
-        } else if self.state == BranchState::Dormant {
-            // If we're within threshold, reactivate.
-            self.state = BranchState::Active;
         }
     }
 }
