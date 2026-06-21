@@ -208,6 +208,15 @@ pub trait ChangePointDetector {
         rate: f64,
         config: &CpdConfig,
     ) -> Verdict;
+
+    /// Whether this detector should be gated by `min_confidence`.
+    ///
+    /// The Bayesian detector produces `Uncertain` when confidence is low;
+    /// the lightweight detector only produces `ChangePoint`/`Continuation`
+    /// and should not be gated.
+    fn requires_confidence_gate(&self) -> bool {
+        false
+    }
 }
 
 // ── Exponential PDF ────────────────────────────────────────────────────────
@@ -238,6 +247,10 @@ impl BayesianDetector {
 }
 
 impl ChangePointDetector for BayesianDetector {
+    fn requires_confidence_gate(&self) -> bool {
+        true
+    }
+
     fn detect(
         &self,
         dist: &mut RunLengthDistribution,
@@ -459,11 +472,15 @@ pub fn detect_and_update(
     gap: f64,
     config: &CpdConfig,
 ) -> Verdict {
-    // Gate on confidence for the Bayesian detector.
-    let confidence = branch.rate_confidence();
-    if confidence < config.min_confidence {
-        branch.increment_run_length();
-        return Verdict::Uncertain { confidence };
+    // Gate on confidence — only applies to detectors that require it
+    // (BayesianDetector). LightweightDetector produces only ChangePoint/
+    // Continuation and should not be gated.
+    if detector.requires_confidence_gate() {
+        let confidence = branch.rate_confidence();
+        if confidence < config.min_confidence {
+            branch.increment_run_length();
+            return Verdict::Uncertain { confidence };
+        }
     }
 
     let rate = branch.rate_estimate();
