@@ -200,22 +200,11 @@ impl Pipeline {
                 let branch_participants = branch.participants().as_raw_ids();
 
                 // Reply chain: check if reply_to maps to this branch.
-                let reply_match = input
-                    .reply_to
-                    .and_then(|reply_id| {
-                        // Check via the tracker's channel state.
-                        // We look at the message-branch mapping.
-                        self.tracker
-                            .branch(input.channel_id, branch_id)
-                            .is_some()
-                            .then_some(reply_id)
-                    })
-                    .is_some_and(|_reply_id| {
-                        // Approximate: if the branch exists and contains the
-                        // reply target, it's a match. The full mapping check
-                        // happens in assign_default.
-                        false // Conservative: let assign_default handle reply chains.
-                    });
+                let reply_match = input.reply_to.is_some_and(|reply_id| {
+                    self.tracker
+                        .branch_for_message(input.channel_id, reply_id)
+                        .is_some_and(|bid| bid == branch_id)
+                });
 
                 let elapsed_secs = now.duration_since(branch.last_active_at()).as_secs_f64();
 

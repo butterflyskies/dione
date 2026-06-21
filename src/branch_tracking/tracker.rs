@@ -139,6 +139,17 @@ impl BranchTracker {
             .and_then(|cs| cs.branches.get_mut(&branch_id))
     }
 
+    /// Look up which branch a message was assigned to (for reply-chain matching).
+    pub fn branch_for_message(
+        &self,
+        channel_id: ChannelId,
+        message_id: MessageId,
+    ) -> Option<BranchId> {
+        self.channels
+            .get(&channel_id)
+            .and_then(|cs| cs.branch_for_message(message_id))
+    }
+
     /// Iterate over all branches in a channel (for feature vector scoring).
     pub fn branches_in_channel(
         &self,
