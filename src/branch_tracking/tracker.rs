@@ -223,22 +223,18 @@ impl MessageAnnotator for BranchTracker {
     fn annotate(&mut self, input: &MessageInput<'_>, branch_id: BranchId) -> BranchAnnotation {
         let channel = ensure_channel(&mut self.channels, &self.config, input.channel_id);
 
-        // If the branch doesn't exist yet (new branch from feature vector),
-        // create it.
-        if let std::collections::hash_map::Entry::Vacant(e) = channel.branches.entry(branch_id) {
-            let rate = make_rate_estimator(&self.config);
-            let branch = Branch::new(branch_id, rate, input.timestamp);
-            e.insert(branch);
+        // Ensure the branch exists (new branch from feature vector) and get
+        // a mutable reference in one step — no panic path.
+        let dormancy_multiplier = self.config.dormancy_multiplier;
+        let reactivation_boost = self.config.reactivation_alpha_boost;
+        let branch = channel.branches.entry(branch_id).or_insert_with(|| {
             // Advance the counter past this ID if needed.
             if branch_id.raw() >= channel.next_branch_id {
                 channel.next_branch_id = branch_id.raw() + 1;
             }
-        }
-
-        // Record the message on the branch.
-        let dormancy_multiplier = self.config.dormancy_multiplier;
-        let reactivation_boost = self.config.reactivation_alpha_boost;
-        let branch = channel.branches.get_mut(&branch_id).expect("just ensured");
+            let rate = make_rate_estimator(&self.config);
+            Branch::new(branch_id, rate, input.timestamp)
+        });
         branch.record_message(
             input.user_id,
             input.timestamp,
