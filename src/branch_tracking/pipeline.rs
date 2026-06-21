@@ -131,11 +131,25 @@ impl Pipeline {
             }
         };
 
+        // Compute the raw inter-message gap *before* annotate() updates
+        // last_active_at. CPD needs the raw observation, not the
+        // EWMA-smoothed rate estimate.
+        let observed_gap = self
+            .tracker
+            .branch(input.channel_id, branch_id)
+            .map(|b| {
+                input
+                    .timestamp
+                    .duration_since(b.last_active_at())
+                    .as_secs_f64()
+            })
+            .unwrap_or(0.0);
+
         // Step 4: Annotate (updates rate estimate, participants, timestamps).
         let annotation = self.tracker.annotate(input, branch_id);
 
-        // Step 5: CPD.
-        let gap = annotation.rate_estimate;
+        // Step 5: CPD — pass raw gap, not smoothed rate.
+        let gap = observed_gap;
         let dist = self
             .distributions
             .entry((input.channel_id, branch_id))
