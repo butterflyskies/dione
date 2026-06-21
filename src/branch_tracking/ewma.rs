@@ -45,6 +45,18 @@ impl EwmaEstimator {
             observations: 0,
         }
     }
+
+    /// Core observation logic parameterized by alpha.
+    fn observe_with_alpha(&mut self, gap_secs: f64, alpha: f64) {
+        if self.observations == 0 {
+            // First observation snaps (effectively alpha=1.0).
+            self.estimate = gap_secs;
+        } else {
+            // EWMA: estimate = alpha * observed + (1 - alpha) * previous
+            self.estimate = alpha * gap_secs + (1.0 - alpha) * self.estimate;
+        }
+        self.observations = self.observations.saturating_add(1);
+    }
 }
 
 impl RateEstimator for EwmaEstimator {
@@ -61,24 +73,12 @@ impl RateEstimator for EwmaEstimator {
     }
 
     fn observe(&mut self, gap_secs: f64) {
-        if self.observations == 0 {
-            // First observation snaps (effectively alpha=1.0).
-            self.estimate = gap_secs;
-        } else {
-            // EWMA: estimate = alpha * observed + (1 - alpha) * previous
-            self.estimate = self.alpha * gap_secs + (1.0 - self.alpha) * self.estimate;
-        }
-        self.observations = self.observations.saturating_add(1);
+        self.observe_with_alpha(gap_secs, self.alpha);
     }
 
     fn observe_boosted(&mut self, gap_secs: f64, alpha_boost: f64) {
         let boosted_alpha = (self.alpha * alpha_boost).min(1.0);
-        if self.observations == 0 {
-            self.estimate = gap_secs;
-        } else {
-            self.estimate = boosted_alpha * gap_secs + (1.0 - boosted_alpha) * self.estimate;
-        }
-        self.observations = self.observations.saturating_add(1);
+        self.observe_with_alpha(gap_secs, boosted_alpha);
     }
 }
 
@@ -172,8 +172,7 @@ impl RateEstimator for WindowedMedianEstimator {
     fn observe_boosted(&mut self, gap_secs: f64, _alpha_boost: f64) {
         // Windowed median has no alpha to boost — just observe normally.
         // The outlier robustness of median makes boosting unnecessary.
-        self.push(gap_secs);
-        self.observations = self.observations.saturating_add(1);
+        self.observe(gap_secs);
     }
 }
 
