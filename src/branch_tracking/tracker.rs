@@ -246,6 +246,14 @@ impl MessageAnnotator for BranchTracker {
             let rate = make_rate_estimator(&self.config);
             Branch::new(branch_id, rate, input.timestamp)
         });
+        // Capture the raw inter-message gap before record_message updates
+        // last_active_at. The channel-wide rate needs the raw observation,
+        // not the EWMA-smoothed estimate.
+        let raw_gap = input
+            .timestamp
+            .duration_since(branch.last_active_at())
+            .as_secs_f64();
+
         branch.record_message(
             input.user_id,
             input.timestamp,
@@ -262,10 +270,9 @@ impl MessageAnnotator for BranchTracker {
             run_length: branch.run_length(),
         };
 
-        // Feed the branch's observed gap into the channel-wide composite rate.
-        let gap = branch.rate_estimate();
+        // Feed the raw observed gap into the channel-wide composite rate.
         if branch.observation_count() > 0 {
-            channel.channel_rate.observe(gap);
+            channel.channel_rate.observe(raw_gap);
         }
 
         // Record message -> branch mapping.
