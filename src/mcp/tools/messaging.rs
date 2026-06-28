@@ -189,9 +189,9 @@ pub async fn fetch_messages(ctx: &MessagingCtx, channel_id: ChannelId, limit: u8
     }
 }
 
-/// Serializes one message into the wire shape shared by `fetch_messages` and
-/// `fetch_new_since`, so the two tools cannot drift apart.
-fn message_json(config: &LoadedConfig, m: &Message) -> Value {
+/// Serializes one message into the wire shape shared by `fetch_messages`,
+/// `fetch_new_since`, and `search_messages`, so the tools cannot drift apart.
+pub(crate) fn message_json(config: &LoadedConfig, m: &Message) -> Value {
     json!({
         "id": m.id.get().to_string(),
         "author": m.author.name,

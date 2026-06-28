@@ -5,3 +5,4 @@ pub mod introspection;
 pub mod management;
 pub mod messaging;
 pub mod render;
+pub mod search;
