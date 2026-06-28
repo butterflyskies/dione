@@ -4,11 +4,12 @@ use std::fmt;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use serenity::model::id::GuildId;
+use serenity::model::id::{ChannelId, GuildId, UserId};
 use thiserror::Error;
 
 use super::messaging::{MessagingCtx, check_outbound, message_json};
 use crate::gate::OutboundGate;
+use crate::mcp::ids::Snowflake;
 
 // ── Error type ───────────────────────────────────────────────────────────────
 
@@ -141,6 +142,77 @@ impl fmt::Display for SortOrder {
     }
 }
 
+// ── ID vector deserialization ───────────────────────────────────────────────
+
+/// Deserializes a single snowflake ID or an array of IDs from string or numeric
+/// JSON values, validating each as a nonzero u64.
+fn deserialize_id_vec<'de, D>(deserializer: D) -> Result<Vec<Snowflake>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct IdVecVisitor;
+
+    impl<'de> de::Visitor<'de> for IdVecVisitor {
+        type Value = Vec<Snowflake>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a snowflake ID or array of snowflake IDs (string or number)")
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            let sf = Snowflake::new(v).ok_or_else(|| E::custom("snowflake ID must be nonzero"))?;
+            Ok(vec![sf])
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            let n: u64 = v.parse().map_err(E::custom)?;
+            let sf = Snowflake::new(n).ok_or_else(|| E::custom("snowflake ID must be nonzero"))?;
+            Ok(vec![sf])
+        }
+
+        fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut ids = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+            while let Some(elem) = seq.next_element::<Value>()? {
+                let n = match &elem {
+                    Value::Number(n) => n
+                        .as_u64()
+                        .ok_or_else(|| de::Error::custom("ID must be a positive integer"))?,
+                    Value::String(s) => s
+                        .parse::<u64>()
+                        .map_err(|_| de::Error::custom(format!("invalid ID: {s}")))?,
+                    _ => return Err(de::Error::custom("ID must be a string or number")),
+                };
+                let sf = Snowflake::new(n)
+                    .ok_or_else(|| de::Error::custom("snowflake ID must be nonzero"))?;
+                ids.push(sf);
+            }
+            Ok(ids)
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+    }
+
+    deserializer.deserialize_any(IdVecVisitor)
+}
+
+fn deserialize_user_ids<'de, D>(deserializer: D) -> Result<Vec<UserId>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserialize_id_vec(deserializer).map(|v| v.into_iter().map(Snowflake::user).collect())
+}
+
+fn deserialize_channel_ids<'de, D>(deserializer: D) -> Result<Vec<ChannelId>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserialize_id_vec(deserializer).map(|v| v.into_iter().map(Snowflake::channel).collect())
+}
+
 // ── Search parameters ───────────────────────────────────────────────────────
 
 /// Parameters for [`search_messages`], deserialized from MCP tool arguments.
@@ -151,10 +223,10 @@ impl fmt::Display for SortOrder {
 pub struct SearchParams {
     #[serde(default)]
     pub content: Option<String>,
-    #[serde(default)]
-    pub author_id: Option<String>,
-    #[serde(default)]
-    pub mentions: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_user_ids")]
+    pub author_id: Vec<UserId>,
+    #[serde(default, deserialize_with = "deserialize_user_ids")]
+    pub mentions: Vec<UserId>,
     #[serde(default)]
     pub has: Vec<SearchHas>,
     /// ISO 8601 date (YYYY-MM-DD). Converted to a `max_id` snowflake.
@@ -163,8 +235,8 @@ pub struct SearchParams {
     /// ISO 8601 date (YYYY-MM-DD). Converted to a `min_id` snowflake.
     #[serde(default)]
     pub after: Option<String>,
-    #[serde(default)]
-    pub channel_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_channel_ids")]
+    pub channel_id: Vec<ChannelId>,
     #[serde(default)]
     pub sort_by: Option<SortBy>,
     #[serde(default)]
@@ -179,12 +251,12 @@ impl SearchParams {
     /// Returns `true` if at least one search filter is set.
     fn has_any_filter(&self) -> bool {
         self.content.is_some()
-            || self.author_id.is_some()
-            || self.mentions.is_some()
+            || !self.author_id.is_empty()
+            || !self.mentions.is_empty()
             || !self.has.is_empty()
             || self.before.is_some()
             || self.after.is_some()
-            || self.channel_id.is_some()
+            || !self.channel_id.is_empty()
     }
 }
 
@@ -224,17 +296,10 @@ pub async fn search_messages(ctx: &MessagingCtx, guild_id: GuildId, params: Sear
         return json!({ "error": SearchError::NoFilters.to_string() });
     }
 
-    // If channel_id is specified, validate it against the outbound gate.
-    if let Some(ref ch_id_str) = params.channel_id {
-        match ch_id_str.parse::<u64>() {
-            Ok(0) => return json!({ "error": "invalid channel_id: must be nonzero" }),
-            Ok(ch_id) => {
-                let channel_id = serenity::model::id::ChannelId::new(ch_id);
-                if let Err(e) = check_outbound(ctx, channel_id).await {
-                    return e;
-                }
-            }
-            Err(_) => return json!({ "error": "invalid channel_id: not a valid u64" }),
+    // Validate each channel_id against the outbound gate.
+    for &ch_id in &params.channel_id {
+        if let Err(e) = check_outbound(ctx, ch_id).await {
+            return e;
         }
     }
 
@@ -244,11 +309,11 @@ pub async fn search_messages(ctx: &MessagingCtx, guild_id: GuildId, params: Sear
     if let Some(ref content) = params.content {
         query.push(("content", content.clone()));
     }
-    if let Some(ref author_id) = params.author_id {
-        query.push(("author_id", author_id.clone()));
+    for id in &params.author_id {
+        query.push(("author_id", id.get().to_string()));
     }
-    if let Some(ref mentions) = params.mentions {
-        query.push(("mentions", mentions.clone()));
+    for id in &params.mentions {
+        query.push(("mentions", id.get().to_string()));
     }
     for h in &params.has {
         query.push(("has", h.to_string()));
@@ -265,8 +330,8 @@ pub async fn search_messages(ctx: &MessagingCtx, guild_id: GuildId, params: Sear
             Err(e) => return json!({ "error": e.to_string() }),
         }
     }
-    if let Some(ref channel_id) = params.channel_id {
-        query.push(("channel_id", channel_id.clone()));
+    for id in &params.channel_id {
+        query.push(("channel_id", id.get().to_string()));
     }
     if let Some(sort_by) = params.sort_by {
         query.push(("sort_by", sort_by.to_string()));
@@ -511,6 +576,9 @@ mod tests {
         let args = json!({ "content": "hello" });
         let params: SearchParams = serde_json::from_value(args).unwrap();
         assert_eq!(params.content.as_deref(), Some("hello"));
+        assert!(params.author_id.is_empty());
+        assert!(params.mentions.is_empty());
+        assert!(params.channel_id.is_empty());
         assert!(params.has.is_empty());
         assert!(params.limit.is_none());
         assert!(params.offset.is_none());
@@ -533,16 +601,70 @@ mod tests {
         });
         let params: SearchParams = serde_json::from_value(args).unwrap();
         assert_eq!(params.content.as_deref(), Some("hello"));
-        assert_eq!(params.author_id.as_deref(), Some("123"));
-        assert_eq!(params.mentions.as_deref(), Some("456"));
+        assert_eq!(params.author_id, vec![UserId::new(123)]);
+        assert_eq!(params.mentions, vec![UserId::new(456)]);
         assert_eq!(params.has, vec![SearchHas::Image, SearchHas::File]);
         assert_eq!(params.before.as_deref(), Some("2024-06-01"));
         assert_eq!(params.after.as_deref(), Some("2024-01-01"));
-        assert_eq!(params.channel_id.as_deref(), Some("789"));
+        assert_eq!(params.channel_id, vec![ChannelId::new(789)]);
         assert_eq!(params.sort_by, Some(SortBy::Timestamp));
         assert_eq!(params.sort_order, Some(SortOrder::Desc));
         assert_eq!(params.limit.unwrap().get(), 10);
         assert_eq!(params.offset.unwrap().get(), 25);
+    }
+
+    #[test]
+    fn search_params_deserializes_id_arrays() {
+        let args = json!({
+            "content": "hello",
+            "author_id": ["100", "200"],
+            "mentions": ["300"],
+            "channel_id": ["400", "500", "600"]
+        });
+        let params: SearchParams = serde_json::from_value(args).unwrap();
+        assert_eq!(params.author_id, vec![UserId::new(100), UserId::new(200)]);
+        assert_eq!(params.mentions, vec![UserId::new(300)]);
+        assert_eq!(
+            params.channel_id,
+            vec![
+                ChannelId::new(400),
+                ChannelId::new(500),
+                ChannelId::new(600)
+            ]
+        );
+    }
+
+    #[test]
+    fn search_params_deserializes_numeric_ids() {
+        let args = json!({
+            "content": "hello",
+            "author_id": 123,
+            "mentions": [456, 789]
+        });
+        let params: SearchParams = serde_json::from_value(args).unwrap();
+        assert_eq!(params.author_id, vec![UserId::new(123)]);
+        assert_eq!(params.mentions, vec![UserId::new(456), UserId::new(789)]);
+    }
+
+    #[test]
+    fn search_params_rejects_zero_id() {
+        let args = json!({ "author_id": "0" });
+        assert!(serde_json::from_value::<SearchParams>(args).is_err());
+
+        let args = json!({ "channel_id": 0 });
+        assert!(serde_json::from_value::<SearchParams>(args).is_err());
+
+        let args = json!({ "mentions": ["123", "0"] });
+        assert!(serde_json::from_value::<SearchParams>(args).is_err());
+    }
+
+    #[test]
+    fn search_params_rejects_non_numeric_id() {
+        let args = json!({ "author_id": "not-a-number" });
+        assert!(serde_json::from_value::<SearchParams>(args).is_err());
+
+        let args = json!({ "channel_id": ["123", "abc"] });
+        assert!(serde_json::from_value::<SearchParams>(args).is_err());
     }
 
     #[test]
