@@ -85,6 +85,28 @@ pub(crate) fn tools_list() -> Value {
                     "message_id": { "type": "string" }
                 }
             })),
+            tool("search_messages", "Search messages in a guild. At least one filter required. Results filtered to configured channels.", json!({
+                "type": "object",
+                "required": ["guild_id"],
+                "properties": {
+                    "guild_id": { "type": "string", "description": "Discord guild (server) ID to search" },
+                    "content": { "type": "string", "description": "Text content to search for" },
+                    "author_id": { "type": "string", "description": "Filter by message author ID" },
+                    "mentions": { "type": "string", "description": "Filter by mentioned user ID" },
+                    "has": {
+                        "type": "array",
+                        "items": { "type": "string", "enum": ["link", "embed", "file", "video", "image", "sound", "sticker"] },
+                        "description": "Filter by attachment type"
+                    },
+                    "before": { "type": "string", "description": "ISO 8601 date (YYYY-MM-DD); return messages before this date" },
+                    "after": { "type": "string", "description": "ISO 8601 date (YYYY-MM-DD); return messages after this date" },
+                    "channel_id": { "type": "string", "description": "Filter to a specific channel ID" },
+                    "sort_by": { "type": "string", "enum": ["timestamp", "relevance"], "description": "Sort field (default: timestamp)" },
+                    "sort_order": { "type": "string", "enum": ["asc", "desc"], "description": "Sort direction (default: desc)" },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 25, "default": 25, "description": "Results per page (1-25)" },
+                    "offset": { "type": "integer", "minimum": 0, "maximum": 9975, "default": 0, "description": "Pagination offset (0-9975)" }
+                }
+            })),
             tool("send_file", "Upload a file as an attachment to a Discord channel", json!({
                 "type": "object",
                 "required": ["channel_id", "file_path"],
