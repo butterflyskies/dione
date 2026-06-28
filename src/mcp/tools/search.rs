@@ -1,5 +1,6 @@
 //! Guild message search: wraps Discord's `GET /guilds/{guild_id}/messages/search`.
 
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
 use serde::Deserialize;
@@ -7,12 +8,18 @@ use serde_json::{Value, json};
 use serenity::model::id::{ChannelId, GuildId, UserId};
 use thiserror::Error;
 
-use super::messaging::{MessagingCtx, check_outbound, message_json};
+use super::messaging::{MessagingCtx, message_json};
 use crate::gate::OutboundGate;
 use crate::mcp::ids::Snowflake;
 
 // ── Error type ───────────────────────────────────────────────────────────────
 
+/// Validation errors for search parameters.
+///
+/// Used by [`SearchLimit`], [`SearchOffset`], and [`date_to_snowflake`] for
+/// typed validation. The top-level [`search_messages`] function converts these
+/// to `json!({"error": …})` strings, following the crate-wide convention
+/// where all tool handlers return `Value`.
 #[derive(Debug, Error)]
 pub enum SearchError {
     #[error(
@@ -223,8 +230,12 @@ where
 pub struct SearchParams {
     #[serde(default)]
     pub content: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_user_ids")]
-    pub author_id: Vec<UserId>,
+    #[serde(
+        default,
+        rename = "author_id",
+        deserialize_with = "deserialize_user_ids"
+    )]
+    pub author_ids: Vec<UserId>,
     #[serde(default, deserialize_with = "deserialize_user_ids")]
     pub mentions: Vec<UserId>,
     #[serde(default)]
@@ -235,8 +246,14 @@ pub struct SearchParams {
     /// ISO 8601 date (YYYY-MM-DD). Converted to a `min_id` snowflake.
     #[serde(default)]
     pub after: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_channel_ids")]
-    pub channel_id: Vec<ChannelId>,
+    #[serde(
+        default,
+        rename = "channel_id",
+        deserialize_with = "deserialize_channel_ids"
+    )]
+    pub channel_ids: Vec<ChannelId>,
+    #[serde(default)]
+    pub pinned: Option<bool>,
     #[serde(default)]
     pub sort_by: Option<SortBy>,
     #[serde(default)]
@@ -251,12 +268,13 @@ impl SearchParams {
     /// Returns `true` if at least one search filter is set.
     fn has_any_filter(&self) -> bool {
         self.content.is_some()
-            || !self.author_id.is_empty()
+            || !self.author_ids.is_empty()
             || !self.mentions.is_empty()
             || !self.has.is_empty()
             || self.before.is_some()
             || self.after.is_some()
-            || !self.channel_id.is_empty()
+            || !self.channel_ids.is_empty()
+            || self.pinned.is_some()
     }
 }
 
@@ -296,20 +314,13 @@ pub async fn search_messages(ctx: &MessagingCtx, guild_id: GuildId, params: Sear
         return json!({ "error": SearchError::NoFilters.to_string() });
     }
 
-    // Validate each channel_id against the outbound gate.
-    for &ch_id in &params.channel_id {
-        if let Err(e) = check_outbound(ctx, ch_id).await {
-            return e;
-        }
-    }
-
     // Build query parameters.
     let mut query: Vec<(&str, String)> = Vec::new();
 
     if let Some(ref content) = params.content {
         query.push(("content", content.clone()));
     }
-    for id in &params.author_id {
+    for id in &params.author_ids {
         query.push(("author_id", id.get().to_string()));
     }
     for id in &params.mentions {
@@ -330,8 +341,11 @@ pub async fn search_messages(ctx: &MessagingCtx, guild_id: GuildId, params: Sear
             Err(e) => return json!({ "error": e.to_string() }),
         }
     }
-    for id in &params.channel_id {
+    for id in &params.channel_ids {
         query.push(("channel_id", id.get().to_string()));
+    }
+    if let Some(pinned) = params.pinned {
+        query.push(("pinned", pinned.to_string()));
     }
     if let Some(sort_by) = params.sort_by {
         query.push(("sort_by", sort_by.to_string()));
@@ -396,17 +410,42 @@ pub async fn search_messages(ctx: &MessagingCtx, guild_id: GuildId, params: Sear
         Err(e) => return json!({ "error": format!("failed to parse response: {e}") }),
     };
 
-    let total_results = body["total_results"].as_u64().unwrap_or(0);
-
     // Discord returns [[Message, ...], ...] — nested arrays where the first
     // element of each inner array is the matching message.
     let raw_messages = match body["messages"].as_array() {
         Some(arr) => arr,
-        None => return json!({ "messages": [], "total_results": total_results }),
+        None => return json!({ "messages": [], "total_results": 0 }),
     };
 
     // Filter results to channels permitted by the outbound gate.
     let state = ctx.state.read().await;
+    let messages = filter_results(
+        &ctx.config,
+        &state.dm_channel_ids,
+        &state.thread_parents,
+        raw_messages,
+    );
+    drop(state);
+
+    json!({
+        "messages": messages,
+        "total_results": messages.len(),
+    })
+}
+
+// ── Result filtering ────────────────────────────────────────────────────────
+
+/// Filter search results to channels permitted by the outbound gate.
+///
+/// `raw_messages` is Discord's nested `[[Message, ...], ...]` format where the
+/// first element of each inner array is the matching message. Returns only
+/// messages from channels that pass the outbound gate check.
+fn filter_results(
+    config: &crate::config::LoadedConfig,
+    dm_channel_ids: &HashSet<u64>,
+    thread_parents: &BTreeMap<u64, Option<u64>>,
+    raw_messages: &[Value],
+) -> Vec<Value> {
     let mut messages: Vec<Value> = Vec::new();
 
     for group in raw_messages {
@@ -425,19 +464,15 @@ pub async fn search_messages(ctx: &MessagingCtx, guild_id: GuildId, params: Sear
             continue;
         }
 
-        if !OutboundGate::check_channel_with_threads(
-            &ctx.config,
-            ch_id,
-            &state.dm_channel_ids,
-            &state.thread_parents,
-        ) {
+        if !OutboundGate::check_channel_with_threads(config, ch_id, dm_channel_ids, thread_parents)
+        {
             continue;
         }
 
         // Deserialize into serenity Message for format parity via message_json.
         match serde_json::from_value::<serenity::model::channel::Message>(inner.clone()) {
             Ok(msg) => {
-                let mut msg_val = message_json(&ctx.config, &msg);
+                let mut msg_val = message_json(config, &msg);
                 // Add channel_id — search spans multiple channels.
                 if let Some(obj) = msg_val.as_object_mut() {
                     obj.insert(
@@ -456,12 +491,8 @@ pub async fn search_messages(ctx: &MessagingCtx, guild_id: GuildId, params: Sear
             }
         }
     }
-    drop(state);
 
-    json!({
-        "messages": messages,
-        "total_results": total_results,
-    })
+    messages
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -576,9 +607,9 @@ mod tests {
         let args = json!({ "content": "hello" });
         let params: SearchParams = serde_json::from_value(args).unwrap();
         assert_eq!(params.content.as_deref(), Some("hello"));
-        assert!(params.author_id.is_empty());
+        assert!(params.author_ids.is_empty());
         assert!(params.mentions.is_empty());
-        assert!(params.channel_id.is_empty());
+        assert!(params.channel_ids.is_empty());
         assert!(params.has.is_empty());
         assert!(params.limit.is_none());
         assert!(params.offset.is_none());
@@ -601,12 +632,12 @@ mod tests {
         });
         let params: SearchParams = serde_json::from_value(args).unwrap();
         assert_eq!(params.content.as_deref(), Some("hello"));
-        assert_eq!(params.author_id, vec![UserId::new(123)]);
+        assert_eq!(params.author_ids, vec![UserId::new(123)]);
         assert_eq!(params.mentions, vec![UserId::new(456)]);
         assert_eq!(params.has, vec![SearchHas::Image, SearchHas::File]);
         assert_eq!(params.before.as_deref(), Some("2024-06-01"));
         assert_eq!(params.after.as_deref(), Some("2024-01-01"));
-        assert_eq!(params.channel_id, vec![ChannelId::new(789)]);
+        assert_eq!(params.channel_ids, vec![ChannelId::new(789)]);
         assert_eq!(params.sort_by, Some(SortBy::Timestamp));
         assert_eq!(params.sort_order, Some(SortOrder::Desc));
         assert_eq!(params.limit.unwrap().get(), 10);
@@ -622,10 +653,10 @@ mod tests {
             "channel_id": ["400", "500", "600"]
         });
         let params: SearchParams = serde_json::from_value(args).unwrap();
-        assert_eq!(params.author_id, vec![UserId::new(100), UserId::new(200)]);
+        assert_eq!(params.author_ids, vec![UserId::new(100), UserId::new(200)]);
         assert_eq!(params.mentions, vec![UserId::new(300)]);
         assert_eq!(
-            params.channel_id,
+            params.channel_ids,
             vec![
                 ChannelId::new(400),
                 ChannelId::new(500),
@@ -642,7 +673,7 @@ mod tests {
             "mentions": [456, 789]
         });
         let params: SearchParams = serde_json::from_value(args).unwrap();
-        assert_eq!(params.author_id, vec![UserId::new(123)]);
+        assert_eq!(params.author_ids, vec![UserId::new(123)]);
         assert_eq!(params.mentions, vec![UserId::new(456), UserId::new(789)]);
     }
 
@@ -710,6 +741,114 @@ mod tests {
     fn search_params_has_any_filter_channel() {
         let p: SearchParams = serde_json::from_value(json!({"channel_id": "123"})).unwrap();
         assert!(p.has_any_filter());
+    }
+
+    #[test]
+    fn search_params_has_any_filter_author_id() {
+        let p: SearchParams = serde_json::from_value(json!({"author_id": "123"})).unwrap();
+        assert!(p.has_any_filter());
+    }
+
+    #[test]
+    fn search_params_has_any_filter_mentions() {
+        let p: SearchParams = serde_json::from_value(json!({"mentions": "456"})).unwrap();
+        assert!(p.has_any_filter());
+    }
+
+    #[test]
+    fn search_params_has_any_filter_after() {
+        let p: SearchParams = serde_json::from_value(json!({"after": "2024-06-01"})).unwrap();
+        assert!(p.has_any_filter());
+    }
+
+    #[test]
+    fn search_params_has_any_filter_pinned() {
+        let p: SearchParams = serde_json::from_value(json!({"pinned": true})).unwrap();
+        assert!(p.has_any_filter());
+    }
+
+    #[test]
+    fn search_params_has_any_filter_sort_by_alone_is_not_filter() {
+        let p: SearchParams = serde_json::from_value(json!({"sort_by": "timestamp"})).unwrap();
+        assert!(!p.has_any_filter(), "sort_by alone is not a search filter");
+    }
+
+    #[test]
+    fn search_params_has_any_filter_sort_order_alone_is_not_filter() {
+        let p: SearchParams = serde_json::from_value(json!({"sort_order": "desc"})).unwrap();
+        assert!(
+            !p.has_any_filter(),
+            "sort_order alone is not a search filter"
+        );
+    }
+
+    // ── filter_results ─────────────────────────────────────────────────────
+
+    #[test]
+    fn filter_results_omits_unconfigured_channels() {
+        use crate::config::{ChannelConfig, Config};
+
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        let config = crate::config::LoadedConfig::from_raw(raw);
+
+        let configured_msg = json!({
+            "id": "1",
+            "type": 0,
+            "channel_id": "42",
+            "author": {
+                "id": "1", "username": "test", "global_name": null,
+                "avatar": null, "discriminator": "0", "public_flags": 0
+            },
+            "content": "hello",
+            "timestamp": "2024-01-01T00:00:00.000000+00:00",
+            "edited_timestamp": null,
+            "tts": false,
+            "mention_everyone": false,
+            "mentions": [],
+            "mention_roles": [],
+            "attachments": [],
+            "embeds": [],
+            "pinned": false
+        });
+
+        let unconfigured_msg = json!({
+            "id": "2",
+            "type": 0,
+            "channel_id": "999",
+            "author": {
+                "id": "1", "username": "test", "global_name": null,
+                "avatar": null, "discriminator": "0", "public_flags": 0
+            },
+            "content": "secret",
+            "timestamp": "2024-01-01T00:00:00.000000+00:00",
+            "edited_timestamp": null,
+            "tts": false,
+            "mention_everyone": false,
+            "mentions": [],
+            "mention_roles": [],
+            "attachments": [],
+            "embeds": [],
+            "pinned": false
+        });
+
+        // Discord returns [[msg], [msg]] format.
+        let raw_messages = vec![json!([configured_msg]), json!([unconfigured_msg])];
+
+        let dm_ids = HashSet::new();
+        let thread_parents = BTreeMap::new();
+
+        let results = filter_results(&config, &dm_ids, &thread_parents, &raw_messages);
+
+        assert_eq!(
+            results.len(),
+            1,
+            "only the configured channel's message should survive"
+        );
+        assert_eq!(results[0]["channel_id"], "42");
     }
 
     // ── Enum Display ────────────────────────────────────────────────────────

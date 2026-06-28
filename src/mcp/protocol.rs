@@ -119,6 +119,7 @@ pub(crate) fn tools_list() -> Value {
                             { "type": "array", "items": { "type": "string" } }
                         ]
                     },
+                    "pinned": { "type": "boolean", "description": "Filter to pinned (true) or unpinned (false) messages" },
                     "sort_by": { "type": "string", "enum": ["timestamp", "relevance"], "description": "Sort field (default: timestamp)" },
                     "sort_order": { "type": "string", "enum": ["asc", "desc"], "description": "Sort direction (default: desc)" },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 25, "default": 25, "description": "Results per page (1-25)" },
