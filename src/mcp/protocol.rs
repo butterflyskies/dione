@@ -91,8 +91,20 @@ pub(crate) fn tools_list() -> Value {
                 "properties": {
                     "guild_id": { "type": "string", "description": "Discord guild (server) ID to search" },
                     "content": { "type": "string", "description": "Text content to search for" },
-                    "author_id": { "type": "string", "description": "Filter by message author ID" },
-                    "mentions": { "type": "string", "description": "Filter by mentioned user ID" },
+                    "author_id": {
+                        "description": "Filter by message author ID(s). Single string/number or array.",
+                        "oneOf": [
+                            { "type": "string" },
+                            { "type": "array", "items": { "type": "string" } }
+                        ]
+                    },
+                    "mentions": {
+                        "description": "Filter by mentioned user ID(s). Single string/number or array.",
+                        "oneOf": [
+                            { "type": "string" },
+                            { "type": "array", "items": { "type": "string" } }
+                        ]
+                    },
                     "has": {
                         "type": "array",
                         "items": { "type": "string", "enum": ["link", "embed", "file", "video", "image", "sound", "sticker"] },
@@ -100,7 +112,13 @@ pub(crate) fn tools_list() -> Value {
                     },
                     "before": { "type": "string", "description": "ISO 8601 date (YYYY-MM-DD); return messages before this date" },
                     "after": { "type": "string", "description": "ISO 8601 date (YYYY-MM-DD); return messages after this date" },
-                    "channel_id": { "type": "string", "description": "Filter to a specific channel ID" },
+                    "channel_id": {
+                        "description": "Filter to specific channel ID(s). Single string/number or array.",
+                        "oneOf": [
+                            { "type": "string" },
+                            { "type": "array", "items": { "type": "string" } }
+                        ]
+                    },
                     "sort_by": { "type": "string", "enum": ["timestamp", "relevance"], "description": "Sort field (default: timestamp)" },
                     "sort_order": { "type": "string", "enum": ["asc", "desc"], "description": "Sort direction (default: desc)" },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 25, "default": 25, "description": "Results per page (1-25)" },
