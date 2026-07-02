@@ -447,6 +447,27 @@ pub fn state_dir() -> Utf8PathBuf {
     Utf8PathBuf::from(home).join(".claude/channels/dione")
 }
 
+static CONFIG_PATH_OVERRIDE: std::sync::OnceLock<Utf8PathBuf> = std::sync::OnceLock::new();
+
+/// Set a custom config file path, overriding the default `state_dir/config.toml`.
+///
+/// Must be called before [`reload_config`]. Can only be set once; subsequent
+/// calls are no-ops.
+pub fn set_config_path(path: Utf8PathBuf) {
+    CONFIG_PATH_OVERRIDE.set(path).ok();
+}
+
+/// Returns the config file path.
+///
+/// If [`set_config_path`] was called, returns the override path.
+/// Otherwise returns `state_dir/config.toml`.
+pub fn config_path(state_dir: &Utf8Path) -> Utf8PathBuf {
+    CONFIG_PATH_OVERRIDE
+        .get()
+        .cloned()
+        .unwrap_or_else(|| state_dir.join("config.toml"))
+}
+
 static LAST_VALID_CONFIG: std::sync::LazyLock<ArcSwap<LoadedConfig>> =
     std::sync::LazyLock::new(|| ArcSwap::from_pointee(LoadedConfig::from_raw(Config::default())));
 
@@ -467,7 +488,7 @@ pub fn load_config(_state_dir: &Utf8Path) -> Arc<LoadedConfig> {
 /// Called by the file watcher on changes, by [`ConfigStore::save`] after writes,
 /// and as a fallback when the cache is empty.
 pub fn reload_config(state_dir: &Utf8Path) -> (LoadedConfig, Option<String>) {
-    let config_path = state_dir.join("config.toml");
+    let config_path = config_path(state_dir);
     let mut config_error = None;
     let raw = match try_load_config(&config_path) {
         Ok(cfg) => cfg,

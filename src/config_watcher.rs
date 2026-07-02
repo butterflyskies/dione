@@ -13,14 +13,20 @@ pub fn spawn(
     tokio::spawn(async move {
         let (tx, mut rx) = mpsc::channel::<()>(16);
 
-        let watch_dir = state_dir.as_std_path().to_path_buf();
+        let cfg_path = crate::config::config_path(&state_dir);
+        let watch_dir = cfg_path
+            .parent()
+            .unwrap_or(state_dir.as_path())
+            .as_std_path()
+            .to_path_buf();
+        let config_filename = cfg_path.file_name().unwrap_or("config.toml").to_string();
         let mut watcher: RecommendedWatcher = match Watcher::new(
             move |res: Result<notify::Event, notify::Error>| {
                 if let Ok(event) = res {
                     let is_config = event
                         .paths
                         .iter()
-                        .any(|p| p.file_name().is_some_and(|n| n == "config.toml"));
+                        .any(|p| p.file_name().is_some_and(|n| n == config_filename.as_str()));
                     if is_config
                         && matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_))
                     {

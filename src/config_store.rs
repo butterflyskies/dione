@@ -38,15 +38,16 @@ pub struct ConfigStore {
 
 impl ConfigStore {
     pub async fn load(state_dir: &Utf8Path) -> Result<Self, BoxError> {
-        let config_path = state_dir.join("config.toml");
+        let config_path = crate::config::config_path(state_dir);
         let contents = match tokio::fs::read_to_string(&config_path).await {
             Ok(s) => s,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(e) => return Err(e.into()),
         };
+        let tmp_path = Utf8PathBuf::from(format!("{}.tmp", config_path));
         Ok(Self {
             doc: contents.parse()?,
-            tmp_path: state_dir.join("config.toml.tmp"),
+            tmp_path,
             config_path,
         })
     }
