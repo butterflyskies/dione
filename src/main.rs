@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
+use camino::Utf8PathBuf;
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr};
 use tokio::sync::{RwLock, mpsc};
@@ -23,6 +24,10 @@ struct Cli {
     /// Tracing filter level (e.g. "info", "debug", "dione=debug,serenity=warn")
     #[arg(long, default_value = "dione=info")]
     log_level: String,
+
+    /// Path to config file (overrides default <state_dir>/config.toml)
+    #[arg(long)]
+    config: Option<Utf8PathBuf>,
 }
 
 #[tokio::main]
@@ -30,6 +35,10 @@ async fn main() -> Result<()> {
     color_eyre::install()?;
 
     let cli = Cli::parse();
+
+    if let Some(config_path) = cli.config {
+        dione::config::set_config_path(config_path);
+    }
 
     // Build a reloadable EnvFilter so trace level can be changed at runtime via MCP tool.
     // Respect RUST_LOG if set, otherwise use the CLI flag.
