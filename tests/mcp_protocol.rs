@@ -630,6 +630,74 @@ async fn test_tools_call_list_access_requests_empty() {
     );
 }
 
+// ── Codex transport mode tests ───────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_codex_initialize_omits_experimental_capabilities() {
+    let resp = test_helpers::get_initialize_response_codex();
+    // Must still advertise tools capability.
+    assert!(
+        resp.get("capabilities")
+            .and_then(|c| c.get("tools"))
+            .is_some(),
+        "codex initialize response must include capabilities.tools"
+    );
+    // Must NOT advertise experimental channel capabilities (codex uses wait_for_push instead).
+    let experimental = resp.get("capabilities").and_then(|c| c.get("experimental"));
+    assert!(
+        experimental.is_none(),
+        "codex initialize response must not include experimental capabilities"
+    );
+}
+
+#[test]
+fn test_codex_tools_list_includes_wait_for_push() {
+    let list = test_helpers::get_tools_list_codex();
+    let tools = list["tools"].as_array().expect("tools must be an array");
+    let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+    assert!(
+        names.contains(&"wait_for_push"),
+        "codex tools/list must include wait_for_push"
+    );
+}
+
+#[test]
+fn test_claude_code_tools_list_excludes_wait_for_push() {
+    let list = test_helpers::get_tools_list();
+    let tools = list["tools"].as_array().expect("tools must be an array");
+    let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+    assert!(
+        !names.contains(&"wait_for_push"),
+        "claude-code tools/list must not include wait_for_push"
+    );
+}
+
+#[tokio::test]
+async fn test_wait_for_push_rejected_in_claude_code_mode() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 60,
+        "method": "tools/call",
+        "params": {
+            "name": "wait_for_push",
+            "arguments": {}
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    assert_eq!(resp["id"], 60);
+    let err = resp
+        .get("error")
+        .expect("wait_for_push in claude-code mode should return a JSON-RPC error");
+    let msg = err["message"].as_str().unwrap_or_default();
+    assert!(
+        msg.contains("codex mode"),
+        "error should mention codex mode, got: {msg}"
+    );
+}
+
 // ── Notification format tests ─────────────────────────────────────────────────
 
 // Semantic property tests — wire format is pinned by snapshots below.

@@ -9,6 +9,7 @@
 use clap::ValueEnum;
 use serde_json::Value;
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, mpsc};
 
 /// Transport mode selector — determines how channel notifications reach the harness.
@@ -41,7 +42,6 @@ impl NotificationSink {
                 let mut line = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string());
                 line.push('\n');
                 let mut out = stdout.lock().await;
-                use tokio::io::AsyncWriteExt;
                 if let Err(e) = out.write_all(line.as_bytes()).await {
                     tracing::warn!(error = %e, "failed to write notification to stdout");
                 }
