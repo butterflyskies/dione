@@ -19,6 +19,7 @@ use crate::mcp::tools::{
     },
     render::{render_latex, render_latex_to_channel},
 };
+use crate::mcp::transport::TransportMode;
 
 fn check_admin_gate(config: &crate::config::LoadedConfig) -> Result<(), String> {
     if config.access.admin_only_mutations {
@@ -374,6 +375,14 @@ pub(crate) async fn call_tool(
             set_stderr_level(&ctx, filter).await
         }
 
+        // Codex transport: long-poll for queued notifications
+        "wait_for_push" if server.mode == TransportMode::Codex => {
+            wait_for_push(server, &args).await
+        }
+        "wait_for_push" => {
+            return Err("wait_for_push is only available in codex mode".to_string());
+        }
+
         unknown => return Err(format!("unknown tool: {unknown}")),
     };
 
@@ -455,6 +464,69 @@ fn parse_string_array(args: &Value, key: &str) -> Option<Vec<String>> {
             .filter_map(|v| v.as_str().map(str::to_owned))
             .collect()
     })
+}
+
+// ── Codex transport: wait_for_push ──────────────────────────────────────────
+
+/// Maximum allowed timeout for `wait_for_push` (60 seconds).
+const WAIT_FOR_PUSH_MAX_TIMEOUT_MS: u64 = 60_000;
+/// Default timeout when none is specified (30 seconds).
+const WAIT_FOR_PUSH_DEFAULT_TIMEOUT_MS: u64 = 30_000;
+
+/// Block until one or more notifications are available, then return them.
+///
+/// Drains all pending notifications from the push queue. If the queue is empty,
+/// blocks until at least one arrives or the timeout expires.
+async fn wait_for_push(server: &DioneServer, args: &Value) -> Value {
+    let timeout_ms = args
+        .get("timeout_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(WAIT_FOR_PUSH_DEFAULT_TIMEOUT_MS)
+        .min(WAIT_FOR_PUSH_MAX_TIMEOUT_MS);
+
+    let rx = match server.push_queue.as_ref() {
+        Some(rx) => rx,
+        None => return json!({ "error": "push queue not initialized" }),
+    };
+
+    let mut notifications = Vec::new();
+
+    // First, drain any already-queued notifications without blocking.
+    {
+        let mut rx_guard = rx.lock().await;
+        while let Ok(notif) = rx_guard.try_recv() {
+            notifications.push(notif);
+        }
+    }
+
+    // If we got some, return immediately (don't wait for more).
+    if !notifications.is_empty() {
+        return json!({ "notifications": notifications });
+    }
+
+    // Nothing pending — block until one arrives or timeout.
+    let timeout = tokio::time::Duration::from_millis(timeout_ms);
+    {
+        let mut rx_guard = rx.lock().await;
+        match tokio::time::timeout(timeout, rx_guard.recv()).await {
+            Ok(Some(notif)) => {
+                notifications.push(notif);
+                // Drain any additional notifications that arrived while we were waiting.
+                while let Ok(notif) = rx_guard.try_recv() {
+                    notifications.push(notif);
+                }
+            }
+            Ok(None) => {
+                // Channel closed — server shutting down.
+                return json!({ "notifications": [], "closed": true });
+            }
+            Err(_) => {
+                // Timeout — no notifications arrived.
+            }
+        }
+    }
+
+    json!({ "notifications": notifications })
 }
 
 #[cfg(test)]

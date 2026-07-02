@@ -28,6 +28,7 @@ use crate::{
             management::ManagementCtx,
             messaging::MessagingCtx,
         },
+        transport::{NotificationSink, TransportMode},
     },
     rate_limiter::{ChannelRef, ParticipantId, RateLimitDecision, RateLimiter},
 };
@@ -54,6 +55,9 @@ pub struct DioneServer {
     pub notification_tx: mpsc::Sender<Value>,
     pub discord_cmd_tx: Option<mpsc::Sender<DiscordCommand>>,
     pub trace_controller: TraceLevelController,
+    pub mode: TransportMode,
+    /// Receiver for queued notifications in codex mode. `wait_for_push` drains this.
+    pub push_queue: Option<Arc<Mutex<mpsc::Receiver<Value>>>>,
 }
 
 // ── Context factory methods ───────────────────────────────────────────────────
@@ -120,9 +124,19 @@ pub async fn run(
     server: DioneServer,
     event_rx: mpsc::Receiver<NotificationEvent>,
     cancel: CancellationToken,
+    push_queue_tx: Option<mpsc::Sender<Value>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let stdin = BufReader::new(tokio::io::stdin());
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
+
+    // Build the notification sink based on transport mode.
+    let notif_sink = match push_queue_tx {
+        Some(tx) => {
+            tracing::info!("codex transport: notifications queued for wait_for_push");
+            Arc::new(NotificationSink::Queue(tx))
+        }
+        None => Arc::new(NotificationSink::Stdout(stdout.clone())),
+    };
 
     // Both rate limiter and delivery buffer configs are live-reloadable
     // via the ArcSwap config cache. Rate limiter config is refreshed per
@@ -140,7 +154,7 @@ pub async fn run(
 
     // Notification forwarding task.
     // Exits on cancellation or when the event channel closes.
-    let stdout_notif = stdout.clone();
+    let sink_notif = notif_sink;
     let cancel_notif = cancel.clone();
     let notif_task = tokio::spawn(async move {
         let mut rx = event_rx;
@@ -169,7 +183,7 @@ pub async fn run(
                 } => {
                     let now = tokio::time::Instant::now();
                     let flushed = delivery_buffer.flush_ready(now);
-                    deliver_flushed(&stdout_notif, flushed, tz).await;
+                    deliver_flushed(&sink_notif, flushed, tz).await;
                 }
 
                 // New event arrives from Discord.
@@ -228,7 +242,7 @@ pub async fn run(
                     match delivery_buffer.buffer_event(event, delay_ms) {
                         BufferResult::Immediate(event) => {
                             let notification = (*event).into_notification();
-                            write_line(&stdout_notif, &notification).await;
+                            sink_notif.deliver(&notification).await;
                         }
                         BufferResult::Buffered => {
                             // Will be flushed when the deadline fires.
@@ -247,7 +261,7 @@ pub async fn run(
 
         // Channel closed — flush any remaining buffered events.
         let remaining = delivery_buffer.flush_all();
-        deliver_flushed(&stdout_notif, remaining, tz).await;
+        deliver_flushed(&sink_notif, remaining, tz).await;
     });
 
     // Main request loop.
@@ -338,11 +352,11 @@ async fn handle_request(server: &DioneServer, req: Value) -> Option<Value> {
 async fn dispatch(server: &DioneServer, method: &str, params: Value) -> Result<Value, String> {
     match method {
         // ── MCP lifecycle ─────────────────────────────────────────────────────
-        "initialize" => Ok(initialize_response()),
+        "initialize" => Ok(initialize_response(server.mode)),
         "notifications/initialized" => Ok(json!({})),
 
         // ── Tool discovery ────────────────────────────────────────────────────
-        "tools/list" => Ok(tools_list()),
+        "tools/list" => Ok(tools_list(server.mode)),
 
         // ── Tool invocation ───────────────────────────────────────────────────
         "tools/call" => {
@@ -354,8 +368,10 @@ async fn dispatch(server: &DioneServer, method: &str, params: Value) -> Result<V
             call_tool(server, tool_name, arguments).await
         }
 
-        // ── Permission relay (inbound from Claude Code) ──────────────────────
-        "notifications/claude/channel/permission_request" => {
+        // ── Permission relay (inbound from Claude Code, not used in codex mode) ──
+        "notifications/claude/channel/permission_request"
+            if server.mode == TransportMode::ClaudeCode =>
+        {
             let request_id = params
                 .get("request_id")
                 .and_then(Value::as_str)
@@ -423,7 +439,7 @@ async fn write_line(stdout: &Arc<Mutex<tokio::io::Stdout>>, value: &Value) {
 /// are coalesced into a single batched notification so the LLM receives one
 /// prompt injection per batch window instead of N.
 async fn deliver_flushed(
-    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    sink: &NotificationSink,
     events: Vec<NotificationEvent>,
     tz: Option<chrono_tz::Tz>,
 ) {
@@ -436,14 +452,14 @@ async fn deliver_flushed(
     match coalesce(events, tz) {
         Some(CoalesceResult::Single(event)) => {
             let notification = event.into_notification();
-            write_line(stdout, &notification).await;
+            sink.deliver(&notification).await;
         }
         Some(CoalesceResult::Coalesced(notification)) => {
             tracing::debug!(
                 event_count,
                 "coalesced {event_count} events into single delivery"
             );
-            write_line(stdout, &notification).await;
+            sink.deliver(&notification).await;
         }
         None => {
             // Empty — nothing to deliver.
@@ -486,12 +502,22 @@ pub mod test_helpers {
 
     /// Exposes `tools_list` for unit testing tool discovery.
     pub fn get_tools_list() -> Value {
-        crate::mcp::protocol::tools_list()
+        crate::mcp::protocol::tools_list(TransportMode::ClaudeCode)
+    }
+
+    /// Exposes `tools_list` for unit testing Codex tool discovery.
+    pub fn get_tools_list_codex() -> Value {
+        crate::mcp::protocol::tools_list(TransportMode::Codex)
     }
 
     /// Exposes `initialize_response` for unit testing the handshake.
     pub fn get_initialize_response() -> Value {
-        crate::mcp::protocol::initialize_response()
+        crate::mcp::protocol::initialize_response(TransportMode::ClaudeCode)
+    }
+
+    /// Exposes `initialize_response` in codex mode for unit testing.
+    pub fn get_initialize_response_codex() -> Value {
+        crate::mcp::protocol::initialize_response(TransportMode::Codex)
     }
 
     /// Exposes `handle_request` for unit testing request dispatch.

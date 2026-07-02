@@ -14,6 +14,7 @@ use tracing_subscriber::reload;
 
 use dione::discord::events::{Handler, NotificationEvent};
 use dione::mcp::server::DioneServer;
+use dione::mcp::transport::TransportMode;
 use dione::state::SharedState;
 use dione::tracing_channel::{TraceLevelController, TracingChannelLayer};
 
@@ -28,6 +29,10 @@ struct Cli {
     /// Path to config file (overrides default <state_dir>/config.toml)
     #[arg(long)]
     config: Option<Utf8PathBuf>,
+
+    /// Transport mode: how notifications reach the harness
+    #[arg(long, value_enum, default_value_t = TransportMode::ClaudeCode)]
+    mode: TransportMode,
 }
 
 #[tokio::main]
@@ -109,6 +114,16 @@ async fn main() -> Result<()> {
     let http = discord_client.http.clone();
 
     // Build MCP server.
+    // In codex mode, create a push queue for wait_for_push delivery.
+    let push_queue = if cli.mode == TransportMode::Codex {
+        let (tx, rx) = mpsc::channel::<serde_json::Value>(256);
+        Some((tx, rx))
+    } else {
+        None
+    };
+    let push_queue_tx = push_queue.as_ref().map(|(tx, _)| tx.clone());
+    let push_queue_rx = push_queue.map(|(_, rx)| Arc::new(tokio::sync::Mutex::new(rx)));
+
     let trace_controller = TraceLevelController::new(stderr_reload_handle, channel_reload_handle);
     let server = DioneServer {
         state: state.clone(),
@@ -118,6 +133,8 @@ async fn main() -> Result<()> {
         notification_tx: notif_tx,
         discord_cmd_tx: None,
         trace_controller,
+        mode: cli.mode,
+        push_queue: push_queue_rx,
     };
 
     // Spawn the tracing-channel forwarder: converts tracing events into NotificationEvents.
@@ -160,7 +177,7 @@ async fn main() -> Result<()> {
     // Spawn MCP server (owns stdin/stdout).
     let cancel_mcp = cancel.clone();
     let mcp_handle = tokio::spawn(async move {
-        if let Err(e) = dione::mcp::server::run(server, event_rx, cancel_mcp).await {
+        if let Err(e) = dione::mcp::server::run(server, event_rx, cancel_mcp, push_queue_tx).await {
             tracing::error!(error = ?e, "MCP server exited with error");
         }
     });
