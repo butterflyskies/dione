@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-07-02
+
+### Added
+- `--config <path>` CLI flag to override the default config file location
+  (`<state_dir>/config.toml`). Enables running multiple constructs with separate
+  configs on the same machine without collision. The override is implemented as a
+  process-global `OnceLock` set once at startup, consumed by `reload_config`,
+  `config_watcher`, and `ConfigStore` so all config paths stay consistent.
+  When omitted, existing behavior is unchanged (#142).
+
+### Fixed
+- `cargo-deny` advisory ignores added for new typst transitive dependency
+  advisories (#142).
+
 ## [0.14.1] - 2026-06-20
 
 ### Fixed
