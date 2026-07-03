@@ -179,14 +179,8 @@ impl EventHandler for Handler {
 
                     if should_notify {
                         for &admin_id in &config.admin_ids {
-                            notify_admin_dm(
-                                &ctx.http,
-                                admin_id,
-                                &dn,
-                                sender_id,
-                                &msg.content,
-                            )
-                            .await;
+                            notify_admin_dm(&ctx.http, admin_id, &dn, sender_id, &msg.content)
+                                .await;
                         }
                     }
                 }
@@ -380,7 +374,8 @@ impl EventHandler for Handler {
             if is_dm {
                 state.record_dm_channel(author.id.get(), channel_id);
             }
-            let dn = new.as_ref()
+            let dn = new
+                .as_ref()
                 .map(|m| display_name(m))
                 .unwrap_or_else(|| display_name_from_user(author));
             state.cache_username(author.id.get(), dn.clone());
@@ -637,11 +632,7 @@ fn reply_context(msg: &Message) -> (Option<UserId>, Option<String>, Option<Strin
         return (None, None, None);
     };
     let preview = reply_preview(&parent.content);
-    (
-        Some(parent.author.id),
-        Some(display_name(parent)),
-        preview,
-    )
+    (Some(parent.author.id), Some(display_name(parent)), preview)
 }
 
 /// Resolves the best available display name for a message author.
@@ -661,10 +652,7 @@ fn display_name(msg: &Message) -> String {
 /// Display name from a bare `User` (no guild member context).
 /// Falls back global_name > username.
 fn display_name_from_user(user: &serenity::model::user::User) -> String {
-    user.global_name
-        .as_ref()
-        .unwrap_or(&user.name)
-        .clone()
+    user.global_name.as_ref().unwrap_or(&user.name).clone()
 }
 
 /// UTF-8-safe truncation to `REPLY_PREVIEW_MAX_CHARS` chars, with an ellipsis
