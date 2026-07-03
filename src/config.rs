@@ -9,7 +9,7 @@ use regex::RegexSet;
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::timestamp::LocalTimestamp;
+use crate::timestamp::Timestamp;
 
 // ── Error type ───────────────────────────────────────────────────────────────
 
@@ -366,25 +366,36 @@ impl LoadedConfig {
             .unwrap_or(self.raw.delivery.delivery_delay_ms)
     }
 
-    /// Convert a `chrono::DateTime<Utc>` to a [`LocalTimestamp`] in the configured timezone.
-    pub fn localize_utc(&self, utc: &chrono::DateTime<chrono::Utc>) -> LocalTimestamp {
-        let s = match self.tz {
-            Some(tz) => utc.with_timezone(&tz).to_rfc3339(),
-            None => utc.to_rfc3339(),
+    /// Convert a `chrono::DateTime<Utc>` to a [`Timestamp`] in the configured timezone.
+    pub fn localize_utc(&self, utc: &chrono::DateTime<chrono::Utc>) -> Timestamp {
+        let dt = match self.tz {
+            Some(tz) => utc.with_timezone(&tz).fixed_offset(),
+            None => utc.fixed_offset(),
         };
-        LocalTimestamp(s)
+        Timestamp(dt)
     }
 
-    /// Convert an RFC3339 timestamp string to a [`LocalTimestamp`] in the configured timezone.
-    pub fn localize_rfc3339(&self, rfc3339: &str) -> LocalTimestamp {
-        let s = match self.tz {
-            Some(tz) => match chrono::DateTime::parse_from_rfc3339(rfc3339) {
-                Ok(dt) => dt.with_timezone(&tz).to_rfc3339(),
-                Err(_) => rfc3339.to_owned(),
-            },
-            None => rfc3339.to_owned(),
+    /// Convert an RFC3339 timestamp string to a [`Timestamp`] in the configured timezone.
+    ///
+    /// If parsing fails, falls back to the current UTC time (localized to the
+    /// configured timezone). Callers should ensure input is valid — the fallback
+    /// exists only as a safety net.
+    pub fn localize_rfc3339(&self, rfc3339: &str) -> Timestamp {
+        let dt = match chrono::DateTime::parse_from_rfc3339(rfc3339) {
+            Ok(dt) => dt,
+            Err(_) => {
+                tracing::warn!(
+                    input = rfc3339,
+                    "failed to parse RFC3339 timestamp; falling back to current UTC"
+                );
+                chrono::Utc::now().fixed_offset()
+            }
         };
-        LocalTimestamp(s)
+        let localized = match self.tz {
+            Some(tz) => dt.with_timezone(&tz).fixed_offset(),
+            None => dt,
+        };
+        Timestamp(localized)
     }
 }
 
@@ -436,6 +447,27 @@ pub fn state_dir() -> Utf8PathBuf {
     Utf8PathBuf::from(home).join(".claude/channels/dione")
 }
 
+static CONFIG_PATH_OVERRIDE: std::sync::OnceLock<Utf8PathBuf> = std::sync::OnceLock::new();
+
+/// Set a custom config file path, overriding the default `state_dir/config.toml`.
+///
+/// Must be called before [`reload_config`]. Can only be set once; subsequent
+/// calls are no-ops.
+pub fn set_config_path(path: Utf8PathBuf) {
+    CONFIG_PATH_OVERRIDE.set(path).ok();
+}
+
+/// Returns the config file path.
+///
+/// If [`set_config_path`] was called, returns the override path.
+/// Otherwise returns `state_dir/config.toml`.
+pub fn config_path(state_dir: &Utf8Path) -> Utf8PathBuf {
+    CONFIG_PATH_OVERRIDE
+        .get()
+        .cloned()
+        .unwrap_or_else(|| state_dir.join("config.toml"))
+}
+
 static LAST_VALID_CONFIG: std::sync::LazyLock<ArcSwap<LoadedConfig>> =
     std::sync::LazyLock::new(|| ArcSwap::from_pointee(LoadedConfig::from_raw(Config::default())));
 
@@ -456,7 +488,7 @@ pub fn load_config(_state_dir: &Utf8Path) -> Arc<LoadedConfig> {
 /// Called by the file watcher on changes, by [`ConfigStore::save`] after writes,
 /// and as a fallback when the cache is empty.
 pub fn reload_config(state_dir: &Utf8Path) -> (LoadedConfig, Option<String>) {
-    let config_path = state_dir.join("config.toml");
+    let config_path = config_path(state_dir);
     let mut config_error = None;
     let raw = match try_load_config(&config_path) {
         Ok(cfg) => cfg,

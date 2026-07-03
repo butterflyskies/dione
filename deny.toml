@@ -19,6 +19,9 @@ ignore = [
     { id = "RUSTSEC-2023-0031", reason = "paste: transitive via typst, deep dep, no control" },
     { id = "RUSTSEC-2024-0436", reason = "paste: transitive via typst, unmaintained, no control" },
     { id = "RUSTSEC-2024-0320", reason = "yaml-rust: transitive via typst → syntect, no alternative" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser: unmaintained, transitive via typst → fontdb/rustybuzz/pixglyph, no control" },
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml: transitive via typst → citationberg/syntect, pinned by typst, no control" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml: transitive via typst → citationberg/syntect, pinned by typst, no control" },
 ]
 
 # --- Licenses -------------------------------------------------------------

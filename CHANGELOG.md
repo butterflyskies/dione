@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-07-02
+
+### Added
+- `--config <path>` CLI flag to override the default config file location
+  (`<state_dir>/config.toml`). Enables running multiple constructs with separate
+  configs on the same machine without collision. The override is implemented as a
+  process-global `OnceLock` set once at startup, consumed by `reload_config`,
+  `config_watcher`, and `ConfigStore` so all config paths stay consistent.
+  When omitted, existing behavior is unchanged (#142).
+
+### Fixed
+- `cargo-deny` advisory ignores added for new typst transitive dependency
+  advisories (#142).
+
+## [0.14.1] - 2026-06-20
+
+### Fixed
+- Coalesced batch notifications now use the standard `notifications/claude/channel`
+  method instead of the custom `notifications/claude/channel/batch` method that
+  Claude Code's MCP client silently drops. Batch content is packed into the
+  standard `{ content, meta }` params structure. This fixes message loss when
+  multiple Discord messages arrive within the coalesce window. Regression
+  introduced in #122; same root cause as the reverts in #91 and #94.
+
+## [0.14.0] - 2026-06-20
+
+### Added
+- `coalesce` module (`src/coalesce.rs`) — top-level event coalescing layer that
+  sits between `DeliveryBuffer` and stdout. Routes flushed event batches into
+  the optimal wire format: single events pass through as individual notifications,
+  homogeneous message batches use the `batch_v1` compact format, and mixed-type
+  batches (messages + edits + reactions + deletes) use the new `events_v1`
+  heterogeneous format. Cross-channel flushes produce a multi-envelope wrapper
+  that groups per-channel envelopes (#122).
+- `events_v1` wire format — heterogeneous event serialization with `[events]`
+  header, `[users]` roster, and typed event lines (`!edit`, `!react`, `!delete`)
+  interspersed with message entries. Covers the full event taxonomy: messages,
+  edits, reactions, deletes, and graceful fallback for trace/config/permission
+  events (#122).
+- `multi` envelope format for non-channel events (Trace, PermissionResponse,
+  ConfigError) — wraps individual notification params in a
+  `{ format: "multi", notifications: [...] }` batch when 2+ non-channel events
+  flush together (#122).
+- `deliver_flushed()` integration in `mcp/server.rs` — replaces the old
+  per-event stdout loop with a single `coalesce()` call that emits one
+  JSON-RPC line per flush, regardless of how many events were buffered (#122).
+
+### Changed
+- `Timestamp` newtype replaces raw `String` timestamps throughout the codebase —
+  parsing happens once at construction, formatting is deferred to display (#122).
+- Timezone resolution lifted to startup — `deliver_flushed()` receives a
+  pre-resolved `Tz` instead of re-parsing the timezone string on every flush
+  (#122).
+
+### Fixed
+- Clippy lint cleanup across coalesce and event modules (#122).
+
+## [0.13.0] - 2026-06-19
+
+### Added
+- `batch` module (`src/batch.rs`) with `serialize_batch()` — converts coalesced
+  `NotificationEvent::Message` vectors into a compact, human-readable text format
+  that uses far fewer tokens than individual JSON-RPC notifications. Format uses
+  a `[batch]` envelope header, a `[users]` roster for short-name-to-ID mapping,
+  and `|`-delimited message lines with optional reply-to and attachment count
+  suffixes. Extracted `MessageEvent` struct from `NotificationEvent` for cleaner
+  field access. 14 tests covering round-trip serialization, edge cases, and
+  timezone localization (#114).
+
 ## [0.12.0] - 2026-06-14
 
 ### Added

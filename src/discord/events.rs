@@ -2,6 +2,7 @@ use crate::{
     gate::{GateDecision, InboundGate, MentionDetector},
     mcp::tools::messaging::create_dm_channel,
     queue::AccessRequest,
+    timestamp::Timestamp,
 };
 use serenity::{
     async_trait,
@@ -24,30 +25,34 @@ pub struct AttachmentMeta {
     pub size: u64,
 }
 
+/// A Discord message forwarded from the gateway to the MCP notification stream.
+#[derive(Debug, Clone)]
+pub struct MessageEvent {
+    pub chat_id: ChannelId,
+    pub message_id: MessageId,
+    pub user: String,
+    pub user_id: UserId,
+    pub content: String,
+    pub timestamp: Timestamp,
+    pub attachments: Vec<AttachmentMeta>,
+    pub is_voice_message: bool,
+    /// If the message was sent in a thread, the parent channel ID.
+    pub thread_parent_id: Option<ChannelId>,
+    /// If the message is a reply, the ID of the message being replied to.
+    pub reply_to_message_id: Option<MessageId>,
+    /// If the message is a reply, the author ID of the replied-to message.
+    pub reply_to_user_id: Option<UserId>,
+    /// If the message is a reply, the author name of the replied-to message.
+    pub reply_to_user: Option<String>,
+    /// If the message is a reply, a short preview of the replied-to content.
+    pub reply_to_content_preview: Option<String>,
+}
+
 /// Events forwarded from the Discord gateway to the MCP notification stream.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum NotificationEvent {
-    Message {
-        chat_id: ChannelId,
-        message_id: MessageId,
-        user: String,
-        user_id: UserId,
-        content: String,
-        timestamp: String,
-        attachments: Vec<AttachmentMeta>,
-        is_voice_message: bool,
-        /// If the message was sent in a thread, the parent channel ID.
-        thread_parent_id: Option<ChannelId>,
-        /// If the message is a reply, the ID of the message being replied to.
-        reply_to_message_id: Option<MessageId>,
-        /// If the message is a reply, the author ID of the replied-to message.
-        reply_to_user_id: Option<UserId>,
-        /// If the message is a reply, the author name of the replied-to message.
-        reply_to_user: Option<String>,
-        /// If the message is a reply, a short preview of the replied-to content.
-        reply_to_content_preview: Option<String>,
-    },
+    Message(MessageEvent),
     Reaction {
         chat_id: ChannelId,
         message_id: MessageId,
@@ -71,7 +76,7 @@ pub enum NotificationEvent {
         user: String,
         user_id: UserId,
         new_content: String,
-        timestamp: String,
+        timestamp: Timestamp,
         /// If the edit was in a thread, the parent channel ID.
         thread_parent_id: Option<ChannelId>,
         /// If the edited message is a reply, the ID of the message being replied to.
@@ -131,7 +136,7 @@ impl EventHandler for Handler {
 
         {
             let mut state = self.state.write().await;
-            state.cache_username(msg.author.id.get(), msg.author.name.clone());
+            state.cache_username(msg.author.id.get(), display_name(&msg));
         }
 
         let is_dm = msg.guild_id.is_none();
@@ -160,9 +165,10 @@ impl EventHandler for Handler {
                     let cooldown = std::time::Duration::from_secs(
                         config.access_requests.notify_cooldown_seconds,
                     );
+                    let sender_name = display_name(&msg);
                     let request = AccessRequest {
                         user_id: sender_id,
-                        username: msg.author.name.clone(),
+                        username: sender_name.clone(),
                         message_preview: msg.content.clone(),
                         timestamp: chrono::Utc::now(),
                     };
@@ -183,7 +189,7 @@ impl EventHandler for Handler {
                             notify_admin_dm(
                                 &ctx.http,
                                 admin_id,
-                                &msg.author.name,
+                                &sender_name,
                                 sender_id,
                                 &msg.content,
                             )
@@ -384,17 +390,20 @@ impl EventHandler for Handler {
             return;
         }
 
-        {
+        let sender_name = {
             let mut state = self.state.write().await;
             if is_dm {
                 state.record_dm_channel(author.id.get(), channel_id);
             }
-            state.cache_username(author.id.get(), author.name.clone());
-        }
+            let sender_name = new
+                .as_ref()
+                .map(display_name)
+                .unwrap_or_else(|| display_name_from_user(author));
+            state.cache_username(author.id.get(), sender_name.clone());
+            sender_name
+        };
 
-        let timestamp = config
-            .localize_rfc3339(&serenity_ts_to_rfc3339("edited_ts", &edited_ts))
-            .into();
+        let timestamp = config.localize_rfc3339(&serenity_ts_to_rfc3339("edited_ts", &edited_ts));
 
         // message_reference is Option<Option<MessageReference>> in update events:
         // outer Option = field present in update, inner Option = nullable value.
@@ -407,7 +416,7 @@ impl EventHandler for Handler {
         let ev = NotificationEvent::MessageEdit {
             chat_id: event.channel_id,
             message_id: event.id,
-            user: author.name.clone(),
+            user: sender_name,
             user_id: author.id,
             new_content,
             timestamp,
@@ -644,11 +653,27 @@ fn reply_context(msg: &Message) -> (Option<UserId>, Option<String>, Option<Strin
         return (None, None, None);
     };
     let preview = reply_preview(&parent.content);
-    (
-        Some(parent.author.id),
-        Some(parent.author.name.clone()),
-        preview,
-    )
+    (Some(parent.author.id), Some(display_name(parent)), preview)
+}
+
+/// Resolves the best available display name for a message author.
+///
+/// Priority: server nickname > global display name > username.
+/// For webhook messages (e.g. PluralKit), `author.name` is already the
+/// alter's display name, so the fallback is correct.
+fn display_name(msg: &Message) -> String {
+    msg.member
+        .as_ref()
+        .and_then(|m| m.nick.as_ref())
+        .or(msg.author.global_name.as_ref())
+        .unwrap_or(&msg.author.name)
+        .clone()
+}
+
+/// Display name from a bare `User` (no guild member context).
+/// Falls back global_name > username.
+fn display_name_from_user(user: &serenity::model::user::User) -> String {
+    user.global_name.as_ref().unwrap_or(&user.name).clone()
 }
 
 /// UTF-8-safe truncation to `REPLY_PREVIEW_MAX_CHARS` chars, with an ellipsis
@@ -689,15 +714,14 @@ fn build_message_event(
     let reply_to_message_id = msg.message_reference.as_ref().and_then(reply_to_id);
     let (reply_to_user_id, reply_to_user, reply_to_content_preview) = reply_context(msg);
 
-    NotificationEvent::Message {
+    NotificationEvent::Message(MessageEvent {
         chat_id: msg.channel_id,
         message_id: msg.id,
-        user: msg.author.name.clone(),
+        user: display_name(msg),
         user_id: msg.author.id,
         content: msg.content.clone(),
         timestamp: config
-            .localize_rfc3339(&serenity_ts_to_rfc3339("msg.timestamp", &msg.timestamp))
-            .into(),
+            .localize_rfc3339(&serenity_ts_to_rfc3339("msg.timestamp", &msg.timestamp)),
         attachments,
         is_voice_message,
         thread_parent_id: thread_parent_id.map(ChannelId::new),
@@ -705,7 +729,7 @@ fn build_message_event(
         reply_to_user_id,
         reply_to_user,
         reply_to_content_preview,
-    }
+    })
 }
 
 /// Resolves the parent channel ID for a thread channel.
@@ -1165,7 +1189,7 @@ mod tests {
         );
 
         let event = build_message_event(&msg, &config, None);
-        let NotificationEvent::Message {
+        let NotificationEvent::Message(MessageEvent {
             reply_to_message_id,
             reply_to_user_id,
             reply_to_user,
@@ -1173,7 +1197,7 @@ mod tests {
             content,
             user,
             ..
-        } = event
+        }) = event
         else {
             panic!("expected Message event");
         };
@@ -1187,5 +1211,54 @@ mod tests {
         );
         assert_eq!(content, "my reply");
         assert_eq!(user, "alice");
+    }
+
+    // ── display_name tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn display_name_falls_back_to_username() {
+        let msg = message_from_wire(wire_message_body(1, wire_author(1, "alice"), "hi"));
+        assert_eq!(display_name(&msg), "alice");
+    }
+
+    #[test]
+    fn display_name_prefers_global_name() {
+        let mut author = wire_author(1, "alice");
+        author["global_name"] = serde_json::json!("Alice Display");
+        let msg = message_from_wire(wire_message_body(1, author, "hi"));
+        assert_eq!(display_name(&msg), "Alice Display");
+    }
+
+    #[test]
+    fn display_name_prefers_server_nick() {
+        let mut author = wire_author(1, "alice");
+        author["global_name"] = serde_json::json!("Alice Display");
+        let mut payload = wire_message_body(1, author, "hi");
+        payload["member"] = serde_json::json!({
+            "roles": [],
+            "joined_at": "2026-01-01T00:00:00.000000+00:00",
+            "deaf": false,
+            "mute": false,
+            "nick": "Server Alice",
+        });
+        let msg = message_from_wire(payload);
+        assert_eq!(display_name(&msg), "Server Alice");
+    }
+
+    #[test]
+    fn display_name_from_user_falls_back_to_username() {
+        let user_json = wire_author(1, "bob_iverse");
+        let user: serenity::model::user::User =
+            serde_json::from_value(user_json).expect("valid User JSON");
+        assert_eq!(display_name_from_user(&user), "bob_iverse");
+    }
+
+    #[test]
+    fn display_name_from_user_prefers_global_name() {
+        let mut user_json = wire_author(1, "bob_iverse");
+        user_json["global_name"] = serde_json::json!("Bob Iverse");
+        let user: serenity::model::user::User =
+            serde_json::from_value(user_json).expect("valid User JSON");
+        assert_eq!(display_name_from_user(&user), "Bob Iverse");
     }
 }

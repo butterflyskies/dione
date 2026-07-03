@@ -6,10 +6,11 @@
 //! only up to the gate-rejection path.
 
 use dione::{
-    discord::events::{AttachmentMeta, NotificationEvent},
+    discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
     mcp::server::{DioneServer, test_helpers},
     queue::AccessQueue,
     state::new_state,
+    timestamp::Timestamp,
     tracing_channel::TraceLevelController,
 };
 use serde_json::json;
@@ -633,13 +634,13 @@ async fn test_tools_call_list_access_requests_empty() {
 
 #[test]
 fn test_notification_has_no_id_field() {
-    let event = NotificationEvent::Message {
+    let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1),
         message_id: MessageId::new(2),
         user: "x".to_string(),
         user_id: UserId::new(3),
         content: "hi".to_string(),
-        timestamp: "2026-01-01T00:00:00Z".to_string(),
+        timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: false,
         thread_parent_id: None,
@@ -647,7 +648,7 @@ fn test_notification_has_no_id_field() {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-    };
+    });
     let notif = test_helpers::make_notification(event);
     assert!(
         notif.get("id").is_none(),
@@ -657,13 +658,13 @@ fn test_notification_has_no_id_field() {
 
 #[test]
 fn test_notification_attachment_metadata_present() {
-    let event = NotificationEvent::Message {
+    let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1),
         message_id: MessageId::new(2),
         user: "x".to_string(),
         user_id: UserId::new(3),
         content: "see file".to_string(),
-        timestamp: "2026-01-01T00:00:00Z".to_string(),
+        timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![AttachmentMeta {
             name: "photo.png".to_string(),
             content_type: Some("image/png".to_string()),
@@ -675,7 +676,7 @@ fn test_notification_attachment_metadata_present() {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-    };
+    });
     let notif = test_helpers::make_notification(event);
     let meta = &notif["params"]["meta"];
     assert_eq!(meta["attachment_count"], "1");
@@ -684,13 +685,13 @@ fn test_notification_attachment_metadata_present() {
 
 #[test]
 fn test_notification_voice_flag_in_meta() {
-    let event = NotificationEvent::Message {
+    let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1),
         message_id: MessageId::new(2),
         user: "x".to_string(),
         user_id: UserId::new(3),
         content: String::new(),
-        timestamp: "2026-01-01T00:00:00Z".to_string(),
+        timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: true,
         thread_parent_id: None,
@@ -698,7 +699,7 @@ fn test_notification_voice_flag_in_meta() {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-    };
+    });
     let notif = test_helpers::make_notification(event);
     assert_eq!(notif["params"]["meta"]["is_voice_message"], true);
 }
@@ -718,13 +719,13 @@ fn test_permission_deny_uses_deny_behavior() {
 
 #[test]
 fn test_notification_message_snapshot() {
-    let event = NotificationEvent::Message {
+    let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1000),
         message_id: MessageId::new(2000),
         user: "snapuser".to_string(),
         user_id: UserId::new(3000),
         content: "snapshot content".to_string(),
-        timestamp: "2026-01-01T00:00:00+00:00".to_string(),
+        timestamp: Timestamp::parse("2026-01-01T00:00:00+00:00").unwrap(),
         attachments: vec![],
         is_voice_message: false,
         thread_parent_id: None,
@@ -732,7 +733,7 @@ fn test_notification_message_snapshot() {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-    };
+    });
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
 }
@@ -768,7 +769,7 @@ fn test_notification_message_edit_snapshot() {
         user: "editor".to_string(),
         user_id: UserId::new(3002),
         new_content: "fixed a typo".to_string(),
-        timestamp: "2026-01-01T00:01:00+00:00".to_string(),
+        timestamp: Timestamp::parse("2026-01-01T00:01:00+00:00").unwrap(),
         thread_parent_id: None,
         reply_to_message_id: None,
     };
@@ -784,7 +785,7 @@ fn test_notification_message_edit_reply_snapshot() {
         user: "editor".to_string(),
         user_id: UserId::new(3002),
         new_content: "fixed a typo".to_string(),
-        timestamp: "2026-01-01T00:01:00+00:00".to_string(),
+        timestamp: Timestamp::parse("2026-01-01T00:01:00+00:00").unwrap(),
         thread_parent_id: None,
         reply_to_message_id: Some(MessageId::new(8888)),
     };
@@ -807,13 +808,13 @@ fn test_notification_message_delete_snapshot() {
 
 #[test]
 fn test_notification_message_in_thread_snapshot() {
-    let event = NotificationEvent::Message {
+    let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1000),
         message_id: MessageId::new(2000),
         user: "threaduser".to_string(),
         user_id: UserId::new(3000),
         content: "reply in thread".to_string(),
-        timestamp: "2026-01-01T00:00:00+00:00".to_string(),
+        timestamp: Timestamp::parse("2026-01-01T00:00:00+00:00").unwrap(),
         attachments: vec![],
         is_voice_message: false,
         thread_parent_id: Some(ChannelId::new(700)),
@@ -821,7 +822,7 @@ fn test_notification_message_in_thread_snapshot() {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-    };
+    });
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
 }
@@ -830,13 +831,13 @@ fn test_notification_message_in_thread_snapshot() {
 
 #[test]
 fn test_notification_message_reply_snapshot() {
-    let event = NotificationEvent::Message {
+    let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1000),
         message_id: MessageId::new(2000),
         user: "replyuser".to_string(),
         user_id: UserId::new(3000),
         content: "replying to someone".to_string(),
-        timestamp: "2026-01-01T00:00:00+00:00".to_string(),
+        timestamp: Timestamp::parse("2026-01-01T00:00:00+00:00").unwrap(),
         attachments: vec![],
         is_voice_message: false,
         thread_parent_id: None,
@@ -844,20 +845,20 @@ fn test_notification_message_reply_snapshot() {
         reply_to_user_id: Some(UserId::new(4444)),
         reply_to_user: Some("parentuser".to_string()),
         reply_to_content_preview: Some("the original message".to_string()),
-    };
+    });
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
 }
 
 #[test]
 fn test_notification_message_reply_in_thread_snapshot() {
-    let event = NotificationEvent::Message {
+    let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1000),
         message_id: MessageId::new(2000),
         user: "threaduser".to_string(),
         user_id: UserId::new(3000),
         content: "reply in thread".to_string(),
-        timestamp: "2026-01-01T00:00:00+00:00".to_string(),
+        timestamp: Timestamp::parse("2026-01-01T00:00:00+00:00").unwrap(),
         attachments: vec![],
         is_voice_message: false,
         thread_parent_id: Some(ChannelId::new(700)),
@@ -865,7 +866,7 @@ fn test_notification_message_reply_in_thread_snapshot() {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-    };
+    });
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
 }

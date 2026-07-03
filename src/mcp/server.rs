@@ -13,8 +13,9 @@
 
 pub use crate::tracing_channel::TraceLevelController;
 use crate::{
+    coalesce::{CoalesceResult, coalesce},
     delivery_buffer::{BufferResult, DeliveryBuffer},
-    discord::events::NotificationEvent,
+    discord::events::{MessageEvent, NotificationEvent},
     mcp::{
         dispatch::call_tool,
         notifications::IntoNotification,
@@ -130,6 +131,11 @@ pub async fn run(
     let mut rate_limiter = RateLimiter::new(config.rate_limit_runtime().clone());
     let mut delivery_buffer = DeliveryBuffer::new();
 
+    // Resolve timezone once at startup so `deliver_flushed` doesn't need to
+    // load config just for the tz. Updated opportunistically when we already
+    // load config per-event for the rate limiter.
+    let initial_tz = config.tz;
+
     let state_dir_notif = server.state_dir.clone();
 
     // Notification forwarding task.
@@ -139,6 +145,7 @@ pub async fn run(
     let notif_task = tokio::spawn(async move {
         let mut rx = event_rx;
         let mut events_since_prune: u64 = 0;
+        let mut tz = initial_tz;
         const PRUNE_INTERVAL: u64 = 100;
 
         loop {
@@ -153,7 +160,7 @@ pub async fn run(
                     break;
                 }
 
-                // Flush deadline fires — drain buffered events.
+                // Flush deadline fires — drain and coalesce buffered events.
                 _ = async {
                     match flush_deadline {
                         Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -162,11 +169,7 @@ pub async fn run(
                 } => {
                     let now = tokio::time::Instant::now();
                     let flushed = delivery_buffer.flush_ready(now);
-                    let notifications: Vec<Value> = flushed
-                        .into_iter()
-                        .map(IntoNotification::into_notification)
-                        .collect();
-                    write_lines(&stdout_notif, &notifications).await;
+                    deliver_flushed(&stdout_notif, flushed, tz).await;
                 }
 
                 // New event arrives from Discord.
@@ -175,6 +178,10 @@ pub async fn run(
 
                     // Reload config from ArcSwap (cheap Arc pointer load).
                     let cfg = crate::config::load_config(&state_dir_notif);
+
+                    // Keep tz in sync with config changes so flushes use
+                    // the current value without a separate config load.
+                    tz = cfg.tz;
 
                     // Live-reload rate limiter config before the check so
                     // changes apply to the current event, not the next one.
@@ -185,7 +192,7 @@ pub async fn run(
                     }
 
                     // Rate-limit check for message events.
-                    if let NotificationEvent::Message { ref user_id, ref chat_id, .. } = event {
+                    if let NotificationEvent::Message(MessageEvent { ref user_id, ref chat_id, .. }) = event {
                         let user_id_str = user_id.get().to_string();
                         let chat_id_str = chat_id.get().to_string();
                         let sender = ParticipantId::new(&user_id_str);
@@ -240,11 +247,7 @@ pub async fn run(
 
         // Channel closed — flush any remaining buffered events.
         let remaining = delivery_buffer.flush_all();
-        let notifications: Vec<Value> = remaining
-            .into_iter()
-            .map(IntoNotification::into_notification)
-            .collect();
-        write_lines(&stdout_notif, &notifications).await;
+        deliver_flushed(&stdout_notif, remaining, tz).await;
     });
 
     // Main request loop.
@@ -412,27 +415,41 @@ async fn write_line(stdout: &Arc<Mutex<tokio::io::Stdout>>, value: &Value) {
     }
 }
 
-/// Write multiple JSON-RPC notifications in a single write+flush.
-async fn write_lines(stdout: &Arc<Mutex<tokio::io::Stdout>>, values: &[Value]) {
-    if values.is_empty() {
+// ── Notification helpers ─────────────────────────────────────────────────────
+
+/// Deliver flushed events, coalescing multiple events into a single envelope.
+///
+/// Single events pass through as individual notifications. Multiple events
+/// are coalesced into a single batched notification so the LLM receives one
+/// prompt injection per batch window instead of N.
+async fn deliver_flushed(
+    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    events: Vec<NotificationEvent>,
+    tz: Option<chrono_tz::Tz>,
+) {
+    if events.is_empty() {
         return;
     }
-    let mut buf = String::new();
-    for value in values {
-        buf.push_str(&serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()));
-        buf.push('\n');
-    }
-    let mut out = stdout.lock().await;
-    if let Err(e) = out.write_all(buf.as_bytes()).await {
-        tracing::warn!(error = %e, "failed to write MCP notifications to stdout");
-        return;
-    }
-    if let Err(e) = out.flush().await {
-        tracing::warn!(error = %e, "failed to flush stdout");
+
+    let event_count = events.len();
+
+    match coalesce(events, tz) {
+        Some(CoalesceResult::Single(event)) => {
+            let notification = event.into_notification();
+            write_line(stdout, &notification).await;
+        }
+        Some(CoalesceResult::Coalesced(notification)) => {
+            tracing::debug!(
+                event_count,
+                "coalesced {event_count} events into single delivery"
+            );
+            write_line(stdout, &notification).await;
+        }
+        None => {
+            // Empty — nothing to deliver.
+        }
     }
 }
-
-// ── Notification helpers ─────────────────────────────────────────────────────
 
 /// Extract the delivery delay (ms) for an event based on its channel ID.
 ///
@@ -440,8 +457,8 @@ async fn write_lines(stdout: &Arc<Mutex<tokio::io::Stdout>>, values: &[Value]) {
 /// MessageDelete, Reaction). Non-channel events always return 0.
 fn extract_delay_ms(event: &NotificationEvent, config: &crate::config::LoadedConfig) -> u64 {
     let channel_id = match event {
-        NotificationEvent::Message { chat_id, .. }
-        | NotificationEvent::MessageEdit { chat_id, .. }
+        NotificationEvent::Message(msg) => Some(msg.chat_id.get()),
+        NotificationEvent::MessageEdit { chat_id, .. }
         | NotificationEvent::MessageDelete { chat_id, .. }
         | NotificationEvent::Reaction { chat_id, .. } => Some(chat_id.get()),
         _ => None,
@@ -490,6 +507,7 @@ mod tests {
         config::{ChannelConfig, Config, LoadedConfig},
         delivery_buffer::{BufferResult, DeliveryBuffer},
         mcp::notifications::IntoNotification,
+        timestamp::Timestamp,
     };
     use serenity::model::id::{ChannelId, MessageId, UserId};
 
@@ -510,13 +528,13 @@ mod tests {
     }
 
     fn message_event(channel: u64) -> NotificationEvent {
-        NotificationEvent::Message {
+        NotificationEvent::Message(MessageEvent {
             chat_id: ChannelId::new(channel),
             message_id: MessageId::new(1),
             user: "u".into(),
             user_id: UserId::new(1),
             content: "c".into(),
-            timestamp: "2026-01-01T00:00:00Z".into(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
@@ -524,7 +542,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
-        }
+        })
     }
 
     #[test]
@@ -555,7 +573,7 @@ mod tests {
             user: "u".into(),
             user_id: UserId::new(1),
             new_content: "edited".into(),
-            timestamp: "2026-01-01T00:00:00Z".into(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             thread_parent_id: None,
             reply_to_message_id: None,
         };
