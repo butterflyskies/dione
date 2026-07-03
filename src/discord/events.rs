@@ -122,15 +122,18 @@ impl EventHandler for Handler {
         let config = crate::config::load_config(&self.state_dir);
 
         // Webhook messages from proxy bots (e.g. PluralKit) have author.bot=true
-        // but represent human speech. Check the webhook creator before dropping.
-        if should_drop_bot_message(msg.author.bot, msg.author.id.get(), &config) {
-            let dominated_by_proxy = match msg.webhook_id {
-                Some(wh_id) => is_proxy_webhook(&ctx.http, &self.state, wh_id.get()).await,
-                None => false,
-            };
-            if !dominated_by_proxy {
-                return;
-            }
+        // but represent human-authored content. Check the webhook creator before dropping.
+        if should_filter_bot_message(
+            &ctx.http,
+            &self.state,
+            msg.author.bot,
+            msg.author.id.get(),
+            msg.webhook_id.map(|wh| wh.get()),
+            &config,
+        )
+        .await
+        {
+            return;
         }
         let bot_user_id = self.bot_user_id.load(Ordering::Relaxed);
 
@@ -348,17 +351,18 @@ impl EventHandler for Handler {
 
         let config = crate::config::load_config(&self.state_dir);
 
-        // Proxy bot webhook edits: same logic as message(). The webhook_id
-        // lives directly on the event as Option<Option<WebhookId>>.
-        if should_drop_bot_message(author.bot, author.id.get(), &config) {
-            let webhook_id = event.webhook_id.flatten();
-            let dominated_by_proxy = match webhook_id {
-                Some(wh_id) => is_proxy_webhook(&ctx.http, &self.state, wh_id.get()).await,
-                None => false,
-            };
-            if !dominated_by_proxy {
-                return;
-            }
+        // Proxy bot webhook edits: same logic as message().
+        if should_filter_bot_message(
+            &ctx.http,
+            &self.state,
+            author.bot,
+            author.id.get(),
+            event.webhook_id.flatten().map(|wh| wh.get()),
+            &config,
+        )
+        .await
+        {
+            return;
         }
 
         let new_content = event
@@ -818,6 +822,32 @@ async fn notify_admin_dm(
     }
 }
 
+/// Returns `true` if a bot message should be filtered out after considering
+/// proxy-bot webhooks.
+///
+/// Decision path:
+/// 1. If the author is not a bot, or is a bot in `allow_from` → keep (false).
+/// 2. If the message came from a webhook created by a known proxy bot
+///    (e.g. PluralKit) → keep (false) — it represents human-authored content.
+/// 3. Otherwise → filter (true).
+async fn should_filter_bot_message(
+    http: &serenity::http::Http,
+    state: &crate::state::State,
+    is_bot: bool,
+    user_id: u64,
+    webhook_id: Option<u64>,
+    config: &crate::config::LoadedConfig,
+) -> bool {
+    if !should_drop_bot_message(is_bot, user_id, config) {
+        return false;
+    }
+    let is_proxy = match webhook_id {
+        Some(wh_id) => is_proxy_webhook(http, state, wh_id).await,
+        None => false,
+    };
+    !is_proxy
+}
+
 /// Returns `true` if the message should be dropped because the author is a bot
 /// whose user ID is **not** in the `allow_from` list.
 ///
@@ -960,12 +990,59 @@ mod tests {
         );
     }
 
-    /// An arbitrary bot ID is not in the proxy bot list.
+    /// Carl-bot is not a proxy bot and must not be in the proxy bot list.
     #[test]
-    fn test_random_bot_not_in_proxy_bot_ids() {
+    fn test_carlbot_not_in_proxy_bot_ids() {
         assert!(
-            !PROXY_BOT_IDS.contains(&123456789),
-            "arbitrary bot ID must not be in PROXY_BOT_IDS"
+            !PROXY_BOT_IDS.contains(&235148962103951360),
+            "Carl-bot must not be in PROXY_BOT_IDS"
+        );
+    }
+
+    // ── proxy bot filter behavioral tests ────────────────────────────────────
+
+    /// PluralKit-proxied message: the bot filter catches it (bot=true, not in
+    /// allow_from), but proxy-bot recognition rescues it. Without a webhook
+    /// lookup (tested separately via integration), the rescue depends on PK's
+    /// bot ID being in PROXY_BOT_IDS.
+    #[test]
+    fn test_pluralkit_proxy_message_passes_through_bot_filter() {
+        let config = config_with_allow_from(vec![]);
+        let pk_bot_id: u64 = 466378653216014359;
+
+        // Step 1: PK messages have author.bot=true, so the initial bot filter
+        // flags them for dropping.
+        assert!(
+            should_drop_bot_message(true, pk_bot_id, &config),
+            "PluralKit bot should be initially caught by bot filter"
+        );
+
+        // Step 2: But PK is a known proxy bot, so the webhook-creator check
+        // rescues the message — its ID is in PROXY_BOT_IDS.
+        assert!(
+            PROXY_BOT_IDS.contains(&pk_bot_id),
+            "PluralKit must be recognized as a proxy bot to rescue its messages"
+        );
+    }
+
+    /// Carl-bot (non-proxy bot): the bot filter catches it and no proxy-bot
+    /// recognition rescues it, so the message is filtered out.
+    #[test]
+    fn test_carlbot_message_filtered_as_non_proxy_bot() {
+        let config = config_with_allow_from(vec![]);
+        let carlbot_id: u64 = 235148962103951360;
+
+        // Step 1: Carl-bot messages have author.bot=true, so the bot filter
+        // flags them for dropping.
+        assert!(
+            should_drop_bot_message(true, carlbot_id, &config),
+            "Carl-bot should be caught by bot filter"
+        );
+
+        // Step 2: Carl-bot is NOT a proxy bot — no rescue.
+        assert!(
+            !PROXY_BOT_IDS.contains(&carlbot_id),
+            "Carl-bot must not be recognized as a proxy bot"
         );
     }
 
