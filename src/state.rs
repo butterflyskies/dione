@@ -37,7 +37,7 @@ pub struct SharedState {
     /// (e.g. PluralKit). `true` means the webhook is a proxy bot webhook whose
     /// messages should be treated as human-authored. PK reuses webhooks
     /// per-channel, so this cache is very effective.
-    pub proxy_webhooks: HashMap<u64, bool>,
+    pub proxy_webhooks: BTreeMap<u64, bool>,
 }
 
 /// Thread-safe shared state handle.
@@ -65,7 +65,7 @@ impl SharedState {
             non_bot_message_ids: BTreeSet::new(),
             user_names: BTreeMap::new(),
             thread_parents: BTreeMap::new(),
-            proxy_webhooks: HashMap::new(),
+            proxy_webhooks: BTreeMap::new(),
         }
     }
 
@@ -128,9 +128,8 @@ impl SharedState {
     pub fn record_proxy_webhook(&mut self, webhook_id: u64, is_proxy: bool) {
         self.proxy_webhooks.insert(webhook_id, is_proxy);
         while self.proxy_webhooks.len() > WEBHOOK_CACHE_CAP {
-            // HashMap doesn't have ordered eviction; just remove an arbitrary entry.
-            if let Some(&key) = self.proxy_webhooks.keys().next() {
-                self.proxy_webhooks.remove(&key);
+            if let Some(&oldest) = self.proxy_webhooks.keys().next() {
+                self.proxy_webhooks.remove(&oldest);
             } else {
                 break;
             }
