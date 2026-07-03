@@ -1160,18 +1160,18 @@ mod tests {
 
     #[test]
     fn display_name_from_user_falls_back_to_username() {
-        let user_json = wire_author(1, "bob");
+        let user_json = wire_author(1, "bob_iverse");
         let user: serenity::model::user::User =
             serde_json::from_value(user_json).expect("valid User JSON");
-        assert_eq!(display_name_from_user(&user), "bob");
+        assert_eq!(display_name_from_user(&user), "bob_iverse");
     }
 
     #[test]
     fn display_name_from_user_prefers_global_name() {
-        let mut user_json = wire_author(1, "bob");
-        user_json["global_name"] = serde_json::json!("Bob Display");
+        let mut user_json = wire_author(1, "bob_iverse");
+        user_json["global_name"] = serde_json::json!("Bob Iverse");
         let user: serenity::model::user::User =
             serde_json::from_value(user_json).expect("valid User JSON");
-        assert_eq!(display_name_from_user(&user), "Bob Display");
+        assert_eq!(display_name_from_user(&user), "Bob Iverse");
     }
 }
