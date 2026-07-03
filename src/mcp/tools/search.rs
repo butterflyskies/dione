@@ -414,7 +414,14 @@ pub async fn search_messages(ctx: &MessagingCtx, guild_id: GuildId, params: Sear
     // element of each inner array is the matching message.
     let raw_messages = match body["messages"].as_array() {
         Some(arr) => arr,
-        None => return json!({ "messages": [], "total_results": 0 }),
+        None => {
+            return json!({
+                "messages": [],
+                "count": 0,
+                "offset": params.offset.unwrap_or_default().get(),
+                "has_more": false,
+            });
+        }
     };
 
     // Filter results to channels permitted by the outbound gate.
@@ -427,9 +434,12 @@ pub async fn search_messages(ctx: &MessagingCtx, guild_id: GuildId, params: Sear
     );
     drop(state);
 
+    let page_size = limit.get() as usize;
     json!({
         "messages": messages,
-        "total_results": messages.len(),
+        "count": messages.len(),
+        "offset": offset.get(),
+        "has_more": raw_messages.len() >= page_size,
     })
 }
 
@@ -849,6 +859,70 @@ mod tests {
             "only the configured channel's message should survive"
         );
         assert_eq!(results[0]["channel_id"], "42");
+    }
+
+    #[test]
+    fn filter_results_passes_thread_of_configured_channel() {
+        use crate::config::{ChannelConfig, Config};
+
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        let config = crate::config::LoadedConfig::from_raw(raw);
+
+        let thread_msg = wire_search_message("100", "77");
+
+        let raw_messages = vec![json!([thread_msg])];
+        let dm_ids = HashSet::new();
+        let mut thread_parents = BTreeMap::new();
+        thread_parents.insert(77u64, Some(42u64));
+
+        let results = filter_results(&config, &dm_ids, &thread_parents, &raw_messages);
+
+        assert_eq!(results.len(), 1, "thread of configured channel should pass");
+    }
+
+    #[test]
+    fn filter_results_passes_dm_channel() {
+        use crate::config::Config;
+
+        let config = crate::config::LoadedConfig::from_raw(Config::default());
+
+        let dm_msg = wire_search_message("101", "55");
+
+        let raw_messages = vec![json!([dm_msg])];
+        let mut dm_ids = HashSet::new();
+        dm_ids.insert(55u64);
+        let thread_parents = BTreeMap::new();
+
+        let results = filter_results(&config, &dm_ids, &thread_parents, &raw_messages);
+
+        assert_eq!(results.len(), 1, "known DM channel should pass");
+    }
+
+    /// Helper: build a minimal Discord message JSON for filter tests.
+    fn wire_search_message(msg_id: &str, channel_id: &str) -> Value {
+        json!({
+            "id": msg_id,
+            "type": 0,
+            "channel_id": channel_id,
+            "author": {
+                "id": "1", "username": "test", "global_name": null,
+                "avatar": null, "discriminator": "0", "public_flags": 0
+            },
+            "content": "test message",
+            "timestamp": "2024-01-01T00:00:00.000000+00:00",
+            "edited_timestamp": null,
+            "tts": false,
+            "mention_everyone": false,
+            "mentions": [],
+            "mention_roles": [],
+            "attachments": [],
+            "embeds": [],
+            "pinned": false
+        })
     }
 
     // ── Enum Display ────────────────────────────────────────────────────────
