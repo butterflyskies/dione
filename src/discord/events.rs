@@ -158,10 +158,10 @@ impl EventHandler for Handler {
                     let cooldown = std::time::Duration::from_secs(
                         config.access_requests.notify_cooldown_seconds,
                     );
-                    let dn = display_name(&msg);
+                    let sender_name = display_name(&msg);
                     let request = AccessRequest {
                         user_id: sender_id,
-                        username: dn.clone(),
+                        username: sender_name.clone(),
                         message_preview: msg.content.clone(),
                         timestamp: chrono::Utc::now(),
                     };
@@ -179,8 +179,14 @@ impl EventHandler for Handler {
 
                     if should_notify {
                         for &admin_id in &config.admin_ids {
-                            notify_admin_dm(&ctx.http, admin_id, &dn, sender_id, &msg.content)
-                                .await;
+                            notify_admin_dm(
+                                &ctx.http,
+                                admin_id,
+                                &sender_name,
+                                sender_id,
+                                &msg.content,
+                            )
+                            .await;
                         }
                     }
                 }
@@ -374,12 +380,12 @@ impl EventHandler for Handler {
             if is_dm {
                 state.record_dm_channel(author.id.get(), channel_id);
             }
-            let dn = new
+            let sender_name = new
                 .as_ref()
                 .map(|m| display_name(m))
                 .unwrap_or_else(|| display_name_from_user(author));
-            state.cache_username(author.id.get(), dn.clone());
-            dn
+            state.cache_username(author.id.get(), sender_name.clone());
+            sender_name
         };
 
         let timestamp = config.localize_rfc3339(&serenity_ts_to_rfc3339("edited_ts", &edited_ts));
