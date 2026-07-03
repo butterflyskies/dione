@@ -382,7 +382,7 @@ impl EventHandler for Handler {
             }
             let sender_name = new
                 .as_ref()
-                .map(|m| display_name(m))
+                .map(display_name)
                 .unwrap_or_else(|| display_name_from_user(author));
             state.cache_username(author.id.get(), sender_name.clone());
             sender_name
