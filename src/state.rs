@@ -37,7 +37,7 @@ pub struct SharedState {
     /// (e.g. PluralKit). `true` means the webhook is a proxy bot webhook whose
     /// messages should be treated as human-authored. PK reuses webhooks
     /// per-channel, so this cache is very effective.
-    pub proxy_webhooks: BTreeMap<u64, bool>,
+    pub proxy_webhooks: HashMap<u64, bool>,
 }
 
 /// Thread-safe shared state handle.
@@ -46,7 +46,10 @@ pub type State = Arc<RwLock<SharedState>>;
 /// Maximum recent-sent-ID entries kept in memory.
 const SENT_IDS_CAP: usize = 200;
 
+/// Maximum thread-parent cache entries.
 const THREAD_CACHE_CAP: usize = 200;
+
+/// Maximum proxy-webhook cache entries.
 const WEBHOOK_CACHE_CAP: usize = 200;
 
 // ── Implementation ────────────────────────────────────────────────────────────
@@ -62,7 +65,7 @@ impl SharedState {
             non_bot_message_ids: BTreeSet::new(),
             user_names: BTreeMap::new(),
             thread_parents: BTreeMap::new(),
-            proxy_webhooks: BTreeMap::new(),
+            proxy_webhooks: HashMap::new(),
         }
     }
 
@@ -124,9 +127,13 @@ impl SharedState {
     /// Caches whether a webhook ID belongs to a proxy bot (e.g. PluralKit).
     pub fn record_proxy_webhook(&mut self, webhook_id: u64, is_proxy: bool) {
         self.proxy_webhooks.insert(webhook_id, is_proxy);
-        // Prune if over cap — BTreeMap with snowflake keys evicts oldest first.
         while self.proxy_webhooks.len() > WEBHOOK_CACHE_CAP {
-            self.proxy_webhooks.pop_first();
+            // HashMap doesn't have ordered eviction; just remove an arbitrary entry.
+            if let Some(&key) = self.proxy_webhooks.keys().next() {
+                self.proxy_webhooks.remove(&key);
+            } else {
+                break;
+            }
         }
     }
 
