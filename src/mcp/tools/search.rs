@@ -86,6 +86,75 @@ impl TryFrom<u64> for SearchOffset {
     }
 }
 
+/// A timestamp for search bounds — accepts either a Discord snowflake ID
+/// or an ISO 8601 date (YYYY-MM-DD).
+#[derive(Debug, Clone)]
+pub enum SearchTimestamp {
+    Snowflake(u64),
+    Date(chrono::NaiveDate),
+}
+
+impl SearchTimestamp {
+    pub fn to_snowflake(&self) -> Result<u64, SearchError> {
+        match self {
+            Self::Snowflake(id) => Ok(*id),
+            Self::Date(nd) => {
+                let dt = nd
+                    .and_hms_opt(0, 0, 0)
+                    .ok_or_else(|| SearchError::InvalidDate(nd.to_string()))?;
+                let ms = dt.and_utc().timestamp_millis();
+                let discord_ms = ms - DISCORD_EPOCH_MS;
+                if discord_ms < 0 {
+                    return Err(SearchError::InvalidDate(format!(
+                        "{nd}: date is before Discord epoch (2015-01-01)"
+                    )));
+                }
+                Ok((discord_ms as u64) << 22)
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SearchTimestamp {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct TimestampVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for TimestampVisitor {
+            type Value = SearchTimestamp;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "a snowflake ID (integer/string) or YYYY-MM-DD date")
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Self::Value, E> {
+                if v == 0 {
+                    return Err(E::custom("snowflake ID must be nonzero"));
+                }
+                Ok(SearchTimestamp::Snowflake(v))
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                if let Ok(id) = v.parse::<u64>() {
+                    if id == 0 {
+                        return Err(E::custom("snowflake ID must be nonzero"));
+                    }
+                    return Ok(SearchTimestamp::Snowflake(id));
+                }
+                chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d")
+                    .map(SearchTimestamp::Date)
+                    .map_err(|_| {
+                        E::custom(format!("expected snowflake ID or YYYY-MM-DD, got '{v}'"))
+                    })
+            }
+        }
+
+        deserializer.deserialize_any(TimestampVisitor)
+    }
+}
+
 // ── Enums ───────────────────────────────────────────────────────────────────
 
 /// Attachment type filter for search.
@@ -240,12 +309,12 @@ pub struct SearchParams {
     pub mentions: Vec<UserId>,
     #[serde(default)]
     pub has: Vec<SearchHas>,
-    /// ISO 8601 date (YYYY-MM-DD). Converted to a `max_id` snowflake.
+    /// Snowflake ID or ISO 8601 date (YYYY-MM-DD). Converted to `max_id`.
     #[serde(default)]
-    pub before: Option<String>,
-    /// ISO 8601 date (YYYY-MM-DD). Converted to a `min_id` snowflake.
+    pub before: Option<SearchTimestamp>,
+    /// Snowflake ID or ISO 8601 date (YYYY-MM-DD). Converted to `min_id`.
     #[serde(default)]
-    pub after: Option<String>,
+    pub after: Option<SearchTimestamp>,
     #[serde(
         default,
         rename = "channel_id",
@@ -283,25 +352,6 @@ impl SearchParams {
 /// Discord epoch: 2015-01-01T00:00:00Z in milliseconds since Unix epoch.
 const DISCORD_EPOCH_MS: i64 = 1_420_070_400_000;
 
-/// Converts an ISO 8601 date string (YYYY-MM-DD) to a Discord snowflake.
-///
-/// The snowflake encodes the start of the given day (00:00:00 UTC).
-fn date_to_snowflake(date: &str) -> Result<u64, SearchError> {
-    let nd = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
-        .map_err(|_| SearchError::InvalidDate(date.to_string()))?;
-    let dt = nd
-        .and_hms_opt(0, 0, 0)
-        .ok_or_else(|| SearchError::InvalidDate(date.to_string()))?;
-    let ms = dt.and_utc().timestamp_millis();
-    let discord_ms = ms - DISCORD_EPOCH_MS;
-    if discord_ms < 0 {
-        return Err(SearchError::InvalidDate(format!(
-            "{date}: date is before Discord epoch (2015-01-01)"
-        )));
-    }
-    Ok((discord_ms as u64) << 22)
-}
-
 // ── Main search function ────────────────────────────────────────────────────
 
 /// Search messages in a guild using Discord's search endpoint.
@@ -330,13 +380,13 @@ pub async fn search_messages(ctx: &MessagingCtx, guild_id: GuildId, params: Sear
         query.push(("has", h.to_string()));
     }
     if let Some(ref before) = params.before {
-        match date_to_snowflake(before) {
+        match before.to_snowflake() {
             Ok(sf) => query.push(("max_id", sf.to_string())),
             Err(e) => return json!({ "error": e.to_string() }),
         }
     }
     if let Some(ref after) = params.after {
-        match date_to_snowflake(after) {
+        match after.to_snowflake() {
             Ok(sf) => query.push(("min_id", sf.to_string())),
             Err(e) => return json!({ "error": e.to_string() }),
         }
@@ -580,34 +630,58 @@ mod tests {
     // ── date_to_snowflake ───────────────────────────────────────────────────
 
     #[test]
-    fn date_to_snowflake_valid_date() {
+    fn search_timestamp_date_to_snowflake() {
         // 2024-01-15 00:00:00 UTC
         // Unix ms: 1705276800000
         // Discord ms: 1705276800000 - 1420070400000 = 285206400000
         // Snowflake: 285206400000 << 22
-        let sf = date_to_snowflake("2024-01-15").unwrap();
+        let ts = SearchTimestamp::Date(chrono::NaiveDate::from_ymd_opt(2024, 1, 15).unwrap());
+        let sf = ts.to_snowflake().unwrap();
         let expected = (1_705_276_800_000i64 - DISCORD_EPOCH_MS) as u64;
         assert_eq!(sf, expected << 22);
     }
 
     #[test]
-    fn date_to_snowflake_discord_epoch() {
-        // 2015-01-01 is the Discord epoch — snowflake should be 0.
-        let sf = date_to_snowflake("2015-01-01").unwrap();
+    fn search_timestamp_discord_epoch() {
+        let ts = SearchTimestamp::Date(chrono::NaiveDate::from_ymd_opt(2015, 1, 1).unwrap());
+        let sf = ts.to_snowflake().unwrap();
         assert_eq!(sf, 0);
     }
 
     #[test]
-    fn date_to_snowflake_before_epoch_is_error() {
-        assert!(date_to_snowflake("2014-12-31").is_err());
-        assert!(date_to_snowflake("2000-01-01").is_err());
+    fn search_timestamp_before_epoch_is_error() {
+        let ts = SearchTimestamp::Date(chrono::NaiveDate::from_ymd_opt(2014, 12, 31).unwrap());
+        assert!(ts.to_snowflake().is_err());
     }
 
     #[test]
-    fn date_to_snowflake_invalid_format() {
-        assert!(date_to_snowflake("not-a-date").is_err());
-        assert!(date_to_snowflake("2024/01/15").is_err());
-        assert!(date_to_snowflake("").is_err());
+    fn search_timestamp_snowflake_passthrough() {
+        let ts = SearchTimestamp::Snowflake(123456789);
+        assert_eq!(ts.to_snowflake().unwrap(), 123456789);
+    }
+
+    #[test]
+    fn search_timestamp_deserializes_date_string() {
+        let ts: SearchTimestamp = serde_json::from_value(json!("2024-01-15")).unwrap();
+        assert!(matches!(ts, SearchTimestamp::Date(_)));
+    }
+
+    #[test]
+    fn search_timestamp_deserializes_snowflake_number() {
+        let ts: SearchTimestamp = serde_json::from_value(json!(123456789)).unwrap();
+        assert!(matches!(ts, SearchTimestamp::Snowflake(123456789)));
+    }
+
+    #[test]
+    fn search_timestamp_deserializes_snowflake_string() {
+        let ts: SearchTimestamp = serde_json::from_value(json!("123456789")).unwrap();
+        assert!(matches!(ts, SearchTimestamp::Snowflake(123456789)));
+    }
+
+    #[test]
+    fn search_timestamp_rejects_invalid() {
+        assert!(serde_json::from_value::<SearchTimestamp>(json!("not-a-date")).is_err());
+        assert!(serde_json::from_value::<SearchTimestamp>(json!(0)).is_err());
     }
 
     // ── SearchParams ────────────────────────────────────────────────────────
@@ -645,8 +719,8 @@ mod tests {
         assert_eq!(params.author_ids, vec![UserId::new(123)]);
         assert_eq!(params.mentions, vec![UserId::new(456)]);
         assert_eq!(params.has, vec![SearchHas::Image, SearchHas::File]);
-        assert_eq!(params.before.as_deref(), Some("2024-06-01"));
-        assert_eq!(params.after.as_deref(), Some("2024-01-01"));
+        assert!(matches!(params.before, Some(SearchTimestamp::Date(_))));
+        assert!(matches!(params.after, Some(SearchTimestamp::Date(_))));
         assert_eq!(params.channel_ids, vec![ChannelId::new(789)]);
         assert_eq!(params.sort_by, Some(SortBy::Timestamp));
         assert_eq!(params.sort_order, Some(SortOrder::Desc));
