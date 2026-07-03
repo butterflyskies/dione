@@ -342,14 +342,10 @@ impl EventHandler for Handler {
 
         let config = crate::config::load_config(&self.state_dir);
 
-        // Proxy bot webhook edits: same logic as message(), but webhook_id
-        // must be resolved from the full Message objects since
-        // MessageUpdateEvent doesn't carry it.
+        // Proxy bot webhook edits: same logic as message(). The webhook_id
+        // lives directly on the event as Option<Option<WebhookId>>.
         if should_drop_bot_message(author.bot, author.id.get(), &config) {
-            let webhook_id = new
-                .as_ref()
-                .and_then(|m| m.webhook_id)
-                .or_else(|| old_if_available.as_ref().and_then(|m| m.webhook_id));
+            let webhook_id = event.webhook_id.flatten();
             let dominated_by_proxy = match webhook_id {
                 Some(wh_id) => is_proxy_webhook(&ctx.http, &self.state, wh_id.get()).await,
                 None => false,
@@ -843,16 +839,18 @@ async fn is_proxy_webhook(
             .as_ref()
             .is_some_and(|u| PROXY_BOT_IDS.contains(&u.id.get())),
         Err(e) => {
+            // Don't cache errors — transient API failures (rate limits, network)
+            // would permanently silence this webhook's messages.
             tracing::debug!(
                 webhook_id,
                 error = %e,
                 "failed to look up webhook for proxy bot detection"
             );
-            false
+            return false;
         }
     };
 
-    // Cache the result.
+    // Cache only on successful lookup.
     {
         let mut state = state.write().await;
         state.record_proxy_webhook(webhook_id, is_proxy);
