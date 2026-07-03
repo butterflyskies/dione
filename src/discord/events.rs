@@ -375,7 +375,7 @@ impl EventHandler for Handler {
             return;
         }
 
-        let edit_display_name = {
+        let sender_name = {
             let mut state = self.state.write().await;
             if is_dm {
                 state.record_dm_channel(author.id.get(), channel_id);
@@ -401,7 +401,7 @@ impl EventHandler for Handler {
         let ev = NotificationEvent::MessageEdit {
             chat_id: event.channel_id,
             message_id: event.id,
-            user: edit_display_name,
+            user: sender_name,
             user_id: author.id,
             new_content,
             timestamp,
