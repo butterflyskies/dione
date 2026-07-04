@@ -33,6 +33,11 @@ pub struct SharedState {
     /// `None` means the channel was looked up and confirmed **not** to be a thread
     /// (negative cache), avoiding repeated HTTP calls.
     pub thread_parents: BTreeMap<u64, Option<u64>>,
+    /// Cache of webhook ID → whether it was created by a known proxy bot
+    /// (e.g. PluralKit). `true` means the webhook is a proxy bot webhook whose
+    /// messages should be treated as human-authored. PK reuses webhooks
+    /// per-channel, so this cache is very effective.
+    pub proxy_webhooks: BTreeMap<u64, bool>,
 }
 
 /// Thread-safe shared state handle.
@@ -41,8 +46,8 @@ pub type State = Arc<RwLock<SharedState>>;
 /// Maximum recent-sent-ID entries kept in memory.
 const SENT_IDS_CAP: usize = 200;
 
-/// Maximum thread-parent cache entries.
 const THREAD_CACHE_CAP: usize = 200;
+const WEBHOOK_CACHE_CAP: usize = 200;
 
 // ── Implementation ────────────────────────────────────────────────────────────
 
@@ -57,6 +62,7 @@ impl SharedState {
             non_bot_message_ids: BTreeSet::new(),
             user_names: BTreeMap::new(),
             thread_parents: BTreeMap::new(),
+            proxy_webhooks: BTreeMap::new(),
         }
     }
 
@@ -109,6 +115,18 @@ impl SharedState {
         while self.user_names.len() > SENT_IDS_CAP {
             if let Some(&oldest) = self.user_names.keys().next() {
                 self.user_names.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Caches whether a webhook ID belongs to a proxy bot (e.g. PluralKit).
+    pub fn record_proxy_webhook(&mut self, webhook_id: u64, is_proxy: bool) {
+        self.proxy_webhooks.insert(webhook_id, is_proxy);
+        while self.proxy_webhooks.len() > WEBHOOK_CACHE_CAP {
+            if let Some(&oldest) = self.proxy_webhooks.keys().next() {
+                self.proxy_webhooks.remove(&oldest);
             } else {
                 break;
             }
@@ -338,6 +356,29 @@ mod tests {
         assert!(
             !state.recent_sent_ids.contains(&5003),
             "unrelated pending entry must not be marked sent"
+        );
+    }
+
+    #[test]
+    fn test_record_proxy_webhook() {
+        let mut state = SharedState::new();
+        state.record_proxy_webhook(100, true);
+        state.record_proxy_webhook(200, false);
+        assert_eq!(state.proxy_webhooks.get(&100), Some(&true));
+        assert_eq!(state.proxy_webhooks.get(&200), Some(&false));
+        assert_eq!(state.proxy_webhooks.get(&300), None);
+    }
+
+    #[test]
+    fn test_proxy_webhook_cache_prunes() {
+        let mut state = SharedState::new();
+        for i in 0u64..210 {
+            state.record_proxy_webhook(i, i % 2 == 0);
+        }
+        assert!(
+            state.proxy_webhooks.len() <= 200,
+            "proxy_webhooks exceeded cap: {}",
+            state.proxy_webhooks.len()
         );
     }
 }
