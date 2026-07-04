@@ -23,7 +23,8 @@ text_chunk_limit = 2000
 # [contradictionary]
 # enabled = true
 # sidecar_path = "contradictionary.toml"  # TOML sidecar file (relative to config dir)
-# # Inline entries (sidecar entries are appended after these):
+# # Inline entries (sidecar entries are appended after these).
+# # Patterns are matched case-insensitively.
 # # [[contradictionary.entries]]
 # # pattern = "load-bearing"
 # # action = "warn"        # "warn" (🙊), "block" (reject), "log" (silent), "celebrate" (✨)

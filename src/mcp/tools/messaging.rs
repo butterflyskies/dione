@@ -84,8 +84,10 @@ pub async fn reply(
         }
         // Log and warn hits are handled post-send (warn self-reacts with 🙊).
         if !contradictionary_hits.is_empty() {
-            let patterns: Vec<&str> =
-                contradictionary_hits.iter().map(|h| h.pattern.as_str()).collect();
+            let patterns: Vec<&str> = contradictionary_hits
+                .iter()
+                .map(|h| h.pattern.as_str())
+                .collect();
             tracing::info!(
                 channel = %channel_id,
                 patterns = ?patterns,
@@ -159,7 +161,9 @@ pub async fn reply(
     if !contradictionary_hits.is_empty()
         && let Some(&first_id) = sent_ids.first()
     {
-        let has_warns = contradictionary_hits.iter().any(|h| h.action == Action::Warn);
+        let has_warns = contradictionary_hits
+            .iter()
+            .any(|h| h.action == Action::Warn);
         let has_celebrates = contradictionary_hits
             .iter()
             .any(|h| h.action == Action::Celebrate);
