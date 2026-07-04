@@ -46,10 +46,7 @@ pub type State = Arc<RwLock<SharedState>>;
 /// Maximum recent-sent-ID entries kept in memory.
 const SENT_IDS_CAP: usize = 200;
 
-/// Maximum thread-parent cache entries.
 const THREAD_CACHE_CAP: usize = 200;
-
-/// Maximum proxy-webhook cache entries.
 const WEBHOOK_CACHE_CAP: usize = 200;
 
 // ── Implementation ────────────────────────────────────────────────────────────
