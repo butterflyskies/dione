@@ -18,6 +18,7 @@ use crate::mcp::tools::{
         react as discord_react, reply, send_dm, send_file,
     },
     render::{render_latex, render_latex_to_channel},
+    search::{SearchParams, search_messages},
 };
 
 fn check_admin_gate(config: &crate::config::LoadedConfig) -> Result<(), String> {
@@ -100,6 +101,14 @@ pub(crate) async fn call_tool(
             let message_id = parse_id(&args, "message_id")?.message();
             get_message(&ctx, channel_id, message_id).await
         }
+        "search_messages" => {
+            let ctx = server.messaging_ctx(config.clone());
+            let guild_id = parse_id(&args, "guild_id")?.guild();
+            let params: SearchParams =
+                serde_json::from_value(args).map_err(|e| format!("invalid search params: {e}"))?;
+            search_messages(&ctx, guild_id, params).await
+        }
+
         "send_file" => {
             let ctx = server.messaging_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?.channel();
