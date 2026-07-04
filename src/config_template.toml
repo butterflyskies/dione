@@ -19,3 +19,9 @@ text_chunk_limit = 2000
 # Global default coalescing delay for channel events (ms). Per-channel
 # delivery_delay_ms overrides this. 0 = no buffering.
 # delivery_delay_ms = 0
+
+# [contradictionary]
+# enabled = true
+# [[contradictionary.entries]]
+# pattern = "load-bearing"
+# action = "warn"          # "warn" (🙊 self-react), "block" (reject), "log" (silent)

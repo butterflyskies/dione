@@ -9,6 +9,7 @@ use serenity::model::channel::Message;
 use serenity::model::id::{ChannelId, MessageId, UserId};
 
 use crate::config::{ChunkMode, DmPolicy, LoadedConfig};
+use crate::contradictionary::Action;
 use crate::discord::chunk;
 use crate::gate::OutboundGate;
 use crate::state::State;
@@ -53,6 +54,38 @@ pub async fn reply(
     }
 
     let ch = channel_id;
+
+    // ── Contradictionary check ────────────────────────────────────────────
+    if let Some(ref contradictionary) = ctx.config.contradictionary {
+        let hits = contradictionary.check(content);
+        if contradictionary.has_block(&hits) {
+            let blocked: Vec<&str> = hits
+                .iter()
+                .filter(|h| h.action == Action::Block)
+                .map(|h| h.pattern.as_str())
+                .collect();
+            tracing::warn!(
+                channel = %channel_id,
+                patterns = ?blocked,
+                "contradictionary blocked outbound message"
+            );
+            return json!({
+                "error": format!(
+                    "message blocked by contradictionary: matched [{}]",
+                    blocked.join(", ")
+                )
+            });
+        }
+        // Log and warn hits are handled post-send (warn self-reacts with 🙊).
+        if !hits.is_empty() {
+            let patterns: Vec<&str> = hits.iter().map(|h| h.pattern.as_str()).collect();
+            tracing::info!(
+                channel = %channel_id,
+                patterns = ?patterns,
+                "contradictionary flagged outbound message"
+            );
+        }
+    }
 
     // Fire typing indicator now that we've committed to sending a reply.
     let _ = ctx.http.broadcast_typing(ch).await;
@@ -112,6 +145,19 @@ pub async fn reply(
                 tracing::warn!(channel_id = channel_id.get(), chunk = i, error = %e, "failed to send chunk");
                 return json!({ "error": format!("failed to send chunk {i}: {e}") });
             }
+        }
+    }
+
+    // ── Contradictionary post-send: self-react 🙊 on warn hits ─────────
+    if let Some(ref contradictionary) = ctx.config.contradictionary {
+        let hits = contradictionary.check(content);
+        let has_warns = hits.iter().any(|h| h.action == Action::Warn);
+        if has_warns && let Some(&first_id) = sent_ids.first() {
+            let reaction = serenity::model::channel::ReactionType::Unicode("🙊".into());
+            let _ = ctx
+                .http
+                .create_reaction(ch, MessageId::new(first_id), &reaction)
+                .await;
         }
     }
 

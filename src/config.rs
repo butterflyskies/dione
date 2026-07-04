@@ -9,6 +9,7 @@ use regex::RegexSet;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::contradictionary::{Contradictionary, ContradictionaryConfig};
 use crate::timestamp::Timestamp;
 
 // ── Error type ───────────────────────────────────────────────────────────────
@@ -41,6 +42,7 @@ pub struct Config {
     pub access_requests: AccessRequestsConfig,
     pub voice: VoiceConfig,
     pub rate_limit: RateLimitTomlConfig,
+    pub contradictionary: ContradictionaryConfig,
 }
 
 /// Access control configuration.
@@ -273,6 +275,8 @@ pub struct LoadedConfig {
     pub tz: Option<chrono_tz::Tz>,
     /// Pre-computed runtime rate limit config (avoids per-event `into_runtime()`).
     rate_limit_runtime: crate::rate_limiter::RateLimitConfig,
+    /// Pre-built Aho-Corasick concordance for outbound text scanning.
+    pub contradictionary: Option<Arc<Contradictionary>>,
 }
 
 /// Pre-parsed per-channel access policy.
@@ -325,6 +329,14 @@ impl LoadedConfig {
                 }
             });
         let rate_limit_runtime = raw.rate_limit.clone().into_runtime();
+        let contradictionary =
+            if raw.contradictionary.enabled && !raw.contradictionary.entries.is_empty() {
+                Some(Arc::new(Contradictionary::new(
+                    raw.contradictionary.entries.clone(),
+                )))
+            } else {
+                None
+            };
         Self {
             raw,
             allowed_ids,
@@ -333,6 +345,7 @@ impl LoadedConfig {
             mention_patterns,
             tz,
             rate_limit_runtime,
+            contradictionary,
         }
     }
 

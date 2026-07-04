@@ -742,6 +742,7 @@ dependencies = [
 name = "dione"
 version = "0.16.0"
 dependencies = [
+ "aho-corasick",
  "arc-swap",
  "camino",
  "chrono",
