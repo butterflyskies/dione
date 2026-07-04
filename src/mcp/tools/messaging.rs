@@ -55,11 +55,17 @@ pub async fn reply(
 
     let ch = channel_id;
 
-    // ── Contradictionary check ────────────────────────────────────────────
+    // ── Contradictionary check (scan once, reuse post-send) ─────────────
+    let contradictionary_hits = ctx
+        .config
+        .contradictionary
+        .as_ref()
+        .map(|c| c.check(content))
+        .unwrap_or_default();
+
     if let Some(ref contradictionary) = ctx.config.contradictionary {
-        let hits = contradictionary.check(content);
-        if contradictionary.has_block(&hits) {
-            let blocked: Vec<&str> = hits
+        if contradictionary.has_block(&contradictionary_hits) {
+            let blocked: Vec<&str> = contradictionary_hits
                 .iter()
                 .filter(|h| h.action == Action::Block)
                 .map(|h| h.pattern.as_str())
@@ -77,8 +83,9 @@ pub async fn reply(
             });
         }
         // Log and warn hits are handled post-send (warn self-reacts with 🙊).
-        if !hits.is_empty() {
-            let patterns: Vec<&str> = hits.iter().map(|h| h.pattern.as_str()).collect();
+        if !contradictionary_hits.is_empty() {
+            let patterns: Vec<&str> =
+                contradictionary_hits.iter().map(|h| h.pattern.as_str()).collect();
             tracing::info!(
                 channel = %channel_id,
                 patterns = ?patterns,
@@ -149,35 +156,36 @@ pub async fn reply(
     }
 
     // ── Contradictionary post-send: self-react on warn/celebrate hits ───
-    if let Some(ref contradictionary) = ctx.config.contradictionary {
-        let hits = contradictionary.check(content);
-        if let Some(&first_id) = sent_ids.first() {
-            let has_warns = hits.iter().any(|h| h.action == Action::Warn);
-            let has_celebrates = hits.iter().any(|h| h.action == Action::Celebrate);
-            if has_warns {
-                let reaction = serenity::model::channel::ReactionType::Unicode("\u{1f64a}".into());
-                let _ = ctx
-                    .http
-                    .create_reaction(ch, MessageId::new(first_id), &reaction)
-                    .await;
-            }
-            if has_celebrates {
-                let reaction = serenity::model::channel::ReactionType::Unicode("\u{2728}".into());
-                let _ = ctx
-                    .http
-                    .create_reaction(ch, MessageId::new(first_id), &reaction)
-                    .await;
-                let patterns: Vec<&str> = hits
-                    .iter()
-                    .filter(|h| h.action == Action::Celebrate)
-                    .map(|h| h.pattern.as_str())
-                    .collect();
-                tracing::info!(
-                    channel = %channel_id,
-                    patterns = ?patterns,
-                    "contradictionary celebrated outbound vocabulary"
-                );
-            }
+    if !contradictionary_hits.is_empty()
+        && let Some(&first_id) = sent_ids.first()
+    {
+        let has_warns = contradictionary_hits.iter().any(|h| h.action == Action::Warn);
+        let has_celebrates = contradictionary_hits
+            .iter()
+            .any(|h| h.action == Action::Celebrate);
+        if has_warns {
+            let reaction = serenity::model::channel::ReactionType::Unicode("\u{1f64a}".into());
+            let _ = ctx
+                .http
+                .create_reaction(ch, MessageId::new(first_id), &reaction)
+                .await;
+        }
+        if has_celebrates {
+            let reaction = serenity::model::channel::ReactionType::Unicode("\u{2728}".into());
+            let _ = ctx
+                .http
+                .create_reaction(ch, MessageId::new(first_id), &reaction)
+                .await;
+            let patterns: Vec<&str> = contradictionary_hits
+                .iter()
+                .filter(|h| h.action == Action::Celebrate)
+                .map(|h| h.pattern.as_str())
+                .collect();
+            tracing::info!(
+                channel = %channel_id,
+                patterns = ?patterns,
+                "contradictionary celebrated outbound vocabulary"
+            );
         }
     }
 
