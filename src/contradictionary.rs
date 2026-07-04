@@ -38,9 +38,9 @@ fn default_action() -> Action {
 pub struct ContradictionaryConfig {
     #[serde(default)]
     pub enabled: bool,
-    /// Path to the JSON sidecar file containing entries. Relative paths are
+    /// Path to the TOML sidecar file containing entries. Relative paths are
     /// resolved against the directory containing `config.toml`. Defaults to
-    /// `contradictionary.json` alongside the config file.
+    /// `contradictionary.toml` alongside the config file.
     #[serde(default = "default_sidecar_path")]
     pub sidecar_path: String,
     /// Inline entries — still supported but the sidecar file is preferred.
@@ -50,11 +50,24 @@ pub struct ContradictionaryConfig {
 }
 
 fn default_sidecar_path() -> String {
-    "contradictionary.json".to_string()
+    "contradictionary.toml".to_string()
 }
 
-/// Load entries from a JSON sidecar file. The expected format is an array of
-/// objects with `pattern`, `action`, and optional `reason` fields.
+/// TOML-level wrapper for the sidecar file.
+#[derive(Debug, Clone, Deserialize)]
+struct SidecarFile {
+    #[serde(default)]
+    entry: Vec<Entry>,
+}
+
+/// Load entries from a TOML sidecar file. The expected format is:
+///
+/// ```toml
+/// [[entry]]
+/// pattern = "load-bearing"
+/// action = "warn"
+/// reason = "substrate tell — use keystone/linchpin"
+/// ```
 ///
 /// Returns `Ok(vec![])` if the file does not exist (opt-in sidecar).
 pub fn load_sidecar_entries(path: &Path) -> Result<Vec<Entry>, String> {
@@ -67,13 +80,13 @@ pub fn load_sidecar_entries(path: &Path) -> Result<Vec<Entry>, String> {
             path.display()
         )
     })?;
-    let entries: Vec<Entry> = serde_json::from_str(&contents).map_err(|e| {
+    let sidecar: SidecarFile = toml::from_str(&contents).map_err(|e| {
         format!(
             "failed to parse contradictionary sidecar {}: {e}",
             path.display()
         )
     })?;
-    Ok(entries)
+    Ok(sidecar.entry)
 }
 
 /// A match found in outbound text.
@@ -232,16 +245,26 @@ mod tests {
     }
 
     #[test]
-    fn sidecar_loads_json_array() {
+    fn sidecar_loads_toml_entries() {
         let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("contradictionary.json");
+        let path = dir.path().join("contradictionary.toml");
         std::fs::write(
             &path,
-            r#"[
-                {"pattern": "synergy", "action": "warn", "reason": "corporate filler"},
-                {"pattern": "pivot", "action": "log"},
-                {"pattern": "keystone", "action": "celebrate", "reason": "good word"}
-            ]"#,
+            r#"
+[[entry]]
+pattern = "synergy"
+action = "warn"
+reason = "corporate filler"
+
+[[entry]]
+pattern = "pivot"
+action = "log"
+
+[[entry]]
+pattern = "keystone"
+action = "celebrate"
+reason = "good word"
+"#,
         )
         .unwrap();
         let entries = load_sidecar_entries(&path).unwrap();
@@ -257,23 +280,30 @@ mod tests {
     #[test]
     fn sidecar_missing_file_returns_empty() {
         let entries =
-            load_sidecar_entries(Path::new("/nonexistent/contradictionary.json")).unwrap();
+            load_sidecar_entries(Path::new("/nonexistent/contradictionary.toml")).unwrap();
         assert!(entries.is_empty());
     }
 
     #[test]
-    fn sidecar_invalid_json_returns_error() {
+    fn sidecar_invalid_toml_returns_error() {
         let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("contradictionary.json");
-        std::fs::write(&path, "not json").unwrap();
+        let path = dir.path().join("contradictionary.toml");
+        std::fs::write(&path, "not valid {{{toml").unwrap();
         assert!(load_sidecar_entries(&path).is_err());
     }
 
     #[test]
     fn sidecar_action_defaults_to_warn() {
         let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("contradictionary.json");
-        std::fs::write(&path, r#"[{"pattern": "test"}]"#).unwrap();
+        let path = dir.path().join("contradictionary.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[entry]]
+pattern = "test"
+"#,
+        )
+        .unwrap();
         let entries = load_sidecar_entries(&path).unwrap();
         assert_eq!(entries[0].action, Action::Warn);
     }

@@ -22,7 +22,7 @@ text_chunk_limit = 2000
 
 # [contradictionary]
 # enabled = true
-# sidecar_path = "contradictionary.json"  # JSON sidecar file (relative to config dir)
+# sidecar_path = "contradictionary.toml"  # TOML sidecar file (relative to config dir)
 # # Inline entries (sidecar entries are appended after these):
 # # [[contradictionary.entries]]
 # # pattern = "load-bearing"

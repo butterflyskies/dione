@@ -532,7 +532,7 @@ pub fn reload_config(state_dir: &Utf8Path) -> (LoadedConfig, Option<String>) {
     if raw.contradictionary.enabled {
         let config_dir = config_path.parent().unwrap_or_else(|| Utf8Path::new("."));
         let sidecar = if raw.contradictionary.sidecar_path.is_empty() {
-            config_dir.join("contradictionary.json")
+            config_dir.join("contradictionary.toml")
         } else {
             let p = Utf8PathBuf::from(&raw.contradictionary.sidecar_path);
             if p.is_absolute() {
@@ -1163,10 +1163,10 @@ delivery_delay_ms = 750
     // ── contradictionary sidecar tests ──────────────────────────────────────
 
     #[test]
-    fn test_contradictionary_sidecar_loads_json() {
+    fn test_contradictionary_sidecar_loads_toml() {
         let (_dir, state_dir) = temp_state_dir();
         let config_path = state_dir.join("config.toml");
-        let sidecar_path = state_dir.join("contradictionary.json");
+        let sidecar_path = state_dir.join("contradictionary.toml");
 
         let toml = r#"
 [contradictionary]
@@ -1175,10 +1175,16 @@ enabled = true
         fs::write(config_path.as_std_path(), toml.as_bytes()).unwrap();
         fs::write(
             sidecar_path.as_std_path(),
-            r#"[
-                {"pattern": "load-bearing", "action": "warn", "reason": "substrate tell"},
-                {"pattern": "synergy", "action": "block"}
-            ]"#,
+            r#"
+[[entry]]
+pattern = "load-bearing"
+action = "warn"
+reason = "substrate tell"
+
+[[entry]]
+pattern = "synergy"
+action = "block"
+"#,
         )
         .unwrap();
 
@@ -1216,7 +1222,7 @@ enabled = true
     fn test_contradictionary_inline_and_sidecar_merged() {
         let (_dir, state_dir) = temp_state_dir();
         let config_path = state_dir.join("config.toml");
-        let sidecar_path = state_dir.join("contradictionary.json");
+        let sidecar_path = state_dir.join("contradictionary.toml");
 
         let toml = r#"
 [contradictionary]
@@ -1229,7 +1235,11 @@ action = "log"
         fs::write(config_path.as_std_path(), toml.as_bytes()).unwrap();
         fs::write(
             sidecar_path.as_std_path(),
-            r#"[{"pattern": "sidecar-word", "action": "warn"}]"#,
+            r#"
+[[entry]]
+pattern = "sidecar-word"
+action = "warn"
+"#,
         )
         .unwrap();
 
@@ -1251,17 +1261,21 @@ action = "log"
         let config_path = state_dir.join("config.toml");
         let custom_dir = state_dir.join("custom");
         fs::create_dir_all(custom_dir.as_std_path()).unwrap();
-        let custom_sidecar = custom_dir.join("words.json");
+        let custom_sidecar = custom_dir.join("words.toml");
 
         let toml = r#"
 [contradictionary]
 enabled = true
-sidecar_path = "custom/words.json"
+sidecar_path = "custom/words.toml"
 "#;
         fs::write(config_path.as_std_path(), toml.as_bytes()).unwrap();
         fs::write(
             custom_sidecar.as_std_path(),
-            r#"[{"pattern": "custom-word", "action": "celebrate"}]"#,
+            r#"
+[[entry]]
+pattern = "custom-word"
+action = "celebrate"
+"#,
         )
         .unwrap();
 
