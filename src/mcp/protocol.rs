@@ -241,10 +241,25 @@ pub(crate) fn tools_list() -> Value {
                     "user_id": { "type": "string" }
                 }
             })),
-            // set_presence is intentionally excluded from the tools list:
-            // presence updates require the Discord gateway shard manager, which is
-            // not yet wired to the MCP command channel. The implementation stub
-            // remains in bot_state.rs for future use.
+            tool("set_presence", "Set the bot's Discord presence (online status and activity)", json!({
+                "type": "object",
+                "properties": {
+                    "online_status": {
+                        "type": "string",
+                        "enum": ["online", "idle", "dnd", "invisible"],
+                        "description": "Online status (default: online)"
+                    },
+                    "activity_type": {
+                        "type": "string",
+                        "enum": ["playing", "watching", "listening", "competing", "custom"],
+                        "description": "Activity type. If set, activity_name is required."
+                    },
+                    "activity_name": {
+                        "type": "string",
+                        "description": "Activity text (e.g. 'catena', 'the void'). Required when activity_type is set."
+                    }
+                }
+            })),
             tool("render_latex", "Render a LaTeX math expression to a PNG image file", json!({
                 "type": "object",
                 "required": ["latex"],

@@ -14,7 +14,11 @@ use crate::state::State;
 pub enum DiscordCommand {
     /// Update the bot's presence status and activity.
     SetPresence {
-        status: String,
+        /// Online status: "online", "idle", "dnd", or "invisible".
+        online_status: String,
+        /// Activity type: "playing", "watching", "listening", "competing", or "custom".
+        activity_type: Option<String>,
+        /// The activity text (e.g. "catena", "the void").
         activity_name: Option<String>,
     },
 }
@@ -29,13 +33,50 @@ pub struct BotStateCtx {
 
 // ── set_presence ──────────────────────────────────────────────────────────────
 
-pub async fn set_presence(ctx: &BotStateCtx, status: &str, activity_name: Option<&str>) -> Value {
+/// Valid online statuses for the `set_presence` tool.
+const VALID_STATUSES: &[&str] = &["online", "idle", "dnd", "invisible"];
+
+/// Valid activity types for the `set_presence` tool.
+const VALID_ACTIVITY_TYPES: &[&str] = &["playing", "watching", "listening", "competing", "custom"];
+
+pub async fn set_presence(
+    ctx: &BotStateCtx,
+    online_status: &str,
+    activity_type: Option<&str>,
+    activity_name: Option<&str>,
+) -> Value {
     let Some(ref tx) = ctx.discord_cmd_tx else {
         return json!({ "error": "presence updates require the discord gateway command channel" });
     };
 
+    if !VALID_STATUSES.contains(&online_status) {
+        return json!({
+            "error": format!(
+                "invalid online_status: {online_status}; must be one of: {}",
+                VALID_STATUSES.join(", ")
+            )
+        });
+    }
+
+    if let Some(at) = activity_type
+        && !VALID_ACTIVITY_TYPES.contains(&at)
+    {
+        return json!({
+            "error": format!(
+                "invalid activity_type: {at}; must be one of: {}",
+                VALID_ACTIVITY_TYPES.join(", ")
+            )
+        });
+    }
+
+    // activity_name is required when activity_type is set.
+    if activity_type.is_some() && activity_name.is_none() {
+        return json!({ "error": "activity_name is required when activity_type is set" });
+    }
+
     let cmd = DiscordCommand::SetPresence {
-        status: status.to_string(),
+        online_status: online_status.to_string(),
+        activity_type: activity_type.map(|s| s.to_string()),
         activity_name: activity_name.map(|s| s.to_string()),
     };
 
