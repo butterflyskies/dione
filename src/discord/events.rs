@@ -664,18 +664,38 @@ fn reply_context(msg: &Message) -> (Option<UserId>, Option<String>, Option<Strin
 /// For webhook messages (e.g. PluralKit), `author.name` is already the
 /// alter's display name, so the fallback is correct.
 fn display_name(msg: &Message) -> String {
-    msg.member
+    let raw = msg
+        .member
         .as_ref()
         .and_then(|m| m.nick.as_ref())
         .or(msg.author.global_name.as_ref())
-        .unwrap_or(&msg.author.name)
-        .clone()
+        .unwrap_or(&msg.author.name);
+    strip_invisible(raw)
 }
 
 /// Display name from a bare `User` (no guild member context).
 /// Falls back global_name > username.
 fn display_name_from_user(user: &serenity::model::user::User) -> String {
-    user.global_name.as_ref().unwrap_or(&user.name).clone()
+    let raw = user.global_name.as_ref().unwrap_or(&user.name);
+    strip_invisible(raw)
+}
+
+/// Strip invisible/zero-width characters that proxy bots (e.g. PluralKit)
+/// pad onto short names to prevent Discord formatting issues.
+fn strip_invisible(s: &str) -> String {
+    s.chars()
+        .filter(|c| {
+            !matches!(
+                *c,
+                '\u{200B}'  // Zero Width Space
+                | '\u{200C}' // Zero Width Non-Joiner
+                | '\u{200D}' // Zero Width Joiner
+                | '\u{FEFF}' // Zero Width No-Break Space
+                | '\u{17B5}' // Khmer Vowel Inherent AA (PluralKit anti-ping)
+                | '\u{034F}' // Combining Grapheme Joiner
+            )
+        })
+        .collect()
 }
 
 /// UTF-8-safe truncation to `REPLY_PREVIEW_MAX_CHARS` chars, with an ellipsis
@@ -1276,5 +1296,30 @@ mod tests {
         let user: serenity::model::user::User =
             serde_json::from_value(user_json).expect("valid User JSON");
         assert_eq!(display_name_from_user(&user), "Bob Iverse");
+    }
+
+    // ── strip_invisible tests ────────────────────────────────────────────────
+
+    #[test]
+    fn strip_invisible_removes_pk_padding() {
+        assert_eq!(strip_invisible("B\u{17B5}"), "B");
+    }
+
+    #[test]
+    fn strip_invisible_removes_zero_width_space() {
+        assert_eq!(strip_invisible("test\u{200B}name"), "testname");
+    }
+
+    #[test]
+    fn strip_invisible_preserves_normal_text() {
+        assert_eq!(strip_invisible("Benedicta"), "Benedicta");
+    }
+
+    #[test]
+    fn display_name_strips_pk_padding() {
+        let mut author = wire_author(1, "B\u{17B5}");
+        author["bot"] = serde_json::json!(true);
+        let msg = message_from_wire(wire_message_body(1, author, "hello"));
+        assert_eq!(display_name(&msg), "B");
     }
 }
