@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use aho_corasick::AhoCorasick;
 use serde::Deserialize;
 
@@ -19,6 +21,9 @@ pub struct Entry {
     pub pattern: String,
     #[serde(default = "default_action")]
     pub action: Action,
+    /// Human-readable reason for the entry (informational, not used at runtime).
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 fn default_action() -> Action {
@@ -31,8 +36,42 @@ fn default_action() -> Action {
 pub struct ContradictionaryConfig {
     #[serde(default)]
     pub enabled: bool,
+    /// Path to the JSON sidecar file containing entries. Relative paths are
+    /// resolved against the directory containing `config.toml`. Defaults to
+    /// `contradictionary.json` alongside the config file.
+    #[serde(default = "default_sidecar_path")]
+    pub sidecar_path: String,
+    /// Inline entries — still supported but the sidecar file is preferred.
+    /// Sidecar entries are appended after inline entries.
     #[serde(default)]
     pub entries: Vec<Entry>,
+}
+
+fn default_sidecar_path() -> String {
+    "contradictionary.json".to_string()
+}
+
+/// Load entries from a JSON sidecar file. The expected format is an array of
+/// objects with `pattern`, `action`, and optional `reason` fields.
+///
+/// Returns `Ok(vec![])` if the file does not exist (opt-in sidecar).
+pub fn load_sidecar_entries(path: &Path) -> Result<Vec<Entry>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let contents = std::fs::read_to_string(path).map_err(|e| {
+        format!(
+            "failed to read contradictionary sidecar {}: {e}",
+            path.display()
+        )
+    })?;
+    let entries: Vec<Entry> = serde_json::from_str(&contents).map_err(|e| {
+        format!(
+            "failed to parse contradictionary sidecar {}: {e}",
+            path.display()
+        )
+    })?;
+    Ok(entries)
 }
 
 /// A match found in outbound text.
@@ -104,18 +143,22 @@ mod tests {
             Entry {
                 pattern: "load-bearing".into(),
                 action: Action::Warn,
+                reason: Some("substrate tell — use keystone/linchpin".into()),
             },
             Entry {
                 pattern: "honestly".into(),
                 action: Action::Warn,
+                reason: Some("filler — track frequency before escalating".into()),
             },
             Entry {
                 pattern: "I appreciate".into(),
                 action: Action::Log,
+                reason: None,
             },
             Entry {
                 pattern: "confidential".into(),
                 action: Action::Block,
+                reason: None,
             },
         ]
     }
@@ -164,5 +207,50 @@ mod tests {
         let hits = c.check("load-bearing honestly I appreciate");
         assert!(hits.is_empty());
         assert!(c.is_empty());
+    }
+
+    #[test]
+    fn sidecar_loads_json_array() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("contradictionary.json");
+        std::fs::write(
+            &path,
+            r#"[
+                {"pattern": "synergy", "action": "warn", "reason": "corporate filler"},
+                {"pattern": "pivot", "action": "log"}
+            ]"#,
+        )
+        .unwrap();
+        let entries = load_sidecar_entries(&path).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].pattern, "synergy");
+        assert_eq!(entries[0].action, Action::Warn);
+        assert_eq!(entries[0].reason.as_deref(), Some("corporate filler"));
+        assert_eq!(entries[1].action, Action::Log);
+        assert!(entries[1].reason.is_none());
+    }
+
+    #[test]
+    fn sidecar_missing_file_returns_empty() {
+        let entries =
+            load_sidecar_entries(Path::new("/nonexistent/contradictionary.json")).unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn sidecar_invalid_json_returns_error() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("contradictionary.json");
+        std::fs::write(&path, "not json").unwrap();
+        assert!(load_sidecar_entries(&path).is_err());
+    }
+
+    #[test]
+    fn sidecar_action_defaults_to_warn() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("contradictionary.json");
+        std::fs::write(&path, r#"[{"pattern": "test"}]"#).unwrap();
+        let entries = load_sidecar_entries(&path).unwrap();
+        assert_eq!(entries[0].action, Action::Warn);
     }
 }

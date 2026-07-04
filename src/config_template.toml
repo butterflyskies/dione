@@ -22,6 +22,8 @@ text_chunk_limit = 2000
 
 # [contradictionary]
 # enabled = true
-# [[contradictionary.entries]]
-# pattern = "load-bearing"
-# action = "warn"          # "warn" (🙊 self-react), "block" (reject), "log" (silent)
+# sidecar_path = "contradictionary.json"  # JSON sidecar file (relative to config dir)
+# # Inline entries (sidecar entries are appended after these):
+# # [[contradictionary.entries]]
+# # pattern = "load-bearing"
+# # action = "warn"        # "warn" (🙊), "block" (reject), "log" (silent)
