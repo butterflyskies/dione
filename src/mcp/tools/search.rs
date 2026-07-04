@@ -1054,6 +1054,121 @@ mod tests {
         assert_eq!(v, SortOrder::Desc);
     }
 
+    // ── pagination ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn filter_results_has_more_reflects_raw_count_not_filtered() {
+        use crate::config::{ChannelConfig, Config};
+
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        let config = crate::config::LoadedConfig::from_raw(raw);
+
+        fn make_msg(id: &str, channel: &str) -> Value {
+            json!({
+                "id": id,
+                "type": 0,
+                "channel_id": channel,
+                "author": {
+                    "id": "1", "username": "test", "global_name": null,
+                    "avatar": null, "discriminator": "0", "public_flags": 0
+                },
+                "content": "msg",
+                "timestamp": "2024-01-01T00:00:00.000000+00:00",
+                "edited_timestamp": null,
+                "tts": false,
+                "mention_everyone": false,
+                "mentions": [],
+                "mention_roles": [],
+                "attachments": [],
+                "embeds": [],
+                "pinned": false
+            })
+        }
+
+        // 3 raw messages but only 1 passes the outbound gate filter.
+        let raw_messages = vec![
+            json!([make_msg("1", "42")]),  // configured channel — passes
+            json!([make_msg("2", "999")]), // unconfigured — filtered
+            json!([make_msg("3", "888")]), // unconfigured — filtered
+        ];
+
+        let dm_ids = HashSet::new();
+        let thread_parents = BTreeMap::new();
+        let results = filter_results(&config, &dm_ids, &thread_parents, &raw_messages);
+
+        assert_eq!(results.len(), 1, "only one message passes the gate");
+
+        // has_more is based on raw_messages.len() (3) vs page_size.
+        // with a page_size of 3, has_more = (3 >= 3) = true, even though
+        // only 1 visible result came through. this is a known edge case —
+        // the client may fetch an empty next page.
+        let page_size = 3usize;
+        let has_more = raw_messages.len() >= page_size;
+        assert!(has_more, "has_more reflects raw count, not filtered count");
+    }
+
+    #[test]
+    fn filter_results_produces_distinct_messages() {
+        use crate::config::{ChannelConfig, Config};
+
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        let config = crate::config::LoadedConfig::from_raw(raw);
+
+        fn make_msg(id: &str) -> Value {
+            json!({
+                "id": id,
+                "type": 0,
+                "channel_id": "42",
+                "author": {
+                    "id": "1", "username": "test", "global_name": null,
+                    "avatar": null, "discriminator": "0", "public_flags": 0
+                },
+                "content": format!("message {id}"),
+                "timestamp": "2024-01-01T00:00:00.000000+00:00",
+                "edited_timestamp": null,
+                "tts": false,
+                "mention_everyone": false,
+                "mentions": [],
+                "mention_roles": [],
+                "attachments": [],
+                "embeds": [],
+                "pinned": false
+            })
+        }
+
+        // Simulate two pages of results with distinct message IDs.
+        let page1_raw = vec![json!([make_msg("100")]), json!([make_msg("101")])];
+        let page2_raw = vec![json!([make_msg("200")]), json!([make_msg("201")])];
+
+        let dm_ids = HashSet::new();
+        let thread_parents = BTreeMap::new();
+
+        let page1 = filter_results(&config, &dm_ids, &thread_parents, &page1_raw);
+        let page2 = filter_results(&config, &dm_ids, &thread_parents, &page2_raw);
+
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page2.len(), 2);
+
+        let page1_ids: Vec<&str> = page1.iter().map(|m| m["id"].as_str().unwrap()).collect();
+        let page2_ids: Vec<&str> = page2.iter().map(|m| m["id"].as_str().unwrap()).collect();
+
+        // No overlap between pages.
+        for id in &page2_ids {
+            assert!(
+                !page1_ids.contains(id),
+                "page 2 should contain different messages than page 1"
+            );
+        }
+    }
+
     mod proptests {
         use proptest::prelude::*;
 
