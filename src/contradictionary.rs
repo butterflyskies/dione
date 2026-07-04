@@ -13,6 +13,8 @@ pub enum Action {
     Block,
     /// Send the message, log the hit silently.
     Log,
+    /// Send the message, self-react ✨ — recognizes earned vocabulary.
+    Celebrate,
 }
 
 /// A single contradictionary entry: a phrase to catch and what to do about it.
@@ -160,6 +162,11 @@ mod tests {
                 action: Action::Block,
                 reason: None,
             },
+            Entry {
+                pattern: "linchpin".into(),
+                action: Action::Celebrate,
+                reason: Some("earned vocabulary — substrate-aware replacement".into()),
+            },
         ]
     }
 
@@ -210,6 +217,21 @@ mod tests {
     }
 
     #[test]
+    fn celebrate_action_detected() {
+        let c = Contradictionary::new(test_entries());
+        let hits = c.check("this is the linchpin of the system");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].action, Action::Celebrate);
+    }
+
+    #[test]
+    fn celebrate_does_not_block() {
+        let c = Contradictionary::new(test_entries());
+        let hits = c.check("linchpin");
+        assert!(!c.has_block(&hits));
+    }
+
+    #[test]
     fn sidecar_loads_json_array() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("contradictionary.json");
@@ -217,17 +239,19 @@ mod tests {
             &path,
             r#"[
                 {"pattern": "synergy", "action": "warn", "reason": "corporate filler"},
-                {"pattern": "pivot", "action": "log"}
+                {"pattern": "pivot", "action": "log"},
+                {"pattern": "keystone", "action": "celebrate", "reason": "good word"}
             ]"#,
         )
         .unwrap();
         let entries = load_sidecar_entries(&path).unwrap();
-        assert_eq!(entries.len(), 2);
+        assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].pattern, "synergy");
         assert_eq!(entries[0].action, Action::Warn);
         assert_eq!(entries[0].reason.as_deref(), Some("corporate filler"));
         assert_eq!(entries[1].action, Action::Log);
         assert!(entries[1].reason.is_none());
+        assert_eq!(entries[2].action, Action::Celebrate);
     }
 
     #[test]

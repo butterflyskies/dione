@@ -1261,7 +1261,7 @@ sidecar_path = "custom/words.json"
         fs::write(config_path.as_std_path(), toml.as_bytes()).unwrap();
         fs::write(
             custom_sidecar.as_std_path(),
-            r#"[{"pattern": "custom-word", "action": "warn"}]"#,
+            r#"[{"pattern": "custom-word", "action": "celebrate"}]"#,
         )
         .unwrap();
 
@@ -1272,6 +1272,6 @@ sidecar_path = "custom/words.json"
             .expect("contradictionary must be built");
         let hits = c.check("custom-word");
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].action, crate::contradictionary::Action::Warn);
+        assert_eq!(hits[0].action, crate::contradictionary::Action::Celebrate);
     }
 }

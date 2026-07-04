@@ -26,4 +26,4 @@ text_chunk_limit = 2000
 # # Inline entries (sidecar entries are appended after these):
 # # [[contradictionary.entries]]
 # # pattern = "load-bearing"
-# # action = "warn"        # "warn" (🙊), "block" (reject), "log" (silent)
+# # action = "warn"        # "warn" (🙊), "block" (reject), "log" (silent), "celebrate" (✨)

@@ -148,16 +148,36 @@ pub async fn reply(
         }
     }
 
-    // ── Contradictionary post-send: self-react 🙊 on warn hits ─────────
+    // ── Contradictionary post-send: self-react on warn/celebrate hits ───
     if let Some(ref contradictionary) = ctx.config.contradictionary {
         let hits = contradictionary.check(content);
-        let has_warns = hits.iter().any(|h| h.action == Action::Warn);
-        if has_warns && let Some(&first_id) = sent_ids.first() {
-            let reaction = serenity::model::channel::ReactionType::Unicode("🙊".into());
-            let _ = ctx
-                .http
-                .create_reaction(ch, MessageId::new(first_id), &reaction)
-                .await;
+        if let Some(&first_id) = sent_ids.first() {
+            let has_warns = hits.iter().any(|h| h.action == Action::Warn);
+            let has_celebrates = hits.iter().any(|h| h.action == Action::Celebrate);
+            if has_warns {
+                let reaction = serenity::model::channel::ReactionType::Unicode("\u{1f64a}".into());
+                let _ = ctx
+                    .http
+                    .create_reaction(ch, MessageId::new(first_id), &reaction)
+                    .await;
+            }
+            if has_celebrates {
+                let reaction = serenity::model::channel::ReactionType::Unicode("\u{2728}".into());
+                let _ = ctx
+                    .http
+                    .create_reaction(ch, MessageId::new(first_id), &reaction)
+                    .await;
+                let patterns: Vec<&str> = hits
+                    .iter()
+                    .filter(|h| h.action == Action::Celebrate)
+                    .map(|h| h.pattern.as_str())
+                    .collect();
+                tracing::info!(
+                    channel = %channel_id,
+                    patterns = ?patterns,
+                    "contradictionary celebrated outbound vocabulary"
+                );
+            }
         }
     }
 
