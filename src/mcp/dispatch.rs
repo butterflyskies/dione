@@ -7,7 +7,7 @@ use crate::mcp::ids::Snowflake;
 use crate::mcp::server::DioneServer;
 use crate::mcp::tools::{
     access::{approve_access, deny_access, list_access_requests},
-    bot_state::send_typing,
+    bot_state::{send_typing, set_presence},
     diagnostics::{get_version, set_stderr_level, set_trace_level},
     introspection::{
         get_channel, get_member, get_user, list_channels, list_emojis, list_guilds, list_roles,
@@ -335,6 +335,16 @@ pub(crate) async fn call_tool(
             let ctx = server.bot_state_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?.channel();
             send_typing(&ctx, channel_id).await
+        }
+        "set_presence" => {
+            let ctx = server.bot_state_ctx(config.clone());
+            let online_status = args
+                .get("online_status")
+                .and_then(Value::as_str)
+                .unwrap_or("online");
+            let activity_type = args.get("activity_type").and_then(Value::as_str);
+            let activity_name = args.get("activity_name").and_then(Value::as_str);
+            set_presence(&ctx, online_status, activity_type, activity_name).await
         }
 
         // Rendering
