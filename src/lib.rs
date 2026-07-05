@@ -3,6 +3,7 @@ pub mod coalesce;
 pub mod config;
 pub mod config_store;
 pub mod config_watcher;
+pub mod contradictionary;
 pub mod delivery_buffer;
 pub mod discord;
 pub mod gate;

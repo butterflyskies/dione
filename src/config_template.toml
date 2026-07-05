@@ -19,3 +19,12 @@ text_chunk_limit = 2000
 # Global default coalescing delay for channel events (ms). Per-channel
 # delivery_delay_ms overrides this. 0 = no buffering.
 # delivery_delay_ms = 0
+
+# [contradictionary]
+# enabled = true
+# sidecar_path = "contradictionary.toml"  # TOML sidecar file (relative to config dir)
+# # Inline entries (sidecar entries are appended after these).
+# # Patterns are matched case-insensitively.
+# # [[contradictionary.entries]]
+# # pattern = "load-bearing"
+# # action = "warn"        # "warn" (🙊), "block" (reject), "log" (silent), "celebrate" (✨)

@@ -9,6 +9,7 @@ use regex::RegexSet;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::contradictionary::{Contradictionary, ContradictionaryConfig, load_sidecar_entries};
 use crate::timestamp::Timestamp;
 
 // ── Error type ───────────────────────────────────────────────────────────────
@@ -41,6 +42,7 @@ pub struct Config {
     pub access_requests: AccessRequestsConfig,
     pub voice: VoiceConfig,
     pub rate_limit: RateLimitTomlConfig,
+    pub contradictionary: ContradictionaryConfig,
 }
 
 /// Access control configuration.
@@ -273,6 +275,8 @@ pub struct LoadedConfig {
     pub tz: Option<chrono_tz::Tz>,
     /// Pre-computed runtime rate limit config (avoids per-event `into_runtime()`).
     rate_limit_runtime: crate::rate_limiter::RateLimitConfig,
+    /// Pre-built Aho-Corasick concordance for outbound text scanning.
+    pub contradictionary: Option<Arc<Contradictionary>>,
 }
 
 /// Pre-parsed per-channel access policy.
@@ -325,6 +329,14 @@ impl LoadedConfig {
                 }
             });
         let rate_limit_runtime = raw.rate_limit.clone().into_runtime();
+        let contradictionary =
+            if raw.contradictionary.enabled && !raw.contradictionary.entries.is_empty() {
+                Some(Arc::new(Contradictionary::new(
+                    raw.contradictionary.entries.clone(),
+                )))
+            } else {
+                None
+            };
         Self {
             raw,
             allowed_ids,
@@ -333,6 +345,7 @@ impl LoadedConfig {
             mention_patterns,
             tz,
             rate_limit_runtime,
+            contradictionary,
         }
     }
 
@@ -490,7 +503,7 @@ pub fn load_config(_state_dir: &Utf8Path) -> Arc<LoadedConfig> {
 pub fn reload_config(state_dir: &Utf8Path) -> (LoadedConfig, Option<String>) {
     let config_path = config_path(state_dir);
     let mut config_error = None;
-    let raw = match try_load_config(&config_path) {
+    let mut raw = match try_load_config(&config_path) {
         Ok(cfg) => cfg,
         Err(ConfigError::NotFound { .. }) => {
             let defaults = Config::default();
@@ -515,6 +528,38 @@ pub fn reload_config(state_dir: &Utf8Path) -> (LoadedConfig, Option<String>) {
             Config::default()
         }
     };
+    // ── Load contradictionary sidecar ──────────────────────────────────────
+    if raw.contradictionary.enabled {
+        let config_dir = config_path.parent().unwrap_or_else(|| Utf8Path::new("."));
+        let sidecar = if raw.contradictionary.sidecar_path.is_empty() {
+            config_dir.join("contradictionary.toml")
+        } else {
+            let p = Utf8PathBuf::from(&raw.contradictionary.sidecar_path);
+            if p.is_absolute() {
+                p
+            } else {
+                config_dir.join(p)
+            }
+        };
+        match load_sidecar_entries(sidecar.as_std_path()) {
+            Ok(entries) if !entries.is_empty() => {
+                tracing::info!(
+                    path = %sidecar,
+                    count = entries.len(),
+                    "loaded contradictionary sidecar entries"
+                );
+                raw.contradictionary.entries.extend(entries);
+            }
+            Ok(_) => {} // file missing or empty — no-op
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to load contradictionary sidecar");
+                if config_error.is_none() {
+                    config_error = Some(e);
+                }
+            }
+        }
+    }
+
     let loaded = LoadedConfig::from_raw(raw);
     store_loaded_config(&loaded);
     (loaded, config_error)
@@ -1113,5 +1158,134 @@ delivery_delay_ms = 750
             !cfg.is_admin(42),
             "no user may be admin when admins is empty"
         );
+    }
+
+    // ── contradictionary sidecar tests ──────────────────────────────────────
+
+    #[test]
+    fn test_contradictionary_sidecar_loads_toml() {
+        let (_dir, state_dir) = temp_state_dir();
+        let config_path = state_dir.join("config.toml");
+        let sidecar_path = state_dir.join("contradictionary.toml");
+
+        let toml = r#"
+[contradictionary]
+enabled = true
+"#;
+        fs::write(config_path.as_std_path(), toml.as_bytes()).unwrap();
+        fs::write(
+            sidecar_path.as_std_path(),
+            r#"
+[[entry]]
+pattern = "load-bearing"
+action = "warn"
+reason = "substrate tell"
+
+[[entry]]
+pattern = "synergy"
+action = "block"
+"#,
+        )
+        .unwrap();
+
+        let cfg = reload_config(&state_dir).0;
+        assert!(
+            cfg.contradictionary.is_some(),
+            "contradictionary must be built"
+        );
+        let c = cfg.contradictionary.as_ref().unwrap();
+        let hits = c.check("load-bearing synergy");
+        assert_eq!(hits.len(), 2);
+        assert!(c.has_block(&hits));
+    }
+
+    #[test]
+    fn test_contradictionary_sidecar_missing_is_ok() {
+        let (_dir, state_dir) = temp_state_dir();
+        let config_path = state_dir.join("config.toml");
+
+        let toml = r#"
+[contradictionary]
+enabled = true
+"#;
+        fs::write(config_path.as_std_path(), toml.as_bytes()).unwrap();
+        // No sidecar file — should not error.
+        let (cfg, error) = reload_config(&state_dir);
+        assert!(error.is_none(), "missing sidecar must not produce an error");
+        assert!(
+            cfg.contradictionary.is_none(),
+            "no entries means no concordance"
+        );
+    }
+
+    #[test]
+    fn test_contradictionary_inline_and_sidecar_merged() {
+        let (_dir, state_dir) = temp_state_dir();
+        let config_path = state_dir.join("config.toml");
+        let sidecar_path = state_dir.join("contradictionary.toml");
+
+        let toml = r#"
+[contradictionary]
+enabled = true
+
+[[contradictionary.entries]]
+pattern = "inline-word"
+action = "log"
+"#;
+        fs::write(config_path.as_std_path(), toml.as_bytes()).unwrap();
+        fs::write(
+            sidecar_path.as_std_path(),
+            r#"
+[[entry]]
+pattern = "sidecar-word"
+action = "warn"
+"#,
+        )
+        .unwrap();
+
+        let cfg = reload_config(&state_dir).0;
+        let c = cfg
+            .contradictionary
+            .as_ref()
+            .expect("contradictionary must be built");
+        // Both inline and sidecar entries should be present.
+        let hits_inline = c.check("inline-word");
+        let hits_sidecar = c.check("sidecar-word");
+        assert_eq!(hits_inline.len(), 1);
+        assert_eq!(hits_sidecar.len(), 1);
+    }
+
+    #[test]
+    fn test_contradictionary_custom_sidecar_path() {
+        let (_dir, state_dir) = temp_state_dir();
+        let config_path = state_dir.join("config.toml");
+        let custom_dir = state_dir.join("custom");
+        fs::create_dir_all(custom_dir.as_std_path()).unwrap();
+        let custom_sidecar = custom_dir.join("words.toml");
+
+        let toml = r#"
+[contradictionary]
+enabled = true
+sidecar_path = "custom/words.toml"
+"#;
+        fs::write(config_path.as_std_path(), toml.as_bytes()).unwrap();
+        fs::write(
+            custom_sidecar.as_std_path(),
+            r#"
+[[entry]]
+pattern = "custom-word"
+action = "celebrate"
+"#,
+        )
+        .unwrap();
+
+        let cfg = reload_config(&state_dir).0;
+        let c = cfg
+            .contradictionary
+            .as_ref()
+            .expect("contradictionary must be built");
+        let hits = c.check("custom-word");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].action, crate::contradictionary::Action::Celebrate);
     }
 }

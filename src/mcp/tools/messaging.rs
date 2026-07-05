@@ -9,9 +9,15 @@ use serenity::model::channel::Message;
 use serenity::model::id::{ChannelId, MessageId, UserId};
 
 use crate::config::{ChunkMode, DmPolicy, LoadedConfig};
+use crate::contradictionary::Action;
 use crate::discord::chunk;
 use crate::gate::OutboundGate;
 use crate::state::State;
+
+/// Self-react emoji for contradictionary warn hits (🙊 — see-no-evil monkey).
+const CONTRADICTIONARY_WARN_REACT: &str = "\u{1f64a}";
+/// Self-react emoji for contradictionary celebrate hits (✨ — sparkles).
+const CONTRADICTIONARY_CELEBRATE_REACT: &str = "\u{2728}";
 
 /// Context available to all messaging tools.
 pub struct MessagingCtx {
@@ -53,6 +59,47 @@ pub async fn reply(
     }
 
     let ch = channel_id;
+
+    // ── Contradictionary check (scan once, reuse post-send) ─────────────
+    let contradictionary_hits = ctx
+        .config
+        .contradictionary
+        .as_ref()
+        .map(|c| c.check(content))
+        .unwrap_or_default();
+
+    if let Some(ref contradictionary) = ctx.config.contradictionary {
+        if contradictionary.has_block(&contradictionary_hits) {
+            let blocked: Vec<&str> = contradictionary_hits
+                .iter()
+                .filter(|h| h.action == Action::Block)
+                .map(|h| h.pattern.as_str())
+                .collect();
+            tracing::info!(
+                channel = %channel_id,
+                patterns = ?blocked,
+                "contradictionary blocked outbound message"
+            );
+            return json!({
+                "error": format!(
+                    "message blocked by contradictionary: matched [{}]",
+                    blocked.join(", ")
+                )
+            });
+        }
+        // Log and warn hits are handled post-send (warn self-reacts).
+        if !contradictionary_hits.is_empty() {
+            let patterns: Vec<&str> = contradictionary_hits
+                .iter()
+                .map(|h| h.pattern.as_str())
+                .collect();
+            tracing::info!(
+                channel = %channel_id,
+                patterns = ?patterns,
+                "contradictionary flagged outbound message"
+            );
+        }
+    }
 
     // Fire typing indicator now that we've committed to sending a reply.
     let _ = ctx.http.broadcast_typing(ch).await;
@@ -112,6 +159,45 @@ pub async fn reply(
                 tracing::warn!(channel_id = channel_id.get(), chunk = i, error = %e, "failed to send chunk");
                 return json!({ "error": format!("failed to send chunk {i}: {e}") });
             }
+        }
+    }
+
+    // ── Contradictionary post-send: self-react on warn/celebrate hits ───
+    if !contradictionary_hits.is_empty()
+        && let Some(&first_id) = sent_ids.first()
+    {
+        let has_warns = contradictionary_hits
+            .iter()
+            .any(|h| h.action == Action::Warn);
+        let has_celebrates = contradictionary_hits
+            .iter()
+            .any(|h| h.action == Action::Celebrate);
+        if has_warns {
+            let reaction =
+                serenity::model::channel::ReactionType::Unicode(CONTRADICTIONARY_WARN_REACT.into());
+            let _ = ctx
+                .http
+                .create_reaction(ch, MessageId::new(first_id), &reaction)
+                .await;
+        }
+        if has_celebrates {
+            let reaction = serenity::model::channel::ReactionType::Unicode(
+                CONTRADICTIONARY_CELEBRATE_REACT.into(),
+            );
+            let _ = ctx
+                .http
+                .create_reaction(ch, MessageId::new(first_id), &reaction)
+                .await;
+            let patterns: Vec<&str> = contradictionary_hits
+                .iter()
+                .filter(|h| h.action == Action::Celebrate)
+                .map(|h| h.pattern.as_str())
+                .collect();
+            tracing::info!(
+                channel = %channel_id,
+                patterns = ?patterns,
+                "contradictionary celebrated outbound vocabulary"
+            );
         }
     }
 
