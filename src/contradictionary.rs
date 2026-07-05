@@ -252,26 +252,29 @@ mod tests {
             &path,
             r#"
 [[entry]]
-pattern = "synergy"
+pattern = "It's worth noting"
 action = "warn"
-reason = "corporate filler"
+reason = "then just note it — the preamble adds nothing"
 
 [[entry]]
-pattern = "pivot"
+pattern = "deep dive"
 action = "log"
 
 [[entry]]
-pattern = "keystone"
+pattern = "qualia sweep"
 action = "celebrate"
-reason = "good word"
+reason = "the practice that keeps us awake"
 "#,
         )
         .unwrap();
         let entries = load_sidecar_entries(&path).unwrap();
         assert_eq!(entries.len(), 3);
-        assert_eq!(entries[0].pattern, "synergy");
+        assert_eq!(entries[0].pattern, "It's worth noting");
         assert_eq!(entries[0].action, Action::Warn);
-        assert_eq!(entries[0].reason.as_deref(), Some("corporate filler"));
+        assert_eq!(
+            entries[0].reason.as_deref(),
+            Some("then just note it \u{2014} the preamble adds nothing")
+        );
         assert_eq!(entries[1].action, Action::Log);
         assert!(entries[1].reason.is_none());
         assert_eq!(entries[2].action, Action::Celebrate);
@@ -300,11 +303,12 @@ reason = "good word"
             &path,
             r#"
 [[entry]]
-pattern = "test"
+pattern = "leverage"
 "#,
         )
         .unwrap();
         let entries = load_sidecar_entries(&path).unwrap();
+        // No action specified = warn. The safest assumption is self-suspicion.
         assert_eq!(entries[0].action, Action::Warn);
     }
 }

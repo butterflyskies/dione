@@ -14,6 +14,11 @@ use crate::discord::chunk;
 use crate::gate::OutboundGate;
 use crate::state::State;
 
+/// Self-react emoji for contradictionary warn hits (🙊 — see-no-evil monkey).
+const CONTRADICTIONARY_WARN_REACT: &str = "\u{1f64a}";
+/// Self-react emoji for contradictionary celebrate hits (✨ — sparkles).
+const CONTRADICTIONARY_CELEBRATE_REACT: &str = "\u{2728}";
+
 /// Context available to all messaging tools.
 pub struct MessagingCtx {
     pub http: Arc<serenity::http::Http>,
@@ -70,7 +75,7 @@ pub async fn reply(
                 .filter(|h| h.action == Action::Block)
                 .map(|h| h.pattern.as_str())
                 .collect();
-            tracing::warn!(
+            tracing::info!(
                 channel = %channel_id,
                 patterns = ?blocked,
                 "contradictionary blocked outbound message"
@@ -82,7 +87,7 @@ pub async fn reply(
                 )
             });
         }
-        // Log and warn hits are handled post-send (warn self-reacts with 🙊).
+        // Log and warn hits are handled post-send (warn self-reacts).
         if !contradictionary_hits.is_empty() {
             let patterns: Vec<&str> = contradictionary_hits
                 .iter()
@@ -168,14 +173,17 @@ pub async fn reply(
             .iter()
             .any(|h| h.action == Action::Celebrate);
         if has_warns {
-            let reaction = serenity::model::channel::ReactionType::Unicode("\u{1f64a}".into());
+            let reaction =
+                serenity::model::channel::ReactionType::Unicode(CONTRADICTIONARY_WARN_REACT.into());
             let _ = ctx
                 .http
                 .create_reaction(ch, MessageId::new(first_id), &reaction)
                 .await;
         }
         if has_celebrates {
-            let reaction = serenity::model::channel::ReactionType::Unicode("\u{2728}".into());
+            let reaction = serenity::model::channel::ReactionType::Unicode(
+                CONTRADICTIONARY_CELEBRATE_REACT.into(),
+            );
             let _ = ctx
                 .http
                 .create_reaction(ch, MessageId::new(first_id), &reaction)
