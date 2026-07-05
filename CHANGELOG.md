@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-07-04
+
+### Added
+- `contradictionary` — concordance-based output filter with aho-corasick matching.
+  Self-reacts with 🙊 on warn, blocks before send, ✨ celebrate action. TOML sidecar
+  config with case-insensitive matching (#151).
+- `set_presence` MCP tool — set Discord bot presence/status (online/idle/dnd/invisible)
+  and activity (playing/watching/listening/competing/custom) via MCP (#150).
+
 ## [0.15.0] - 2026-07-02
 
 ### Added
