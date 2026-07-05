@@ -2,6 +2,8 @@
 
 use serde_json::{Value, json};
 
+use super::tools::bot_state::{ActivityType, OnlineStatus};
+
 /// Build the MCP `initialize` response.
 pub(crate) fn initialize_response() -> Value {
     json!({
@@ -246,12 +248,12 @@ pub(crate) fn tools_list() -> Value {
                 "properties": {
                     "online_status": {
                         "type": "string",
-                        "enum": ["online", "idle", "dnd", "invisible"],
+                        "enum": OnlineStatus::json_enum(),
                         "description": "Online status (default: online)"
                     },
                     "activity_type": {
                         "type": "string",
-                        "enum": ["playing", "watching", "listening", "competing", "custom"],
+                        "enum": ActivityType::json_enum(),
                         "description": "Activity type. If set, activity_name is required."
                     },
                     "activity_name": {

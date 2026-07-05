@@ -1,3 +1,5 @@
+use std::fmt;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -8,17 +10,156 @@ use crate::config::LoadedConfig;
 use crate::gate::OutboundGate;
 use crate::state::State;
 
+/// Bot online status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnlineStatus {
+    Online,
+    Idle,
+    Dnd,
+    Invisible,
+}
+
+impl OnlineStatus {
+    pub const ALL: &[OnlineStatus] = &[
+        OnlineStatus::Online,
+        OnlineStatus::Idle,
+        OnlineStatus::Dnd,
+        OnlineStatus::Invisible,
+    ];
+
+    pub fn json_enum() -> Value {
+        Value::Array(
+            Self::ALL
+                .iter()
+                .map(|s| Value::String(s.to_string()))
+                .collect(),
+        )
+    }
+
+    pub fn to_serenity(self) -> serenity::model::user::OnlineStatus {
+        match self {
+            Self::Online => serenity::model::user::OnlineStatus::Online,
+            Self::Idle => serenity::model::user::OnlineStatus::Idle,
+            Self::Dnd => serenity::model::user::OnlineStatus::DoNotDisturb,
+            Self::Invisible => serenity::model::user::OnlineStatus::Invisible,
+        }
+    }
+}
+
+impl fmt::Display for OnlineStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Online => write!(f, "online"),
+            Self::Idle => write!(f, "idle"),
+            Self::Dnd => write!(f, "dnd"),
+            Self::Invisible => write!(f, "invisible"),
+        }
+    }
+}
+
+impl FromStr for OnlineStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "online" => Ok(Self::Online),
+            "idle" => Ok(Self::Idle),
+            "dnd" => Ok(Self::Dnd),
+            "invisible" => Ok(Self::Invisible),
+            other => Err(format!(
+                "invalid online_status: {other}; must be one of: {}",
+                Self::ALL
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+    }
+}
+
+/// Bot activity type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityType {
+    Playing,
+    Watching,
+    Listening,
+    Competing,
+    Custom,
+}
+
+impl ActivityType {
+    pub const ALL: &[ActivityType] = &[
+        ActivityType::Playing,
+        ActivityType::Watching,
+        ActivityType::Listening,
+        ActivityType::Competing,
+        ActivityType::Custom,
+    ];
+
+    pub fn json_enum() -> Value {
+        Value::Array(
+            Self::ALL
+                .iter()
+                .map(|s| Value::String(s.to_string()))
+                .collect(),
+        )
+    }
+
+    pub fn to_activity(self, name: &str) -> serenity::gateway::ActivityData {
+        use serenity::gateway::ActivityData;
+        match self {
+            Self::Playing => ActivityData::playing(name),
+            Self::Watching => ActivityData::watching(name),
+            Self::Listening => ActivityData::listening(name),
+            Self::Competing => ActivityData::competing(name),
+            Self::Custom => ActivityData::custom(name),
+        }
+    }
+}
+
+impl fmt::Display for ActivityType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Playing => write!(f, "playing"),
+            Self::Watching => write!(f, "watching"),
+            Self::Listening => write!(f, "listening"),
+            Self::Competing => write!(f, "competing"),
+            Self::Custom => write!(f, "custom"),
+        }
+    }
+}
+
+impl FromStr for ActivityType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "playing" => Ok(Self::Playing),
+            "watching" => Ok(Self::Watching),
+            "listening" => Ok(Self::Listening),
+            "competing" => Ok(Self::Competing),
+            "custom" => Ok(Self::Custom),
+            other => Err(format!(
+                "invalid activity_type: {other}; must be one of: {}",
+                Self::ALL
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+    }
+}
+
 /// Commands the Discord task can execute on behalf of MCP tools that need
 /// gateway-level operations (e.g. presence updates).
 #[derive(Debug)]
 pub enum DiscordCommand {
     /// Update the bot's presence status and activity.
     SetPresence {
-        /// Online status: "online", "idle", "dnd", or "invisible".
-        online_status: String,
-        /// Activity type: "playing", "watching", "listening", "competing", or "custom".
-        activity_type: Option<String>,
-        /// The activity text (e.g. "catena", "the void").
+        online_status: OnlineStatus,
+        activity_type: Option<ActivityType>,
         activity_name: Option<String>,
     },
 }
@@ -33,12 +174,6 @@ pub struct BotStateCtx {
 
 // ── set_presence ──────────────────────────────────────────────────────────────
 
-/// Valid online statuses for the `set_presence` tool.
-const VALID_STATUSES: &[&str] = &["online", "idle", "dnd", "invisible"];
-
-/// Valid activity types for the `set_presence` tool.
-const VALID_ACTIVITY_TYPES: &[&str] = &["playing", "watching", "listening", "competing", "custom"];
-
 pub async fn set_presence(
     ctx: &BotStateCtx,
     online_status: &str,
@@ -49,34 +184,26 @@ pub async fn set_presence(
         return json!({ "error": "presence updates require the discord gateway command channel" });
     };
 
-    if !VALID_STATUSES.contains(&online_status) {
-        return json!({
-            "error": format!(
-                "invalid online_status: {online_status}; must be one of: {}",
-                VALID_STATUSES.join(", ")
-            )
-        });
-    }
+    let status = match OnlineStatus::from_str(online_status) {
+        Ok(s) => s,
+        Err(e) => return json!({ "error": e }),
+    };
 
-    if let Some(at) = activity_type
-        && !VALID_ACTIVITY_TYPES.contains(&at)
-    {
-        return json!({
-            "error": format!(
-                "invalid activity_type: {at}; must be one of: {}",
-                VALID_ACTIVITY_TYPES.join(", ")
-            )
-        });
-    }
+    let at = match activity_type {
+        Some(s) => match ActivityType::from_str(s) {
+            Ok(a) => Some(a),
+            Err(e) => return json!({ "error": e }),
+        },
+        None => None,
+    };
 
-    // activity_name is required when activity_type is set.
-    if activity_type.is_some() && activity_name.is_none() {
+    if at.is_some() && activity_name.is_none() {
         return json!({ "error": "activity_name is required when activity_type is set" });
     }
 
     let cmd = DiscordCommand::SetPresence {
-        online_status: online_status.to_string(),
-        activity_type: activity_type.map(|s| s.to_string()),
+        online_status: status,
+        activity_type: at,
         activity_name: activity_name.map(|s| s.to_string()),
     };
 

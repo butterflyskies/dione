@@ -8,7 +8,6 @@ use crate::{
 use serenity::{
     async_trait,
     builder::{CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage},
-    gateway::ActivityData,
     model::{event::MessageUpdateEvent, prelude::*},
     prelude::*,
 };
@@ -589,14 +588,14 @@ async fn run_discord_commands(ctx: Context, mut rx: tokio::sync::mpsc::Receiver<
                 activity_type,
                 activity_name,
             } => {
-                let status = parse_online_status(&online_status);
-                let activity = match (activity_type.as_deref(), activity_name.as_deref()) {
-                    (Some(kind), Some(name)) => build_activity(kind, name),
+                let status = online_status.to_serenity();
+                let activity = match (activity_type, activity_name.as_deref()) {
+                    (Some(kind), Some(name)) => Some(kind.to_activity(name)),
                     _ => None,
                 };
                 tracing::info!(
                     ?status,
-                    activity_type = activity_type.as_deref(),
+                    ?activity_type,
                     activity_name = activity_name.as_deref(),
                     "setting presence"
                 );
@@ -605,29 +604,6 @@ async fn run_discord_commands(ctx: Context, mut rx: tokio::sync::mpsc::Receiver<
         }
     }
     tracing::debug!("discord command processor stopped (channel closed)");
-}
-
-/// Parses a string into a serenity [`OnlineStatus`].
-fn parse_online_status(s: &str) -> OnlineStatus {
-    match s {
-        "online" => OnlineStatus::Online,
-        "idle" => OnlineStatus::Idle,
-        "dnd" => OnlineStatus::DoNotDisturb,
-        "invisible" => OnlineStatus::Invisible,
-        _ => OnlineStatus::Online,
-    }
-}
-
-/// Builds a serenity [`ActivityData`] from a type string and name.
-fn build_activity(kind: &str, name: &str) -> Option<ActivityData> {
-    Some(match kind {
-        "playing" => ActivityData::playing(name),
-        "watching" => ActivityData::watching(name),
-        "listening" => ActivityData::listening(name),
-        "competing" => ActivityData::competing(name),
-        "custom" => ActivityData::custom(name),
-        _ => return None,
-    })
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
