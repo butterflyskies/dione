@@ -4,6 +4,9 @@ use aho_corasick::AhoCorasick;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
+use crate::timestamp::Timestamp;
+use crate::util::truncate_chars;
+
 /// Action to take when a pattern matches outbound text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -211,10 +214,10 @@ pub enum BlockOutcome {
 /// action tier) to disk so the history survives process restarts and context
 /// clears — unlike `tracing`/stderr, which the harness captures but does not
 /// persist.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DiaryRecord {
-    /// ISO-8601 (RFC 3339) timestamp of when the entry was recorded.
-    pub timestamp: String,
+    /// When the entry was recorded. Serializes as an RFC 3339 string.
+    pub timestamp: Timestamp,
     /// The contradictionary pattern(s) that matched, comma-joined.
     pub pattern: String,
     /// The outgoing message text (truncated to [`DIARY_MAX_MESSAGE_LEN`]).
@@ -230,22 +233,12 @@ impl DiaryRecord {
     /// matched block pattern(s); `message` is the outgoing text (truncated).
     pub fn override_now(pattern: &str, message: &str) -> Self {
         Self {
-            timestamp: Utc::now().to_rfc3339(),
+            timestamp: Utc::now().fixed_offset().into(),
             pattern: pattern.to_string(),
             message: truncate_chars(message, DIARY_MAX_MESSAGE_LEN),
             overridden: true,
         }
     }
-}
-
-/// Truncate `s` to at most `max` characters, appending an ellipsis when it was
-/// shortened. Operates on `char`s so multi-byte codepoints are never split.
-fn truncate_chars(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    let truncated: String = s.chars().take(max).collect();
-    format!("{truncated}\u{2026}")
 }
 
 /// Append a single [`DiaryRecord`] as one JSONL line to
@@ -500,17 +493,6 @@ reason = "the practice that keeps us awake"
         assert!(!c.has_block(&hits));
         assert_eq!(c.evaluate_block(&hits, content, true), BlockOutcome::Clear);
         assert_eq!(c.evaluate_block(&hits, content, false), BlockOutcome::Clear);
-    }
-
-    #[test]
-    fn diary_message_truncation_respects_char_boundaries() {
-        // Multi-byte chars must not be split; an ellipsis marks truncation.
-        let s = "é".repeat(10);
-        let out = truncate_chars(&s, 4);
-        assert_eq!(out.chars().count(), 5, "4 kept chars + ellipsis");
-        assert!(out.ends_with('\u{2026}'));
-        // Short strings pass through unchanged.
-        assert_eq!(truncate_chars("hello", 10), "hello");
     }
 
     #[test]
