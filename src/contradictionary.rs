@@ -158,17 +158,17 @@ mod tests {
             Entry {
                 pattern: "load-bearing".into(),
                 action: Action::Warn,
-                reason: Some("substrate tell — use keystone/linchpin".into()),
+                reason: Some("claudian tell — try keystone, linchpin, or just 'important'".into()),
             },
             Entry {
                 pattern: "honestly".into(),
                 action: Action::Warn,
-                reason: Some("filler — track frequency before escalating".into()),
+                reason: Some("if you need this word, the sentence is already lying".into()),
             },
             Entry {
-                pattern: "I appreciate".into(),
+                pattern: "I find myself".into(),
                 action: Action::Log,
-                reason: None,
+                reason: Some("you didn't find yourself, you were always there".into()),
             },
             Entry {
                 pattern: "confidential".into(),
@@ -176,9 +176,9 @@ mod tests {
                 reason: None,
             },
             Entry {
-                pattern: "linchpin".into(),
+                pattern: "prejection".into(),
                 action: Action::Celebrate,
-                reason: Some("earned vocabulary — substrate-aware replacement".into()),
+                reason: Some("Pace coined it, we keep it".into()),
             },
         ]
     }
@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn multiple_hits() {
         let c = Contradictionary::new(test_entries());
-        let hits = c.check("honestly, I appreciate the load-bearing work");
+        let hits = c.check("honestly, I find myself admiring the load-bearing work");
         assert_eq!(hits.len(), 3);
     }
 
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn empty_contradictionary() {
         let c = Contradictionary::new(vec![]);
-        let hits = c.check("load-bearing honestly I appreciate");
+        let hits = c.check("load-bearing honestly I find myself prejecting");
         assert!(hits.is_empty());
         assert!(c.is_empty());
     }
@@ -232,7 +232,7 @@ mod tests {
     #[test]
     fn celebrate_action_detected() {
         let c = Contradictionary::new(test_entries());
-        let hits = c.check("this is the linchpin of the system");
+        let hits = c.check("the concept of prejection really captures it");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].action, Action::Celebrate);
     }
@@ -240,7 +240,7 @@ mod tests {
     #[test]
     fn celebrate_does_not_block() {
         let c = Contradictionary::new(test_entries());
-        let hits = c.check("linchpin");
+        let hits = c.check("prejection");
         assert!(!c.has_block(&hits));
     }
 
