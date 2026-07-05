@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Reaction and message notifications no longer emit an empty `user` field when
+  no cached display name is available. Identity resolution now follows a full
+  fallback chain — resolved display name → Discord username → the literal
+  `"dione"` — so a reactor's username is used instead of surfacing the substrate
+  name downstream (#153).
+
 ## [0.17.0] - 2026-07-04
 
 ### Added
