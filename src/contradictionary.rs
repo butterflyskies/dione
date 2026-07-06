@@ -893,6 +893,20 @@ reason = "chom-chom game"
         assert_eq!(c.check("the porter carried bags").len(), 1);
     }
 
+    #[test]
+    fn unicode_immediately_flanking_joiner() {
+        // Ülkü-Özlem: Unicode on BOTH sides of the hyphen (ü-Ö)
+        let entries = vec![Entry {
+            pattern: "Özlem".into(),
+            action: Action::Warn,
+            match_mode: MatchMode::Word,
+            reason: None,
+        }];
+        let c = Contradictionary::new(entries);
+        assert!(c.check("Ülkü-Özlem arrived").is_empty());
+        assert_eq!(c.check("Özlem arrived").len(), 1);
+    }
+
     // ── Hit position tests ───────────────────────────────────────────
 
     #[test]
