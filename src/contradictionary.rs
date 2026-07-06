@@ -479,6 +479,40 @@ mod tests {
     }
 
     #[test]
+    fn empty_pattern_fires_on_everything() {
+        let c = Contradictionary::new(vec![Entry {
+            pattern: "".into(),
+            action: Action::Warn,
+            match_mode: MatchMode::Substring,
+            reason: Some("might wanna 🔍 that before sending".into()),
+        }]);
+        let hits = c.check("literally anything");
+        assert!(!hits.is_empty(), "empty pattern should match all text");
+        let hits2 = c.check("a");
+        assert!(
+            !hits2.is_empty(),
+            "empty pattern should match even single chars"
+        );
+    }
+
+    #[test]
+    fn empty_pattern_word_mode_fires_on_everything() {
+        let c = Contradictionary::new(vec![Entry {
+            pattern: "".into(),
+            action: Action::Warn,
+            match_mode: MatchMode::Word,
+            reason: Some("word-mode empty also fires on everything".into()),
+        }]);
+        let hits = c.check("literally anything");
+        assert!(
+            !hits.is_empty(),
+            "empty pattern in word mode should match all text"
+        );
+        let hits2 = c.check("hello world");
+        assert!(!hits2.is_empty(), "empty pattern in word mode should match");
+    }
+
+    #[test]
     fn celebrate_action_detected() {
         let c = Contradictionary::new(test_entries());
         let hits = c.check("the concept of prejection really captures it");
