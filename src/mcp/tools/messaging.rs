@@ -8,9 +8,12 @@ use serenity::model::Timestamp;
 use serenity::model::channel::Message;
 use serenity::model::id::{ChannelId, MessageId, UserId};
 
+use tokio::sync::mpsc;
+
 use crate::config::{ChunkMode, DmPolicy, LoadedConfig};
 use crate::contradictionary::Action;
 use crate::discord::chunk;
+use crate::discord::events::NotificationEvent;
 use crate::gate::OutboundGate;
 use crate::no_rly::consent::{
     BounceTicket, ConsentGate, DeliverError, DeliverReply, RejectedHandle, Rephrased, ReplyRequest,
@@ -36,6 +39,7 @@ pub struct MessagingCtx {
     author_id: Option<UserId>,
     construct_id: ConstructId,
     pub no_rly: Arc<ConsentGate>,
+    pub event_tx: Option<mpsc::Sender<NotificationEvent>>,
 }
 
 impl MessagingCtx {
@@ -60,6 +64,7 @@ impl MessagingCtx {
             state_dir,
             pre_send_pipeline,
             no_rly,
+            event_tx: None,
         }
     }
 
@@ -623,6 +628,21 @@ async fn deliver_reply(
                 patterns = ?patterns,
                 "contradictionary celebrated outbound vocabulary"
             );
+
+            // Emit a self-reaction notification so the construct sees the
+            // celebrate signal. The gateway filters bot self-reactions, so
+            // without this the positive reinforcement loop is broken.
+            if let Some(ref tx) = ctx.event_tx {
+                let event = NotificationEvent::Reaction {
+                    chat_id: ch,
+                    message_id: MessageId::new(first_id),
+                    user: String::new(),
+                    user_id: UserId::new(0),
+                    emoji: CONTRADICTIONARY_CELEBRATE_REACT.to_string(),
+                    self_react: true,
+                };
+                let _ = tx.send(event).await;
+            }
         }
     }
 

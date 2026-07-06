@@ -63,19 +63,22 @@ pub struct DioneServer {
     pub codex_queue: Option<CodexEventQueue>,
     pub codex_thread_binding: Option<watch::Sender<Option<crate::codex::CodexThreadId>>>,
     pub no_rly: Arc<ConsentGate>,
+    pub event_tx: Option<mpsc::Sender<NotificationEvent>>,
 }
 
 // ── Context factory methods ───────────────────────────────────────────────────
 
 impl DioneServer {
     pub(crate) fn messaging_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> MessagingCtx {
-        MessagingCtx::new(
+        let mut ctx = MessagingCtx::new(
             self.http.clone(),
             self.state.clone(),
             config,
             self.state_dir.clone(),
             self.no_rly.clone(),
-        )
+        );
+        ctx.event_tx = self.event_tx.clone();
+        ctx
     }
 
     pub(crate) fn no_rly_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> NoRlyCtx {
@@ -682,6 +685,7 @@ mod tests {
             mode: TransportMode::ClaudeCode,
             codex_queue: None,
             codex_thread_binding: None,
+            event_tx: None,
         };
 
         let context = server.messaging_ctx(Arc::new(LoadedConfig::from_raw(Config::default())));
@@ -777,6 +781,7 @@ mod tests {
             user: "u".into(),
             user_id: UserId::new(1),
             emoji: "👍".into(),
+            self_react: false,
         };
         assert_eq!(extract_delay_ms(&event, &config), 200);
     }

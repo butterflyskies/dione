@@ -89,6 +89,9 @@ pub enum NotificationEvent {
         user: String,
         user_id: UserId,
         emoji: String,
+        /// When true, this reaction was added by the bot itself (e.g. contradictionary celebrate).
+        /// Gateway self-reactions are filtered, so this is only set for tool-initiated reacts.
+        self_react: bool,
     },
     PermissionResponse {
         request_id: String,
@@ -437,6 +440,7 @@ impl EventHandler for Handler {
             user: user_name,
             user_id,
             emoji,
+            self_react: false,
         };
 
         if let Err(e) = self.tx.send(event).await {

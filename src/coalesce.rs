@@ -492,6 +492,7 @@ mod tests {
             user: "bob".to_string(),
             user_id: UserId::new(200),
             emoji: "\u{1f44d}".to_string(),
+            self_react: false,
         }
     }
 
@@ -708,6 +709,7 @@ mod tests {
                 user: "ros".to_string(),
                 user_id: UserId::new(20),
                 emoji: "\u{2764}\u{fe0f}".to_string(),
+                self_react: false,
             },
             NotificationEvent::MessageEdit {
                 chat_id: ChannelId::new(555),

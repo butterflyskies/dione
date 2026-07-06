@@ -82,6 +82,7 @@ fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
         codex_queue: None,
         codex_thread_binding: None,
         no_rly: Arc::new(ConsentGate::new(state_dir)),
+        event_tx: None,
     }
 }
 
@@ -915,6 +916,7 @@ fn test_notification_reaction_snapshot() {
         user: "reactor".to_string(),
         user_id: UserId::new(3001),
         emoji: "🎉".to_string(),
+        self_react: false,
     };
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);

@@ -289,6 +289,7 @@ fn non_message_event_returns_error() {
         user: "alice".to_string(),
         user_id: UserId::new(42),
         emoji: "thumbsup".to_string(),
+        self_react: false,
     }];
     let result = serialize_batch(&events, &ctx_basic());
     assert!(result.is_err());
