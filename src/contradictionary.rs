@@ -114,6 +114,10 @@ pub fn load_sidecar_entries(path: &Path) -> Result<Vec<Entry>, String> {
 }
 
 /// A match found in outbound text.
+///
+/// `start`/`end` are byte offsets in the original text for substring-mode hits.
+/// Word-mode hits set both to 0 — the sentinel-delimited positions don't map
+/// back to source text.
 #[derive(Debug, Clone)]
 pub struct Hit {
     pub pattern: String,
@@ -125,7 +129,7 @@ pub struct Hit {
 const SENTINEL: u8 = b'\x01';
 
 fn is_joiner(c: char) -> bool {
-    c == '-' || c == '_' || c == '\''
+    c == '-' || c == '_' || c == '\'' || c == '\u{2019}'
 }
 
 fn is_word_char(c: char) -> bool {
@@ -813,6 +817,128 @@ reason = "chom-chom game"
         let c = Contradictionary::new(entries);
         assert!(c.check("the self_care routine").is_empty());
         assert_eq!(c.check("I care about this").len(), 1);
+    }
+
+    // ── Unicode tests ────────────────────────────────────────────────
+
+    #[test]
+    fn unicode_substring_match() {
+        let entries = vec![Entry {
+            pattern: "café".into(),
+            action: Action::Warn,
+            match_mode: MatchMode::Substring,
+            reason: None,
+        }];
+        let c = Contradictionary::new(entries);
+        assert_eq!(c.check("the café downtown").len(), 1);
+        // ascii_case_insensitive folds A-Z only — É (U+00C9) ≠ é (U+00E9)
+        assert!(c.check("CAFÉ").is_empty());
+        assert_eq!(c.check("Café").len(), 1); // ASCII C folds, é stays
+    }
+
+    #[test]
+    fn unicode_word_match() {
+        let entries = vec![Entry {
+            pattern: "naïve".into(),
+            action: Action::Warn,
+            match_mode: MatchMode::Word,
+            reason: None,
+        }];
+        let c = Contradictionary::new(entries);
+        assert_eq!(c.check("that's naïve").len(), 1);
+        assert_eq!(c.check("a naïve approach").len(), 1);
+        assert!(c.check("naive").is_empty()); // different codepoint
+    }
+
+    #[test]
+    fn curly_apostrophe_is_joiner() {
+        let entries = vec![Entry {
+            pattern: "don".into(),
+            action: Action::Block,
+            match_mode: MatchMode::Word,
+            reason: None,
+        }];
+        let c = Contradictionary::new(entries);
+        // curly right single quote (U+2019) from rich-text paste
+        assert!(c.check("I don\u{2019}t think so").is_empty());
+        assert_eq!(c.check("don of the mafia").len(), 1);
+    }
+
+    #[test]
+    fn em_dash_is_boundary_but_hyphen_is_joiner() {
+        let entries = vec![Entry {
+            pattern: "load".into(),
+            action: Action::Block,
+            match_mode: MatchMode::Word,
+            reason: None,
+        }];
+        let c = Contradictionary::new(entries);
+        // em-dash (U+2014) is a boundary — "load" is its own token
+        assert_eq!(c.check("load\u{2014}squirreling").len(), 1);
+        // hyphen-minus is a joiner — "load-squirreling" is one token
+        assert!(c.check("load-squirreling").is_empty());
+    }
+
+    #[test]
+    fn unicode_compound_with_joiner() {
+        // prêt-à-porter: Unicode on both sides of hyphens
+        let entries = vec![Entry {
+            pattern: "porter".into(),
+            action: Action::Warn,
+            match_mode: MatchMode::Word,
+            reason: None,
+        }];
+        let c = Contradictionary::new(entries);
+        assert!(c.check("she wore prêt-à-porter fashion").is_empty());
+        assert_eq!(c.check("the porter carried bags").len(), 1);
+    }
+
+    // ── Hit position tests ───────────────────────────────────────────
+
+    #[test]
+    fn substring_hit_has_correct_byte_offsets() {
+        let entries = vec![Entry {
+            pattern: "fizz".into(),
+            action: Action::Warn,
+            match_mode: MatchMode::Substring,
+            reason: None,
+        }];
+        let c = Contradictionary::new(entries);
+        let hits = c.check("the fizzle pop");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].start, 4);
+        assert_eq!(hits[0].end, 8);
+    }
+
+    #[test]
+    fn substring_hit_byte_offsets_with_unicode() {
+        let entries = vec![Entry {
+            pattern: "café".into(),
+            action: Action::Warn,
+            match_mode: MatchMode::Substring,
+            reason: None,
+        }];
+        let c = Contradictionary::new(entries);
+        let hits = c.check("the café is nice");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].start, 4);
+        // é is 2 bytes in UTF-8, so "café" is 5 bytes
+        assert_eq!(hits[0].end, 9);
+    }
+
+    #[test]
+    fn word_mode_hit_positions_are_zero() {
+        let entries = vec![Entry {
+            pattern: "fizz".into(),
+            action: Action::Block,
+            match_mode: MatchMode::Word,
+            reason: None,
+        }];
+        let c = Contradictionary::new(entries);
+        let hits = c.check("the fizz is here");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].start, 0);
+        assert_eq!(hits[0].end, 0);
     }
 
     #[test]
