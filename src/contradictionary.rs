@@ -478,41 +478,31 @@ mod tests {
         assert!(c.is_empty());
     }
 
-    #[test]
-    fn empty_pattern_substring_mode_matches_all_text() {
+    fn assert_empty_pattern_matches_all(mode: MatchMode) {
         let c = Contradictionary::new(vec![Entry {
             pattern: "".into(),
             action: Action::Warn,
-            match_mode: MatchMode::Substring,
-            reason: Some("might wanna 🔍 that before sending".into()),
+            match_mode: mode,
+            reason: Some("empty pattern test".into()),
         }]);
-        let hits = c.check("literally anything");
-        assert!(!hits.is_empty(), "empty pattern should match all text");
-        let hits2 = c.check("a");
-        assert!(
-            !hits2.is_empty(),
-            "empty pattern should match even single chars"
-        );
+        assert!(!c.check("literally anything").is_empty());
+        assert!(!c.check("a").is_empty());
+        assert!(!c.check("hello world").is_empty());
     }
 
     #[test]
     fn empty_pattern_matches_all_text() {
-        let c = Contradictionary::new(vec![Entry {
-            pattern: "".into(),
-            action: Action::Warn,
-            match_mode: default_match_mode(),
-            reason: Some("foot-mouth buffer: default mode empty pattern".into()),
-        }]);
-        let hits = c.check("literally anything");
-        assert!(
-            !hits.is_empty(),
-            "empty pattern in default mode should match all text"
-        );
-        let hits2 = c.check("hello world");
-        assert!(
-            !hits2.is_empty(),
-            "empty pattern in default mode should match"
-        );
+        assert_empty_pattern_matches_all(default_match_mode());
+    }
+
+    #[test]
+    fn empty_pattern_substring_mode_matches_all_text() {
+        assert_empty_pattern_matches_all(MatchMode::Substring);
+    }
+
+    #[test]
+    fn empty_pattern_word_mode_matches_all_text() {
+        assert_empty_pattern_matches_all(MatchMode::Word);
     }
 
     #[test]
