@@ -30,8 +30,6 @@ pub enum MatchMode {
     /// patterns like "load-bearing". This is the default.
     Word,
     /// Match anywhere as a substring (original Aho-Corasick behavior).
-    /// Use for chom-chom game entries or stem-matching where you want
-    /// collateral hits on containing words.
     Substring,
 }
 
