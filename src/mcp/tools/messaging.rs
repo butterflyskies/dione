@@ -9,7 +9,7 @@ use serenity::model::channel::Message;
 use serenity::model::id::{ChannelId, MessageId, UserId};
 
 use crate::config::{ChunkMode, DmPolicy, LoadedConfig};
-use crate::contradictionary::Action;
+use crate::contradictionary::{Action, BlockOutcome, append_diary_record};
 use crate::discord::chunk;
 use crate::gate::OutboundGate;
 use crate::state::State;
@@ -53,6 +53,7 @@ pub async fn reply(
     content: &str,
     reply_to_message_id: Option<MessageId>,
     suppress_ping: bool,
+    no_rly: bool,
 ) -> Value {
     if let Err(e) = check_outbound(ctx, channel_id).await {
         return e;
@@ -69,23 +70,33 @@ pub async fn reply(
         .unwrap_or_default();
 
     if let Some(ref contradictionary) = ctx.config.contradictionary {
-        if contradictionary.has_block(&contradictionary_hits) {
-            let blocked: Vec<&str> = contradictionary_hits
-                .iter()
-                .filter(|h| h.action == Action::Block)
-                .map(|h| h.pattern.as_str())
-                .collect();
-            tracing::info!(
-                channel = %channel_id,
-                patterns = ?blocked,
-                "contradictionary blocked outbound message"
-            );
-            return json!({
-                "error": format!(
-                    "message blocked by contradictionary: matched [{}]",
-                    blocked.join(", ")
-                )
-            });
+        // A block hit either rejects the send outright, or — when the construct
+        // resends the same message with `no_rly: true` — is overridden via the
+        // consent gate and recorded in the durable diary.
+        match contradictionary.evaluate_block(&contradictionary_hits, content, no_rly) {
+            BlockOutcome::Clear => {}
+            BlockOutcome::Rejected(error) => {
+                tracing::info!(
+                    channel = %channel_id,
+                    "contradictionary blocked outbound message"
+                );
+                return json!({ "error": error });
+            }
+            BlockOutcome::Overridden(record) => {
+                tracing::info!(
+                    channel = %channel_id,
+                    pattern = %record.pattern,
+                    "contradictionary block overridden via no_rly"
+                );
+                // Durable append; failure to log the override must not stop the
+                // send the construct explicitly consented to.
+                if let Err(e) = append_diary_record(ctx.state_dir.as_std_path(), &record) {
+                    tracing::warn!(
+                        error = %e,
+                        "failed to append contradictionary override to diary"
+                    );
+                }
+            }
         }
         // Log and warn hits are handled post-send (warn self-reacts).
         if !contradictionary_hits.is_empty() {
@@ -486,7 +497,7 @@ pub async fn send_dm(ctx: &MessagingCtx, user_id: UserId, content: &str) -> Valu
         state.record_dm_channel(user_id.get(), channel_id.get());
     }
 
-    let result = reply(ctx, channel_id, content, None, false).await;
+    let result = reply(ctx, channel_id, content, None, false, false).await;
 
     if result.get("error").is_some() {
         return result;

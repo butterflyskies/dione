@@ -54,7 +54,8 @@ pub(crate) async fn call_tool(
                 .get("suppress_ping")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            reply(&ctx, channel_id, content, reply_to, suppress_ping).await
+            let no_rly = args.get("no_rly").and_then(Value::as_bool).unwrap_or(false);
+            reply(&ctx, channel_id, content, reply_to, suppress_ping, no_rly).await
         }
         "react" => {
             let ctx = server.messaging_ctx(config.clone());

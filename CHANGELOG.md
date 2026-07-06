@@ -5,8 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.18.0] - 2026-07-05
 
+### Added
+- `no_rly` override for the contradictionary `block` action. A blocked `reply`
+  now rejects with an error that names the matched pattern inline
+  (`⚠️ blocked: <pattern>`); resending the identical message with `no_rly: true`
+  bypasses the block, sends, and appends a durable JSONL entry to
+  `~/.claude/channels/dione/contradictionary.jsonl` (timestamp, matched pattern,
+  truncated message text, `override: true`). The diary is a real append-to-file
+  sink so override history survives process restarts and context clears —
+  unlike stderr, which the harness captures but does not persist. warn/log/
+  celebrate are unaffected, and `no_rly` on a non-blocked message is a no-op.
 ## [0.17.0] - 2026-07-04
 
 ### Added

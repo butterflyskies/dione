@@ -1,7 +1,11 @@
 use std::path::Path;
 
 use aho_corasick::AhoCorasick;
-use serde::Deserialize;
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+
+use crate::timestamp::Timestamp;
+use crate::util::truncate_chars;
 
 /// Action to take when a pattern matches outbound text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -144,9 +148,120 @@ impl Contradictionary {
         hits.iter().any(|h| h.action == Action::Block)
     }
 
+    /// Decide what a block action should do for outbound `content` (already
+    /// scanned into `hits`), given the caller's `no_rly` override flag.
+    ///
+    /// - No block hit → [`BlockOutcome::Clear`]: send normally, write nothing.
+    /// - Block hit, `no_rly == false` → [`BlockOutcome::Rejected`]: an error
+    ///   that names the matched pattern(s) inline, so the construct knows what
+    ///   to override.
+    /// - Block hit, `no_rly == true` → [`BlockOutcome::Overridden`]: a
+    ///   consent-gated bypass. Send the message and append the returned
+    ///   [`DiaryRecord`] to the durable diary once the send commits.
+    ///
+    /// `no_rly` on a message with no block hit is a no-op ([`BlockOutcome::Clear`]);
+    /// warn/log/celebrate hits are untouched here.
+    pub fn evaluate_block(&self, hits: &[Hit], content: &str, no_rly: bool) -> BlockOutcome {
+        let blocked: Vec<&str> = hits
+            .iter()
+            .filter(|h| h.action == Action::Block)
+            .map(|h| h.pattern.as_str())
+            .collect();
+        if blocked.is_empty() {
+            return BlockOutcome::Clear;
+        }
+        let pattern = blocked.join(", ");
+        if no_rly {
+            BlockOutcome::Overridden(DiaryRecord::override_now(&pattern, content))
+        } else {
+            BlockOutcome::Rejected(format!(
+                "\u{26a0}\u{fe0f} blocked by contradictionary: {pattern} \
+                 — resend with no_rly: true to override"
+            ))
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+}
+
+/// Maximum number of characters of outgoing text retained in a diary record.
+/// Longer messages are truncated (with an ellipsis) to bound line size.
+const DIARY_MAX_MESSAGE_LEN: usize = 2000;
+
+/// Name of the durable diary file, created under the channel state directory
+/// (`~/.claude/channels/dione/contradictionary.jsonl`).
+pub const DIARY_FILE_NAME: &str = "contradictionary.jsonl";
+
+/// The decision reached when evaluating a potential block.
+/// See [`Contradictionary::evaluate_block`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlockOutcome {
+    /// No block matched — send normally, write nothing to the diary.
+    Clear,
+    /// A block matched and was not overridden — reject with this error message
+    /// (it names the matched pattern(s) inline).
+    Rejected(String),
+    /// A block matched but the caller passed `no_rly: true` — send anyway and
+    /// append this record to the durable diary.
+    Overridden(DiaryRecord),
+}
+
+/// One durable diary entry, serialized as a single JSON line (JSONL).
+///
+/// The diary persists consent-gated block overrides (and, in future, the `log`
+/// action tier) to disk so the history survives process restarts and context
+/// clears — unlike `tracing`/stderr, which the harness captures but does not
+/// persist.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DiaryRecord {
+    /// When the entry was recorded. Serializes as an RFC 3339 string.
+    pub timestamp: Timestamp,
+    /// The contradictionary pattern(s) that matched, comma-joined.
+    pub pattern: String,
+    /// The outgoing message text (truncated to [`DIARY_MAX_MESSAGE_LEN`]).
+    pub message: String,
+    /// Always true — this entry records a `no_rly` override of a block action.
+    /// Serialized as `override` for readability of the on-disk log.
+    #[serde(rename = "override")]
+    pub overridden: bool,
+}
+
+impl DiaryRecord {
+    /// Build an override record stamped at the current time. `pattern` is the
+    /// matched block pattern(s); `message` is the outgoing text (truncated).
+    pub fn override_now(pattern: &str, message: &str) -> Self {
+        Self {
+            timestamp: Utc::now().fixed_offset().into(),
+            pattern: pattern.to_string(),
+            message: truncate_chars(message, DIARY_MAX_MESSAGE_LEN),
+            overridden: true,
+        }
+    }
+}
+
+/// Append a single [`DiaryRecord`] as one JSONL line to
+/// `<dir>/contradictionary.jsonl`.
+///
+/// `dir` is the channel state directory (e.g. `~/.claude/channels/dione`). The
+/// file and any missing parent directories are created on demand. This is the
+/// durable sink for the diary — a real append-to-file write, not a `tracing`
+/// event — so records survive process restarts.
+///
+/// Kept as a small reusable helper so the future `log` action tier can share
+/// the same sink.
+pub fn append_diary_record(dir: &Path, record: &DiaryRecord) -> std::io::Result<()> {
+    use std::io::Write;
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join(DIARY_FILE_NAME);
+    let mut line = serde_json::to_string(record).map_err(std::io::Error::other)?;
+    line.push('\n');
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+    file.write_all(line.as_bytes())
 }
 
 #[cfg(test)]
@@ -293,6 +408,91 @@ reason = "the practice that keeps us awake"
         let path = dir.path().join("contradictionary.toml");
         std::fs::write(&path, "not valid {{{toml").unwrap();
         assert!(load_sidecar_entries(&path).is_err());
+    }
+
+    // ── no_rly override + durable diary ──────────────────────────────────────
+
+    #[test]
+    fn block_without_no_rly_rejects_and_names_pattern() {
+        let c = Contradictionary::new(test_entries());
+        let content = "this is confidential information";
+        let hits = c.check(content);
+        match c.evaluate_block(&hits, content, false) {
+            BlockOutcome::Rejected(msg) => {
+                assert!(
+                    msg.contains("confidential"),
+                    "block error must name the matched pattern inline: {msg}"
+                );
+            }
+            other => panic!("expected Rejected without no_rly, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn block_with_no_rly_overrides_and_appends_jsonl() {
+        let c = Contradictionary::new(test_entries());
+        let content = "this is confidential information";
+        let hits = c.check(content);
+        let record = match c.evaluate_block(&hits, content, true) {
+            BlockOutcome::Overridden(record) => record,
+            other => panic!("expected Overridden with no_rly, got {other:?}"),
+        };
+        assert_eq!(record.pattern, "confidential");
+        assert!(record.overridden);
+
+        // Inject a temp dir so the real home dir is never touched.
+        let dir = tempfile::TempDir::new().unwrap();
+        append_diary_record(dir.path(), &record).unwrap();
+
+        let contents = std::fs::read_to_string(dir.path().join(DIARY_FILE_NAME)).unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 1, "exactly one JSONL line expected");
+
+        let parsed: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(parsed["pattern"], "confidential");
+        assert_eq!(parsed["override"], true);
+        assert_eq!(parsed["message"], content);
+        assert!(
+            parsed["timestamp"].as_str().is_some_and(|t| !t.is_empty()),
+            "record must carry a non-empty timestamp"
+        );
+    }
+
+    #[test]
+    fn append_diary_record_is_append_only() {
+        let dir = tempfile::TempDir::new().unwrap();
+        append_diary_record(
+            dir.path(),
+            &DiaryRecord::override_now("confidential", "first"),
+        )
+        .unwrap();
+        append_diary_record(dir.path(), &DiaryRecord::override_now("secret", "second")).unwrap();
+        let contents = std::fs::read_to_string(dir.path().join(DIARY_FILE_NAME)).unwrap();
+        assert_eq!(
+            contents.lines().count(),
+            2,
+            "records must accumulate across calls, not overwrite"
+        );
+    }
+
+    #[test]
+    fn no_rly_on_clean_message_is_clear_no_diary() {
+        let c = Contradictionary::new(test_entries());
+        let content = "the keystone component is well designed";
+        let hits = c.check(content);
+        // A no_rly on a non-blocked message is a no-op: no diary record.
+        assert_eq!(c.evaluate_block(&hits, content, true), BlockOutcome::Clear);
+    }
+
+    #[test]
+    fn no_rly_does_not_affect_warn_log_celebrate() {
+        let c = Contradictionary::new(test_entries());
+        // warn (honestly) + log (I find myself) + celebrate (prejection), no block.
+        let content = "honestly, I find myself admiring prejection";
+        let hits = c.check(content);
+        assert!(!c.has_block(&hits));
+        assert_eq!(c.evaluate_block(&hits, content, true), BlockOutcome::Clear);
+        assert_eq!(c.evaluate_block(&hits, content, false), BlockOutcome::Clear);
     }
 
     #[test]

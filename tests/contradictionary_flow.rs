@@ -15,7 +15,7 @@ use tempfile::TempDir;
 
 use dione::{
     config::{ChannelConfig, Config, LoadedConfig, reload_config},
-    contradictionary::{Action, Contradictionary, Entry},
+    contradictionary::{Action, Contradictionary, DIARY_FILE_NAME, Entry},
     mcp::tools::messaging::{self, MessagingCtx},
     state::new_state,
 };
@@ -85,15 +85,22 @@ fn config_with_contradictionary(entries: Vec<Entry>) -> LoadedConfig {
     LoadedConfig::from_raw(raw)
 }
 
-/// Build a MessagingCtx with a fake HTTP client. Good enough for testing paths
-/// that return before actually calling Discord (block path, outbound gate).
-fn test_ctx(config: LoadedConfig) -> MessagingCtx {
+/// Build a MessagingCtx with a fake HTTP client and the given state dir. The
+/// state dir is where the durable contradictionary diary is written, so
+/// override tests inject a temp dir to avoid touching the real home dir.
+fn test_ctx_with_state_dir(config: LoadedConfig, state_dir: Utf8PathBuf) -> MessagingCtx {
     MessagingCtx {
         http: Arc::new(serenity::http::Http::new("fake-token-for-testing")),
         state: new_state(),
         config: Arc::new(config),
-        state_dir: "/tmp".into(),
+        state_dir,
     }
+}
+
+/// Build a MessagingCtx with a fake HTTP client. Good enough for testing paths
+/// that return before actually calling Discord (block path, outbound gate).
+fn test_ctx(config: LoadedConfig) -> MessagingCtx {
+    test_ctx_with_state_dir(config, "/tmp".into())
 }
 
 // ── Integration: messaging::reply() block path ──────────────────────────────
@@ -110,6 +117,7 @@ async fn reply_block_prevents_send() {
         ChannelId::new(42),
         "this is a straightforward implementation",
         Some(MessageId::new(1)),
+        false,
         false,
     )
     .await;
@@ -154,6 +162,7 @@ async fn reply_block_reports_all_blocked_patterns() {
         "this is a straightforward and trivial change",
         None,
         false,
+        false,
     )
     .await;
 
@@ -173,6 +182,7 @@ async fn reply_warn_does_not_block() {
         ChannelId::new(42),
         "I find myself honestly appreciating the load-bearing work here",
         None,
+        false,
         false,
     )
     .await;
@@ -205,6 +215,7 @@ async fn reply_gate_rejects_unknown_channel() {
         "straightforward message to wrong channel",
         None,
         false,
+        false,
     )
     .await;
 
@@ -217,6 +228,83 @@ async fn reply_gate_rejects_unknown_channel() {
     assert!(
         !error_msg.contains("contradictionary"),
         "gate error should not mention contradictionary: {error_msg}"
+    );
+}
+
+// ── Integration: no_rly override + durable diary ─────────────────────────────
+
+/// The consent gate: resending a blocked message with `no_rly: true` bypasses
+/// the block and records the override to the durable JSONL diary. The fake HTTP
+/// send still fails at the Discord layer — but that happens *after* the bypass
+/// decision and the diary append, so the record is written regardless.
+#[tokio::test]
+async fn reply_no_rly_overrides_block_and_appends_diary() {
+    let dir = TempDir::new().unwrap();
+    let state_dir = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
+    let ctx = test_ctx_with_state_dir(
+        config_with_contradictionary(ariadne_entries()),
+        state_dir.clone(),
+    );
+
+    let result = messaging::reply(
+        &ctx,
+        ChannelId::new(42),
+        "this is a straightforward implementation",
+        None,
+        false,
+        true, // no_rly: consent-gated override
+    )
+    .await;
+
+    // Whatever the outcome, it must not be the contradictionary block rejection.
+    if let Some(err) = result.get("error").and_then(|e| e.as_str()) {
+        assert!(
+            !err.contains("blocked by contradictionary"),
+            "no_rly must bypass the block, got: {err}"
+        );
+    }
+
+    // The override is durably recorded: one JSONL line naming the pattern.
+    let contents = fs::read_to_string(state_dir.join(DIARY_FILE_NAME).as_std_path())
+        .expect("override must append a durable diary line");
+    let lines: Vec<&str> = contents.lines().collect();
+    assert_eq!(lines.len(), 1, "exactly one override recorded");
+    let parsed: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(parsed["pattern"], "straightforward");
+    assert_eq!(parsed["override"], true);
+    assert!(
+        parsed["message"]
+            .as_str()
+            .unwrap()
+            .contains("straightforward"),
+        "diary must record the outgoing message text"
+    );
+    assert!(parsed["timestamp"].as_str().is_some_and(|t| !t.is_empty()));
+}
+
+/// `no_rly: true` on a message with no block hit is a no-op — no diary entry.
+#[tokio::test]
+async fn reply_no_rly_on_clean_message_writes_no_diary() {
+    let dir = TempDir::new().unwrap();
+    let state_dir = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
+    let ctx = test_ctx_with_state_dir(
+        config_with_contradictionary(ariadne_entries()),
+        state_dir.clone(),
+    );
+
+    let _ = messaging::reply(
+        &ctx,
+        ChannelId::new(42),
+        "the architecture is elegant and the tests pass",
+        None,
+        false,
+        true,
+    )
+    .await;
+
+    assert!(
+        !state_dir.join(DIARY_FILE_NAME).as_std_path().exists(),
+        "no_rly on a non-blocked message must not write a diary entry"
     );
 }
 
