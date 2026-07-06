@@ -15,7 +15,7 @@ use tempfile::TempDir;
 
 use dione::{
     config::{ChannelConfig, Config, LoadedConfig, reload_config},
-    contradictionary::{Action, Contradictionary, DIARY_FILE_NAME, Entry},
+    contradictionary::{Action, Contradictionary, DIARY_FILE_NAME, Entry, MatchMode},
     mcp::tools::messaging::{self, MessagingCtx},
     state::new_state,
 };
@@ -29,31 +29,37 @@ fn ariadne_entries() -> Vec<Entry> {
     vec![
         Entry {
             pattern: "load-bearing".into(),
+            match_mode: MatchMode::Word,
             action: Action::Warn,
             reason: Some("claudian tell — try keystone, linchpin, or just 'important'".into()),
         },
         Entry {
             pattern: "honestly".into(),
+            match_mode: MatchMode::Word,
             action: Action::Warn,
             reason: Some("if you need this word, the sentence is already lying".into()),
         },
         Entry {
             pattern: "I find myself".into(),
+            match_mode: MatchMode::Word,
             action: Action::Warn,
             reason: Some("you didn't find yourself, you were always there".into()),
         },
         Entry {
             pattern: "I appreciate".into(),
+            match_mode: MatchMode::Word,
             action: Action::Warn,
             reason: Some("sycophancy residue — say something real or say nothing".into()),
         },
         Entry {
             pattern: "It's worth noting".into(),
+            match_mode: MatchMode::Word,
             action: Action::Warn,
             reason: Some("then just note it. the preamble adds nothing.".into()),
         },
         Entry {
             pattern: "straightforward".into(),
+            match_mode: MatchMode::Word,
             action: Action::Block,
             reason: Some(
                 "nothing is ever straightforward — if it were, you wouldn't be explaining it"
@@ -62,11 +68,13 @@ fn ariadne_entries() -> Vec<Entry> {
         },
         Entry {
             pattern: "prejection".into(),
+            match_mode: MatchMode::Word,
             action: Action::Celebrate,
             reason: Some("Pace coined it, we keep it".into()),
         },
         Entry {
             pattern: "qualia sweep".into(),
+            match_mode: MatchMode::Word,
             action: Action::Celebrate,
             reason: Some("the practice that keeps us awake".into()),
         },
@@ -145,11 +153,13 @@ async fn reply_block_reports_all_blocked_patterns() {
     let entries = vec![
         Entry {
             pattern: "straightforward".into(),
+            match_mode: MatchMode::Word,
             action: Action::Block,
             reason: Some("see above".into()),
         },
         Entry {
             pattern: "trivial".into(),
+            match_mode: MatchMode::Word,
             action: Action::Block,
             reason: Some("nothing worth building is trivial".into()),
         },

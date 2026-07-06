@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.19.0] - 2026-07-06
+
+### Added
+- **Word-mode matching** for contradictionary entries (`match_mode = "word"`,
+  now the default). Tokenizes on word boundaries so single-word patterns match
+  whole words only — "fizz" catches "hey fizz" but not "fizzy." Multi-token
+  patterns work via sentinel-delimited Aho-Corasick.
+- **Joiner set** `{- _ ' '}`: hyphens, underscores, ASCII apostrophes, and
+  curly right single quotes (U+2019) are word-internal. "bearing" does not
+  match inside "load-bearing"; "don" does not match inside "don't."
+- `match_mode = "substring"` preserves original Aho-Corasick behavior for
+  chom-chom game entries and stem-matching.
+
 ## [0.18.0] - 2026-07-05
 
 ### Added
