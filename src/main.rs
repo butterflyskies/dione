@@ -93,6 +93,10 @@ async fn main() -> Result<()> {
     // MCP notification channel (for server-initiated writes, currently unused beyond event_rx).
     let (notif_tx, _notif_rx) = mpsc::channel::<serde_json::Value>(64);
 
+    // MCP → Discord gateway command channel (for presence updates, etc.).
+    let (discord_cmd_tx, discord_cmd_rx) =
+        mpsc::channel::<dione::mcp::tools::bot_state::DiscordCommand>(16);
+
     // Build Discord event handler.
     let handler = Handler {
         state: state.clone(),
@@ -100,6 +104,7 @@ async fn main() -> Result<()> {
         tx: event_tx.clone(),
         state_dir: state_dir.clone(),
         bot_user_id: AtomicU64::new(0),
+        discord_cmd_rx: tokio::sync::Mutex::new(Some(discord_cmd_rx)),
     };
 
     let mut discord_client = dione::discord::client::build_client(&token, handler)
@@ -116,7 +121,7 @@ async fn main() -> Result<()> {
         http,
         state_dir: state_dir.clone(),
         notification_tx: notif_tx,
-        discord_cmd_tx: None,
+        discord_cmd_tx: Some(discord_cmd_tx),
         trace_controller,
     };
 

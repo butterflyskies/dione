@@ -28,3 +28,4 @@ text_chunk_limit = 2000
 # # [[contradictionary.entries]]
 # # pattern = "load-bearing"
 # # action = "warn"        # "warn" (🙊), "block" (reject), "log" (silent), "celebrate" (✨)
+# # match_mode = "word"    # "word" (default, whole-word), "substring" (anywhere in text)

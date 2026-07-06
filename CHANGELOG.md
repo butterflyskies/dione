@@ -5,7 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.19.0] - 2026-07-06
+
+### Added
+- **Word-mode matching** for contradictionary entries (`match_mode = "word"`,
+  now the default). Tokenizes on word boundaries so single-word patterns match
+  whole words only — "fizz" catches "hey fizz" but not "fizzy." Multi-token
+  patterns work via sentinel-delimited Aho-Corasick.
+- **Joiner set** `{- _ ' '}`: hyphens, underscores, ASCII apostrophes, and
+  curly right single quotes (U+2019) are word-internal. "bearing" does not
+  match inside "load-bearing"; "don" does not match inside "don't."
+- `match_mode = "substring"` preserves original Aho-Corasick behavior for
+  chom-chom game entries and stem-matching.
 
 ### Fixed
 - Reaction and message notifications no longer emit an empty `user` field when
@@ -13,6 +24,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   fallback chain — resolved display name → Discord username → the literal
   `"dione"` — so a reactor's username is used instead of surfacing the substrate
   name downstream (#153).
+
+## [0.18.0] - 2026-07-05
+
+### Added
+- `no_rly` override for the contradictionary `block` action. A blocked `reply`
+  now rejects with an error that names the matched pattern inline
+  (`⚠️ blocked: <pattern>`); resending the identical message with `no_rly: true`
+  bypasses the block, sends, and appends a durable JSONL entry to
+  `~/.claude/channels/dione/contradictionary.jsonl` (timestamp, matched pattern,
+  truncated message text, `override: true`). The diary is a real append-to-file
+  sink so override history survives process restarts and context clears —
+  unlike stderr, which the harness captures but does not persist. warn/log/
+  celebrate are unaffected, and `no_rly` on a non-blocked message is a no-op.
 
 ## [0.17.0] - 2026-07-04
 

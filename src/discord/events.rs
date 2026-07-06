@@ -1,5 +1,6 @@
 use crate::{
     gate::{GateDecision, InboundGate, MentionDetector},
+    mcp::tools::bot_state::DiscordCommand,
     mcp::tools::messaging::create_dm_channel,
     queue::AccessRequest,
     timestamp::Timestamp,
@@ -102,13 +103,16 @@ pub struct Handler {
     pub tx: tokio::sync::mpsc::Sender<NotificationEvent>,
     pub state_dir: camino::Utf8PathBuf,
     pub bot_user_id: AtomicU64,
+    /// Receiver for gateway-level commands from MCP tools (e.g. presence updates).
+    /// Taken once during `ready()` to spawn the command processing task.
+    pub discord_cmd_rx: tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<DiscordCommand>>>,
 }
 
 // ── EventHandler impl ─────────────────────────────────────────────────────────
 
 #[async_trait]
 impl EventHandler for Handler {
-    async fn ready(&self, _ctx: Context, ready: Ready) {
+    async fn ready(&self, ctx: Context, ready: Ready) {
         let id = ready.user.id.get();
         self.bot_user_id.store(id, Ordering::Relaxed);
         tracing::info!(
@@ -116,6 +120,12 @@ impl EventHandler for Handler {
             id,
             "Discord gateway ready"
         );
+
+        // Take the command receiver and spawn a task that processes gateway
+        // commands (e.g. presence updates) using this Context.
+        if let Some(rx) = self.discord_cmd_rx.lock().await.take() {
+            tokio::spawn(run_discord_commands(ctx, rx));
+        }
     }
 
     async fn message(&self, ctx: Context, msg: Message) {
@@ -572,6 +582,40 @@ impl EventHandler for Handler {
             tracing::warn!(error = %e, "failed to send permission response event");
         }
     }
+}
+
+// ── Discord command processing ───────────────────────────────────────────────
+
+/// Processes gateway-level commands sent from MCP tools.
+///
+/// Spawned in `ready()` with a cloned `Context` so it can call
+/// `ctx.set_presence()` and other gateway operations that require the
+/// shard messenger.
+async fn run_discord_commands(ctx: Context, mut rx: tokio::sync::mpsc::Receiver<DiscordCommand>) {
+    tracing::debug!("discord command processor started");
+    while let Some(cmd) = rx.recv().await {
+        match cmd {
+            DiscordCommand::SetPresence {
+                online_status,
+                activity_type,
+                activity_name,
+            } => {
+                let status = online_status.to_serenity();
+                let activity = match (activity_type, activity_name.as_deref()) {
+                    (Some(kind), Some(name)) => Some(kind.to_activity(name)),
+                    _ => None,
+                };
+                tracing::info!(
+                    ?status,
+                    ?activity_type,
+                    activity_name = activity_name.as_deref(),
+                    "setting presence"
+                );
+                ctx.set_presence(activity, status);
+            }
+        }
+    }
+    tracing::debug!("discord command processor stopped (channel closed)");
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

@@ -2,6 +2,8 @@
 
 use serde_json::{Value, json};
 
+use super::tools::bot_state::{ActivityType, OnlineStatus};
+
 /// Build the MCP `initialize` response.
 pub(crate) fn initialize_response() -> Value {
     json!({
@@ -31,7 +33,8 @@ pub(crate) fn tools_list() -> Value {
                     "channel_id": { "type": "string", "description": "Discord channel ID" },
                     "content": { "type": "string", "description": "Message content" },
                     "reply_to_message_id": { "type": "string", "description": "Optional message ID to reply to" },
-                    "suppress_ping": { "type": "boolean", "description": "When true, the reply will not ping the user being replied to (default: false)" }
+                    "suppress_ping": { "type": "boolean", "description": "When true, the reply will not ping the user being replied to (default: false)" },
+                    "no_rly": { "type": "boolean", "description": "Consent-gate override for the contradictionary block action. A blocked send returns an error naming the matched pattern (⚠️ blocked: <pattern>); resend the identical message with no_rly=true to bypass the block, send anyway, and record a durable diary entry. No effect on non-blocked messages (default: false)." }
                 }
             })),
             tool("react", "Add a reaction to a message", json!({
@@ -241,10 +244,25 @@ pub(crate) fn tools_list() -> Value {
                     "user_id": { "type": "string" }
                 }
             })),
-            // set_presence is intentionally excluded from the tools list:
-            // presence updates require the Discord gateway shard manager, which is
-            // not yet wired to the MCP command channel. The implementation stub
-            // remains in bot_state.rs for future use.
+            tool("set_presence", "Set the bot's Discord presence (online status and activity)", json!({
+                "type": "object",
+                "properties": {
+                    "online_status": {
+                        "type": "string",
+                        "enum": OnlineStatus::json_enum(),
+                        "description": "Online status (default: online)"
+                    },
+                    "activity_type": {
+                        "type": "string",
+                        "enum": ActivityType::json_enum(),
+                        "description": "Activity type. If set, activity_name is required."
+                    },
+                    "activity_name": {
+                        "type": "string",
+                        "description": "Activity text (e.g. 'catena', 'the void'). Required when activity_type is set."
+                    }
+                }
+            })),
             tool("render_latex", "Render a LaTeX math expression to a PNG image file", json!({
                 "type": "object",
                 "required": ["latex"],
