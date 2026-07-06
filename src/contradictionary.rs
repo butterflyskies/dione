@@ -26,7 +26,7 @@ pub enum Action {
 #[serde(rename_all = "lowercase")]
 pub enum MatchMode {
     /// Match whole words/phrases only. Tokenizes on word boundaries so
-    /// "fizz" matches "hey fizz" but not "frizzy". Supports multi-token
+    /// "fizz" matches "hey fizz" but not "fizzy". Supports multi-token
     /// patterns like "load-bearing". This is the default.
     Word,
     /// Match anywhere as a substring (original Aho-Corasick behavior).
@@ -661,6 +661,19 @@ pattern = "leverage"
         assert!(c.check("frizzy").is_empty());
         assert!(c.check("frizzy fizzy").is_empty());
         assert!(c.check("fizzle pop").is_empty());
+    }
+
+    #[test]
+    fn word_mode_fizz_matches_fizz_not_fizzy() {
+        let entries = vec![Entry {
+            pattern: "fizz".into(),
+            action: Action::Block,
+            match_mode: MatchMode::Word,
+            reason: None,
+        }];
+        let c = Contradictionary::new(entries);
+        assert_eq!(c.check("hey fizz").len(), 1);
+        assert!(c.check("fizzy").is_empty());
     }
 
     #[test]
