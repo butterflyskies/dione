@@ -478,6 +478,33 @@ mod tests {
         assert!(c.is_empty());
     }
 
+    fn assert_empty_pattern_matches_all(mode: MatchMode) {
+        let c = Contradictionary::new(vec![Entry {
+            pattern: "".into(),
+            action: Action::Warn,
+            match_mode: mode,
+            reason: Some("empty pattern test".into()),
+        }]);
+        assert!(!c.check("literally anything").is_empty());
+        assert!(!c.check("a").is_empty());
+        assert!(!c.check("hello world").is_empty());
+    }
+
+    #[test]
+    fn empty_pattern_matches_all_text() {
+        assert_empty_pattern_matches_all(default_match_mode());
+    }
+
+    #[test]
+    fn empty_pattern_substring_mode_matches_all_text() {
+        assert_empty_pattern_matches_all(MatchMode::Substring);
+    }
+
+    #[test]
+    fn empty_pattern_word_mode_matches_all_text() {
+        assert_empty_pattern_matches_all(MatchMode::Word);
+    }
+
     #[test]
     fn celebrate_action_detected() {
         let c = Contradictionary::new(test_entries());
