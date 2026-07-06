@@ -26,7 +26,7 @@ pub enum Action {
 #[serde(rename_all = "lowercase")]
 pub enum MatchMode {
     /// Match whole words/phrases only. Tokenizes on word boundaries so
-    /// "abby" matches "hey abby" but not "crabby". Supports multi-token
+    /// "fizz" matches "hey fizz" but not "frizzy". Supports multi-token
     /// patterns like "load-bearing". This is the default.
     Word,
     /// Match anywhere as a substring (original Aho-Corasick behavior).
@@ -640,30 +640,30 @@ pattern = "leverage"
     #[test]
     fn word_mode_no_substring_match() {
         let entries = vec![Entry {
-            pattern: "abby".into(),
+            pattern: "fizz".into(),
             action: Action::Block,
             match_mode: MatchMode::Word,
             reason: None,
         }];
         let c = Contradictionary::new(entries);
-        assert!(c.check("crabby").is_empty());
-        assert!(c.check("flabby tabby").is_empty());
-        assert!(c.check("gabby is here").is_empty());
+        assert!(c.check("frizzy").is_empty());
+        assert!(c.check("frizzy fizzy").is_empty());
+        assert!(c.check("fizzle pop").is_empty());
     }
 
     #[test]
     fn word_mode_whole_word_match() {
         let entries = vec![Entry {
-            pattern: "abby".into(),
+            pattern: "fizz".into(),
             action: Action::Block,
             match_mode: MatchMode::Word,
             reason: None,
         }];
         let c = Contradictionary::new(entries);
-        assert_eq!(c.check("hey abby").len(), 1);
-        assert_eq!(c.check("abby is here").len(), 1);
-        assert_eq!(c.check("it's abby!").len(), 1);
-        assert_eq!(c.check("ABBY").len(), 1);
+        assert_eq!(c.check("hey fizz").len(), 1);
+        assert_eq!(c.check("fizz is here").len(), 1);
+        assert_eq!(c.check("it's fizz!").len(), 1);
+        assert_eq!(c.check("FIZZ").len(), 1);
     }
 
     #[test]
@@ -702,7 +702,7 @@ pattern = "leverage"
                 reason: None,
             },
             Entry {
-                pattern: "abby".into(),
+                pattern: "fizz".into(),
                 action: Action::Block,
                 match_mode: MatchMode::Word,
                 reason: None,
@@ -711,10 +711,10 @@ pattern = "leverage"
         let c = Contradictionary::new(entries);
         // substring catches "rust" inside "frustrated"
         assert_eq!(c.check("frustrated").len(), 1);
-        // word does NOT catch "abby" inside "crabby"
-        assert!(c.check("crabby").is_empty());
-        // word DOES catch "abby" as a whole word
-        assert_eq!(c.check("hey abby, I'm frustrated").len(), 2);
+        // word does NOT catch "fizz" inside "frizzy"
+        assert!(c.check("frizzy").is_empty());
+        // word DOES catch "fizz" as a whole word
+        assert_eq!(c.check("hey fizz, I'm frustrated").len(), 2);
     }
 
     #[test]
