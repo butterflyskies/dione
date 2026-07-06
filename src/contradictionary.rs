@@ -479,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_pattern_fires_on_everything() {
+    fn empty_pattern_substring_mode_matches_all_text() {
         let c = Contradictionary::new(vec![Entry {
             pattern: "".into(),
             action: Action::Warn,
@@ -496,20 +496,23 @@ mod tests {
     }
 
     #[test]
-    fn empty_pattern_word_mode_fires_on_everything() {
+    fn empty_pattern_matches_all_text() {
         let c = Contradictionary::new(vec![Entry {
             pattern: "".into(),
             action: Action::Warn,
-            match_mode: MatchMode::Word,
-            reason: Some("word-mode empty also fires on everything".into()),
+            match_mode: default_match_mode(),
+            reason: Some("foot-mouth buffer: default mode empty pattern".into()),
         }]);
         let hits = c.check("literally anything");
         assert!(
             !hits.is_empty(),
-            "empty pattern in word mode should match all text"
+            "empty pattern in default mode should match all text"
         );
         let hits2 = c.check("hello world");
-        assert!(!hits2.is_empty(), "empty pattern in word mode should match");
+        assert!(
+            !hits2.is_empty(),
+            "empty pattern in default mode should match"
+        );
     }
 
     #[test]
