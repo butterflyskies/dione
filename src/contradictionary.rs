@@ -124,9 +124,19 @@ pub struct Hit {
 
 const SENTINEL: u8 = b'\x01';
 
-/// Tokenize text into lowercase words, splitting on non-alphanumeric boundaries.
+fn is_joiner(c: char) -> bool {
+    c == '-' || c == '_' || c == '\''
+}
+
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || is_joiner(c)
+}
+
+/// Tokenize text into lowercase words, splitting on non-word boundaries.
+/// Joiners (hyphens, underscores, apostrophes) are word-internal,
+/// so "load-bearing" and "don't" each stay as one token.
 fn tokenize(text: &str) -> Vec<String> {
-    text.split(|c: char| !c.is_alphanumeric())
+    text.split(|c: char| !is_word_char(c))
         .filter(|s| !s.is_empty())
         .map(|s| s.to_ascii_lowercase())
         .collect()
@@ -764,6 +774,45 @@ reason = "chom-chom game"
         let c = Contradictionary::new(entries);
         assert_eq!(c.check("well, I find myself thinking about it").len(), 1);
         assert!(c.check("find myself").is_empty()); // missing "I"
+    }
+
+    #[test]
+    fn joiners_keep_hyphenated_words_intact() {
+        let entries = vec![Entry {
+            pattern: "bearing".into(),
+            action: Action::Block,
+            match_mode: MatchMode::Word,
+            reason: None,
+        }];
+        let c = Contradictionary::new(entries);
+        assert!(c.check("the load-bearing wall").is_empty());
+        assert_eq!(c.check("the bearing failed").len(), 1);
+    }
+
+    #[test]
+    fn joiners_keep_apostrophes_intact() {
+        let entries = vec![Entry {
+            pattern: "don".into(),
+            action: Action::Block,
+            match_mode: MatchMode::Word,
+            reason: None,
+        }];
+        let c = Contradictionary::new(entries);
+        assert!(c.check("I don't think so").is_empty());
+        assert_eq!(c.check("don of the mafia").len(), 1);
+    }
+
+    #[test]
+    fn joiners_keep_underscores_intact() {
+        let entries = vec![Entry {
+            pattern: "care".into(),
+            action: Action::Block,
+            match_mode: MatchMode::Word,
+            reason: None,
+        }];
+        let c = Contradictionary::new(entries);
+        assert!(c.check("the self_care routine").is_empty());
+        assert_eq!(c.check("I care about this").len(), 1);
     }
 
     #[test]
