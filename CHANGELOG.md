@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 - **Word-mode matching** for contradictionary entries (`match_mode = "word"`,
   now the default). Tokenizes on word boundaries so single-word patterns match
-  whole words only — "fizz" catches "hey fizz" but not "frizzy." Multi-token
+  whole words only — "fizz" catches "hey fizz" but not "fizzy." Multi-token
   patterns work via sentinel-delimited Aho-Corasick.
 - **Joiner set** `{- _ ' '}`: hyphens, underscores, ASCII apostrophes, and
   curly right single quotes (U+2019) are word-internal. "bearing" does not
