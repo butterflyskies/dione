@@ -34,11 +34,14 @@ impl RejectReason {
     ///
     /// This is the stable grouping key used by journal summaries.
     pub fn patterns(&self) -> String {
-        self.matches
-            .iter()
-            .map(|m| m.pattern.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
+        let mut out = String::new();
+        for (i, m) in self.matches.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(&m.pattern);
+        }
+        out
     }
 }
 
