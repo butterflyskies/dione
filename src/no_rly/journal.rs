@@ -25,7 +25,11 @@
 //! Both rewrite atomically (temp file + rename), so a crash mid-maintenance
 //! leaves the original journal intact.
 
-use std::{collections::BTreeMap, fs, io, io::Write};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fs, io,
+    io::Write,
+};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::{DateTime, NaiveDate, Utc};
@@ -58,15 +62,15 @@ pub enum Outcome {
 }
 
 impl Outcome {
+    /// Every variant, for iterating the wire forms.
+    const ALL: [Self; 3] = [Self::Released, Self::Rephrased, Self::Expired];
+
     /// Parse a tool-argument string (`"released"`, `"rephrased"`,
-    /// `"expired"`).
+    /// `"expired"`). Defined as the inverse of [`Outcome::as_str`], so the
+    /// serde `rename_all` annotation stays the single source of truth for
+    /// valid strings (see the `outcome_wire_forms_agree_with_serde` test).
     pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "released" => Some(Self::Released),
-            "rephrased" => Some(Self::Rephrased),
-            "expired" => Some(Self::Expired),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|o| o.as_str() == s)
     }
 
     /// The lowercase wire form.
@@ -300,10 +304,11 @@ impl Journal {
 
         // Chain validation runs over the full record set, not the filtered
         // view — a parent outside the filter window is not dangling.
+        let known_handles: HashSet<&str> = bounces.iter().map(|b| b.handle.as_str()).collect();
         let dangling_parents = bounces
             .iter()
             .filter_map(|b| b.parent.as_deref())
-            .filter(|parent| !bounces.iter().any(|b| b.handle == *parent))
+            .filter(|parent| !known_handles.contains(parent))
             .count() as u64;
 
         let matched: Vec<&&BounceRecord> = bounces
@@ -609,6 +614,28 @@ mod tests {
     // ── Wire contract: the serialized shape IS the interface ────────────
 
     #[test]
+    fn outcome_wire_forms_agree_with_serde() {
+        for outcome in Outcome::ALL {
+            assert_eq!(
+                serde_json::to_value(outcome).unwrap(),
+                serde_json::json!(outcome.as_str()),
+                "as_str must be exactly the serde wire form"
+            );
+            assert_eq!(
+                Outcome::parse(outcome.as_str()),
+                Some(outcome),
+                "parse must be the inverse of as_str"
+            );
+            assert_eq!(
+                serde_json::from_value::<Outcome>(serde_json::json!(outcome.as_str())).unwrap(),
+                outcome,
+                "the serde annotation accepts every as_str form"
+            );
+        }
+        assert_eq!(Outcome::parse("Released"), None, "wire forms are lowercase");
+    }
+
+    #[test]
     fn bounce_record_wire_shape() {
         let rec = JournalRecord::Bounce(BounceRecord {
             handle: "nr-3f92-7".into(),
@@ -807,6 +834,33 @@ mod tests {
             }
             other => panic!("expected summary first, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn condense_recovers_from_stale_tmp_of_a_crashed_rewrite() {
+        let (_dir, journal) = temp_journal();
+        journal
+            .append(&record("nr-0001-1", Outcome::Released, "2026-01-01T10:00:00+00:00", 2000))
+            .unwrap();
+        journal
+            .append(&record("nr-0001-2", Outcome::Released, "2026-07-07T10:00:00+00:00", 1000))
+            .unwrap();
+
+        // A crash mid-rewrite leaves a stale temp file behind; the journal
+        // itself is intact (rename never happened). The next maintenance run
+        // must succeed and must not resurrect any of the stale bytes.
+        let stale_tmp = journal.path().with_extension("jsonl.tmp");
+        fs::write(&stale_tmp, "half-written garbage from a dead process\n").unwrap();
+
+        let cutoff = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
+        let report = journal.condense(cutoff).expect("stale tmp must not break condense");
+        assert_eq!(report.condensed_bounces, 1);
+        assert_eq!(report.kept_bounces, 1);
+
+        let scan = journal.load().unwrap();
+        assert_eq!(scan.records.len(), 2, "one summary plus one kept bounce");
+        assert!(scan.malformed.is_empty(), "no stale bytes may leak into the journal");
+        assert!(!stale_tmp.exists(), "the rewrite consumes the tmp path");
     }
 
     #[test]
