@@ -1024,6 +1024,11 @@ impl LoadedConfig {
         &self.rate_limit_runtime
     }
 
+    /// How long a message bounced by the contradictionary stays claimable.
+    pub fn no_rly_hold_ttl(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.raw.contradictionary.hold_ttl_secs)
+    }
+
     /// Returns the delivery delay (ms) for a channel.
     ///
     /// Resolution order: per-channel override → global `[delivery]` default → 0.

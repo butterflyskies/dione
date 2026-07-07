@@ -9,6 +9,7 @@ use dione::{
     codex::TransportMode,
     discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
     mcp::server::{DioneServer, test_helpers},
+    no_rly::consent::ConsentGate,
     queue::AccessQueue,
     state::new_state,
     timestamp::Timestamp,
@@ -80,6 +81,7 @@ fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
         mode: TransportMode::ClaudeCode,
         codex_queue: None,
         codex_thread_binding: None,
+        no_rly: Arc::new(ConsentGate::new(state_dir)),
     }
 }
 
@@ -226,6 +228,59 @@ async fn test_tools_list_contains_expected_tools() {
     assert!(
         names.contains(&"send_dm"),
         "tools/list must include send_dm"
+    );
+
+    // no_rly consent-gate tools.
+    assert!(names.contains(&"no_rly"), "tools/list must include no_rly");
+    assert!(
+        names.contains(&"rephrase"),
+        "tools/list must include rephrase"
+    );
+    assert!(
+        names.contains(&"no_rly_stats"),
+        "tools/list must include no_rly_stats"
+    );
+    assert!(
+        names.contains(&"no_rly_condense"),
+        "tools/list must include no_rly_condense"
+    );
+    assert!(
+        names.contains(&"no_rly_vacuum"),
+        "tools/list must include no_rly_vacuum"
+    );
+}
+
+/// Wire contract: every tool schema must declare `type: "object"` — a strict
+/// MCP client (Claude Code) rejects the entire tool list otherwise.
+#[test]
+fn test_every_tool_schema_is_object_typed() {
+    let list = test_helpers::get_tools_list();
+    let tools = list["tools"].as_array().expect("tools must be an array");
+    for tool in tools {
+        let name = tool["name"].as_str().unwrap_or("<unnamed>");
+        assert_eq!(
+            tool["inputSchema"]["type"], "object",
+            "tool {name} must have an object input schema"
+        );
+    }
+}
+
+/// The `no_rly` arg is gone from reply — the handle queue replaced the
+/// resend-with-a-flag override, and a leftover schema property would invite
+/// pre-emptive overrides the design exists to kill.
+#[test]
+fn test_reply_schema_has_no_no_rly_arg() {
+    let list = test_helpers::get_tools_list();
+    let tools = list["tools"].as_array().expect("tools must be an array");
+    let reply_tool = tools
+        .iter()
+        .find(|t| t["name"] == "reply")
+        .expect("reply tool must exist");
+    assert!(
+        reply_tool["inputSchema"]["properties"]
+            .get("no_rly")
+            .is_none(),
+        "reply must not accept a no_rly argument"
     );
 }
 
@@ -1162,6 +1217,128 @@ async fn test_permission_request_missing_id_is_ignored() {
     });
     let resp = test_helpers::dispatch_request(&server, req).await;
     assert!(resp.is_none());
+}
+
+// ── no_rly tool dispatch tests ───────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_no_rly_unknown_handle_errors() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 60,
+        "method": "tools/call",
+        "params": { "name": "no_rly", "arguments": { "handle": "nr-dead-1" } }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+    let error = parsed["error"].as_str().expect("must be an error");
+    assert!(
+        error.contains("unknown or already-used handle"),
+        "unknown handle must be named: {error}"
+    );
+    assert_eq!(resp["result"]["isError"], true);
+}
+
+#[tokio::test]
+async fn test_rephrase_unknown_handle_errors() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 61,
+        "method": "tools/call",
+        "params": { "name": "rephrase", "arguments": { "handle": "nr-dead-2", "content": "new text" } }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert!(
+        parsed["error"]
+            .as_str()
+            .unwrap()
+            .contains("unknown or already-used handle")
+    );
+}
+
+#[tokio::test]
+async fn test_rephrase_missing_content_is_protocol_error() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 62,
+        "method": "tools/call",
+        "params": { "name": "rephrase", "arguments": { "handle": "nr-dead-3" } }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    assert!(resp["error"].is_object(), "missing content must error");
+}
+
+#[tokio::test]
+async fn test_no_rly_stats_empty_journal_reports_zeros() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 63,
+        "method": "tools/call",
+        "params": { "name": "no_rly_stats", "arguments": {} }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(parsed["bounces"], 0);
+    assert_eq!(parsed["pending"], 0);
+    assert_eq!(parsed["malformed_lines"], 0);
+    assert!(parsed.get("error").is_none());
+}
+
+#[tokio::test]
+async fn test_no_rly_stats_rejects_invalid_outcome() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 64,
+        "method": "tools/call",
+        "params": { "name": "no_rly_stats", "arguments": { "outcome": "vibed" } }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert!(parsed["error"].as_str().unwrap().contains("invalid outcome"));
+}
+
+#[tokio::test]
+async fn test_no_rly_condense_and_vacuum_empty_journal() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 65,
+        "method": "tools/call",
+        "params": { "name": "no_rly_condense", "arguments": {} }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(parsed["condensed_bounces"], 0);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 66,
+        "method": "tools/call",
+        "params": { "name": "no_rly_vacuum", "arguments": {} }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(parsed["dropped_summaries"], 0);
+    assert_eq!(parsed["kept"], 0);
 }
 
 // ── suppress_ping tests ─────────────────────────────────────────────────────

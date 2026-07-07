@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **no_rly v2 — handle-queue consent gate.** A contradictionary `block` match
+  no longer rejects with a resend flag: the message is **held** under a
+  single-use handle (`nr-xxxx-N`) and the error names the matched pattern(s),
+  the configured reason, the handle, and the expiry window. Three verbs act on
+  the handle: `no_rly(handle)` releases the byte-identical text, `rephrase(handle,
+  content)` sends a re-judged replacement (a re-bounce mints a NEW handle
+  chained to the old one), and ignoring it lets it expire (default 3 minutes,
+  `contradictionary.hold_ttl_secs`).
+
+### Added
+- **no_rly audit journal** (`no_rly_journal.jsonl`): every bounce is journaled
+  once, at resolution, with message, structured reason, outcome
+  (released/rephrased/expired), bounce + resolution timestamps,
+  bounce-to-action latency, and chain links for rephrase re-bounces. New tools:
+  `no_rly_stats`, `no_rly_condense`, and `no_rly_vacuum`.
+- **Judge seam**: the queue/handle/expiry machinery is behind an
+  `OutboundJudge` trait so a future classifier ("cingulate") can replace the
+  word-matcher without touching the queue.
+
 ## [0.28.0] - 2026-08-01
 
 ### Added

@@ -30,8 +30,10 @@ use crate::{
             introspection::IntrospectionCtx,
             management::ManagementCtx,
             messaging::MessagingCtx,
+            no_rly::NoRlyCtx,
         },
     },
+    no_rly::consent::ConsentGate,
     rate_limiter::{ChannelRef, ParticipantId, RateLimitDecision, RateLimiter},
 };
 use camino::Utf8PathBuf;
@@ -60,6 +62,7 @@ pub struct DioneServer {
     pub mode: TransportMode,
     pub codex_queue: Option<CodexEventQueue>,
     pub codex_thread_binding: Option<watch::Sender<Option<crate::codex::CodexThreadId>>>,
+    pub no_rly: Arc<ConsentGate>,
 }
 
 // ── Context factory methods ───────────────────────────────────────────────────
@@ -71,7 +74,15 @@ impl DioneServer {
             self.state.clone(),
             config,
             self.state_dir.clone(),
+            self.no_rly.clone(),
         )
+    }
+
+    pub(crate) fn no_rly_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> NoRlyCtx {
+        NoRlyCtx {
+            gate: self.no_rly.clone(),
+            config,
+        }
     }
 
     pub(crate) fn introspection_ctx(
@@ -146,6 +157,34 @@ pub async fn run(
     let initial_tz = config.tz;
 
     let state_dir_notif = server.state_dir.clone();
+
+    // Expiry sweeper for the no_rly hold queue. Expiry is enforced lazily at
+    // claim time too — this task just makes sure abandoned handles get their
+    // journal record promptly instead of at the next claim. On shutdown it
+    // drains everything still pending as expired, so the in-memory queue
+    // never swallows a bounce without an audit trail.
+    let no_rly_sweeper = server.no_rly.clone();
+    let cancel_sweep = cancel.clone();
+    let sweep_task = tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(15));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel_sweep.cancelled() => break,
+                _ = tick.tick() => {
+                    let expired = no_rly_sweeper.expire_due(Instant::now()).await;
+                    if expired > 0 {
+                        tracing::info!(expired, "no_rly: expired abandoned handles");
+                    }
+                }
+            }
+        }
+        let drained = no_rly_sweeper.drain_shutdown().await;
+        if drained > 0 {
+            tracing::info!(drained, "no_rly: drained pending handles at shutdown");
+        }
+    });
 
     // Notification forwarding task.
     // Exits on cancellation or when the event channel closes.
@@ -350,9 +389,11 @@ pub async fn run(
     }
 
     // Cancellation signal already sent — notif_task will break out of its
-    // loop and flush_all() any buffered events. Give it a short window.
+    // loop and flush_all() any buffered events, and the sweeper will drain
+    // pending no_rly handles into the journal. Give them a short window.
     drop(server);
     let _ = tokio::time::timeout(Duration::from_millis(500), notif_task).await;
+    let _ = tokio::time::timeout(Duration::from_millis(500), sweep_task).await;
 
     Ok(())
 }

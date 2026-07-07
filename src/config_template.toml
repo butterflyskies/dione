@@ -79,6 +79,14 @@ text_chunk_limit = 2000
 # [contradictionary]
 # enabled = true
 # sidecar_path = "contradictionary.toml"  # TOML sidecar file (relative to config dir)
+# # A block-tier match holds the message under a single-use handle instead of
+# # sending it (no_rly v2). How long a held message stays claimable, seconds:
+# hold_ttl_secs = 180
+# # no_rly audit journal retention (no_rly_journal.jsonl). Raw bounce records
+# # older than this are folded into daily summaries by the no_rly_condense
+# # tool; summaries older than the second window are dropped by no_rly_vacuum.
+# journal_raw_retention_days = 365
+# journal_summary_retention_days = 730
 # # Inline entries (sidecar entries are appended after these).
 # # Patterns are matched case-insensitively.
 # # [[contradictionary.entries]]

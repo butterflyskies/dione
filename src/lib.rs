@@ -13,6 +13,7 @@ pub mod gate;
 pub mod mcp;
 pub mod mute_store;
 pub mod nameplates;
+pub mod no_rly;
 pub mod permissions;
 pub mod pre_send;
 pub mod pronouns;
