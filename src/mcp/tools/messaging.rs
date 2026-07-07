@@ -677,18 +677,11 @@ pub async fn rephrase_held(ctx: &MessagingCtx, handle: &str, content: &str) -> V
 
     // A config reload can disable the contradictionary while a handle is in
     // flight; the replacement then goes out unjudged rather than stranding.
-    let result = match ctx.config.contradictionary {
-        Some(ref judge) => {
-            ctx.no_rly
-                .rephrase(ctx, judge.as_ref(), &handle, content, ttl, now)
-                .await
-        }
-        None => {
-            ctx.no_rly
-                .rephrase(ctx, &AlwaysClear, &handle, content, ttl, now)
-                .await
-        }
+    let judge: &dyn OutboundJudge = match ctx.config.contradictionary {
+        Some(ref judge) => judge.as_ref(),
+        None => &AlwaysClear,
     };
+    let result = ctx.no_rly.rephrase(ctx, judge, &handle, content, ttl, now).await;
 
     match result {
         Ok(Rephrased::Sent { message_ids }) => {
@@ -1106,6 +1099,13 @@ pub(crate) async fn create_dm_channel(
 
 // ── send_dm ──────────────────────────────────────────────────────────────────
 
+/// Open (or reuse) a DM channel and send through the shared [`reply`] path.
+///
+/// DMs are judged like every other outbound message — this is deliberate and
+/// carries over from v1, where the contradictionary block check also ran on
+/// the shared reply path. The judge polices the construct's own speech, not
+/// the audience, so a block-tier tic bounces in a DM exactly as it would in
+/// a channel: held under a handle, releasable, rephrasable.
 pub async fn send_dm(ctx: &MessagingCtx, user_id: UserId, content: &str) -> Value {
     send_dm_with_hook_overrides(ctx, user_id, content, &[]).await
 }
