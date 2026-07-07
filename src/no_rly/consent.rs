@@ -840,6 +840,62 @@ mod tests {
         assert_eq!(bounces[0].message, "in flight");
     }
 
+    /// Deliverer that yields mid-send, widening the window in which a second
+    /// concurrent action could slip in if the gate did not hold its lock
+    /// across delivery.
+    struct YieldingDeliver {
+        sends: StdMutex<u32>,
+    }
+
+    impl DeliverReply for YieldingDeliver {
+        async fn deliver(&self, _request: &ReplyRequest) -> Result<Vec<u64>, String> {
+            tokio::task::yield_now().await;
+            let mut sends = self.sends.lock().unwrap();
+            *sends += 1;
+            Ok(vec![u64::from(*sends)])
+        }
+    }
+
+    /// Witnesses the documented serialization guarantee: two concurrent
+    /// releases of the same handle race on real threads, exactly one wins,
+    /// the loser sees a dead handle, and exactly one send reaches the wire.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_releases_on_one_handle_yield_exactly_one_send() {
+        use std::sync::Arc;
+
+        let dir = TempDir::new().unwrap();
+        let path = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
+        let gate = Arc::new(ConsentGate::new(&path));
+        let deliver = Arc::new(YieldingDeliver {
+            sends: StdMutex::new(0),
+        });
+        let now = Instant::now();
+        let ticket = gate
+            .bounce(request("msg"), reason(), TTL, MAX_PENDING, now)
+            .await;
+
+        let spawn_release = |gate: Arc<ConsentGate>, deliver: Arc<YieldingDeliver>| {
+            let handle = ticket.handle.clone();
+            tokio::spawn(async move { gate.release(&*deliver, &handle, now).await })
+        };
+        let a = spawn_release(gate.clone(), deliver.clone());
+        let b = spawn_release(gate.clone(), deliver.clone());
+        let (a, b) = (a.await.unwrap(), b.await.unwrap());
+
+        let winners = [&a, &b].into_iter().filter(|r| r.is_ok()).count();
+        assert_eq!(winners, 1, "exactly one concurrent release may succeed");
+        let loser = if a.is_ok() { b } else { a };
+        match loser {
+            Err(RejectedHandle::Unknown(h)) => assert_eq!(h, ticket.handle),
+            other => panic!("the loser must see a dead handle, got {other:?}"),
+        }
+        assert_eq!(*deliver.sends.lock().unwrap(), 1, "one send, ever");
+
+        let bounces = journal_bounces(&gate);
+        assert_eq!(bounces.len(), 1, "exactly one outcome per bounce");
+        assert_eq!(bounces[0].outcome, Outcome::Released);
+    }
+
     #[tokio::test]
     async fn unknown_handle_is_rejected_without_journaling() {
         let (_dir, gate) = gate();
