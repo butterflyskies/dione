@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Judge seam**: the queue/handle/expiry machinery is behind an
   `OutboundJudge` trait so a future classifier ("cingulate") can replace the
   word-matcher without touching the queue.
+- **Hold queue capacity** (`contradictionary.max_pending`, default 32): a
+  bounce arriving at capacity evicts the held entry closest to expiry and
+  journals it as expired, so a runaway tool loop cannot grow the queue
+  without bound between sweeps.
 
 ## [0.28.0] - 2026-08-01
 

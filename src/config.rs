@@ -1029,6 +1029,11 @@ impl LoadedConfig {
         std::time::Duration::from_secs(self.raw.contradictionary.hold_ttl_secs)
     }
 
+    /// Cap on simultaneously held bounced messages (never below 1).
+    pub fn no_rly_max_pending(&self) -> usize {
+        self.raw.contradictionary.max_pending.max(1)
+    }
+
     /// Returns the delivery delay (ms) for a channel.
     ///
     /// Resolution order: per-channel override → global `[delivery]` default → 0.

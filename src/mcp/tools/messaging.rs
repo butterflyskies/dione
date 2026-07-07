@@ -451,7 +451,13 @@ async fn deliver_prepared_reply(
     {
         let ticket = ctx
             .no_rly
-            .bounce(request, reason, ctx.config.no_rly_hold_ttl(), Instant::now())
+            .bounce(
+                request,
+                reason,
+                ctx.config.no_rly_hold_ttl(),
+                ctx.config.no_rly_max_pending(),
+                Instant::now(),
+            )
             .await;
         tracing::info!(
             channel = %channel_id,

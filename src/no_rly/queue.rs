@@ -200,6 +200,23 @@ impl<T> HoldQueue<T> {
         }
     }
 
+    /// Remove and return the entry closest to expiry, or `None` on an empty
+    /// queue. Capacity enforcement uses this: the entry nearest its deadline
+    /// is the one whose eviction forfeits the least remaining decision
+    /// window.
+    pub fn evict_next_expiring(&mut self) -> Option<(HoldHandle, Held<T>)> {
+        let handle = self
+            .entries
+            .iter()
+            .min_by_key(|(_, e)| e.deadline)
+            .map(|(h, _)| h.clone())?;
+        let entry = self
+            .entries
+            .remove(&handle)
+            .expect("entry present under held map key");
+        Some((handle, entry))
+    }
+
     /// Remove and return every entry past its deadline.
     pub fn sweep_expired(&mut self, now: Instant) -> Vec<(HoldHandle, Held<T>)> {
         let expired: Vec<HoldHandle> = self
@@ -343,6 +360,23 @@ mod tests {
         assert_eq!(swept[0].0, old);
         assert_eq!(q.len(), 1);
         assert!(q.claim(&fresh, now + Duration::from_secs(11)).is_ok());
+    }
+
+    #[test]
+    fn evict_next_expiring_takes_earliest_deadline() {
+        let mut q: HoldQueue<String> = HoldQueue::new();
+        let now = Instant::now();
+        q.hold("late".into(), reason(), None, TTL, now);
+        let soonest = q.hold("soon".into(), reason(), None, Duration::from_secs(5), now);
+        q.hold("later".into(), reason(), None, TTL, now);
+
+        let (handle, entry) = q.evict_next_expiring().expect("non-empty queue evicts");
+        assert_eq!(handle, soonest);
+        assert_eq!(entry.payload, "soon");
+        assert_eq!(q.len(), 2);
+
+        let mut empty: HoldQueue<String> = HoldQueue::new();
+        assert!(empty.evict_next_expiring().is_none());
     }
 
     #[test]

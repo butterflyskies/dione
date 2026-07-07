@@ -84,6 +84,11 @@ pub struct ContradictionaryConfig {
     /// more — but short enough that a release is still a decision about a
     /// live message rather than archaeology.
     pub hold_ttl_secs: u64,
+    /// Maximum number of messages held at once. A new bounce arriving at
+    /// capacity evicts the held entry closest to expiry (journaling it as
+    /// expired), so a runaway tool loop cannot grow the queue without bound
+    /// between sweeps. Default 32; values below 1 are treated as 1.
+    pub max_pending: usize,
     /// How long raw bounce records stay in the no_rly journal before the
     /// condense tool folds them into daily summaries, in days. Bounces are
     /// low-volume, so the default keeps a full year of raw detail (chain
@@ -101,6 +106,7 @@ impl Default for ContradictionaryConfig {
             sidecar_path: "contradictionary.toml".to_string(),
             entries: Vec::new(),
             hold_ttl_secs: 180,
+            max_pending: 32,
             journal_raw_retention_days: 365,
             journal_summary_retention_days: 730,
         }
@@ -401,6 +407,16 @@ mod tests {
                 reason: Some("Pace coined it, we keep it".into()),
             },
         ]
+    }
+
+    #[test]
+    fn config_max_pending_defaults_and_parses() {
+        let defaults = ContradictionaryConfig::default();
+        assert_eq!(defaults.max_pending, 32);
+
+        let parsed: ContradictionaryConfig =
+            toml::from_str("enabled = true\nmax_pending = 4\n").unwrap();
+        assert_eq!(parsed.max_pending, 4);
     }
 
     #[test]

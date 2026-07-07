@@ -151,14 +151,30 @@ impl ConsentGate {
     }
 
     /// Park a bounced request and mint its ticket.
+    ///
+    /// `max_pending` caps the queue (values below 1 are treated as 1): a
+    /// bounce arriving at capacity first evicts the held entry closest to
+    /// expiry and journals it as expired, so a runaway loop cannot grow the
+    /// queue without bound between sweeps.
     pub async fn bounce(
         &self,
         request: ReplyRequest,
         reason: RejectReason,
         ttl: Duration,
+        max_pending: usize,
         now: Instant,
     ) -> BounceTicket {
         let mut queue = self.queue.lock().await;
+        while queue.len() >= max_pending.max(1) {
+            let Some((evicted_handle, entry)) = queue.evict_next_expiring() else {
+                break;
+            };
+            tracing::warn!(
+                handle = %evicted_handle,
+                "no_rly hold queue at capacity; evicting entry closest to expiry"
+            );
+            self.journal_expired(&evicted_handle, &entry, now);
+        }
         let handle = queue.hold(request, reason.clone(), None, ttl, now);
         BounceTicket {
             handle,
@@ -377,6 +393,7 @@ mod tests {
     };
 
     const TTL: Duration = Duration::from_secs(180);
+    const MAX_PENDING: usize = 32;
 
     /// Scripted deliverer: pops one result per call, records every request.
     struct MockDeliver {
@@ -466,7 +483,7 @@ mod tests {
         let now = Instant::now();
 
         let original = request("a straightforward plan");
-        let ticket = gate.bounce(original.clone(), reason(), TTL, now).await;
+        let ticket = gate.bounce(original.clone(), reason(), TTL, MAX_PENDING, now).await;
         assert_eq!(ticket.expires_in, TTL);
         assert_eq!(ticket.parent, None);
 
@@ -496,7 +513,7 @@ mod tests {
         let (_dir, gate) = gate();
         let deliver = MockDeliver::scripted(vec![Ok(vec![1]), Ok(vec![2])]);
         let now = Instant::now();
-        let ticket = gate.bounce(request("msg"), reason(), TTL, now).await;
+        let ticket = gate.bounce(request("msg"), reason(), TTL, MAX_PENDING, now).await;
 
         gate.release(&deliver, &ticket.handle, now).await.unwrap();
         match gate.release(&deliver, &ticket.handle, now).await {
@@ -511,7 +528,7 @@ mod tests {
         let (_dir, gate) = gate();
         let deliver = MockDeliver::ok();
         let now = Instant::now();
-        let ticket = gate.bounce(request("msg"), reason(), TTL, now).await;
+        let ticket = gate.bounce(request("msg"), reason(), TTL, MAX_PENDING, now).await;
 
         let late = now + TTL + Duration::from_secs(1);
         match gate.release(&deliver, &ticket.handle, late).await {
@@ -533,7 +550,7 @@ mod tests {
         let deliver =
             MockDeliver::scripted(vec![Err("discord hiccup".into()), Ok(vec![1002])]);
         let now = Instant::now();
-        let ticket = gate.bounce(request("msg"), reason(), TTL, now).await;
+        let ticket = gate.bounce(request("msg"), reason(), TTL, MAX_PENDING, now).await;
 
         match gate.release(&deliver, &ticket.handle, now).await {
             Err(RejectedHandle::SendFailed { error, .. }) => {
@@ -564,7 +581,7 @@ mod tests {
             MockDeliver::scripted(vec![Err("discord hiccup".into()), Ok(vec![1003])]);
         let now = Instant::now();
         let ticket = gate
-            .bounce(request("a straightforward plan"), reason(), TTL, now)
+            .bounce(request("a straightforward plan"), reason(), TTL, MAX_PENDING, now)
             .await;
 
         match gate
@@ -604,7 +621,7 @@ mod tests {
             MockDeliver::scripted(vec![Err("discord hiccup".into()), Ok(vec![1004])]);
         let now = Instant::now();
         let ticket = gate
-            .bounce(request("a straightforward plan"), reason(), TTL, now)
+            .bounce(request("a straightforward plan"), reason(), TTL, MAX_PENDING, now)
             .await;
 
         gate.rephrase(&deliver, &judge(), &ticket.handle, "a solid plan", TTL, now)
@@ -634,7 +651,7 @@ mod tests {
         let deliver = MockDeliver::ok();
         let now = Instant::now();
         let original = request("a straightforward plan");
-        let ticket = gate.bounce(original.clone(), reason(), TTL, now).await;
+        let ticket = gate.bounce(original.clone(), reason(), TTL, MAX_PENDING, now).await;
 
         let result = gate
             .rephrase(
@@ -674,7 +691,7 @@ mod tests {
         let deliver = MockDeliver::ok();
         let now = Instant::now();
         let ticket = gate
-            .bounce(request("a straightforward plan"), reason(), TTL, now)
+            .bounce(request("a straightforward plan"), reason(), TTL, MAX_PENDING, now)
             .await;
 
         let result = gate
@@ -731,7 +748,7 @@ mod tests {
         let deliver = MockDeliver::ok();
         let now = Instant::now();
         let ticket = gate
-            .bounce(request("a straightforward plan"), reason(), TTL, now)
+            .bounce(request("a straightforward plan"), reason(), TTL, MAX_PENDING, now)
             .await;
         let result = gate
             .rephrase(
@@ -751,11 +768,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bounce_at_capacity_evicts_entry_closest_to_expiry() {
+        let (_dir, gate) = gate();
+        let deliver = MockDeliver::scripted(vec![Ok(vec![1]), Ok(vec![2])]);
+        let now = Instant::now();
+
+        let soonest = gate
+            .bounce(request("one"), reason(), Duration::from_secs(10), 2, now)
+            .await;
+        let second = gate.bounce(request("two"), reason(), TTL, 2, now).await;
+        let third = gate.bounce(request("three"), reason(), TTL, 2, now).await;
+        assert_eq!(gate.pending().await, 2, "capacity holds at max_pending");
+
+        match gate.release(&deliver, &soonest.handle, now).await {
+            Err(RejectedHandle::Unknown(_)) => {}
+            other => panic!("evicted handle must be dead, got {other:?}"),
+        }
+        gate.release(&deliver, &second.handle, now)
+            .await
+            .expect("survivor releases");
+        gate.release(&deliver, &third.handle, now)
+            .await
+            .expect("the bounce that triggered eviction is held normally");
+
+        let bounces = journal_bounces(&gate);
+        assert_eq!(bounces.len(), 3, "the eviction is journaled, not dropped");
+        assert_eq!(bounces[0].outcome, Outcome::Expired);
+        assert_eq!(bounces[0].message, "one");
+        assert_eq!(bounces[0].handle, soonest.handle.as_str());
+    }
+
+    #[tokio::test]
+    async fn bounce_treats_zero_max_pending_as_one() {
+        let (_dir, gate) = gate();
+        let now = Instant::now();
+        gate.bounce(request("one"), reason(), TTL, 0, now).await;
+        gate.bounce(request("two"), reason(), TTL, 0, now).await;
+        assert_eq!(gate.pending().await, 1, "a zero cap must not strand or loop");
+    }
+
+    #[tokio::test]
     async fn expire_due_journals_and_empties() {
         let (_dir, gate) = gate();
         let now = Instant::now();
-        gate.bounce(request("one"), reason(), TTL, now).await;
-        gate.bounce(request("two"), reason(), TTL, now).await;
+        gate.bounce(request("one"), reason(), TTL, MAX_PENDING, now).await;
+        gate.bounce(request("two"), reason(), TTL, MAX_PENDING, now).await;
 
         assert_eq!(gate.expire_due(now + Duration::from_secs(60)).await, 0);
         assert_eq!(gate.pending().await, 2);
@@ -772,7 +829,7 @@ mod tests {
     async fn drain_shutdown_journals_pending_as_expired() {
         let (_dir, gate) = gate();
         let now = Instant::now();
-        gate.bounce(request("in flight"), reason(), TTL, now).await;
+        gate.bounce(request("in flight"), reason(), TTL, MAX_PENDING, now).await;
 
         assert_eq!(gate.drain_shutdown().await, 1);
         assert_eq!(gate.pending().await, 0);
