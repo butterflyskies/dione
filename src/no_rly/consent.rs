@@ -209,6 +209,12 @@ impl ConsentGate {
     /// The old handle dies on a re-bounce too: the original text can never
     /// be sent once a replacement was offered — the chain carries the story
     /// forward instead.
+    ///
+    /// A judged-clear replacement whose *delivery* fails leaves the handle
+    /// live for retry — holding the replacement, not the original. Offering
+    /// a replacement withdraws consent for the original text on every path,
+    /// so a later release or rephrase of the still-live handle operates on
+    /// the rephrased content and can never silently revert.
     pub async fn rephrase<D: DeliverReply, J: OutboundJudge + ?Sized>(
         &self,
         deliver: &D,
@@ -240,11 +246,18 @@ impl ConsentGate {
                     );
                     Ok(Rephrased::Sent { message_ids })
                 }
-                Err(error) => Err(RejectedHandle::SendFailed {
-                    handle: handle.clone(),
-                    error,
-                    expires_in: entry.expires_in(now),
-                }),
+                Err(error) => {
+                    // The construct consented to the replacement, so the
+                    // held entry must carry it from here on — a retry
+                    // (release or rephrase) must never silently revert to
+                    // the original text.
+                    queue.update_payload(handle, request);
+                    Err(RejectedHandle::SendFailed {
+                        handle: handle.clone(),
+                        error,
+                        expires_in: entry.expires_in(now),
+                    })
+                }
             },
             Verdict::Bounce(new_reason) => {
                 queue.settle(handle);
@@ -542,6 +555,77 @@ mod tests {
         let bounces = journal_bounces(&gate);
         assert_eq!(bounces.len(), 1, "exactly one outcome per bounce");
         assert_eq!(bounces[0].outcome, Outcome::Released);
+    }
+
+    #[tokio::test]
+    async fn failed_rephrase_delivery_retry_sends_replacement_not_original() {
+        let (_dir, gate) = gate();
+        let deliver =
+            MockDeliver::scripted(vec![Err("discord hiccup".into()), Ok(vec![1003])]);
+        let now = Instant::now();
+        let ticket = gate
+            .bounce(request("a straightforward plan"), reason(), TTL, now)
+            .await;
+
+        match gate
+            .rephrase(&deliver, &judge(), &ticket.handle, "a solid plan", TTL, now)
+            .await
+        {
+            Err(RejectedHandle::SendFailed { handle, .. }) => assert_eq!(handle, ticket.handle),
+            other => panic!("expected SendFailed, got {other:?}"),
+        }
+
+        let released = gate
+            .release(&deliver, &ticket.handle, now + Duration::from_secs(5))
+            .await
+            .expect("retry within the TTL must work");
+        assert_eq!(released.message_ids, vec![1003]);
+
+        let sent = deliver.requests();
+        assert_eq!(sent.len(), 2, "the failed attempt and the retry");
+        assert_eq!(
+            sent[1].content, "a solid plan",
+            "consent went to the replacement — the retry must never revert to the original"
+        );
+
+        let bounces = journal_bounces(&gate);
+        assert_eq!(bounces.len(), 1);
+        assert_eq!(bounces[0].outcome, Outcome::Released);
+        assert_eq!(
+            bounces[0].message, "a solid plan",
+            "the journal records what actually went out"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_rephrase_delivery_second_rephrase_operates_on_replacement() {
+        let (_dir, gate) = gate();
+        let deliver =
+            MockDeliver::scripted(vec![Err("discord hiccup".into()), Ok(vec![1004])]);
+        let now = Instant::now();
+        let ticket = gate
+            .bounce(request("a straightforward plan"), reason(), TTL, now)
+            .await;
+
+        gate.rephrase(&deliver, &judge(), &ticket.handle, "a solid plan", TTL, now)
+            .await
+            .expect_err("first delivery is scripted to fail");
+
+        let result = gate
+            .rephrase(&deliver, &judge(), &ticket.handle, "a revised plan", TTL, now)
+            .await
+            .expect("second rephrase must succeed");
+        assert!(matches!(result, Rephrased::Sent { .. }));
+        assert_eq!(deliver.requests().last().unwrap().content, "a revised plan");
+
+        let bounces = journal_bounces(&gate);
+        assert_eq!(bounces.len(), 1);
+        assert_eq!(bounces[0].outcome, Outcome::Rephrased);
+        assert_eq!(
+            bounces[0].message, "a solid plan",
+            "the held text is the first replacement — the original was withdrawn"
+        );
+        assert_eq!(bounces[0].replacement.as_deref(), Some("a revised plan"));
     }
 
     #[tokio::test]

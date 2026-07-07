@@ -182,6 +182,24 @@ impl<T> HoldQueue<T> {
         self.entries.remove(handle)
     }
 
+    /// Replace a live entry's payload in place, keeping its handle, reason,
+    /// chain link, and deadline. Returns `false` when the handle is not
+    /// live.
+    ///
+    /// Used by the rephrase path when a judged replacement fails to deliver:
+    /// the entry must hold the replacement so a retry operates on the text
+    /// the construct consented to and can never silently revert to the
+    /// original.
+    pub fn update_payload(&mut self, handle: &HoldHandle, payload: T) -> bool {
+        match self.entries.get_mut(handle) {
+            Some(entry) => {
+                entry.payload = payload;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Remove and return every entry past its deadline.
     pub fn sweep_expired(&mut self, now: Instant) -> Vec<(HoldHandle, Held<T>)> {
         let expired: Vec<HoldHandle> = self
@@ -259,6 +277,21 @@ mod tests {
             "settled handle must be dead"
         );
         assert!(q.settle(&handle).is_none(), "double settle yields nothing");
+    }
+
+    #[test]
+    fn update_payload_replaces_in_place_and_keeps_the_handle_live() {
+        let mut q: HoldQueue<String> = HoldQueue::new();
+        let now = Instant::now();
+        let handle = q.hold("original".into(), reason(), None, TTL, now);
+        assert!(q.update_payload(&handle, "replacement".into()));
+        let entry = q.claim(&handle, now).expect("handle stays live");
+        assert_eq!(entry.payload, "replacement");
+        assert_eq!(entry.expires_in(now), TTL, "deadline is untouched");
+        assert!(
+            !q.update_payload(&HoldHandle::new("nr-0000-9"), "x".into()),
+            "a dead handle takes no payload"
+        );
     }
 
     #[test]
