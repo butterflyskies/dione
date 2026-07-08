@@ -25,7 +25,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{no_rly::judge::RejectReason, timestamp::Timestamp};
 
@@ -36,8 +36,15 @@ use crate::{no_rly::judge::RejectReason, timestamp::Timestamp};
 /// is sufficient. The queue does not survive a restart — but the journal
 /// does, and shutdown drains every pending handle into it as expired.
 ///
+/// **Trust boundary.** Handles are predictable (`nr-{16-bit nonce}-{seq}`) and
+/// unscoped — anyone who can call the gate's verbs can guess and act on any
+/// live handle. That is sound here because the gate is single-principal: the
+/// one construct that bounced a message is the only caller of `no_rly` /
+/// `rephrase`. If this gate is ever shared across principals, handles must
+/// become unguessable and be scoped to their minter before then.
+///
 /// Serializes as its string form (e.g. `"nr-3f92-7"`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct HoldHandle(String);
 
@@ -51,6 +58,18 @@ impl HoldHandle {
     /// The handle's string form.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl From<&str> for HoldHandle {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl From<String> for HoldHandle {
+    fn from(s: String) -> Self {
+        Self(s)
     }
 }
 

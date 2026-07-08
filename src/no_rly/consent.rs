@@ -324,9 +324,13 @@ impl ConsentGate {
             self.reserve_live(&mut queue, handle, now)?
         };
 
+        // Build field-by-field: only the content changes, so there is no
+        // reason to clone the original content string just to overwrite it.
         let request = ReplyRequest {
+            channel_id: entry.payload.channel_id,
             content: replacement.to_string(),
-            ..entry.payload.clone()
+            reply_to_message_id: entry.payload.reply_to_message_id,
+            suppress_ping: entry.payload.suppress_ping,
         };
 
         match judge.judge(replacement) {
@@ -667,7 +671,7 @@ mod tests {
         let bounces = journal_bounces(&gate).await;
         assert_eq!(bounces.len(), 1);
         assert_eq!(bounces[0].outcome, Outcome::Released);
-        assert_eq!(bounces[0].handle, ticket.handle.as_str());
+        assert_eq!(bounces[0].handle, ticket.handle);
         assert_eq!(bounces[0].message, "a straightforward plan");
         assert_eq!(bounces[0].latency_ms, 2000);
         assert_eq!(bounces[0].replacement, None);
@@ -907,8 +911,8 @@ mod tests {
         assert_eq!(bounces[0].outcome, Outcome::Rephrased);
         assert_eq!(bounces[1].outcome, Outcome::Released);
         assert_eq!(
-            bounces[1].parent.as_deref(),
-            Some(ticket.handle.as_str()),
+            bounces[1].parent.as_ref(),
+            Some(&ticket.handle),
             "chain link must survive into the journal"
         );
         let stats = gate.journal().stats(&StatsFilter::default()).unwrap();
@@ -969,7 +973,7 @@ mod tests {
         assert_eq!(bounces.len(), 3, "the eviction is journaled, not dropped");
         assert_eq!(bounces[0].outcome, Outcome::Expired);
         assert_eq!(bounces[0].message, "one");
-        assert_eq!(bounces[0].handle, soonest.handle.as_str());
+        assert_eq!(bounces[0].handle, soonest.handle);
     }
 
     #[tokio::test]

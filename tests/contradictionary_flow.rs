@@ -298,6 +298,21 @@ async fn release_send_failure_keeps_handle_alive() {
     assert_eq!(ctx.no_rly.pending().await, 1);
 }
 
+/// An empty or whitespace-only rephrase is rejected up front with a clear
+/// message rather than passing the judge and 400-ing at Discord.
+#[tokio::test]
+async fn rephrase_empty_content_is_rejected_early() {
+    let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
+    let result = messaging::rephrase_held(&ctx, "nr-0000-1", "   ").await;
+    assert!(
+        result["error"]
+            .as_str()
+            .unwrap()
+            .contains("must not be empty"),
+        "empty rephrase must be rejected with a clear message: {result}"
+    );
+}
+
 /// Rephrase whose replacement bounces again: the old handle dies, a new
 /// chained handle comes back, and the journal records the rephrased triple.
 /// No Discord call happens, so this exercises the full chain with fake HTTP.

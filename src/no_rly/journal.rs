@@ -37,7 +37,11 @@ use camino::{Utf8Path, Utf8PathBuf};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::{no_rly::judge::RejectReason, timestamp::Timestamp, util::truncate_chars};
+use crate::{
+    no_rly::{judge::RejectReason, queue::HoldHandle},
+    timestamp::Timestamp,
+    util::truncate_chars,
+};
 
 /// Name of the journal file, created under the channel state directory
 /// (`~/.claude/channels/dione/no_rly_journal.jsonl`).
@@ -88,12 +92,14 @@ impl Outcome {
 /// One resolved bounce — a single JSONL line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BounceRecord {
-    /// The handle the bounce was held under.
-    pub handle: String,
+    /// The handle the bounce was held under. `HoldHandle` is serde-transparent
+    /// (a bare string on the wire), so the type carries through the journal
+    /// boundary without changing the serialized shape.
+    pub handle: HoldHandle,
     /// The handle of the bounce this one chains from, when a rephrase
     /// re-bounced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent: Option<String>,
+    pub parent: Option<HoldHandle>,
     /// The held message text (truncated to [`JOURNAL_MAX_MESSAGE_LEN`]).
     pub message: String,
     /// The rules that fired.
@@ -337,7 +343,7 @@ impl Journal {
         let known_handles: HashSet<&str> = bounces.iter().map(|b| b.handle.as_str()).collect();
         let dangling_parents = bounces
             .iter()
-            .filter_map(|b| b.parent.as_deref())
+            .filter_map(|b| b.parent.as_ref().map(HoldHandle::as_str))
             .filter(|parent| !known_handles.contains(parent))
             .count() as u64;
 
@@ -432,7 +438,7 @@ impl Journal {
                 .iter()
                 .zip(&keep)
                 .filter(|(_, k)| **k)
-                .filter_map(|(b, _)| b.parent.as_deref())
+                .filter_map(|(b, _)| b.parent.as_ref().map(HoldHandle::as_str))
                 .collect();
             let mut changed = false;
             for (i, b) in bounces.iter().enumerate() {
@@ -738,8 +744,8 @@ impl ResolvedBounce<'_> {
     /// to bound line size, and the resolution time is stamped now.
     pub(crate) fn into_record(self) -> JournalRecord {
         JournalRecord::Bounce(BounceRecord {
-            handle: self.handle.to_string(),
-            parent: self.parent.map(str::to_string),
+            handle: HoldHandle::new(self.handle),
+            parent: self.parent.map(HoldHandle::new),
             message: truncate_chars(self.message, JOURNAL_MAX_MESSAGE_LEN),
             reason: self.reason,
             outcome: self.outcome,

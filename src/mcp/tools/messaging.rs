@@ -511,8 +511,13 @@ async fn deliver_reply(
     let ch = request.channel_id;
     let content = request.content.as_str();
 
-    // Scan once; block hits are irrelevant here (the judge already ruled),
-    // but warn/log/celebrate ride along on every path out.
+    // Seam cost: a clean send scans the contradictionary twice — once as the
+    // judge in `reply` (for block-tier bounces) and again here for the
+    // warn/celebrate self-reacts. The two are deliberately separate concerns
+    // (the judge gates delivery; these reactions ride along after it), and a
+    // bounce path never reaches here, so the second scan only runs on sends
+    // that were already going out. Block hits are irrelevant here (the judge
+    // already ruled); warn/log/celebrate ride along on every path out.
     let contradictionary_hits = ctx
         .config
         .contradictionary
@@ -699,6 +704,12 @@ pub async fn release_held(ctx: &MessagingCtx, handle: &str) -> Value {
 /// and replacement as a triple); a re-bounce mints a new handle chained to
 /// the dead one.
 pub async fn rephrase_held(ctx: &MessagingCtx, handle: &str, content: &str) -> Value {
+    // Reject an empty/whitespace replacement up front with a clear message —
+    // it would otherwise pass the judge and 400 at Discord with a confusing
+    // "cannot send an empty message" error, stranding the handle.
+    if content.trim().is_empty() {
+        return json!({ "error": "rephrase content must not be empty" });
+    }
     let handle = HoldHandle::new(handle);
     let ttl = ctx.config.no_rly_hold_ttl();
     let now = Instant::now();
