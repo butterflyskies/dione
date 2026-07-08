@@ -13,7 +13,7 @@ use crate::contradictionary::Action;
 use crate::discord::chunk;
 use crate::gate::OutboundGate;
 use crate::no_rly::consent::{
-    BounceTicket, ConsentGate, DeliverReply, RejectedHandle, Rephrased, ReplyRequest,
+    BounceTicket, ConsentGate, DeliverError, DeliverReply, RejectedHandle, Rephrased, ReplyRequest,
 };
 use crate::no_rly::judge::{AlwaysClear, OutboundJudge, Verdict};
 use crate::no_rly::queue::HoldHandle;
@@ -470,7 +470,7 @@ async fn deliver_prepared_reply(
 
     match deliver_reply(ctx, &request).await {
         Ok(sent_ids) => json!({ "ok": true, "message_ids": sent_ids }),
-        Err(e) => json!({ "error": e }),
+        Err(e) => json!({ "error": e.message }),
     }
 }
 
@@ -479,7 +479,10 @@ async fn deliver_prepared_reply(
 fn bounce_json(ticket: &BounceTicket) -> Value {
     let mut held = json!({
         "handle": ticket.handle,
-        "reason": ticket.reason.matches,
+        // Canonical structured reason: the same `{ "matches": [...] }` shape
+        // the journal serializes, so a client sees one reason shape everywhere
+        // rather than a flat array here and a nested object in the audit log.
+        "reason": ticket.reason,
         "expires_in_secs": ticket.expires_in.as_secs(),
         "next": "no_rly(handle) sends it verbatim; rephrase(handle, content) sends a replacement (re-checked); ignoring it lets it expire",
     });
@@ -497,8 +500,13 @@ fn bounce_json(ticket: &BounceTicket) -> Value {
 /// shared by judged sends and by release/rephrase — the outbound channel
 /// gate is re-checked here so a held message cannot outlive a config change
 /// that revoked its channel.
-async fn deliver_reply(ctx: &MessagingCtx, request: &ReplyRequest) -> Result<Vec<u64>, String> {
-    ensure_outbound(ctx, request.channel_id).await?;
+async fn deliver_reply(
+    ctx: &MessagingCtx,
+    request: &ReplyRequest,
+) -> Result<Vec<u64>, DeliverError> {
+    ensure_outbound(ctx, request.channel_id)
+        .await
+        .map_err(DeliverError::total)?;
 
     let ch = request.channel_id;
     let content = request.content.as_str();
@@ -605,7 +613,21 @@ async fn deliver_reply(ctx: &MessagingCtx, request: &ReplyRequest) -> Result<Vec
             }
             Err(e) => {
                 tracing::warn!(channel_id = ch.get(), chunk = i, error = %e, "failed to send chunk");
-                return Err(format!("failed to send chunk {i}: {e}"));
+                // Report partial progress: the chunks already posted (so a
+                // retry does not double-post them) and the undelivered
+                // remainder (so a retry resumes from there). When nothing has
+                // landed yet the remainder is left `None` — a retry re-sends
+                // the whole payload.
+                let undelivered = if sent_ids.is_empty() {
+                    None
+                } else {
+                    Some(chunks[i..].join("\n\n"))
+                };
+                return Err(DeliverError {
+                    message: format!("failed to send chunk {i}: {e}"),
+                    sent_ids,
+                    undelivered,
+                });
             }
         }
     }
@@ -642,7 +664,7 @@ async fn deliver_reply(ctx: &MessagingCtx, request: &ReplyRequest) -> Result<Vec
 }
 
 impl DeliverReply for MessagingCtx {
-    async fn deliver(&self, request: &ReplyRequest) -> Result<Vec<u64>, String> {
+    async fn deliver(&self, request: &ReplyRequest) -> Result<Vec<u64>, DeliverError> {
         deliver_reply(self, request).await
     }
 }
@@ -1307,6 +1329,7 @@ mod tests {
     use super::*;
     use crate::{
         config::{ChannelConfig, Config},
+        no_rly::judge::{ReasonEntry, RejectReason},
         pre_send::{
             Assessment, AuditTrail, ConstructFeedback, HookContext, HookDecision, HookOutput,
             PipelineMode, PreSendHook, PreSendPipeline,
@@ -1394,6 +1417,67 @@ mod tests {
                 AuditTrail::default(),
             )
         }
+    }
+
+    // ── bounce_json wire contract ────────────────────────────────────────
+    //
+    // The `held` bounce error is the PR's central new wire contract: the
+    // shape a client parses to extract the handle and act on a bounce. These
+    // snapshots pin it so a field rename can't silently break every consumer.
+
+    fn bounce_reason() -> RejectReason {
+        RejectReason {
+            matches: vec![ReasonEntry {
+                pattern: "straightforward".into(),
+                reason: Some("nothing is ever straightforward".into()),
+            }],
+        }
+    }
+
+    #[test]
+    fn bounce_json_wire_shape_plain() {
+        let ticket = BounceTicket {
+            handle: HoldHandle::new("nr-3f92-7"),
+            reason: bounce_reason(),
+            expires_in: std::time::Duration::from_secs(180),
+            parent: None,
+        };
+        insta::assert_json_snapshot!(bounce_json(&ticket));
+    }
+
+    #[test]
+    fn bounce_json_wire_shape_chained() {
+        let ticket = BounceTicket {
+            handle: HoldHandle::new("nr-3f92-8"),
+            reason: RejectReason {
+                matches: vec![ReasonEntry {
+                    pattern: "trivial".into(),
+                    reason: Some("nothing worth building is trivial".into()),
+                }],
+            },
+            expires_in: std::time::Duration::from_secs(180),
+            parent: Some(HoldHandle::new("nr-3f92-7")),
+        };
+        insta::assert_json_snapshot!(bounce_json(&ticket));
+    }
+
+    /// The construct-facing `held.reason` and the journal `reason` must be the
+    /// same structured shape, so a client sees one reason contract everywhere.
+    #[test]
+    fn bounce_reason_matches_journal_reason_shape() {
+        let ticket = BounceTicket {
+            handle: HoldHandle::new("nr-3f92-7"),
+            reason: bounce_reason(),
+            expires_in: std::time::Duration::from_secs(180),
+            parent: None,
+        };
+        let held = bounce_json(&ticket);
+        let journal = serde_json::to_value(&ticket.reason).unwrap();
+        assert_eq!(
+            held["held"]["reason"], journal,
+            "held.reason must serialize identically to the journal's reason field"
+        );
+        assert_eq!(held["held"]["reason"]["matches"][0]["pattern"], "straightforward");
     }
 
     fn test_config() -> LoadedConfig {

@@ -1,0 +1,21 @@
+---
+source: src/mcp/tools/messaging.rs
+expression: bounce_json(&ticket)
+---
+{
+  "error": "⚠️ held by contradictionary: trivial (nothing worth building is trivial)",
+  "held": {
+    "chained_from": "nr-3f92-7",
+    "expires_in_secs": 180,
+    "handle": "nr-3f92-8",
+    "next": "no_rly(handle) sends it verbatim; rephrase(handle, content) sends a replacement (re-checked); ignoring it lets it expire",
+    "reason": {
+      "matches": [
+        {
+          "pattern": "trivial",
+          "reason": "nothing worth building is trivial"
+        }
+      ]
+    }
+  }
+}

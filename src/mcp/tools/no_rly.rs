@@ -72,7 +72,7 @@ pub async fn no_rly_condense(ctx: &NoRlyCtx, older_than_days: Option<u64>) -> Va
     let Some(cutoff) = days_ago(days) else {
         return json!({ "error": "older_than_days is out of range" });
     };
-    match ctx.gate.journal().condense(cutoff) {
+    match ctx.gate.journal().condense(cutoff).await {
         Ok(report) => serde_json::to_value(report)
             .unwrap_or_else(|e| json!({ "error": format!("failed to serialize report: {e}") })),
         Err(e) => json!({ "error": format!("condense failed: {e}") }),
@@ -89,7 +89,7 @@ pub async fn no_rly_vacuum(ctx: &NoRlyCtx, older_than_days: Option<u64>) -> Valu
     let Some(cutoff) = days_ago(days) else {
         return json!({ "error": "older_than_days is out of range" });
     };
-    match ctx.gate.journal().vacuum(cutoff) {
+    match ctx.gate.journal().vacuum(cutoff).await {
         Ok(report) => serde_json::to_value(report)
             .unwrap_or_else(|e| json!({ "error": format!("failed to serialize report: {e}") })),
         Err(e) => json!({ "error": format!("vacuum failed: {e}") }),
