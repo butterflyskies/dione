@@ -228,9 +228,12 @@ pub(crate) async fn call_tool(
         }
         "no_rly_stats" => {
             let ctx = server.no_rly_ctx(config.clone());
-            let since_days = args.get("since_days").and_then(Value::as_u64);
-            let outcome = args.get("outcome").and_then(Value::as_str);
-            let pattern = args.get("pattern").and_then(Value::as_str);
+            // A present-but-wrong-type filter arg is a caller error, not a
+            // silent "no filter" — otherwise `since_days: "7"` returns all-time
+            // stats presented as if filtered.
+            let since_days = optional_u64(&args, "since_days")?;
+            let outcome = optional_str(&args, "outcome")?;
+            let pattern = optional_str(&args, "pattern")?;
             no_rly_stats(&ctx, since_days, outcome, pattern).await
         }
         "no_rly_condense" => {
@@ -800,6 +803,30 @@ fn parse_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     args.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| format!("missing {key}"))
+}
+
+/// An optional integer argument: absent or null yields `None`, a present value
+/// of the wrong type is an error (rather than silently dropped).
+fn optional_u64(args: &Value, key: &str) -> Result<Option<u64>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| format!("invalid {key}: expected an integer")),
+    }
+}
+
+/// An optional string argument: absent or null yields `None`, a present value
+/// of the wrong type is an error (rather than silently dropped).
+fn optional_str<'a>(args: &'a Value, key: &str) -> Result<Option<&'a str>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_str()
+            .map(Some)
+            .ok_or_else(|| format!("invalid {key}: expected a string")),
+    }
 }
 
 fn parse_string_array(args: &Value, key: &str) -> Option<Vec<String>> {
