@@ -31,6 +31,8 @@ use std::{
     io::Write,
 };
 
+use tokio::sync::{mpsc, oneshot};
+
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
@@ -114,8 +116,8 @@ pub struct BounceRecord {
 /// text and chain links, aggregated per (day, reason patterns, outcome).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SummaryRecord {
-    /// UTC date of resolution, `YYYY-MM-DD`.
-    pub date: String,
+    /// UTC date of resolution. Serializes as `YYYY-MM-DD`.
+    pub date: NaiveDate,
     /// The comma-joined pattern key ([`RejectReason::patterns`]).
     pub patterns: String,
     /// The shared outcome of the aggregated bounces.
@@ -142,13 +144,24 @@ pub enum JournalRecord {
     Summary(SummaryRecord),
 }
 
-/// Everything a full read of the journal yields: parsed records plus the
-/// lines that failed to parse (kept verbatim so no data is silently lost).
+/// Everything a full read of the journal yields: parsed records, plus lines
+/// kept verbatim so no data is silently lost — split into two kinds:
+///
+/// - **unknown**: valid JSON whose `kind` this build does not recognize (a
+///   record type from a newer schema, seen after a downgrade or across a
+///   shared state dir). These are preserved by *every* maintenance op —
+///   vacuum must never delete a well-formed record just because it is newer
+///   than this binary.
+/// - **malformed**: lines that are not valid JSON at all (genuine corruption).
+///   Vacuum drops these; they carry no recoverable meaning.
 #[derive(Debug, Default)]
 pub struct JournalScan {
     /// Successfully parsed records, in file order.
     pub records: Vec<JournalRecord>,
-    /// Raw lines that failed to parse.
+    /// Valid JSON with an unrecognized shape (e.g. a future `kind`), kept
+    /// verbatim and never dropped.
+    pub unknown: Vec<String>,
+    /// Lines that are not valid JSON, kept verbatim until vacuum drops them.
     pub malformed: Vec<String>,
 }
 
@@ -199,7 +212,12 @@ pub struct JournalStats {
     pub summaries: u64,
     /// Total bounces represented by those summaries.
     pub summarized_bounces: u64,
-    /// Audit validation: lines that failed to parse.
+    /// Audit validation: valid-JSON lines with an unrecognized shape (e.g. a
+    /// record `kind` from a newer schema). Preserved across maintenance, never
+    /// dropped — non-zero means this binary is reading a journal it does not
+    /// fully understand.
+    pub unknown_lines: u64,
+    /// Audit validation: lines that are not valid JSON at all.
     pub malformed_lines: u64,
 }
 
@@ -233,8 +251,14 @@ pub struct VacuumReport {
     pub bytes_after: u64,
 }
 
-/// Handle to the on-disk journal. Cheap to construct; every operation opens
-/// the file fresh, so concurrent processes see a consistent append-only view.
+/// The on-disk journal file and its synchronous operations.
+///
+/// This is the *file owner*: `append`, `condense`, and `vacuum` mutate the
+/// file; `load` and `stats` read it. It is deliberately not shared across
+/// writers — at runtime a single [`JournalWriter`] task owns the one instance
+/// that writes, so there is never a second concurrent writer to race. Reads
+/// go straight to the path and are safe against the atomic temp-file rename
+/// (a reader sees the old or new file whole, never a splice).
 #[derive(Debug, Clone)]
 pub struct Journal {
     path: Utf8PathBuf,
@@ -282,6 +306,12 @@ impl Journal {
             }
             match serde_json::from_str::<JournalRecord>(line) {
                 Ok(record) => scan.records.push(record),
+                // Valid JSON we can't map onto a known record (an unrecognized
+                // `kind` from a newer schema) is preserved as unknown, not
+                // destroyed as garbage. Only non-JSON is malformed.
+                Err(_) if serde_json::from_str::<serde_json::Value>(line).is_ok() => {
+                    scan.unknown.push(line.to_string())
+                }
                 Err(_) => scan.malformed.push(line.to_string()),
             }
         }
@@ -340,7 +370,7 @@ impl Journal {
         latencies.sort_unstable();
         let latency = latencies.split_first().map(|(min, _)| LatencyStats {
             min_ms: *min,
-            p50_ms: latencies[latencies.len() / 2],
+            p50_ms: median(&latencies),
             mean_ms: latencies.iter().sum::<u64>() / latencies.len() as u64,
             max_ms: *latencies.last().expect("non-empty after split_first"),
         });
@@ -363,6 +393,7 @@ impl Journal {
             dangling_parents,
             summaries,
             summarized_bounces,
+            unknown_lines: scan.unknown.len() as u64,
             malformed_lines: scan.malformed.len() as u64,
         })
     }
@@ -375,31 +406,69 @@ impl Journal {
         let bytes_before = self.file_size()?;
         let scan = self.load()?;
 
-        let mut summaries: BTreeMap<(String, String, Outcome), SummaryRecord> = BTreeMap::new();
-        let mut kept: Vec<JournalRecord> = Vec::new();
-        let mut condensed_bounces: u64 = 0;
-
+        // Split into existing summaries and raw bounces up front, so we can
+        // reason about the chain before folding anything.
+        let mut existing_summaries: Vec<SummaryRecord> = Vec::new();
+        let mut bounces: Vec<BounceRecord> = Vec::new();
         for record in scan.records {
             match record {
-                JournalRecord::Summary(s) => {
-                    merge_summary(&mut summaries, s);
+                JournalRecord::Summary(s) => existing_summaries.push(s),
+                JournalRecord::Bounce(b) => bounces.push(b),
+            }
+        }
+
+        // A bounce is a fold candidate iff it resolved before the cutoff.
+        // But a candidate whose handle is still referenced as the `parent` of
+        // a bounce we are keeping must itself be kept raw — otherwise folding
+        // it away turns its child into a phantom `dangling_parent`. Promote
+        // referenced candidates to kept, transitively (a kept child keeps its
+        // parent, which may keep *its* parent), until the set is stable.
+        let mut keep: Vec<bool> = bounces
+            .iter()
+            .map(|b| *b.resolved_at.as_datetime() >= cutoff)
+            .collect();
+        loop {
+            let kept_parent_refs: HashSet<&str> = bounces
+                .iter()
+                .zip(&keep)
+                .filter(|(_, k)| **k)
+                .filter_map(|(b, _)| b.parent.as_deref())
+                .collect();
+            let mut changed = false;
+            for (i, b) in bounces.iter().enumerate() {
+                if !keep[i] && kept_parent_refs.contains(b.handle.as_str()) {
+                    keep[i] = true;
+                    changed = true;
                 }
-                JournalRecord::Bounce(b) if *b.resolved_at.as_datetime() < cutoff => {
-                    condensed_bounces += 1;
-                    merge_summary(
-                        &mut summaries,
-                        SummaryRecord {
-                            date: b.resolved_at.as_datetime().date_naive().to_string(),
-                            patterns: b.reason.patterns(),
-                            outcome: b.outcome,
-                            count: 1,
-                            latency_ms_total: b.latency_ms,
-                            latency_ms_max: b.latency_ms,
-                            condensed_at: Timestamp::now(),
-                        },
-                    );
-                }
-                bounce => kept.push(bounce),
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        let mut summaries: BTreeMap<(NaiveDate, String, Outcome), SummaryRecord> = BTreeMap::new();
+        for s in existing_summaries {
+            merge_summary(&mut summaries, s);
+        }
+        let mut kept: Vec<JournalRecord> = Vec::new();
+        let mut condensed_bounces: u64 = 0;
+        for (b, keep_it) in bounces.into_iter().zip(keep) {
+            if keep_it {
+                kept.push(JournalRecord::Bounce(b));
+            } else {
+                condensed_bounces += 1;
+                merge_summary(
+                    &mut summaries,
+                    SummaryRecord {
+                        date: b.resolved_at.as_datetime().date_naive(),
+                        patterns: b.reason.patterns(),
+                        outcome: b.outcome,
+                        count: 1,
+                        latency_ms_total: b.latency_ms,
+                        latency_ms_max: b.latency_ms,
+                        condensed_at: Timestamp::now(),
+                    },
+                );
             }
         }
 
@@ -410,7 +479,10 @@ impl Journal {
             .map(JournalRecord::Summary)
             .chain(kept)
             .collect::<Vec<_>>();
-        self.rewrite(&records, &scan.malformed)?;
+        // Unknown-shape and malformed lines are preserved verbatim — condense
+        // folds bounces, it never destroys data (that is vacuum's job, and
+        // even vacuum keeps unknown-shape lines).
+        self.rewrite(&records, &scan.unknown, &scan.malformed)?;
 
         Ok(CondenseReport {
             condensed_bounces,
@@ -421,8 +493,10 @@ impl Journal {
         })
     }
 
-    /// Drop summaries dated before `cutoff` and every malformed line, then
-    /// compact the file.
+    /// Drop summaries dated before `cutoff` and every malformed (non-JSON)
+    /// line, then compact the file. Valid-JSON lines with an unrecognized
+    /// shape are **kept** — vacuum is not licensed to delete a well-formed
+    /// record just because this binary predates its schema.
     pub fn vacuum(&self, cutoff: DateTime<Utc>) -> io::Result<VacuumReport> {
         let bytes_before = self.file_size()?;
         let scan = self.load()?;
@@ -430,25 +504,32 @@ impl Journal {
 
         let (kept, dropped): (Vec<JournalRecord>, Vec<JournalRecord>) =
             scan.records.into_iter().partition(|r| match r {
-                JournalRecord::Summary(s) => summary_date(s) >= cutoff_date,
+                JournalRecord::Summary(s) => s.date >= cutoff_date,
                 JournalRecord::Bounce(_) => true,
             });
 
-        self.rewrite(&kept, &[])?;
+        self.rewrite(&kept, &scan.unknown, &[])?;
 
         Ok(VacuumReport {
             dropped_summaries: dropped.len() as u64,
             dropped_malformed: scan.malformed.len() as u64,
-            kept: kept.len() as u64,
+            kept: kept.len() as u64 + scan.unknown.len() as u64,
             bytes_before,
             bytes_after: self.file_size()?,
         })
     }
 
-    /// Atomically replace the journal with `records` followed by
-    /// `malformed` lines kept verbatim. Temp-file-plus-rename, so a crash
-    /// mid-rewrite leaves the original journal intact.
-    fn rewrite(&self, records: &[JournalRecord], malformed: &[String]) -> io::Result<()> {
+    /// Atomically replace the journal with `records`, then `unknown` and
+    /// `malformed` lines kept verbatim. Writes a temp file, fsyncs it so the
+    /// bytes are durable before the swap, then renames — a crash mid-rewrite
+    /// leaves the original journal intact and a crash just after leaves the
+    /// fully-written replacement, never a half-synced file.
+    fn rewrite(
+        &self,
+        records: &[JournalRecord],
+        unknown: &[String],
+        malformed: &[String],
+    ) -> io::Result<()> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -457,12 +538,15 @@ impl Journal {
             out.push_str(&serde_json::to_string(record).map_err(io::Error::other)?);
             out.push('\n');
         }
-        for line in malformed {
+        for line in unknown.iter().chain(malformed) {
             out.push_str(line);
             out.push('\n');
         }
         let tmp = self.path.with_extension("jsonl.tmp");
-        fs::write(&tmp, out)?;
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(out.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
         fs::rename(&tmp, &self.path)
     }
 
@@ -475,16 +559,156 @@ impl Journal {
     }
 }
 
+/// A write request handed to the single [`JournalWriter`] task. Funnelling
+/// every mutation through one owner makes the append-vs-rewrite race
+/// structurally impossible: the writer processes commands strictly in order,
+/// so an append can never land between a rewrite's load and rename.
+enum JournalCommand {
+    Append(Box<JournalRecord>),
+    Condense {
+        cutoff: DateTime<Utc>,
+        reply: oneshot::Sender<io::Result<CondenseReport>>,
+    },
+    Vacuum {
+        cutoff: DateTime<Utc>,
+        reply: oneshot::Sender<io::Result<VacuumReport>>,
+    },
+    /// Ack once every previously-queued command has been processed — used at
+    /// shutdown to guarantee drained-as-expired records reach disk before exit.
+    Flush(oneshot::Sender<()>),
+}
+
+/// The single owner of journal *writes*. Clone-cheap: every clone shares the
+/// one background writer task, so no matter how many gate paths append (the
+/// request loop, the sweeper, the shutdown drain) there is exactly one writer.
+///
+/// Reads (`load`, `stats`, `path`) are served directly off a read-only
+/// [`Journal`] clone without touching the writer — they cannot mutate, and the
+/// atomic rename keeps them consistent.
+#[derive(Debug, Clone)]
+pub struct JournalHandle {
+    tx: mpsc::UnboundedSender<JournalCommand>,
+    /// Read-only view of the same file. Never used to write.
+    reader: Journal,
+}
+
+impl JournalHandle {
+    /// Spawn the writer task for a journal in `dir` and return a handle to it.
+    /// Must be called from within a Tokio runtime.
+    pub fn spawn(dir: &Utf8Path) -> Self {
+        let journal = Journal::new(dir);
+        let writer = journal.clone();
+        let (tx, mut rx) = mpsc::unbounded_channel::<JournalCommand>();
+        tokio::spawn(async move {
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    JournalCommand::Append(record) => {
+                        // A journal write failure must not undo or block the
+                        // consented action that produced it — log and move on.
+                        if let Err(e) = writer.append(&record) {
+                            tracing::warn!(error = %e, "failed to append no_rly journal record");
+                        }
+                    }
+                    JournalCommand::Condense { cutoff, reply } => {
+                        let _ = reply.send(writer.condense(cutoff));
+                    }
+                    JournalCommand::Vacuum { cutoff, reply } => {
+                        let _ = reply.send(writer.vacuum(cutoff));
+                    }
+                    JournalCommand::Flush(ack) => {
+                        let _ = ack.send(());
+                    }
+                }
+            }
+        });
+        Self {
+            tx,
+            reader: journal,
+        }
+    }
+
+    /// The journal file path.
+    pub fn path(&self) -> &Utf8Path {
+        self.reader.path()
+    }
+
+    /// Queue one record for the writer. Fire-and-forget: enqueue is
+    /// non-blocking and a dropped writer is logged, never surfaced, so a
+    /// journal problem can never block or undo the consented action.
+    pub fn append(&self, record: &JournalRecord) {
+        if self
+            .tx
+            .send(JournalCommand::Append(Box::new(record.clone())))
+            .is_err()
+        {
+            tracing::warn!("no_rly journal writer stopped; dropping record");
+        }
+    }
+
+    /// Fold old raw bounces into summaries via the writer, awaiting the report.
+    pub async fn condense(&self, cutoff: DateTime<Utc>) -> io::Result<CondenseReport> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(JournalCommand::Condense { cutoff, reply })
+            .map_err(|_| io::Error::other("journal writer stopped"))?;
+        rx.await
+            .map_err(|_| io::Error::other("journal writer dropped the request"))?
+    }
+
+    /// Drop old summaries and malformed lines via the writer, awaiting the
+    /// report.
+    pub async fn vacuum(&self, cutoff: DateTime<Utc>) -> io::Result<VacuumReport> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(JournalCommand::Vacuum { cutoff, reply })
+            .map_err(|_| io::Error::other("journal writer stopped"))?;
+        rx.await
+            .map_err(|_| io::Error::other("journal writer dropped the request"))?
+    }
+
+    /// Wait until every record queued before this call has been written.
+    /// Returns immediately if the writer has already stopped.
+    pub async fn flush(&self) {
+        let (ack, rx) = oneshot::channel();
+        if self.tx.send(JournalCommand::Flush(ack)).is_ok() {
+            let _ = rx.await;
+        }
+    }
+
+    /// Aggregate the journal (read-only, served without the writer).
+    pub fn stats(&self, filter: &StatsFilter) -> io::Result<JournalStats> {
+        self.reader.stats(filter)
+    }
+
+    /// Read and parse the whole journal (read-only, served without the writer).
+    pub fn load(&self) -> io::Result<JournalScan> {
+        self.reader.load()
+    }
+}
+
+/// Median of a sorted, non-empty slice. On an even count it averages the two
+/// middle elements rather than taking the upper one — `p50` is the habituation
+/// signal, and biasing it high on small even samples would mask exactly the
+/// sub-second releases the metric exists to catch.
+fn median(sorted: &[u64]) -> u64 {
+    let n = sorted.len();
+    debug_assert!(n > 0, "median of empty slice");
+    if n % 2 == 1 {
+        sorted[n / 2]
+    } else {
+        // Average without overflow.
+        let lo = sorted[n / 2 - 1];
+        let hi = sorted[n / 2];
+        lo + (hi - lo) / 2
+    }
+}
+
 /// Merge a summary into the accumulator keyed by (date, patterns, outcome).
 fn merge_summary(
-    acc: &mut BTreeMap<(String, String, Outcome), SummaryRecord>,
+    acc: &mut BTreeMap<(NaiveDate, String, Outcome), SummaryRecord>,
     summary: SummaryRecord,
 ) {
-    let key = (
-        summary.date.clone(),
-        summary.patterns.clone(),
-        summary.outcome,
-    );
+    let key = (summary.date, summary.patterns.clone(), summary.outcome);
     acc.entry(key)
         .and_modify(|existing| {
             existing.count += summary.count;
@@ -493,14 +717,6 @@ fn merge_summary(
             existing.condensed_at = summary.condensed_at.clone();
         })
         .or_insert(summary);
-}
-
-/// A summary's date, tolerating unparseable dates by treating them as
-/// ancient (so vacuum eventually clears corrupt-but-parseable records).
-fn summary_date(s: &SummaryRecord) -> NaiveDate {
-    s.date
-        .parse::<NaiveDate>()
-        .unwrap_or(NaiveDate::MIN)
 }
 
 /// A resolved bounce on its way into the journal — the caller-side view
@@ -654,7 +870,7 @@ mod tests {
     #[test]
     fn summary_record_wire_shape() {
         let rec = JournalRecord::Summary(SummaryRecord {
-            date: "2026-07-07".into(),
+            date: NaiveDate::from_ymd_opt(2026, 7, 7).unwrap(),
             patterns: "straightforward".into(),
             outcome: Outcome::Released,
             count: 3,
@@ -803,7 +1019,7 @@ mod tests {
             })
             .collect();
         assert_eq!(summaries.len(), 1);
-        assert_eq!(summaries[0].date, "2026-01-01");
+        assert_eq!(summaries[0].date, NaiveDate::from_ymd_opt(2026, 1, 1).unwrap());
         assert_eq!(summaries[0].count, 2);
         assert_eq!(summaries[0].latency_ms_total, 6000);
         assert_eq!(summaries[0].latency_ms_max, 4000);
@@ -893,7 +1109,7 @@ mod tests {
         let (_dir, journal) = temp_journal();
         journal
             .append(&JournalRecord::Summary(SummaryRecord {
-                date: "2024-01-01".into(),
+                date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
                 patterns: "straightforward".into(),
                 outcome: Outcome::Released,
                 count: 5,
@@ -972,5 +1188,201 @@ mod tests {
             b.replacement.unwrap().chars().count(),
             JOURNAL_MAX_MESSAGE_LEN + 1
         );
+    }
+
+    // ── Median ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn p50_is_the_true_median_on_even_counts() {
+        // Four sorted latencies: the median is the average of the two middle
+        // values, not the upper one. A biased-high p50 (2000) would hide the
+        // sub-second habituation signal this metric exists to surface.
+        let (_dir, journal) = temp_journal();
+        for (i, ms) in [500u64, 1000, 2000, 4000].into_iter().enumerate() {
+            journal
+                .append(&record(
+                    &format!("nr-0001-{i}"),
+                    Outcome::Released,
+                    "2026-07-07T10:00:05+00:00",
+                    ms,
+                ))
+                .unwrap();
+        }
+        let stats = journal.stats(&StatsFilter::default()).unwrap();
+        let latency = stats.latency.unwrap();
+        assert_eq!(latency.p50_ms, 1500, "median of [500,1000,2000,4000] is 1500");
+        assert_eq!(latency.min_ms, 500);
+        assert_eq!(latency.max_ms, 4000);
+    }
+
+    // ── Condense chain integrity ─────────────────────────────────────────
+
+    #[test]
+    fn condense_keeps_a_parent_straddling_the_cutoff_so_no_false_dangling() {
+        // A parent resolves just before the cutoff; its child just after. If
+        // condense folded the parent into a summary, the raw child would read
+        // as a dangling parent — a phantom corruption alarm from routine
+        // maintenance. The parent must be kept raw to preserve the chain.
+        let (_dir, journal) = temp_journal();
+        journal
+            .append(&record("nr-0001-1", Outcome::Rephrased, "2026-05-31T10:00:00+00:00", 1000))
+            .unwrap();
+        let mut child = record("nr-0001-2", Outcome::Released, "2026-06-02T10:00:00+00:00", 500);
+        if let JournalRecord::Bounce(ref mut b) = child {
+            b.parent = Some("nr-0001-1".into());
+        }
+        journal.append(&child).unwrap();
+
+        let cutoff = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
+        let report = journal.condense(cutoff).unwrap();
+        assert_eq!(
+            report.condensed_bounces, 0,
+            "the pre-cutoff parent is referenced by a kept child, so it stays raw"
+        );
+        assert_eq!(report.kept_bounces, 2);
+
+        let stats = journal.stats(&StatsFilter::default()).unwrap();
+        assert_eq!(
+            stats.dangling_parents, 0,
+            "condense must not manufacture a dangling-parent alarm"
+        );
+    }
+
+    #[test]
+    fn condense_transitively_keeps_a_whole_straddling_chain() {
+        // grandparent → parent → child, only the child is past the cutoff.
+        // Keeping the child pulls in the parent, which pulls in the grandparent.
+        let (_dir, journal) = temp_journal();
+        journal
+            .append(&record("nr-0001-1", Outcome::Rephrased, "2026-01-01T10:00:00+00:00", 1000))
+            .unwrap();
+        let mut parent = record("nr-0001-2", Outcome::Rephrased, "2026-01-02T10:00:00+00:00", 1000);
+        if let JournalRecord::Bounce(ref mut b) = parent {
+            b.parent = Some("nr-0001-1".into());
+        }
+        journal.append(&parent).unwrap();
+        let mut child = record("nr-0001-3", Outcome::Released, "2026-07-07T10:00:00+00:00", 500);
+        if let JournalRecord::Bounce(ref mut b) = child {
+            b.parent = Some("nr-0001-2".into());
+        }
+        journal.append(&child).unwrap();
+
+        let cutoff = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
+        let report = journal.condense(cutoff).unwrap();
+        assert_eq!(report.condensed_bounces, 0, "the whole live chain is preserved");
+        assert_eq!(report.kept_bounces, 3);
+        assert_eq!(journal.stats(&StatsFilter::default()).unwrap().dangling_parents, 0);
+    }
+
+    // ── Unknown-schema tolerance ─────────────────────────────────────────
+
+    #[test]
+    fn unknown_kind_is_preserved_by_condense_and_vacuum() {
+        // A record type from a newer schema (valid JSON, unrecognized `kind`)
+        // must survive maintenance verbatim — vacuum is not licensed to delete
+        // a well-formed record just because this binary predates its schema.
+        // Genuine non-JSON garbage is still dropped by vacuum.
+        let (_dir, journal) = temp_journal();
+        journal
+            .append(&record("nr-0001-1", Outcome::Released, "2020-01-01T10:00:00+00:00", 1000))
+            .unwrap();
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(journal.path())
+            .unwrap();
+        file.write_all(b"{\"kind\":\"future_thing\",\"data\":42}\n").unwrap();
+        file.write_all(b"not json at all\n").unwrap();
+        drop(file);
+
+        let scan = journal.load().unwrap();
+        assert_eq!(scan.unknown, vec!["{\"kind\":\"future_thing\",\"data\":42}".to_string()]);
+        assert_eq!(scan.malformed, vec!["not json at all".to_string()]);
+
+        let stats = journal.stats(&StatsFilter::default()).unwrap();
+        assert_eq!(stats.unknown_lines, 1);
+        assert_eq!(stats.malformed_lines, 1);
+
+        // Condense preserves both.
+        let cutoff = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        journal.condense(cutoff).unwrap();
+        let scan = journal.load().unwrap();
+        assert_eq!(scan.unknown.len(), 1, "condense keeps the future record");
+        assert_eq!(scan.malformed.len(), 1, "condense keeps non-JSON too");
+
+        // Vacuum drops the non-JSON garbage but keeps the future record.
+        let report = journal.vacuum(cutoff).unwrap();
+        assert_eq!(report.dropped_malformed, 1);
+        let scan = journal.load().unwrap();
+        assert_eq!(
+            scan.unknown,
+            vec!["{\"kind\":\"future_thing\",\"data\":42}".to_string()],
+            "vacuum must never delete a valid newer-schema record"
+        );
+        assert!(scan.malformed.is_empty(), "vacuum drops genuine garbage");
+    }
+
+    // ── Single-writer discipline (the P1 race) ───────────────────────────
+
+    /// Regression for the condense/append race: with the single-writer actor,
+    /// appends and the condense rewrite are totally ordered on one task, so an
+    /// append can never land between condense's load and rename and be lost.
+    /// Hammer both concurrently through the handle and assert every appended
+    /// record survives.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_appends_and_condense_lose_no_records() {
+        use std::sync::Arc;
+
+        let dir = TempDir::new().unwrap();
+        let path = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
+        let handle = Arc::new(JournalHandle::spawn(&path));
+
+        // All appends are recent (after the cutoff), so every one must survive
+        // as a kept raw bounce no matter how the condense rewrites interleave.
+        const N: usize = 200;
+        let appender = {
+            let handle = handle.clone();
+            tokio::spawn(async move {
+                for i in 0..N {
+                    handle.append(&record(
+                        &format!("nr-0001-{i}"),
+                        Outcome::Released,
+                        "2026-07-07T10:00:05+00:00",
+                        i as u64,
+                    ));
+                    if i % 8 == 0 {
+                        tokio::task::yield_now().await;
+                    }
+                }
+            })
+        };
+        let condenser = {
+            let handle = handle.clone();
+            tokio::spawn(async move {
+                let cutoff = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+                for _ in 0..30 {
+                    handle.condense(cutoff).await.unwrap();
+                    tokio::task::yield_now().await;
+                }
+            })
+        };
+        appender.await.unwrap();
+        condenser.await.unwrap();
+        handle.flush().await;
+
+        let scan = handle.load().unwrap();
+        let handles: HashSet<&str> = scan
+            .records
+            .iter()
+            .filter_map(|r| match r {
+                JournalRecord::Bounce(b) => Some(b.handle.as_str()),
+                JournalRecord::Summary(_) => None,
+            })
+            .collect();
+        assert_eq!(
+            handles.len(),
+            N,
+            "every appended record must survive concurrent condensing — none clobbered by a rename"
+        );
+        assert!(scan.malformed.is_empty(), "no torn writes");
     }
 }
