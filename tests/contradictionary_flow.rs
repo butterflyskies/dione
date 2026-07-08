@@ -163,11 +163,11 @@ async fn reply_block_holds_message_with_handle() {
     let handle = held_handle(&result);
     assert!(handle.starts_with("nr-"), "handle format: {handle}");
     assert_eq!(
-        result["held"]["reason"][0]["pattern"], "straightforward",
+        result["held"]["reason"]["matches"][0]["pattern"], "straightforward",
         "structured reason must name the pattern"
     );
     assert!(
-        result["held"]["reason"][0]["reason"]
+        result["held"]["reason"]["matches"][0]["reason"]
             .as_str()
             .unwrap()
             .contains("nothing is ever straightforward"),
@@ -196,7 +196,7 @@ async fn reply_block_reports_all_blocked_patterns() {
     let error_msg = result["error"].as_str().unwrap();
     assert!(error_msg.contains("straightforward"));
     assert!(error_msg.contains("trivial"));
-    let reasons = result["held"]["reason"].as_array().unwrap();
+    let reasons = result["held"]["reason"]["matches"].as_array().unwrap();
     assert_eq!(reasons.len(), 2);
 }
 
@@ -329,7 +329,7 @@ async fn rephrase_rebounce_chains_and_journals() {
         "the new ticket must chain to the dead handle"
     );
     assert_eq!(
-        result["held"]["reason"][0]["pattern"], "trivial",
+        result["held"]["reason"]["matches"][0]["pattern"], "trivial",
         "the new reason reflects the replacement's own match"
     );
 
@@ -342,6 +342,8 @@ async fn rephrase_rebounce_chains_and_journals() {
             .contains("unknown or already-used handle")
     );
 
+    // The journal writer is asynchronous; flush before reading the file back.
+    ctx.no_rly.journal().flush().await;
     // The journal recorded the (original, reason, replacement) triple.
     let journal = fs::read_to_string(state_dir.join(JOURNAL_FILE_NAME).as_std_path())
         .expect("rephrase must journal the resolved bounce");
@@ -355,6 +357,69 @@ async fn rephrase_rebounce_chains_and_journals() {
     assert_eq!(record["replacement"], "fine, it is a trivial implementation");
     assert_eq!(record["reason"]["matches"][0]["pattern"], "straightforward");
     assert!(record["latency_ms"].is_u64());
+}
+
+/// Containment invariant: a held message cannot outlive a config change that
+/// revoked its channel. Bounce on channel 42, then release through a context
+/// whose config no longer permits 42 (sharing the same gate) — the outbound
+/// re-check in `deliver_reply` must refuse the send, leave the handle live, and
+/// journal nothing.
+#[tokio::test]
+async fn release_into_a_revoked_channel_is_refused_and_keeps_the_handle() {
+    let dir = TempDir::new().unwrap();
+    let state_dir = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
+    let gate = Arc::new(ConsentGate::new(&state_dir));
+
+    // First context: channel 42 is permitted; the message bounces and is held.
+    let ctx_allowed = MessagingCtx {
+        http: Arc::new(serenity::http::Http::new("fake-token-for-testing")),
+        state: new_state(),
+        config: Arc::new(config_with_contradictionary(ariadne_entries())),
+        state_dir: state_dir.clone(),
+        no_rly: gate.clone(),
+    };
+    let bounce = messaging::reply(
+        &ctx_allowed,
+        ChannelId::new(42),
+        "a straightforward take",
+        None,
+        false,
+    )
+    .await;
+    let handle = held_handle(&bounce).to_string();
+    assert_eq!(gate.pending().await, 1);
+
+    // Second context: same gate, but a config where 42 is no longer a
+    // permitted outbound target (no channels configured).
+    let ctx_revoked = MessagingCtx {
+        http: Arc::new(serenity::http::Http::new("fake-token-for-testing")),
+        state: new_state(),
+        config: Arc::new(LoadedConfig::from_raw(Config::default())),
+        state_dir: state_dir.clone(),
+        no_rly: gate.clone(),
+    };
+    let result = messaging::release_held(&ctx_revoked, &handle).await;
+    assert!(
+        result["error"]
+            .as_str()
+            .unwrap()
+            .contains("not a permitted outbound target"),
+        "release into a revoked channel must be refused: {result}"
+    );
+    assert_eq!(
+        result["handle_still_live"], handle,
+        "a refused release must not burn the handle"
+    );
+    assert_eq!(gate.pending().await, 1, "the held message stays claimable");
+
+    // Nothing resolved, so the journal recorded no outcome.
+    gate.journal().flush().await;
+    let journal_path = state_dir.join(JOURNAL_FILE_NAME);
+    let journalled = fs::read_to_string(journal_path.as_std_path()).unwrap_or_default();
+    assert!(
+        journalled.trim().is_empty(),
+        "a refused release must journal nothing, got: {journalled}"
+    );
 }
 
 // ── Integration: config loading full path ───────────────────────────────────

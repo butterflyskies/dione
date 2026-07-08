@@ -1510,3 +1510,118 @@ async fn test_reply_suppress_ping_false_passes_gate_with_configured_channel() {
     );
     insta::assert_json_snapshot!(resp["result"]);
 }
+
+// ── no_rly v2: bounce dispatch + fail-closed + filter typing ───────────────────
+
+/// A blocking config with channel 42 permitted and "straightforward" as a
+/// block-tier tell.
+fn blocking_config() -> dione::config::Config {
+    let mut raw = dione::config::Config::default();
+    raw.channels.push(dione::config::ChannelConfig {
+        id: "42".into(),
+        ..Default::default()
+    });
+    raw.contradictionary.enabled = true;
+    raw.contradictionary.entries = vec![dione::contradictionary::Entry {
+        pattern: "straightforward".into(),
+        action: dione::contradictionary::Action::Block,
+        match_mode: dione::contradictionary::MatchMode::Word,
+        reason: Some("nothing is ever straightforward".into()),
+    }];
+    raw
+}
+
+/// A blocked `reply` through the real dispatch path returns the `held` bounce
+/// contract — a parseable `held.handle` and the structured reason — not a wall.
+/// This is the surface a client parses to act on a bounce; nothing else
+/// exercises it end to end.
+#[tokio::test]
+async fn test_reply_blocked_returns_parseable_held_handle() {
+    let (_dir, state_dir) = temp_state_dir();
+    let _cfg = set_global_config(blocking_config());
+    let server = make_server(&state_dir);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 80,
+        "method": "tools/call",
+        "params": {
+            "name": "reply",
+            "arguments": { "channel_id": "42", "content": "this is a straightforward plan" }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    assert_eq!(resp["result"]["isError"], json!(true), "a bounce is an error result");
+
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+    let handle = parsed["held"]["handle"]
+        .as_str()
+        .expect("a bounced reply must carry held.handle");
+    assert!(handle.starts_with("nr-"), "handle format: {handle}");
+    assert_eq!(
+        parsed["held"]["reason"]["matches"][0]["pattern"], "straightforward",
+        "the structured reason must name the blocked pattern"
+    );
+    assert_eq!(parsed["held"]["expires_in_secs"], 180);
+}
+
+/// A stale client that still sends `no_rly: true` must not get a pre-emptive
+/// override: the flag is ignored, the judge runs, and blocked content bounces
+/// (fail-closed). The old resend-with-a-flag path is dead.
+#[tokio::test]
+async fn test_reply_no_rly_flag_is_ignored_and_still_bounces() {
+    let (_dir, state_dir) = temp_state_dir();
+    let _cfg = set_global_config(blocking_config());
+    let server = make_server(&state_dir);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 81,
+        "method": "tools/call",
+        "params": {
+            "name": "reply",
+            "arguments": {
+                "channel_id": "42",
+                "content": "a straightforward plan",
+                "no_rly": true
+            }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    assert_eq!(
+        resp["result"]["isError"],
+        json!(true),
+        "a leftover no_rly flag must not bypass the judge"
+    );
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert!(
+        parsed["held"]["handle"].as_str().is_some(),
+        "blocked content must still be held under a handle, not sent"
+    );
+}
+
+/// A present-but-wrong-type stats filter is a caller error, not a silently
+/// dropped filter: `since_days: "7"` must not return all-time stats dressed up
+/// as filtered.
+#[tokio::test]
+async fn test_no_rly_stats_rejects_wrong_type_filter() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 82,
+        "method": "tools/call",
+        "params": { "name": "no_rly_stats", "arguments": { "since_days": "7" } }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    let msg = resp["error"]["message"]
+        .as_str()
+        .expect("a wrong-type filter must be a JSON-RPC error, not a silent no-op");
+    assert!(
+        msg.contains("since_days"),
+        "the error must name the offending argument, got: {msg}"
+    );
+}
