@@ -375,12 +375,20 @@ pub async fn run(
                         }
                     }
                     Ok(None) => {
-                        // EOF — client disconnected.
-                        tracing::info!("stdin EOF, MCP server exiting");
+                        // EOF — the MCP client closed the pipe. This is the
+                        // normal way the client dies, and it must trigger the
+                        // same graceful shutdown as Ctrl-C: fire the cancel so
+                        // the sweeper drains pending no_rly handles into the
+                        // journal instead of parking until the timeout.
+                        tracing::info!("stdin EOF, MCP server shutting down");
+                        cancel.cancel();
                         break;
                     }
                     Err(e) => {
-                        tracing::warn!(error = %e, "stdin read error");
+                        // A read error is also a terminal exit — cancel so the
+                        // background tasks run their drain paths.
+                        tracing::warn!(error = %e, "stdin read error, shutting down");
+                        cancel.cancel();
                         break;
                     }
                 }
@@ -388,9 +396,11 @@ pub async fn run(
         }
     }
 
-    // Cancellation signal already sent — notif_task will break out of its
-    // loop and flush_all() any buffered events, and the sweeper will drain
-    // pending no_rly handles into the journal. Give them a short window.
+    // Every exit from the loop above has fired `cancel` (the cancellation
+    // branch by definition, the EOF/read-error branches explicitly). So
+    // notif_task will break out of its loop and flush_all() any buffered
+    // events, and the sweeper will drain pending no_rly handles into the
+    // journal. Give them a short window.
     drop(server);
     let _ = tokio::time::timeout(Duration::from_millis(500), notif_task).await;
     let _ = tokio::time::timeout(Duration::from_millis(500), sweep_task).await;
