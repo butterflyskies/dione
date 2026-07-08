@@ -75,6 +75,26 @@ pub struct Held<T> {
     pub bounced_instant: Instant,
     /// Monotonic expiry deadline (`bounced_instant + ttl`).
     deadline: Instant,
+    /// True while a delivery attempt for this entry is in flight — the queue
+    /// lock is released across the Discord send, so a reserved entry must be
+    /// invisible to sweep/drain/evict (it cannot be resolved out from under
+    /// its in-flight send) and to a second concurrent claim (which sees it as
+    /// unavailable). Set under the lock by [`HoldQueue::reserve`]; cleared by
+    /// [`HoldQueue::settle`] (success) or [`HoldQueue::release_reservation`] /
+    /// [`HoldQueue::record_partial`] (failure).
+    in_flight: bool,
+    /// Chunks already posted to Discord in a prior partial delivery. A retry
+    /// resumes from `payload` (the undelivered remainder) so no chunk is sent
+    /// twice; these IDs are folded into the final released set.
+    pub sent_ids: Vec<u64>,
+    /// The full held text before a partial delivery shrank `payload` to the
+    /// undelivered remainder — recorded as the journal `message` so the audit
+    /// row is the whole message, not just the trailing chunk.
+    pub original_message: Option<String>,
+    /// When a judged-clear rephrase replacement failed delivery, the original
+    /// (withdrawn) text is retained here so a later resolution journals the
+    /// (original, reason, sent-replacement) triple instead of losing it.
+    pub withdrawn_original: Option<String>,
 }
 
 impl<T> Held<T> {
@@ -146,7 +166,19 @@ impl<T> HoldQueue<T> {
                 parent,
                 bounced_at: Timestamp::now(),
                 bounced_instant: now,
-                deadline: now + ttl,
+                // A pathological `ttl` (a mis-set `hold_ttl_secs` in the
+                // billions of years) would overflow `now + ttl` and panic at
+                // the first bounce; saturate to a far-future deadline instead
+                // so a bad config never kills the request loop. The config
+                // layer also caps `hold_ttl_secs`, so this is defense in depth.
+                deadline: now
+                    .checked_add(ttl)
+                    .or_else(|| now.checked_add(Duration::from_secs(365 * 24 * 3600)))
+                    .unwrap_or(now),
+                in_flight: false,
+                sent_ids: Vec::new(),
+                original_message: None,
+                withdrawn_original: None,
             },
         );
         handle
@@ -175,6 +207,71 @@ impl<T> HoldQueue<T> {
         }
     }
 
+    /// Reserve a live entry for an in-flight delivery: hand back a snapshot
+    /// and mark the stored entry `in_flight` so the queue lock can be released
+    /// across the (slow) Discord send without the entry being swept, drained,
+    /// evicted, or claimed by a second concurrent caller. The reservation is
+    /// resolved by [`settle`](Self::settle) on success or
+    /// [`release_reservation`](Self::release_reservation) /
+    /// [`record_partial`](Self::record_partial) on failure.
+    ///
+    /// A handle already in flight reports [`ClaimError::Unknown`] — the second
+    /// caller loses exactly as it would against a settled handle. Expiry is
+    /// still enforced at reserve time for entries not in flight.
+    pub fn reserve(&mut self, handle: &HoldHandle, now: Instant) -> Result<Held<T>, ClaimError<T>>
+    where
+        T: Clone,
+    {
+        match self.entries.get_mut(handle) {
+            None => Err(ClaimError::Unknown),
+            // Busy: a delivery is already in flight for this handle.
+            Some(entry) if entry.in_flight => Err(ClaimError::Unknown),
+            Some(entry) if entry.is_expired(now) => {
+                let entry = self
+                    .entries
+                    .remove(handle)
+                    .expect("entry present under held map key");
+                Err(ClaimError::Expired(Box::new(entry)))
+            }
+            Some(entry) => {
+                entry.in_flight = true;
+                Ok(entry.clone())
+            }
+        }
+    }
+
+    /// Clear the in-flight mark set by [`reserve`](Self::reserve), returning
+    /// the entry to the live pool for a later retry. No-op if the handle is
+    /// gone. Used when a delivery attempt fails with nothing recoverable to
+    /// resume from.
+    pub fn release_reservation(&mut self, handle: &HoldHandle) {
+        if let Some(entry) = self.entries.get_mut(handle) {
+            entry.in_flight = false;
+        }
+    }
+
+    /// Record a partial multi-chunk delivery so a retry resumes instead of
+    /// restarting: replace the payload with the undelivered `remainder`,
+    /// accumulate the `newly_sent` chunk IDs, preserve the `full_message` for
+    /// the eventual journal record (set once), and clear the in-flight mark.
+    /// No-op if the handle is gone.
+    pub fn record_partial(
+        &mut self,
+        handle: &HoldHandle,
+        remainder: T,
+        newly_sent: Vec<u64>,
+        full_message: String,
+    ) {
+        if let Some(entry) = self.entries.get_mut(handle) {
+            if entry.original_message.is_none() {
+                entry.original_message = Some(full_message);
+            }
+            entry.sent_ids.extend(newly_sent);
+            entry.payload = remainder;
+            entry.in_flight = false;
+        }
+    }
+
     /// Consume a handle after its payload was acted on. Returns the entry,
     /// or `None` if the handle was not live. After settling, the handle is
     /// dead: no claim, release, or rephrase can ever see it again.
@@ -200,14 +297,37 @@ impl<T> HoldQueue<T> {
         }
     }
 
-    /// Remove and return the entry closest to expiry, or `None` on an empty
-    /// queue. Capacity enforcement uses this: the entry nearest its deadline
-    /// is the one whose eviction forfeits the least remaining decision
-    /// window.
+    /// Refresh a live entry's expiry deadline. No-op if the handle is gone.
+    /// Used to grant a fresh decision window when a judged-clear rephrase
+    /// merely failed delivery — symmetric with the fresh TTL a re-bounce mints.
+    pub fn refresh_deadline(&mut self, handle: &HoldHandle, deadline: Instant) {
+        if let Some(entry) = self.entries.get_mut(handle) {
+            entry.deadline = deadline;
+        }
+    }
+
+    /// Record (once) the original text withdrawn when a rephrase replacement
+    /// was accepted, so a later resolution journals the (original, reason,
+    /// replacement) triple rather than losing the original. No-op if the
+    /// handle is gone or an original is already retained.
+    pub fn set_withdrawn_original(&mut self, handle: &HoldHandle, original: String) {
+        if let Some(entry) = self.entries.get_mut(handle)
+            && entry.withdrawn_original.is_none()
+        {
+            entry.withdrawn_original = Some(original);
+        }
+    }
+
+    /// Remove and return the entry closest to expiry, or `None` when no
+    /// evictable entry exists. In-flight entries are skipped — an entry mid
+    /// delivery is owned by its send and must not be evicted from under it.
+    /// Capacity enforcement uses this: the entry nearest its deadline is the
+    /// one whose eviction forfeits the least remaining decision window.
     pub fn evict_next_expiring(&mut self) -> Option<(HoldHandle, Held<T>)> {
         let handle = self
             .entries
             .iter()
+            .filter(|(_, e)| !e.in_flight)
             .min_by_key(|(_, e)| e.deadline)
             .map(|(h, _)| h.clone())?;
         let entry = self
@@ -217,12 +337,14 @@ impl<T> HoldQueue<T> {
         Some((handle, entry))
     }
 
-    /// Remove and return every entry past its deadline.
+    /// Remove and return every entry past its deadline. In-flight entries are
+    /// left in place: they are owned by their delivery, which settles or
+    /// releases the reservation itself.
     pub fn sweep_expired(&mut self, now: Instant) -> Vec<(HoldHandle, Held<T>)> {
         let expired: Vec<HoldHandle> = self
             .entries
             .iter()
-            .filter(|(_, e)| e.is_expired(now))
+            .filter(|(_, e)| !e.in_flight && e.is_expired(now))
             .map(|(h, _)| h.clone())
             .collect();
         expired
@@ -231,10 +353,22 @@ impl<T> HoldQueue<T> {
             .collect()
     }
 
-    /// Remove and return every entry, expired or not. Used at shutdown so
-    /// pending bounces are journaled as expired instead of vanishing.
+    /// Remove and return every entry not currently in flight, expired or not.
+    /// Used at shutdown so pending bounces are journaled as expired instead of
+    /// vanishing. In-flight entries are owned by their delivery task and are
+    /// skipped, so the drain can never double-journal an entry whose send is
+    /// about to settle it.
     pub fn drain(&mut self) -> Vec<(HoldHandle, Held<T>)> {
-        self.entries.drain().collect()
+        let handles: Vec<HoldHandle> = self
+            .entries
+            .iter()
+            .filter(|(_, e)| !e.in_flight)
+            .map(|(h, _)| h.clone())
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|h| self.entries.remove(&h).map(|e| (h, e)))
+            .collect()
     }
 
     /// Number of live entries.
@@ -435,6 +569,12 @@ mod tests {
         ReleaseOk(usize),
         /// Claim without settle — models a release attempt whose send fails.
         ReleaseFailed(usize),
+        /// Replace a live entry's payload — models a rephrase that shifted the
+        /// held text (v2 mutation).
+        UpdatePayload(usize),
+        /// Evict the entry nearest its deadline — models capacity enforcement
+        /// (v2 mutation).
+        Evict,
         Sweep,
         Advance(u64),
     }
@@ -444,17 +584,21 @@ mod tests {
             3 => Just(Op::Hold),
             3 => (0usize..12).prop_map(Op::ReleaseOk),
             2 => (0usize..12).prop_map(Op::ReleaseFailed),
+            2 => (0usize..12).prop_map(Op::UpdatePayload),
+            1 => Just(Op::Evict),
             1 => Just(Op::Sweep),
             3 => (1u64..400).prop_map(Op::Advance),
         ]
     }
 
     proptest! {
-        /// Under any interleaving of holds, release attempts, sweeps, and
-        /// clock advances: handles are unique, each handle produces at most
-        /// one successful release, nothing succeeds past its deadline, and a
-        /// successful release is never followed by another success or by a
-        /// live claim.
+        /// Under any interleaving of holds, release attempts, payload updates,
+        /// evictions, sweeps, and clock advances: handles are unique, each
+        /// handle produces at most one successful release, nothing succeeds
+        /// past its deadline, a successful release is never followed by another
+        /// success or a live claim, and entries are conserved — every minted
+        /// handle is either still in the queue or was removed by exactly one of
+        /// release/sweep/evict/expiry.
         #[test]
         fn queue_invariants_hold(ops in proptest::collection::vec(op_strategy(), 1..60)) {
             let base = Instant::now();
@@ -462,17 +606,26 @@ mod tests {
             let mut q: HoldQueue<u32> = HoldQueue::new();
             let mut minted: Vec<(HoldHandle, Instant)> = Vec::new();
             let mut released: Vec<bool> = Vec::new();
+            // Independent oracle: has this handle left the queue (by release,
+            // sweep, evict, or expiry-at-claim)? Conservation is checked at the
+            // end against the physical queue length.
+            let mut gone: Vec<bool> = Vec::new();
+            // Shadow of the current payload for each still-present handle.
+            let mut payload: Vec<u32> = Vec::new();
 
             for op in ops {
                 match op {
                     Op::Hold => {
-                        let handle = q.hold(minted.len() as u32, reason(), None, TTL, now);
+                        let val = minted.len() as u32;
+                        let handle = q.hold(val, reason(), None, TTL, now);
                         prop_assert!(
                             !minted.iter().any(|(h, _)| *h == handle),
                             "minted handles must be unique"
                         );
                         minted.push((handle, now + TTL));
                         released.push(false);
+                        gone.push(false);
+                        payload.push(val);
                     }
                     Op::ReleaseOk(i) | Op::ReleaseFailed(i) if i < minted.len() => {
                         let settle = matches!(op, Op::ReleaseOk(_));
@@ -481,30 +634,58 @@ mod tests {
                             Ok(entry) => {
                                 prop_assert!(now < deadline, "claim must not succeed past deadline");
                                 prop_assert!(!released[i], "released handle must never be claimable");
-                                prop_assert_eq!(entry.payload, i as u32, "payload follows its handle");
+                                prop_assert_eq!(entry.payload, payload[i], "payload follows its handle");
                                 if settle {
                                     prop_assert!(q.settle(&handle).is_some());
                                     released[i] = true;
+                                    gone[i] = true;
                                 }
                             }
                             Err(ClaimError::Expired(_)) => {
                                 prop_assert!(now >= deadline, "expiry only at or past deadline");
                                 prop_assert!(!released[i], "released handles are Unknown, not Expired");
+                                gone[i] = true;
                             }
                             Err(ClaimError::Unknown) => {
                                 prop_assert!(
-                                    released[i] || now >= deadline,
+                                    gone[i] || now >= deadline,
                                     "live unreleased handle within deadline must be claimable"
                                 );
                             }
                         }
                     }
                     Op::ReleaseOk(_) | Op::ReleaseFailed(_) => {}
+                    Op::UpdatePayload(i) if i < minted.len() => {
+                        let handle = minted[i].0.clone();
+                        let new_val = 1000 + i as u32;
+                        let updated = q.update_payload(&handle, new_val);
+                        // update_payload uses the map directly and ignores the
+                        // deadline, so it succeeds iff the entry has not yet
+                        // been removed (an expired-but-unswept entry is still
+                        // physically present and updatable).
+                        prop_assert_eq!(
+                            updated, !gone[i],
+                            "update_payload succeeds iff the handle is still in the map"
+                        );
+                        if updated {
+                            payload[i] = new_val;
+                        }
+                    }
+                    Op::UpdatePayload(_) => {}
+                    Op::Evict => {
+                        if let Some((handle, _)) = q.evict_next_expiring() {
+                            let idx = minted.iter().position(|(h, _)| *h == handle).unwrap();
+                            prop_assert!(!released[idx], "evict must never take a released handle");
+                            prop_assert!(!gone[idx], "evict must never take an already-removed handle");
+                            gone[idx] = true;
+                        }
+                    }
                     Op::Sweep => {
                         for (handle, entry) in q.sweep_expired(now) {
                             prop_assert!(entry.is_expired(now));
                             let idx = minted.iter().position(|(h, _)| *h == handle).unwrap();
                             prop_assert!(!released[idx], "sweep must never evict a released handle");
+                            gone[idx] = true;
                         }
                     }
                     Op::Advance(secs) => {
@@ -513,6 +694,14 @@ mod tests {
                 }
             }
 
+            // Conservation: the physical queue holds exactly the minted handles
+            // that have not left it.
+            let still_present = gone.iter().filter(|g| !**g).count();
+            prop_assert_eq!(
+                q.len(),
+                still_present,
+                "queue length must equal minted handles that never left"
+            );
             let release_count = released.iter().filter(|r| **r).count();
             prop_assert!(release_count <= minted.len());
         }

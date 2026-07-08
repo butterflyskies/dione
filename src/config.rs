@@ -1025,8 +1025,14 @@ impl LoadedConfig {
     }
 
     /// How long a message bounced by the contradictionary stays claimable.
+    ///
+    /// Clamped to a sane ceiling (24h): a hold queue is a short decision
+    /// window, and an absurd `hold_ttl_secs` (billions of years) would
+    /// otherwise overflow `Instant + ttl` at the first bounce. The queue also
+    /// saturates the deadline defensively, so this is the primary guard.
     pub fn no_rly_hold_ttl(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(self.raw.contradictionary.hold_ttl_secs)
+        const MAX_HOLD_TTL_SECS: u64 = 24 * 60 * 60;
+        std::time::Duration::from_secs(self.raw.contradictionary.hold_ttl_secs.min(MAX_HOLD_TTL_SECS))
     }
 
     /// Cap on simultaneously held bounced messages (never below 1).
