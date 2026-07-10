@@ -6,6 +6,7 @@
 //! only up to the gate-rejection path.
 
 use dione::{
+    codex::TransportMode,
     discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
     mcp::server::{DioneServer, test_helpers},
     queue::AccessQueue,
@@ -76,6 +77,8 @@ fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
         notification_tx: tx,
         discord_cmd_tx: None,
         trace_controller: TraceLevelController::noop(),
+        mode: TransportMode::ClaudeCode,
+        codex_event_tx: None,
     }
 }
 
@@ -116,6 +119,13 @@ async fn test_initialize_returns_capabilities() {
         resp.get("protocolVersion").is_some(),
         "initialize response must include protocolVersion"
     );
+}
+
+#[test]
+fn test_codex_initialize_omits_claude_experimental_capabilities() {
+    let response = test_helpers::get_codex_initialize_response();
+    assert!(response["capabilities"].get("tools").is_some());
+    assert!(response["capabilities"].get("experimental").is_none());
 }
 
 #[tokio::test]

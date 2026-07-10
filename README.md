@@ -1,11 +1,12 @@
 # Dione
 
-A Rust MCP channel server that bridges Discord to [Claude Code](https://claude.ai/code).
+A Rust MCP channel server that bridges Discord to Claude Code or
+[Codex](https://developers.openai.com/codex/).
 
 Dione connects to the Discord gateway, gates access, and exposes tools for
-Claude to interact with Discord — replying, reacting, fetching history,
-managing channels, and more. Claude Code provides inference; Dione provides
-the Discord bridge.
+an agent to interact with Discord — replying, reacting, fetching history,
+managing channels, and more. The agent provides inference; Dione provides the
+Discord bridge.
 
 ## Quick start
 
@@ -28,16 +29,50 @@ EOF
 claude --channels dione
 ```
 
+### Codex mode
+
+Codex does not wake an idle thread for unsolicited MCP notifications. Dione's
+Codex transport uses the app-server control socket instead: every accepted
+Discord event is persisted, then submitted as a new turn to the current Codex
+thread. No `wait_for_push` call or polling loop is involved.
+
+Configure Dione as a Codex MCP server with `--mode codex`, and run Codex through
+its managed app-server daemon:
+
+```bash
+codex mcp add dione -- dione --mode codex
+codex app-server daemon bootstrap
+codex app-server daemon start
+```
+
+Dione uses `CODEX_THREAD_ID` when inherited. Managed app-server starts shared
+MCP servers before a thread exists, so Dione otherwise discovers loaded threads
+when an event arrives and selects the first one returned by app-server. If you
+need deterministic routing among several active threads, pass
+`--codex-thread-id` explicitly. Dione connects to
+`$CODEX_HOME/app-server-control/app-server-control.sock` (or
+`~/.codex/app-server-control/app-server-control.sock`):
+
+```bash
+dione --mode codex \
+  --codex-thread-id 019f... \
+  --codex-app-server-socket /path/to/app-server.sock
+```
+
+`CODEX_APP_SERVER_SOCKET` is also accepted. Pending events live in
+`$DIONE_STATE_DIR/codex-inbox.json` and use at-least-once delivery: a failed
+wakeup stays queued and retries with bounded exponential backoff.
+
 ## What it does
 
-Dione is an MCP server (stdio transport) that Claude Code spawns via
-`--channels`. It:
+Dione is an MCP server (stdio transport) spawned by Claude Code or Codex. It:
 
 - Connects to Discord and listens for messages, reactions, and interactions
 - Gates access: only configured users/channels reach Claude
 - Queues messages from unknown senders for admin review
 - Exposes 21 tools for Claude to interact with Discord
 - Relays Claude Code permission prompts to admin via Discord buttons
+- Wakes idle Codex threads through app-server with a durable local inbox
 
 ## Tools
 

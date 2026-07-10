@@ -147,10 +147,10 @@ src/
 ### System Context
 
 Dione sits between two fundamentally different trust domains: Discord
-(untrusted public users) and Claude Code (trusted local process). The MCP
-stdio transport means Dione is spawned as a subprocess of Claude Code, making
-the trust relationship directional — Claude Code controls Dione's lifecycle,
-but Dione controls what Discord input reaches Claude.
+(untrusted public users) and the local agent harness (trusted local process).
+Claude Code consumes server-initiated MCP notifications directly. Codex mode
+persists events to `codex-inbox.json` and submits them to the spawning thread
+through the app-server control socket; MCP remains the tool-call path.
 
 ```mermaid
 C4Context

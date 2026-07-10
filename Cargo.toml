@@ -4,17 +4,17 @@ version = "0.19.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
-description = "Discord MCP channel server for Claude Code"
+description = "Discord MCP channel server for Claude Code and Codex"
 repository = "https://github.com/butterflyskies/dione"
 readme = "README.md"
-keywords = ["discord", "mcp", "claude-code", "bot", "channel"]
+keywords = ["discord", "mcp", "claude-code", "codex", "bot"]
 categories = ["command-line-utilities"]
 
 [dependencies]
 arc-swap = "1"
 clap = { version = "4", features = ["derive"] }
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "http", "rustls_backend", "cache"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "fs", "io-util", "io-std", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "fs", "io-util", "io-std", "net", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

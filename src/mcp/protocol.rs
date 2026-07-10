@@ -3,18 +3,23 @@
 use serde_json::{Value, json};
 
 use super::tools::bot_state::{ActivityType, OnlineStatus};
+use crate::codex::TransportMode;
 
 /// Build the MCP `initialize` response.
-pub(crate) fn initialize_response() -> Value {
-    json!({
-        "protocolVersion": "2024-11-05",
-        "capabilities": {
+pub(crate) fn initialize_response(mode: TransportMode) -> Value {
+    let capabilities = match mode {
+        TransportMode::ClaudeCode => json!({
             "tools": {},
             "experimental": {
                 "claude/channel": {},
                 "claude/channel/permission": {},
             }
-        },
+        }),
+        TransportMode::Codex => json!({ "tools": {} }),
+    };
+    json!({
+        "protocolVersion": "2024-11-05",
+        "capabilities": capabilities,
         "serverInfo": {
             "name": "dione",
             "version": env!("CARGO_PKG_VERSION"),

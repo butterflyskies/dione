@@ -14,6 +14,7 @@
 pub use crate::tracing_channel::TraceLevelController;
 use crate::{
     coalesce::{CoalesceResult, coalesce},
+    codex::{CodexEventSender, TransportMode},
     delivery_buffer::{BufferResult, DeliveryBuffer},
     discord::events::{MessageEvent, NotificationEvent},
     mcp::{
@@ -54,6 +55,8 @@ pub struct DioneServer {
     pub notification_tx: mpsc::Sender<Value>,
     pub discord_cmd_tx: Option<mpsc::Sender<DiscordCommand>>,
     pub trace_controller: TraceLevelController,
+    pub mode: TransportMode,
+    pub codex_event_tx: Option<CodexEventSender>,
 }
 
 // ── Context factory methods ───────────────────────────────────────────────────
@@ -140,7 +143,9 @@ pub async fn run(
 
     // Notification forwarding task.
     // Exits on cancellation or when the event channel closes.
-    let stdout_notif = stdout.clone();
+    let notification_sink =
+        NotificationSink::new(server.mode, stdout.clone(), server.codex_event_tx.clone())
+            .map_err(std::io::Error::other)?;
     let cancel_notif = cancel.clone();
     let notif_task = tokio::spawn(async move {
         let mut rx = event_rx;
@@ -169,7 +174,7 @@ pub async fn run(
                 } => {
                     let now = tokio::time::Instant::now();
                     let flushed = delivery_buffer.flush_ready(now);
-                    deliver_flushed(&stdout_notif, flushed, tz).await;
+                    deliver_flushed(&notification_sink, flushed, tz).await;
                 }
 
                 // New event arrives from Discord.
@@ -228,7 +233,7 @@ pub async fn run(
                     match delivery_buffer.buffer_event(event, delay_ms) {
                         BufferResult::Immediate(event) => {
                             let notification = (*event).into_notification();
-                            write_line(&stdout_notif, &notification).await;
+                            notification_sink.deliver(&notification).await;
                         }
                         BufferResult::Buffered => {
                             // Will be flushed when the deadline fires.
@@ -247,7 +252,7 @@ pub async fn run(
 
         // Channel closed — flush any remaining buffered events.
         let remaining = delivery_buffer.flush_all();
-        deliver_flushed(&stdout_notif, remaining, tz).await;
+        deliver_flushed(&notification_sink, remaining, tz).await;
     });
 
     // Main request loop.
@@ -338,7 +343,7 @@ async fn handle_request(server: &DioneServer, req: Value) -> Option<Value> {
 async fn dispatch(server: &DioneServer, method: &str, params: Value) -> Result<Value, String> {
     match method {
         // ── MCP lifecycle ─────────────────────────────────────────────────────
-        "initialize" => Ok(initialize_response()),
+        "initialize" => Ok(initialize_response(server.mode)),
         "notifications/initialized" => Ok(json!({})),
 
         // ── Tool discovery ────────────────────────────────────────────────────
@@ -355,7 +360,9 @@ async fn dispatch(server: &DioneServer, method: &str, params: Value) -> Result<V
         }
 
         // ── Permission relay (inbound from Claude Code) ──────────────────────
-        "notifications/claude/channel/permission_request" => {
+        "notifications/claude/channel/permission_request"
+            if server.mode == TransportMode::ClaudeCode =>
+        {
             let request_id = params
                 .get("request_id")
                 .and_then(Value::as_str)
@@ -403,6 +410,40 @@ async fn dispatch(server: &DioneServer, method: &str, params: Value) -> Result<V
 
 // ── I/O helpers ───────────────────────────────────────────────────────────────
 
+#[derive(Clone)]
+enum NotificationSink {
+    ClaudeCode(Arc<Mutex<tokio::io::Stdout>>),
+    Codex(CodexEventSender),
+}
+
+impl NotificationSink {
+    fn new(
+        mode: TransportMode,
+        stdout: Arc<Mutex<tokio::io::Stdout>>,
+        codex_event_tx: Option<CodexEventSender>,
+    ) -> Result<Self, &'static str> {
+        match mode {
+            // Claude Code must always retain the original MCP stdout path,
+            // even if a stray Codex sender is present in the server fixture.
+            TransportMode::ClaudeCode => Ok(Self::ClaudeCode(stdout)),
+            TransportMode::Codex => codex_event_tx
+                .map(Self::Codex)
+                .ok_or("Codex mode requires a Codex delivery worker"),
+        }
+    }
+
+    async fn deliver(&self, value: &Value) {
+        match self {
+            Self::ClaudeCode(stdout) => write_line(stdout, value).await,
+            Self::Codex(tx) => {
+                if let Err(error) = tx.persist(value.clone()).await {
+                    tracing::warn!(error = %error, "failed to persist Codex event");
+                }
+            }
+        }
+    }
+}
+
 async fn write_line(stdout: &Arc<Mutex<tokio::io::Stdout>>, value: &Value) {
     let mut line = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string());
     line.push('\n');
@@ -423,7 +464,7 @@ async fn write_line(stdout: &Arc<Mutex<tokio::io::Stdout>>, value: &Value) {
 /// are coalesced into a single batched notification so the LLM receives one
 /// prompt injection per batch window instead of N.
 async fn deliver_flushed(
-    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    sink: &NotificationSink,
     events: Vec<NotificationEvent>,
     tz: Option<chrono_tz::Tz>,
 ) {
@@ -436,14 +477,14 @@ async fn deliver_flushed(
     match coalesce(events, tz) {
         Some(CoalesceResult::Single(event)) => {
             let notification = event.into_notification();
-            write_line(stdout, &notification).await;
+            sink.deliver(&notification).await;
         }
         Some(CoalesceResult::Coalesced(notification)) => {
             tracing::debug!(
                 event_count,
                 "coalesced {event_count} events into single delivery"
             );
-            write_line(stdout, &notification).await;
+            sink.deliver(&notification).await;
         }
         None => {
             // Empty — nothing to deliver.
@@ -491,7 +532,12 @@ pub mod test_helpers {
 
     /// Exposes `initialize_response` for unit testing the handshake.
     pub fn get_initialize_response() -> Value {
-        crate::mcp::protocol::initialize_response()
+        crate::mcp::protocol::initialize_response(TransportMode::ClaudeCode)
+    }
+
+    /// Exposes the Codex initialize response for protocol tests.
+    pub fn get_codex_initialize_response() -> Value {
+        crate::mcp::protocol::initialize_response(TransportMode::Codex)
     }
 
     /// Exposes `handle_request` for unit testing request dispatch.
@@ -519,6 +565,40 @@ mod tests {
             ..Default::default()
         });
         LoadedConfig::from_raw(raw)
+    }
+
+    #[test]
+    fn claude_code_mode_always_selects_mcp_stdout() {
+        let (codex_tx, _codex_rx) = crate::codex::event_channel(1);
+        let sink = NotificationSink::new(
+            TransportMode::ClaudeCode,
+            Arc::new(Mutex::new(tokio::io::stdout())),
+            Some(codex_tx),
+        )
+        .unwrap();
+        assert!(matches!(sink, NotificationSink::ClaudeCode(_)));
+    }
+
+    #[test]
+    fn codex_mode_requires_durable_delivery_worker() {
+        let result = NotificationSink::new(
+            TransportMode::Codex,
+            Arc::new(Mutex::new(tokio::io::stdout())),
+            None,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn codex_mode_selects_durable_event_sender() {
+        let (codex_tx, _codex_rx) = crate::codex::event_channel(1);
+        let sink = NotificationSink::new(
+            TransportMode::Codex,
+            Arc::new(Mutex::new(tokio::io::stdout())),
+            Some(codex_tx),
+        )
+        .unwrap();
+        assert!(matches!(sink, NotificationSink::Codex(_)));
     }
 
     fn config_with_global_delay(delay_ms: u64) -> LoadedConfig {
