@@ -149,8 +149,11 @@ src/
 Dione sits between two fundamentally different trust domains: Discord
 (untrusted public users) and the local agent harness (trusted local process).
 Claude Code consumes server-initiated MCP notifications directly. Codex mode
-persists events to `codex-inbox.json` and submits them to the spawning thread
-through the app-server control socket; MCP remains the tool-call path.
+persists structured events to `codex-inbox.json`; a registered conversation
+leases them through `next_event` and removes them with `ack_event`. Consumer
+handoff is explicit, leases expire for redelivery, and a lifetime filesystem
+lock enforces one Dione owner per Codex state directory. Dione does not select a
+Codex model or independently start an inference turn.
 
 ```mermaid
 C4Context

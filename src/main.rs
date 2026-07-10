@@ -1,22 +1,23 @@
-use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
-use std::time::Duration;
-
 use camino::Utf8PathBuf;
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr};
-use tokio::sync::{RwLock, mpsc};
-use tokio::time::interval;
+use dione::{
+    codex::{CodexEventQueue, TransportMode},
+    discord::events::{Handler, NotificationEvent},
+    mcp::server::DioneServer,
+    state::SharedState,
+    tracing_channel::{TraceLevelController, TracingChannelLayer},
+};
+use std::{
+    sync::{Arc, atomic::AtomicU64},
+    time::Duration,
+};
+use tokio::{
+    sync::{RwLock, mpsc},
+    time::interval,
+};
 use tokio_util::sync::CancellationToken;
-use tracing_subscriber::EnvFilter;
-use tracing_subscriber::prelude::*;
-use tracing_subscriber::reload;
-
-use dione::codex::{CodexDeliveryConfig, TransportMode};
-use dione::discord::events::{Handler, NotificationEvent};
-use dione::mcp::server::DioneServer;
-use dione::state::SharedState;
-use dione::tracing_channel::{TraceLevelController, TracingChannelLayer};
+use tracing_subscriber::{EnvFilter, prelude::*, reload};
 
 /// Discord MCP channel server for Claude Code and Codex.
 #[derive(Parser)]
@@ -33,14 +34,6 @@ struct Cli {
     /// Agent harness transport for inbound Discord events
     #[arg(long, value_enum, default_value_t = TransportMode::ClaudeCode)]
     mode: TransportMode,
-
-    /// Codex app-server Unix socket (defaults to the managed daemon socket)
-    #[arg(long)]
-    codex_app_server_socket: Option<Utf8PathBuf>,
-
-    /// Codex thread to wake (defaults to CODEX_THREAD_ID)
-    #[arg(long)]
-    codex_thread_id: Option<String>,
 }
 
 #[tokio::main]
@@ -106,26 +99,12 @@ async fn main() -> Result<()> {
     // MCP notification channel (for server-initiated writes, currently unused beyond event_rx).
     let (notif_tx, _notif_rx) = mpsc::channel::<serde_json::Value>(64);
 
-    // Codex delivery worker. The worker persists events before attempting to
-    // wake the app-server thread, so a disconnected Codex does not lose them.
-    let (codex_event_tx, codex_handle) = if cli.mode == TransportMode::Codex {
-        let codex_config =
-            CodexDeliveryConfig::resolve(cli.codex_app_server_socket, cli.codex_thread_id)
-                .wrap_err("failed to configure Codex transport")?;
-        let (tx, rx) = dione::codex::event_channel(256);
-        let worker_state_dir = state_dir.clone();
-        let worker_cancel = cancel.clone();
-        let handle = tokio::spawn(async move {
-            if let Err(error) =
-                dione::codex::run_delivery_worker(worker_state_dir, codex_config, rx, worker_cancel)
-                    .await
-            {
-                tracing::error!(error = %error, "Codex delivery worker exited");
-            }
-        });
-        (Some(tx), Some(handle))
+    // Codex owns one durable pull queue. The lifetime file lock prevents two
+    // stdio-spawned Dione processes from corrupting the same inbox.
+    let codex_queue = if cli.mode == TransportMode::Codex {
+        Some(CodexEventQueue::load(&state_dir).wrap_err("failed to open Codex event queue")?)
     } else {
-        (None, None)
+        None
     };
 
     // MCP → Discord gateway command channel (for presence updates, etc.).
@@ -159,7 +138,7 @@ async fn main() -> Result<()> {
         discord_cmd_tx: Some(discord_cmd_tx),
         trace_controller,
         mode: cli.mode,
-        codex_event_tx,
+        codex_queue,
     };
 
     // Spawn the tracing-channel forwarder: converts tracing events into NotificationEvents.
@@ -223,9 +202,6 @@ async fn main() -> Result<()> {
     let _ = tokio::time::timeout(Duration::from_secs(2), async {
         discord_handle.abort();
         let _ = mcp_handle.await;
-        if let Some(codex_handle) = codex_handle {
-            let _ = codex_handle.await;
-        }
     })
     .await;
 

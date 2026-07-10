@@ -78,7 +78,7 @@ fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
         discord_cmd_tx: None,
         trace_controller: TraceLevelController::noop(),
         mode: TransportMode::ClaudeCode,
-        codex_event_tx: None,
+        codex_queue: None,
     }
 }
 
