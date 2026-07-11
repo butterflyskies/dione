@@ -663,7 +663,13 @@ async fn test_bind_codex_thread_updates_live_binding() {
         .unwrap();
 
     assert!(response.get("error").is_none());
-    assert_eq!(binding_rx.borrow().as_deref(), Some(thread_id));
+    assert_eq!(
+        binding_rx
+            .borrow()
+            .as_ref()
+            .map(dione::codex::CodexThreadId::as_str),
+        Some(thread_id)
+    );
 }
 
 // ── Notification format tests ─────────────────────────────────────────────────

@@ -42,7 +42,7 @@ struct Cli {
 
     /// Exact Codex thread to receive Discord events (defaults to CODEX_THREAD_ID)
     #[arg(long)]
-    codex_thread_id: Option<String>,
+    codex_thread_id: Option<dione::codex::CodexThreadId>,
 }
 
 #[tokio::main]
@@ -115,10 +115,14 @@ async fn main() -> Result<()> {
             CodexEventQueue::load(&state_dir).wrap_err("failed to open Codex event queue")?;
         let delivery_config = CodexDeliveryConfig::resolve(cli.codex_app_server_socket)
             .wrap_err("failed to configure Codex live delivery")?;
-        let initial_thread = cli
-            .codex_thread_id
-            .or_else(|| env::var("CODEX_THREAD_ID").ok())
-            .filter(|value| !value.trim().is_empty());
+        let initial_thread = match cli.codex_thread_id {
+            Some(thread_id) => Some(thread_id),
+            None => env::var("CODEX_THREAD_ID")
+                .ok()
+                .map(|value| value.parse())
+                .transpose()
+                .wrap_err("invalid CODEX_THREAD_ID")?,
+        };
         codex_queue
             .bind_live_thread(initial_thread.clone())
             .await

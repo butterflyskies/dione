@@ -1,4 +1,4 @@
-use super::{CodexEventQueue, CodexQueueError, LeasedEvent};
+use super::{CodexEventQueue, CodexQueueError, CodexThreadId, LeasedEvent};
 use camino::Utf8PathBuf;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -97,13 +97,13 @@ struct AppServerClient {
     stream: WebSocketStream<UnixStream>,
     next_request_id: u64,
     config: CodexDeliveryConfig,
-    thread_id: String,
+    thread_id: CodexThreadId,
 }
 
 impl AppServerClient {
     async fn connect(
         config: CodexDeliveryConfig,
-        thread_id: String,
+        thread_id: CodexThreadId,
     ) -> Result<Self, CodexDeliveryError> {
         let unix_stream = UnixStream::connect(config.socket_path.as_std_path())
             .await
@@ -287,7 +287,7 @@ fn event_input(event: &LeasedEvent) -> Value {
 pub async fn run_delivery_worker(
     queue: CodexEventQueue,
     config: CodexDeliveryConfig,
-    mut thread_binding: tokio::sync::watch::Receiver<Option<String>>,
+    mut thread_binding: tokio::sync::watch::Receiver<Option<CodexThreadId>>,
     cancel: CancellationToken,
 ) -> Result<(), CodexDeliveryError> {
     let consumer_id = queue.register_live_consumer().await?;
@@ -337,7 +337,7 @@ pub async fn run_delivery_worker(
                 match connection {
                     Ok(connected) => client = Some(connected),
                     Err(error) => {
-                        tracing::warn!(event_id = event.event_id, error = %error, "failed to connect Codex live delivery");
+                        tracing::warn!(event_id = %event.event_id, error = %error, "failed to connect Codex live delivery");
                         wait_to_retry(&cancel, retry_delay).await;
                         retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
                         if cancel.is_cancelled() {
@@ -370,7 +370,7 @@ pub async fn run_delivery_worker(
                     break;
                 }
                 Err(error) => {
-                    tracing::warn!(event_id = event.event_id, error = %error, "failed to deliver live Codex event; retrying before later events");
+                    tracing::warn!(event_id = %event.event_id, error = %error, "failed to deliver live Codex event; retrying before later events");
                     client = None;
                     wait_to_retry(&cancel, retry_delay).await;
                     retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
@@ -394,7 +394,7 @@ async fn acknowledge_with_retry(
         match queue.acknowledge(consumer_id, &event.delivery_token).await {
             Ok(()) => return Ok(()),
             Err(error) => {
-                tracing::error!(event_id = event.event_id, error = %error, "failed to persist live Codex acknowledgement; retrying");
+                tracing::error!(event_id = %event.event_id, error = %error, "failed to persist live Codex acknowledgement; retrying");
                 wait_to_retry(cancel, delay).await;
                 if cancel.is_cancelled() {
                     return Ok(());
@@ -486,16 +486,17 @@ mod tests {
             request_timeout: Duration::from_secs(1),
         };
         let event = LeasedEvent {
-            event_id: 7,
+            event_id: crate::codex::EventId::new(7),
             delivery_token: DeliveryToken::parse("token-7").unwrap(),
             lease_expires_at: chrono::Utc::now(),
             consumer_id: ConsumerId::parse("consumer-7").unwrap(),
             event: json!({ "params": { "content": "ping" } }),
         };
 
-        let mut client = AppServerClient::connect(config, "thread-123".to_owned())
-            .await
-            .unwrap();
+        let mut client =
+            AppServerClient::connect(config, CodexThreadId::parse("thread-123").unwrap())
+                .await
+                .unwrap();
         client.deliver(&event).await.unwrap();
 
         let received = server.await.unwrap();
@@ -570,12 +571,12 @@ mod tests {
 
         let queue = CodexEventQueue::load(&state_path).unwrap();
         queue
-            .bind_live_thread(Some("thread-order".to_owned()))
+            .bind_live_thread(Some(CodexThreadId::parse("thread-order").unwrap()))
             .await
             .unwrap();
         let cancel = CancellationToken::new();
         let (_binding_tx, binding_rx) =
-            tokio::sync::watch::channel(Some("thread-order".to_owned()));
+            tokio::sync::watch::channel(Some(CodexThreadId::parse("thread-order").unwrap()));
         let worker = tokio::spawn(run_delivery_worker(
             queue.clone(),
             CodexDeliveryConfig {
@@ -630,9 +631,10 @@ mod tests {
             return;
         };
         let config = CodexDeliveryConfig::resolve(None).unwrap();
-        let mut client = AppServerClient::connect(config, thread_id.clone())
-            .await
-            .unwrap();
+        let mut client =
+            AppServerClient::connect(config, CodexThreadId::parse(&thread_id).unwrap())
+                .await
+                .unwrap();
         let result = client
             .request(
                 "thread/read",

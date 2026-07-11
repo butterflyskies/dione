@@ -57,7 +57,7 @@ pub struct DioneServer {
     pub trace_controller: TraceLevelController,
     pub mode: TransportMode,
     pub codex_queue: Option<CodexEventQueue>,
-    pub codex_thread_binding: Option<watch::Sender<Option<String>>>,
+    pub codex_thread_binding: Option<watch::Sender<Option<crate::codex::CodexThreadId>>>,
 }
 
 // ── Context factory methods ───────────────────────────────────────────────────

@@ -7,8 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Development builds from this section report prerelease versions beginning with
-`0.20.0-dev.2` so installed diagnostics are distinguishable from v0.19.0.
+## [0.20.0] - 2026-07-11
 
 ### Added
 - Native Codex transport via `--mode codex`. Dione persists inbound Discord

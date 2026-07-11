@@ -16,6 +16,7 @@ use clap::ValueEnum;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use serenity::model::id::MessageId;
 use std::{
     collections::{HashSet, VecDeque},
     fs::{File, OpenOptions},
@@ -61,8 +62,100 @@ impl DeliveryToken {
         Ok(Self(value.to_owned()))
     }
 
-    fn new(event_id: u64, generation: u64) -> Self {
+    fn new(event_id: EventId, generation: u64) -> Self {
         Self(format!("dione-{event_id}-{generation}"))
+    }
+}
+
+/// Monotonic identifier for one event in the durable Codex inbox.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct EventId(u64);
+
+impl EventId {
+    pub fn new(value: u64) -> Self {
+        Self(value)
+    }
+}
+
+impl std::fmt::Display for EventId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// Exact Codex conversation receiving live inbound delivery.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(transparent)]
+pub struct CodexThreadId(String);
+
+impl CodexThreadId {
+    pub fn parse(value: &str) -> Result<Self, CodexQueueError> {
+        let value = value.trim();
+        if value.is_empty()
+            || value.len() > 128
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(CodexQueueError::InvalidThreadId);
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::str::FromStr for CodexThreadId {
+    type Err = CodexQueueError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse(value)
+    }
+}
+
+impl std::fmt::Display for CodexThreadId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl<'de> Deserialize<'de> for CodexThreadId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Discord snowflake cached for durable event deduplication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct DiscordMessageId(MessageId);
+
+impl Serialize for DiscordMessageId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for DiscordMessageId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        let raw = value.parse::<u64>().map_err(serde::de::Error::custom)?;
+        let id = crate::mcp::ids::Snowflake::new(raw)
+            .map(crate::mcp::ids::Snowflake::message)
+            .ok_or_else(|| serde::de::Error::custom("Discord message ID must be non-zero"))?;
+        Ok(Self(id))
     }
 }
 
@@ -107,15 +200,15 @@ struct Lease {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct QueuedEvent {
-    id: u64,
+    id: EventId,
     payload: Value,
     #[serde(default)]
-    discord_message_id: Option<String>,
+    discord_message_id: Option<DiscordMessageId>,
     #[serde(default)]
     consumer_id: Option<ConsumerId>,
     /// Exact live thread binding at ingress. Pull consumers leave this unset.
     #[serde(default)]
-    live_thread_id: Option<String>,
+    live_thread_id: Option<CodexThreadId>,
     #[serde(default)]
     lease: Option<Lease>,
 }
@@ -130,11 +223,11 @@ struct InboxState {
     #[serde(default)]
     primary_consumer: Option<ConsumerId>,
     #[serde(default)]
-    live_thread_id: Option<String>,
+    live_thread_id: Option<CodexThreadId>,
     #[serde(default)]
     consumers: Vec<ConsumerRegistration>,
     #[serde(default)]
-    processed_message_ids: VecDeque<String>,
+    processed_message_ids: VecDeque<DiscordMessageId>,
     entries: VecDeque<QueuedEvent>,
 }
 
@@ -143,8 +236,8 @@ struct DurableInbox {
     temporary_path: Utf8PathBuf,
     _lock_file: File,
     state: InboxState,
-    message_ids: HashSet<String>,
-    processed_message_ids: HashSet<String>,
+    message_ids: HashSet<DiscordMessageId>,
+    processed_message_ids: HashSet<DiscordMessageId>,
 }
 
 /// A single-owner, durable queue shared by Discord ingress and MCP pull tools.
@@ -157,7 +250,7 @@ pub struct CodexEventQueue {
 /// Event returned to a Codex consumer under a time-bounded lease.
 #[derive(Debug, Clone, Serialize)]
 pub struct LeasedEvent {
-    pub event_id: u64,
+    pub event_id: EventId,
     pub delivery_token: DeliveryToken,
     pub lease_expires_at: DateTime<Utc>,
     pub consumer_id: ConsumerId,
@@ -170,7 +263,7 @@ pub struct LeasedEvent {
 pub struct QueueStatus {
     pub queued: usize,
     pub leased: usize,
-    pub next_event_id: u64,
+    pub next_event_id: EventId,
     pub primary_consumer: Option<ConsumerId>,
     pub consumers: Vec<ConsumerStatus>,
     pub unassigned: usize,
@@ -220,6 +313,8 @@ pub enum CodexQueueError {
     InvalidDeliveryToken,
     #[error("invalid consumer id")]
     InvalidConsumerId,
+    #[error("invalid Codex thread id")]
+    InvalidThreadId,
     #[error("consumer is unknown or expired")]
     UnknownConsumer,
     #[error("consumer is not the active primary")]
@@ -281,7 +376,7 @@ impl DurableInbox {
         let message_ids = state
             .entries
             .iter()
-            .filter_map(|event| event.discord_message_id.clone())
+            .filter_map(|event| event.discord_message_id)
             .collect();
         let processed_message_ids = state.processed_message_ids.iter().cloned().collect();
         Ok(Self {
@@ -305,10 +400,10 @@ impl DurableInbox {
         }
 
         self.transaction(move |inbox| {
-            let id = inbox.state.next_id;
+            let id = EventId::new(inbox.state.next_id);
             inbox.state.next_id = inbox.state.next_id.saturating_add(1);
             if let Some(message_id) = &discord_message_id {
-                inbox.message_ids.insert(message_id.clone());
+                inbox.message_ids.insert(*message_id);
             }
             inbox.state.entries.push_back(QueuedEvent {
                 id,
@@ -327,7 +422,7 @@ impl DurableInbox {
         consumer_id: &ConsumerId,
         now: DateTime<Utc>,
         lease_duration: Duration,
-        live_thread_id: Option<&str>,
+        live_thread_id: Option<&CodexThreadId>,
     ) -> Result<Option<LeasedEvent>, CodexQueueError> {
         self.transaction(|inbox| {
             inbox.touch_consumer(consumer_id, now, DEFAULT_CONSUMER_TTL)?;
@@ -345,7 +440,7 @@ impl DurableInbox {
                 event.lease.is_none()
                     && event.consumer_id.as_ref() == Some(consumer_id)
                     && live_thread_id
-                        .is_none_or(|thread_id| event.live_thread_id.as_deref() == Some(thread_id))
+                        .is_none_or(|thread_id| event.live_thread_id.as_ref() == Some(thread_id))
             }) else {
                 return Ok(None);
             };
@@ -370,14 +465,17 @@ impl DurableInbox {
         })
     }
 
-    fn bind_live_thread(&mut self, thread_id: Option<String>) -> Result<(), CodexQueueError> {
+    fn bind_live_thread(
+        &mut self,
+        thread_id: Option<CodexThreadId>,
+    ) -> Result<(), CodexQueueError> {
         self.transaction(move |inbox| {
             inbox.state.live_thread_id = thread_id;
             Ok(())
         })
     }
 
-    fn live_event_thread_id(&self) -> Option<String> {
+    fn live_event_thread_id(&self) -> Option<CodexThreadId> {
         let primary = self.state.primary_consumer.as_ref()?;
         self.state
             .consumers
@@ -436,7 +534,7 @@ impl DurableInbox {
                         .is_some_and(|lease| lease.expires_at > now)
                 })
                 .count(),
-            next_event_id: self.state.next_id,
+            next_event_id: EventId::new(self.state.next_id),
             primary_consumer: primary_consumer.clone(),
             consumers: active_consumers
                 .into_iter()
@@ -642,8 +740,8 @@ impl DurableInbox {
         }
     }
 
-    fn remember_processed_message(&mut self, message_id: String) {
-        self.processed_message_ids.insert(message_id.clone());
+    fn remember_processed_message(&mut self, message_id: DiscordMessageId) {
+        self.processed_message_ids.insert(message_id);
         self.state.processed_message_ids.push_back(message_id);
         while self.state.processed_message_ids.len() > MAX_PROCESSED_MESSAGE_IDS {
             if let Some(expired) = self.state.processed_message_ids.pop_front() {
@@ -773,7 +871,7 @@ impl CodexEventQueue {
     pub(crate) async fn next_live_event(
         &self,
         consumer_id: &ConsumerId,
-        thread_id: &str,
+        thread_id: &CodexThreadId,
         wait: Duration,
         lease: Duration,
     ) -> Result<Option<LeasedEvent>, CodexQueueError> {
@@ -799,7 +897,10 @@ impl CodexEventQueue {
         }
     }
 
-    pub async fn bind_live_thread(&self, thread_id: Option<String>) -> Result<(), CodexQueueError> {
+    pub async fn bind_live_thread(
+        &self,
+        thread_id: Option<CodexThreadId>,
+    ) -> Result<(), CodexQueueError> {
         self.inbox.lock().await.bind_live_thread(thread_id)?;
         self.changed.notify_waiters();
         Ok(())
@@ -898,11 +999,14 @@ fn duration_delta(duration: Duration) -> TimeDelta {
     TimeDelta::from_std(duration).unwrap_or_else(|_| TimeDelta::hours(1))
 }
 
-fn discord_message_id(payload: &Value) -> Option<String> {
+fn discord_message_id(payload: &Value) -> Option<DiscordMessageId> {
     payload
         .pointer("/params/meta/message_id")
         .and_then(Value::as_str)
-        .map(str::to_owned)
+        .and_then(|value| value.parse::<u64>().ok())
+        .and_then(crate::mcp::ids::Snowflake::new)
+        .map(crate::mcp::ids::Snowflake::message)
+        .map(DiscordMessageId)
 }
 
 pub fn timeout_response() -> Value {
@@ -1011,13 +1115,33 @@ mod tests {
         )
         .unwrap();
         let queue = CodexEventQueue::load(&path).unwrap();
-        let consumer = primary_consumer(&queue).await;
-        let event = queue
-            .next_event(&consumer, Duration::ZERO, Duration::from_secs(60))
+        queue
+            .bind_live_thread(Some(CodexThreadId::parse("legacy-thread").unwrap()))
             .await
-            .unwrap()
             .unwrap();
-        assert_eq!(event.event_id, 1);
+        drop(queue);
+
+        let persisted: Value =
+            serde_json::from_slice(&std::fs::read(path.join(INBOX_FILE_NAME)).unwrap()).unwrap();
+        assert_eq!(persisted["entries"][0]["id"], 1);
+        assert_eq!(persisted["entries"][0]["discord_message_id"], "1");
+        assert_eq!(persisted["live_thread_id"], "legacy-thread");
+
+        let reloaded = CodexEventQueue::load(&path).unwrap();
+        let inbox = reloaded.inbox.lock().await;
+        assert_eq!(inbox.state.entries[0].id, EventId::new(1));
+        assert_eq!(
+            inbox.state.entries[0].discord_message_id,
+            Some(DiscordMessageId(MessageId::new(1)))
+        );
+        assert_eq!(
+            inbox
+                .state
+                .live_thread_id
+                .as_ref()
+                .map(CodexThreadId::as_str),
+            Some("legacy-thread")
+        );
     }
 
     #[tokio::test]
@@ -1166,27 +1290,37 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
         queue
-            .bind_live_thread(Some("thread-a".to_owned()))
+            .bind_live_thread(Some(CodexThreadId::parse("thread-a").unwrap()))
             .await
             .unwrap();
         let consumer = queue.register_live_consumer().await.unwrap();
         queue.enqueue(message("1", "for a")).await.unwrap();
 
         queue
-            .bind_live_thread(Some("thread-b".to_owned()))
+            .bind_live_thread(Some(CodexThreadId::parse("thread-b").unwrap()))
             .await
             .unwrap();
         queue.enqueue(message("2", "for b")).await.unwrap();
 
         let for_b = queue
-            .next_live_event(&consumer, "thread-b", Duration::ZERO, DEFAULT_LEASE)
+            .next_live_event(
+                &consumer,
+                &CodexThreadId::parse("thread-b").unwrap(),
+                Duration::ZERO,
+                DEFAULT_LEASE,
+            )
             .await
             .unwrap()
             .unwrap();
         assert_eq!(for_b.event["params"]["content"], "for b");
         assert!(
             queue
-                .next_live_event(&consumer, "thread-a", Duration::ZERO, DEFAULT_LEASE)
+                .next_live_event(
+                    &consumer,
+                    &CodexThreadId::parse("thread-a").unwrap(),
+                    Duration::ZERO,
+                    DEFAULT_LEASE,
+                )
                 .await
                 .unwrap()
                 .is_some()
@@ -1198,25 +1332,35 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
         queue
-            .bind_live_thread(Some("thread-a".to_owned()))
+            .bind_live_thread(Some(CodexThreadId::parse("thread-a").unwrap()))
             .await
             .unwrap();
         let consumer = queue.register_live_consumer().await.unwrap();
         queue.enqueue(message("1", "leased for a")).await.unwrap();
         let _leased = queue
-            .next_live_event(&consumer, "thread-a", Duration::ZERO, DEFAULT_LEASE)
+            .next_live_event(
+                &consumer,
+                &CodexThreadId::parse("thread-a").unwrap(),
+                Duration::ZERO,
+                DEFAULT_LEASE,
+            )
             .await
             .unwrap()
             .unwrap();
 
         queue
-            .bind_live_thread(Some("thread-b".to_owned()))
+            .bind_live_thread(Some(CodexThreadId::parse("thread-b").unwrap()))
             .await
             .unwrap();
 
         assert!(
             queue
-                .next_live_event(&consumer, "thread-b", Duration::ZERO, DEFAULT_LEASE)
+                .next_live_event(
+                    &consumer,
+                    &CodexThreadId::parse("thread-b").unwrap(),
+                    Duration::ZERO,
+                    DEFAULT_LEASE,
+                )
                 .await
                 .unwrap()
                 .is_none()
