@@ -79,6 +79,7 @@ fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
         trace_controller: TraceLevelController::noop(),
         mode: TransportMode::ClaudeCode,
         codex_queue: None,
+        codex_thread_binding: None,
     }
 }
 
@@ -636,6 +637,30 @@ async fn test_tools_call_list_access_requests_empty() {
         resp.get("error").is_none(),
         "list_access_requests should not error"
     );
+}
+
+#[tokio::test]
+async fn test_bind_codex_thread_updates_live_binding() {
+    let (_dir, state_dir) = temp_state_dir();
+    let mut server = make_server(&state_dir);
+    let (binding_tx, binding_rx) = tokio::sync::watch::channel(None);
+    server.mode = TransportMode::Codex;
+    server.codex_thread_binding = Some(binding_tx);
+    let thread_id = "019f4b14-ccc7-7db2-80c8-fe2b888c8844";
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": 71,
+        "method": "tools/call",
+        "params": {
+            "name": "bind_codex_thread",
+            "arguments": { "thread_id": thread_id }
+        }
+    });
+
+    let response = test_helpers::dispatch_request(&server, request).await.unwrap();
+
+    assert!(response.get("error").is_none());
+    assert_eq!(binding_rx.borrow().as_deref(), Some(thread_id));
 }
 
 // ── Notification format tests ─────────────────────────────────────────────────

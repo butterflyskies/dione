@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Development builds from this section report prerelease versions beginning with
+`0.20.0-dev.1` so installed diagnostics are distinguishable from v0.19.0.
+
 ### Added
 - Native Codex transport via `--mode codex`. Dione persists inbound Discord
-  events to `codex-inbox.json` and exposes structured lease/ack pull tools.
+  events to `codex-inbox.json`, delivers new events live to an exact Codex
+  thread through app-server WebSocket `turn/start`/`turn/steer`, and exposes
+  structured lease/ack pull tools. `bind_codex_thread` explicitly routes every
+  new, resumed, forked, or switched conversation without startup-time guessing.
   Codex conversations register as consumers; an explicit primary receives new
   events and may hand future delivery to another registered conversation.
   Expired leases are redelivered, Discord message IDs remain deduplicated after

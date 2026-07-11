@@ -372,6 +372,13 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
         && let Some(tools) = response["tools"].as_array_mut()
     {
         tools.extend([
+            tool("bind_codex_thread", "Bind live inbound Discord delivery to this exact Codex thread. Call once at startup and after resuming, forking, or switching conversations. Future events move to the new binding; old backlog is not replayed.", json!({
+                "type": "object",
+                "required": ["thread_id"],
+                "properties": {
+                    "thread_id": { "type": "string", "minLength": 1, "maxLength": 128, "description": "Exact current CODEX_THREAD_ID; Dione never guesses among loaded threads" }
+                }
+            })),
             tool("register_event_consumer", "Register this Codex conversation as an event consumer. A consumer may become primary only when no live primary exists; use handoff_event_consumer to switch deliberately.", json!({
                 "type": "object",
                 "required": ["label"],

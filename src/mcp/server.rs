@@ -40,7 +40,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    sync::{Mutex, mpsc},
+    sync::{Mutex, mpsc, watch},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -57,6 +57,7 @@ pub struct DioneServer {
     pub trace_controller: TraceLevelController,
     pub mode: TransportMode,
     pub codex_queue: Option<CodexEventQueue>,
+    pub codex_thread_binding: Option<watch::Sender<Option<String>>>,
 }
 
 // ── Context factory methods ───────────────────────────────────────────────────

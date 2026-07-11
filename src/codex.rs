@@ -1,9 +1,14 @@
-//! Durable pull delivery for Codex.
+//! Durable delivery for Codex.
 //!
 //! Codex cannot turn unsolicited MCP notifications into new turns. In Codex
-//! mode, Dione therefore persists accepted Discord events and exposes them
-//! through a blocking MCP tool. A consumer leases an event, handles it, then
-//! acknowledges the lease. Expired leases become eligible for redelivery.
+//! mode, Dione therefore persists accepted Discord events. Codex conversations
+//! may pull them explicitly, or a live app-server worker may inject them into
+//! one exact thread. Consumers lease an event, handle it, then acknowledge the
+//! lease. Expired leases become eligible for redelivery.
+
+mod app_server;
+
+pub use app_server::{CodexDeliveryConfig, CodexDeliveryError, run_delivery_worker};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::{DateTime, TimeDelta, Utc};
@@ -30,6 +35,7 @@ const DEFAULT_LEASE: Duration = Duration::from_secs(2 * 60);
 const MAX_CONSUMER_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const DEFAULT_CONSUMER_TTL: Duration = Duration::from_secs(15 * 60);
 const MAX_PROCESSED_MESSAGE_IDS: usize = 10_000;
+const LIVE_CONSUMER_LABEL: &str = "dione-live-app-server";
 
 /// Determines how inbound Discord events are delivered to an agent harness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
@@ -467,6 +473,45 @@ impl DurableInbox {
         })
     }
 
+    fn register_live_consumer(
+        &mut self,
+        now: DateTime<Utc>,
+    ) -> Result<ConsumerId, CodexQueueError> {
+        self.transaction(|inbox| {
+            if let Some(primary) = inbox.state.primary_consumer.clone()
+                && let Some(consumer) = inbox
+                    .state
+                    .consumers
+                    .iter_mut()
+                    .find(|consumer| consumer.id == primary)
+                && consumer.label == LIVE_CONSUMER_LABEL
+            {
+                // The inbox lock proves the previous Dione process is gone,
+                // so the live worker may resume its durable identity even
+                // after a long outage. Keeping the identity also keeps its
+                // already-routed events deliverable.
+                consumer.expires_at = now + duration_delta(MAX_CONSUMER_TTL);
+                return Ok(primary);
+            }
+            inbox.expire_consumers(now);
+            if inbox.state.primary_consumer.is_some() {
+                return Err(CodexQueueError::PrimaryConsumerExists);
+            }
+            let generation = inbox.state.next_consumer_generation;
+            inbox.state.next_consumer_generation = generation.saturating_add(1);
+            let consumer_id = ConsumerId::new(generation);
+            inbox.state.consumers.push(ConsumerRegistration {
+                id: consumer_id.clone(),
+                label: LIVE_CONSUMER_LABEL.to_owned(),
+                expires_at: now + duration_delta(MAX_CONSUMER_TTL),
+            });
+            // Existing unassigned/orphaned events are intentionally not moved.
+            // Enabling live delivery must not replay an arbitrary old backlog.
+            inbox.state.primary_consumer = Some(consumer_id.clone());
+            Ok(consumer_id)
+        })
+    }
+
     fn handoff(
         &mut self,
         from: &ConsumerId,
@@ -732,6 +777,16 @@ impl CodexEventQueue {
         )?;
         self.changed.notify_waiters();
         Ok(result)
+    }
+
+    pub(crate) async fn register_live_consumer(&self) -> Result<ConsumerId, CodexQueueError> {
+        let consumer_id = self
+            .inbox
+            .lock()
+            .await
+            .register_live_consumer(Utc::now())?;
+        self.changed.notify_waiters();
+        Ok(consumer_id)
     }
 
     pub async fn handoff(
@@ -1007,6 +1062,49 @@ mod tests {
             .unwrap();
         assert_eq!(claimed, 1);
         assert_ne!(first, second);
+    }
+
+    #[tokio::test]
+    async fn live_consumer_is_reused_after_process_restart() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+
+        let first = queue.register_live_consumer().await.unwrap();
+        let resumed = queue.register_live_consumer().await.unwrap();
+
+        assert_eq!(resumed, first);
+        let status = queue.status().await;
+        assert_eq!(status.primary_consumer.as_ref(), Some(&first));
+        assert_eq!(status.consumers.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn expired_live_consumer_keeps_routed_events_after_long_outage() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        let first = queue.register_live_consumer().await.unwrap();
+        queue.enqueue(message("1", "still pending")).await.unwrap();
+        {
+            let mut inbox = queue.inbox.lock().await;
+            inbox
+                .state
+                .consumers
+                .iter_mut()
+                .find(|consumer| consumer.id == first)
+                .unwrap()
+                .expires_at = Utc::now() - TimeDelta::seconds(1);
+        }
+
+        let resumed = queue.register_live_consumer().await.unwrap();
+
+        assert_eq!(resumed, first);
+        assert!(
+            queue
+                .next_event(&resumed, Duration::ZERO, DEFAULT_LEASE)
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[tokio::test]

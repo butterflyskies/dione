@@ -2,18 +2,19 @@ use camino::Utf8PathBuf;
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr};
 use dione::{
-    codex::{CodexEventQueue, TransportMode},
+    codex::{CodexDeliveryConfig, CodexEventQueue, TransportMode},
     discord::events::{Handler, NotificationEvent},
     mcp::server::DioneServer,
     state::SharedState,
     tracing_channel::{TraceLevelController, TracingChannelLayer},
 };
 use std::{
+    env,
     sync::{Arc, atomic::AtomicU64},
     time::Duration,
 };
 use tokio::{
-    sync::{RwLock, mpsc},
+    sync::{RwLock, mpsc, watch},
     time::interval,
 };
 use tokio_util::sync::CancellationToken;
@@ -34,6 +35,14 @@ struct Cli {
     /// Agent harness transport for inbound Discord events
     #[arg(long, value_enum, default_value_t = TransportMode::ClaudeCode)]
     mode: TransportMode,
+
+    /// Codex app-server Unix socket (defaults to the managed daemon socket)
+    #[arg(long)]
+    codex_app_server_socket: Option<Utf8PathBuf>,
+
+    /// Exact Codex thread to receive Discord events (defaults to CODEX_THREAD_ID)
+    #[arg(long)]
+    codex_thread_id: Option<String>,
 }
 
 #[tokio::main]
@@ -101,10 +110,33 @@ async fn main() -> Result<()> {
 
     // Codex owns one durable pull queue. The lifetime file lock prevents two
     // stdio-spawned Dione processes from corrupting the same inbox.
-    let codex_queue = if cli.mode == TransportMode::Codex {
-        Some(CodexEventQueue::load(&state_dir).wrap_err("failed to open Codex event queue")?)
+    let (codex_queue, codex_handle, codex_thread_binding) = if cli.mode == TransportMode::Codex {
+        let codex_queue =
+            CodexEventQueue::load(&state_dir).wrap_err("failed to open Codex event queue")?;
+        let delivery_config = CodexDeliveryConfig::resolve(cli.codex_app_server_socket)
+            .wrap_err("failed to configure Codex live delivery")?;
+        let initial_thread = cli
+            .codex_thread_id
+            .or_else(|| env::var("CODEX_THREAD_ID").ok())
+            .filter(|value| !value.trim().is_empty());
+        let (binding_tx, binding_rx) = watch::channel(initial_thread);
+        let delivery_queue = codex_queue.clone();
+        let delivery_cancel = cancel.clone();
+        let handle = tokio::spawn(async move {
+            if let Err(error) = dione::codex::run_delivery_worker(
+                delivery_queue,
+                delivery_config,
+                binding_rx,
+                delivery_cancel,
+            )
+            .await
+            {
+                tracing::error!(error = %error, "Codex live delivery worker exited");
+            }
+        });
+        (Some(codex_queue), Some(handle), Some(binding_tx))
     } else {
-        None
+        (None, None, None)
     };
 
     // MCP → Discord gateway command channel (for presence updates, etc.).
@@ -139,6 +171,7 @@ async fn main() -> Result<()> {
         trace_controller,
         mode: cli.mode,
         codex_queue,
+        codex_thread_binding,
     };
 
     // Spawn the tracing-channel forwarder: converts tracing events into NotificationEvents.
@@ -202,6 +235,9 @@ async fn main() -> Result<()> {
     let _ = tokio::time::timeout(Duration::from_secs(2), async {
         discord_handle.abort();
         let _ = mcp_handle.await;
+        if let Some(codex_handle) = codex_handle {
+            let _ = codex_handle.await;
+        }
     })
     .await;
 

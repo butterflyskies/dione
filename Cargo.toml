@@ -1,6 +1,6 @@
 [package]
 name = "dione"
-version = "0.19.0"
+version = "0.20.0-dev.1"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
@@ -30,8 +30,10 @@ aho-corasick = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 chrono-tz = "0.10"
 camino = { version = "1", features = ["serde1"] }
+futures-util = "0.3"
 notify = "8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tokio-tungstenite = { version = "0.21", default-features = false, features = ["handshake"] }
 typst = "0.14.2"
 typst-render = "0.14.2"
 typst-assets = { version = "0.14.2", features = ["fonts"] }
