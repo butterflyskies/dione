@@ -645,6 +645,7 @@ async fn test_bind_codex_thread_updates_live_binding() {
     let mut server = make_server(&state_dir);
     let (binding_tx, binding_rx) = tokio::sync::watch::channel(None);
     server.mode = TransportMode::Codex;
+    server.codex_queue = Some(dione::codex::CodexEventQueue::load(&state_dir).unwrap());
     server.codex_thread_binding = Some(binding_tx);
     let thread_id = "019f4b14-ccc7-7db2-80c8-fe2b888c8844";
     let request = json!({
@@ -657,7 +658,9 @@ async fn test_bind_codex_thread_updates_live_binding() {
         }
     });
 
-    let response = test_helpers::dispatch_request(&server, request).await.unwrap();
+    let response = test_helpers::dispatch_request(&server, request)
+        .await
+        .unwrap();
 
     assert!(response.get("error").is_none());
     assert_eq!(binding_rx.borrow().as_deref(), Some(thread_id));

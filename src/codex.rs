@@ -113,6 +113,9 @@ struct QueuedEvent {
     discord_message_id: Option<String>,
     #[serde(default)]
     consumer_id: Option<ConsumerId>,
+    /// Exact live thread binding at ingress. Pull consumers leave this unset.
+    #[serde(default)]
+    live_thread_id: Option<String>,
     #[serde(default)]
     lease: Option<Lease>,
 }
@@ -126,6 +129,8 @@ struct InboxState {
     next_consumer_generation: u64,
     #[serde(default)]
     primary_consumer: Option<ConsumerId>,
+    #[serde(default)]
+    live_thread_id: Option<String>,
     #[serde(default)]
     consumers: Vec<ConsumerRegistration>,
     #[serde(default)]
@@ -310,6 +315,7 @@ impl DurableInbox {
                 payload,
                 discord_message_id,
                 consumer_id: inbox.state.primary_consumer.clone(),
+                live_thread_id: inbox.live_event_thread_id(),
                 lease: None,
             });
             Ok(true)
@@ -321,6 +327,7 @@ impl DurableInbox {
         consumer_id: &ConsumerId,
         now: DateTime<Utc>,
         lease_duration: Duration,
+        live_thread_id: Option<&str>,
     ) -> Result<Option<LeasedEvent>, CodexQueueError> {
         self.transaction(|inbox| {
             inbox.touch_consumer(consumer_id, now, DEFAULT_CONSUMER_TTL)?;
@@ -335,7 +342,10 @@ impl DurableInbox {
             }
 
             let Some(index) = inbox.state.entries.iter().position(|event| {
-                event.lease.is_none() && event.consumer_id.as_ref() == Some(consumer_id)
+                event.lease.is_none()
+                    && event.consumer_id.as_ref() == Some(consumer_id)
+                    && live_thread_id
+                        .is_none_or(|thread_id| event.live_thread_id.as_deref() == Some(thread_id))
             }) else {
                 return Ok(None);
             };
@@ -360,19 +370,32 @@ impl DurableInbox {
         })
     }
 
+    fn bind_live_thread(&mut self, thread_id: Option<String>) -> Result<(), CodexQueueError> {
+        self.transaction(move |inbox| {
+            inbox.state.live_thread_id = thread_id;
+            Ok(())
+        })
+    }
+
+    fn live_event_thread_id(&self) -> Option<String> {
+        let primary = self.state.primary_consumer.as_ref()?;
+        self.state
+            .consumers
+            .iter()
+            .find(|consumer| consumer.id == *primary && consumer.label == LIVE_CONSUMER_LABEL)?;
+        self.state.live_thread_id.clone()
+    }
+
     fn acknowledge(
         &mut self,
         consumer_id: &ConsumerId,
         token: &DeliveryToken,
     ) -> Result<(), CodexQueueError> {
-        let now = Utc::now();
         self.transaction(|inbox| {
-            inbox.touch_consumer(consumer_id, now, DEFAULT_CONSUMER_TTL)?;
+            inbox.touch_consumer(consumer_id, Utc::now(), DEFAULT_CONSUMER_TTL)?;
             let Some(index) = inbox.state.entries.iter().position(|event| {
                 event.lease.as_ref().is_some_and(|lease| {
-                    lease.token == *token
-                        && lease.consumer_id.as_ref() == Some(consumer_id)
-                        && lease.expires_at > now
+                    lease.token == *token && lease.consumer_id.as_ref() == Some(consumer_id)
                 })
             }) else {
                 return Err(CodexQueueError::UnknownDeliveryToken);
@@ -736,7 +759,7 @@ impl CodexEventQueue {
                 self.inbox
                     .lock()
                     .await
-                    .lease_next(consumer_id, Utc::now(), lease)?
+                    .lease_next(consumer_id, Utc::now(), lease, None)?
             {
                 return Ok(Some(event));
             }
@@ -745,6 +768,41 @@ impl CodexEventQueue {
                 return Ok(None);
             }
         }
+    }
+
+    pub(crate) async fn next_live_event(
+        &self,
+        consumer_id: &ConsumerId,
+        thread_id: &str,
+        wait: Duration,
+        lease: Duration,
+    ) -> Result<Option<LeasedEvent>, CodexQueueError> {
+        let wait = wait.min(MAX_WAIT);
+        let lease = lease.min(MAX_LEASE);
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            let notified = self.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(event) = self.inbox.lock().await.lease_next(
+                consumer_id,
+                Utc::now(),
+                lease,
+                Some(thread_id),
+            )? {
+                return Ok(Some(event));
+            }
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() || tokio::time::timeout(remaining, notified).await.is_err() {
+                return Ok(None);
+            }
+        }
+    }
+
+    pub async fn bind_live_thread(&self, thread_id: Option<String>) -> Result<(), CodexQueueError> {
+        self.inbox.lock().await.bind_live_thread(thread_id)?;
+        self.changed.notify_waiters();
+        Ok(())
     }
 
     pub async fn acknowledge(
@@ -780,11 +838,7 @@ impl CodexEventQueue {
     }
 
     pub(crate) async fn register_live_consumer(&self) -> Result<ConsumerId, CodexQueueError> {
-        let consumer_id = self
-            .inbox
-            .lock()
-            .await
-            .register_live_consumer(Utc::now())?;
+        let consumer_id = self.inbox.lock().await.register_live_consumer(Utc::now())?;
         self.changed.notify_waiters();
         Ok(consumer_id)
     }
@@ -1104,6 +1158,68 @@ mod tests {
                 .await
                 .unwrap()
                 .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn live_rebind_does_not_replay_unleased_event_into_new_thread() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        queue
+            .bind_live_thread(Some("thread-a".to_owned()))
+            .await
+            .unwrap();
+        let consumer = queue.register_live_consumer().await.unwrap();
+        queue.enqueue(message("1", "for a")).await.unwrap();
+
+        queue
+            .bind_live_thread(Some("thread-b".to_owned()))
+            .await
+            .unwrap();
+        queue.enqueue(message("2", "for b")).await.unwrap();
+
+        let for_b = queue
+            .next_live_event(&consumer, "thread-b", Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(for_b.event["params"]["content"], "for b");
+        assert!(
+            queue
+                .next_live_event(&consumer, "thread-a", Duration::ZERO, DEFAULT_LEASE)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn live_rebind_does_not_replay_leased_event_into_new_thread() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        queue
+            .bind_live_thread(Some("thread-a".to_owned()))
+            .await
+            .unwrap();
+        let consumer = queue.register_live_consumer().await.unwrap();
+        queue.enqueue(message("1", "leased for a")).await.unwrap();
+        let _leased = queue
+            .next_live_event(&consumer, "thread-a", Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .unwrap();
+
+        queue
+            .bind_live_thread(Some("thread-b".to_owned()))
+            .await
+            .unwrap();
+
+        assert!(
+            queue
+                .next_live_event(&consumer, "thread-b", Duration::ZERO, DEFAULT_LEASE)
+                .await
+                .unwrap()
+                .is_none()
         );
     }
 

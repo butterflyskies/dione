@@ -119,6 +119,10 @@ async fn main() -> Result<()> {
             .codex_thread_id
             .or_else(|| env::var("CODEX_THREAD_ID").ok())
             .filter(|value| !value.trim().is_empty());
+        codex_queue
+            .bind_live_thread(initial_thread.clone())
+            .await
+            .wrap_err("failed to persist initial Codex thread binding")?;
         let (binding_tx, binding_rx) = watch::channel(initial_thread);
         let delivery_queue = codex_queue.clone();
         let delivery_cancel = cancel.clone();
