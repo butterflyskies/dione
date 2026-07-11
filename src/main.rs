@@ -81,6 +81,12 @@ async fn main() -> Result<()> {
 
     let state_dir = dione::config::state_dir();
     let config = dione::config::reload_config(&state_dir).0;
+    // Keep the Observe pipeline installed for the process lifetime. Each
+    // message's freshly loaded config decides whether it participates, so
+    // `pre_send.enabled` hot reloads in both directions without a restart.
+    let pre_send_pipeline = dione::pre_send::observe_pipeline(Vec::new())
+        .wrap_err("failed to configure Observe pre-send pipeline")?;
+    dione::pre_send::install_pipeline(Some(pre_send_pipeline));
     tracing::info!(
         ?state_dir,
         dm_policy = ?config.access.dm_policy,

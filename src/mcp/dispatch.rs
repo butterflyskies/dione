@@ -19,13 +19,15 @@ use crate::{
             },
             management::{create_thread, delete_message, pin_message, unpin_message},
             messaging::{
-                download_attachment, edit_message, fetch_messages, fetch_new_since, get_message,
-                react as discord_react, reply, send_dm, send_file,
+                download_attachment, edit_message_with_hook_overrides, fetch_messages,
+                fetch_new_since, get_message, react as discord_react, reply_with_hook_overrides,
+                send_dm_with_hook_overrides, send_file_with_hook_overrides,
             },
-            render::{render_latex, render_latex_to_channel},
+            render::{render_latex, render_latex_to_channel_with_hook_overrides},
             search::{SearchParams, search_messages},
         },
     },
+    pre_send::HookName,
 };
 use serde_json::{Value, json};
 
@@ -188,7 +190,17 @@ pub(crate) async fn call_tool(
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             let no_rly = args.get("no_rly").and_then(Value::as_bool).unwrap_or(false);
-            reply(&ctx, channel_id, content, reply_to, suppress_ping, no_rly).await
+            let no_rly_hooks = parse_hook_overrides(&args)?;
+            reply_with_hook_overrides(
+                &ctx,
+                channel_id,
+                content,
+                reply_to,
+                suppress_ping,
+                no_rly,
+                &no_rly_hooks,
+            )
+            .await
         }
         "react" => {
             let ctx = server.messaging_ctx(config.clone());
@@ -208,7 +220,9 @@ pub(crate) async fn call_tool(
                 .get("content")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing content".to_string())?;
-            edit_message(&ctx, channel_id, message_id, content).await
+            let no_rly_hooks = parse_hook_overrides(&args)?;
+            edit_message_with_hook_overrides(&ctx, channel_id, message_id, content, &no_rly_hooks)
+                .await
         }
         "fetch_messages" => {
             let ctx = server.messaging_ctx(config.clone());
@@ -251,7 +265,8 @@ pub(crate) async fn call_tool(
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing file_path".to_string())?;
             let caption = args.get("caption").and_then(Value::as_str);
-            send_file(&ctx, channel_id, file_path, caption).await
+            let no_rly_hooks = parse_hook_overrides(&args)?;
+            send_file_with_hook_overrides(&ctx, channel_id, file_path, caption, &no_rly_hooks).await
         }
 
         "send_dm" => {
@@ -261,7 +276,8 @@ pub(crate) async fn call_tool(
                 .get("content")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing content".to_string())?;
-            send_dm(&ctx, user_id, content).await
+            let no_rly_hooks = parse_hook_overrides(&args)?;
+            send_dm_with_hook_overrides(&ctx, user_id, content, &no_rly_hooks).await
         }
 
         // Introspection
@@ -497,7 +513,15 @@ pub(crate) async fn call_tool(
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing latex".to_string())?;
             let caption = args.get("caption").and_then(Value::as_str);
-            render_latex_to_channel(&ctx, channel_id, latex, caption).await
+            let no_rly_hooks = parse_hook_overrides(&args)?;
+            render_latex_to_channel_with_hook_overrides(
+                &ctx,
+                channel_id,
+                latex,
+                caption,
+                &no_rly_hooks,
+            )
+            .await
         }
 
         // Diagnostics
@@ -610,10 +634,50 @@ fn parse_string_array(args: &Value, key: &str) -> Option<Vec<String>> {
     })
 }
 
+fn parse_hook_overrides(args: &Value) -> Result<Vec<HookName>, String> {
+    let Some(value) = args.get("no_rly_hooks") else {
+        return Ok(Vec::new());
+    };
+    let values = value
+        .as_array()
+        .ok_or_else(|| "no_rly_hooks must be an array of hook-name strings".to_owned())?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(|name| HookName::parse(name).map_err(|error| error.to_string()))
+                .ok_or_else(|| "no_rly_hooks must contain only strings".to_owned())
+                .and_then(std::convert::identity)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    #[test]
+    fn hook_override_boundary_parses_canonical_names() {
+        let parsed = parse_hook_overrides(&serde_json::json!({
+            "no_rly_hooks": ["tier-1", "contradictionary"]
+        }))
+        .unwrap();
+        assert_eq!(
+            parsed.iter().map(HookName::as_str).collect::<Vec<_>>(),
+            ["tier-1", "contradictionary"]
+        );
+    }
+
+    #[test]
+    fn hook_override_boundary_rejects_invalid_names_and_shapes() {
+        assert!(
+            parse_hook_overrides(&serde_json::json!({ "no_rly_hooks": ["Not Valid"] })).is_err()
+        );
+        assert!(parse_hook_overrides(&serde_json::json!({ "no_rly_hooks": "tier-1" })).is_err());
+        assert!(parse_hook_overrides(&serde_json::json!({ "no_rly_hooks": [1] })).is_err());
+    }
 
     /// Edge-weighted snowflake strategy. A uniform `0u64..` hits 0 with
     /// probability ~1/2^64, so the zero arms in the tests below were dead

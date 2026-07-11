@@ -38,7 +38,8 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                     "content": { "type": "string", "description": "Message content" },
                     "reply_to_message_id": { "type": "string", "description": "Optional message ID to reply to" },
                     "suppress_ping": { "type": "boolean", "description": "When true, the reply will not ping the user being replied to (default: false)" },
-                    "no_rly": { "type": "boolean", "description": "Consent-gate override for the contradictionary block action. A blocked send returns an error naming the matched pattern (⚠️ blocked: <pattern>); resend the identical message with no_rly=true to bypass the block, send anyway, and record a durable diary entry. No effect on non-blocked messages (default: false)." }
+                    "no_rly": { "type": "boolean", "description": "Consent-gate override for the contradictionary block action. A blocked send returns an error naming the matched pattern (⚠️ blocked: <pattern>); resend the identical message with no_rly=true to bypass the block, send anyway, and record a durable diary entry. No effect on non-blocked messages (default: false)." },
+                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for this send. Every bypass is audited. This does not bypass the contradictionary; use no_rly for that legacy gate." }
                 }
             })),
             tool("react", "Add a reaction to a message", json!({
@@ -56,7 +57,8 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                 "properties": {
                     "channel_id": { "type": "string" },
                     "message_id": { "type": "string" },
-                    "content": { "type": "string" }
+                    "content": { "type": "string" },
+                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass; every bypass is audited." }
                 }
             })),
             tool("fetch_messages", "Fetch recent messages from a channel", json!({
@@ -139,7 +141,8 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                 "properties": {
                     "channel_id": { "type": "string", "description": "Discord channel ID" },
                     "file_path": { "type": "string", "description": "Absolute path to the file to upload" },
-                    "caption": { "type": "string", "description": "Optional message text to accompany the file" }
+                    "caption": { "type": "string", "description": "Optional message text to accompany the file" },
+                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for the caption; every bypass is audited." }
                 }
             })),
             tool("send_dm", "Initiate a DM conversation with a Discord user and send a message", json!({
@@ -147,7 +150,8 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                 "required": ["user_id", "content"],
                 "properties": {
                     "user_id": { "type": "string", "description": "Discord user ID to send the DM to" },
-                    "content": { "type": "string", "description": "Message content to send" }
+                    "content": { "type": "string", "description": "Message content to send" },
+                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass; every bypass is audited." }
                 }
             })),
             tool("list_guilds", "List guilds the bot is in", json!({
@@ -280,7 +284,8 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                 "properties": {
                     "channel_id": { "type": "string", "description": "Discord channel ID" },
                     "latex": { "type": "string", "description": "LaTeX math expression (without $ delimiters)" },
-                    "caption": { "type": "string", "description": "Optional message text to accompany the image" }
+                    "caption": { "type": "string", "description": "Optional message text to accompany the image" },
+                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for the caption; every bypass is audited." }
                 }
             })),
             tool("send_typing", "Send a typing indicator to a channel", json!({
