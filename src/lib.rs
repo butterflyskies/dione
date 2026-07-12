@@ -1,5 +1,6 @@
 pub mod batch;
 pub mod coalesce;
+pub mod codex;
 pub mod config;
 pub mod config_store;
 pub mod config_watcher;

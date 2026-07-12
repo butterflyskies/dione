@@ -6,6 +6,7 @@
 //! only up to the gate-rejection path.
 
 use dione::{
+    codex::TransportMode,
     discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
     mcp::server::{DioneServer, test_helpers},
     queue::AccessQueue,
@@ -76,6 +77,9 @@ fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
         notification_tx: tx,
         discord_cmd_tx: None,
         trace_controller: TraceLevelController::noop(),
+        mode: TransportMode::ClaudeCode,
+        codex_queue: None,
+        codex_thread_binding: None,
     }
 }
 
@@ -116,6 +120,13 @@ async fn test_initialize_returns_capabilities() {
         resp.get("protocolVersion").is_some(),
         "initialize response must include protocolVersion"
     );
+}
+
+#[test]
+fn test_codex_initialize_omits_claude_experimental_capabilities() {
+    let response = test_helpers::get_codex_initialize_response();
+    assert!(response["capabilities"].get("tools").is_some());
+    assert!(response["capabilities"].get("experimental").is_none());
 }
 
 #[tokio::test]
@@ -625,6 +636,39 @@ async fn test_tools_call_list_access_requests_empty() {
     assert!(
         resp.get("error").is_none(),
         "list_access_requests should not error"
+    );
+}
+
+#[tokio::test]
+async fn test_bind_codex_thread_updates_live_binding() {
+    let (_dir, state_dir) = temp_state_dir();
+    let mut server = make_server(&state_dir);
+    let (binding_tx, binding_rx) = tokio::sync::watch::channel(None);
+    server.mode = TransportMode::Codex;
+    server.codex_queue = Some(dione::codex::CodexEventQueue::load(&state_dir).unwrap());
+    server.codex_thread_binding = Some(binding_tx);
+    let thread_id = "019f4b14-ccc7-7db2-80c8-fe2b888c8844";
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": 71,
+        "method": "tools/call",
+        "params": {
+            "name": "bind_codex_thread",
+            "arguments": { "thread_id": thread_id }
+        }
+    });
+
+    let response = test_helpers::dispatch_request(&server, request)
+        .await
+        .unwrap();
+
+    assert!(response.get("error").is_none());
+    assert_eq!(
+        binding_rx
+            .borrow()
+            .as_ref()
+            .map(dione::codex::CodexThreadId::as_str),
+        Some(thread_id)
     );
 }
 

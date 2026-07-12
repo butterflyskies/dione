@@ -1,25 +1,33 @@
 //! Tool dispatch: routes `tools/call` requests to the correct handler.
 
-use serde_json::{Value, json};
-
-use crate::config_store::{ConfigStore, DiscordId};
-use crate::mcp::ids::Snowflake;
-use crate::mcp::server::DioneServer;
-use crate::mcp::tools::{
-    access::{approve_access, deny_access, list_access_requests},
-    bot_state::{send_typing, set_presence},
-    diagnostics::{get_version, set_stderr_level, set_trace_level},
-    introspection::{
-        get_channel, get_member, get_user, list_channels, list_emojis, list_guilds, list_roles,
+use crate::{
+    codex::{
+        CodexThreadId, ConsumerId, DeliveryToken, consumer_ttl, lease_duration, timeout_response,
+        wait_duration,
     },
-    management::{create_thread, delete_message, pin_message, unpin_message},
-    messaging::{
-        download_attachment, edit_message, fetch_messages, fetch_new_since, get_message,
-        react as discord_react, reply, send_dm, send_file,
+    config_store::{ConfigStore, DiscordId},
+    mcp::{
+        ids::Snowflake,
+        server::DioneServer,
+        tools::{
+            access::{approve_access, deny_access, list_access_requests},
+            bot_state::{send_typing, set_presence},
+            diagnostics::{get_version, set_stderr_level, set_trace_level},
+            introspection::{
+                get_channel, get_member, get_user, list_channels, list_emojis, list_guilds,
+                list_roles,
+            },
+            management::{create_thread, delete_message, pin_message, unpin_message},
+            messaging::{
+                download_attachment, edit_message, fetch_messages, fetch_new_since, get_message,
+                react as discord_react, reply, send_dm, send_file,
+            },
+            render::{render_latex, render_latex_to_channel},
+            search::{SearchParams, search_messages},
+        },
     },
-    render::{render_latex, render_latex_to_channel},
-    search::{SearchParams, search_messages},
 };
+use serde_json::{Value, json};
 
 fn check_admin_gate(config: &crate::config::LoadedConfig) -> Result<(), String> {
     if config.access.admin_only_mutations {
@@ -41,6 +49,131 @@ pub(crate) async fn call_tool(
     let config = crate::config::load_config(&server.state_dir);
 
     let result = match name {
+        // Durable Codex receive loop
+        "bind_codex_thread" => {
+            let binding = server
+                .codex_thread_binding
+                .as_ref()
+                .ok_or_else(|| "bind_codex_thread is only available in Codex mode".to_string())?;
+            let thread_id = CodexThreadId::parse(parse_str(&args, "thread_id")?)
+                .map_err(|error| error.to_string())?;
+            server
+                .codex_queue
+                .as_ref()
+                .ok_or_else(|| "Codex queue is unavailable".to_string())?
+                .bind_live_thread(Some(thread_id.clone()))
+                .await
+                .map_err(|error| error.to_string())?;
+            binding
+                .send(Some(thread_id.clone()))
+                .map_err(|_| "Codex live delivery worker is unavailable".to_string())?;
+            json!({ "bound": true, "thread_id": thread_id })
+        }
+        "next_event" => {
+            let queue = server
+                .codex_queue
+                .as_ref()
+                .ok_or_else(|| "next_event is only available in Codex mode".to_string())?;
+            let consumer_id = ConsumerId::parse(parse_str(&args, "consumer_id")?)
+                .map_err(|error| error.to_string())?;
+            let wait = wait_duration(args.get("wait_seconds").and_then(Value::as_u64));
+            let lease = lease_duration(args.get("lease_seconds").and_then(Value::as_u64));
+            match queue
+                .next_event(&consumer_id, wait, lease)
+                .await
+                .map_err(|error| error.to_string())?
+            {
+                Some(event) => serde_json::to_value(event)
+                    .map_err(|error| format!("failed to serialize leased event: {error}"))?,
+                None => timeout_response(),
+            }
+        }
+        "ack_event" => {
+            let queue = server
+                .codex_queue
+                .as_ref()
+                .ok_or_else(|| "ack_event is only available in Codex mode".to_string())?;
+            let consumer_id = ConsumerId::parse(parse_str(&args, "consumer_id")?)
+                .map_err(|error| error.to_string())?;
+            let raw_token = parse_str(&args, "delivery_token")?;
+            let token = DeliveryToken::parse(raw_token).map_err(|error| error.to_string())?;
+            queue
+                .acknowledge(&consumer_id, &token)
+                .await
+                .map_err(|error| error.to_string())?;
+            json!({ "acknowledged": true })
+        }
+        "event_queue_status" => {
+            let queue = server
+                .codex_queue
+                .as_ref()
+                .ok_or_else(|| "event_queue_status is only available in Codex mode".to_string())?;
+            serde_json::to_value(queue.status().await)
+                .map_err(|error| format!("failed to serialize queue status: {error}"))?
+        }
+        "register_event_consumer" => {
+            let queue = server.codex_queue.as_ref().ok_or_else(|| {
+                "register_event_consumer is only available in Codex mode".to_string()
+            })?;
+            let label = parse_str(&args, "label")?.trim();
+            if label.is_empty() || label.len() > 120 {
+                return Err("label must contain 1 to 120 characters".to_string());
+            }
+            let ttl = consumer_ttl(args.get("ttl_seconds").and_then(Value::as_u64));
+            let make_primary = args
+                .get("make_primary")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let claim_unassigned = args
+                .get("claim_unassigned")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let registration = queue
+                .register_consumer(label.to_owned(), ttl, make_primary, claim_unassigned)
+                .await
+                .map_err(|error| error.to_string())?;
+            serde_json::to_value(registration)
+                .map_err(|error| format!("failed to serialize consumer registration: {error}"))?
+        }
+        "handoff_event_consumer" => {
+            let queue = server.codex_queue.as_ref().ok_or_else(|| {
+                "handoff_event_consumer is only available in Codex mode".to_string()
+            })?;
+            let from = ConsumerId::parse(parse_str(&args, "from_consumer_id")?)
+                .map_err(|error| error.to_string())?;
+            let to = ConsumerId::parse(parse_str(&args, "to_consumer_id")?)
+                .map_err(|error| error.to_string())?;
+            let move_pending = args
+                .get("move_pending")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let result = queue
+                .handoff(&from, &to, move_pending)
+                .await
+                .map_err(|error| error.to_string())?;
+            serde_json::to_value(result)
+                .map_err(|error| format!("failed to serialize consumer handoff: {error}"))?
+        }
+        "claim_event_consumer" => {
+            let queue = server.codex_queue.as_ref().ok_or_else(|| {
+                "claim_event_consumer is only available in Codex mode".to_string()
+            })?;
+            let consumer_id = ConsumerId::parse(parse_str(&args, "consumer_id")?)
+                .map_err(|error| error.to_string())?;
+            let claim_orphaned = args
+                .get("claim_orphaned")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let claimed_events = queue
+                .claim_primary(&consumer_id, claim_orphaned)
+                .await
+                .map_err(|error| error.to_string())?;
+            json!({
+                "primary_consumer_id": consumer_id,
+                "claimed_events": claimed_events
+            })
+        }
+
         // Messaging
         "reply" => {
             let ctx = server.messaging_ctx(config.clone());
@@ -479,9 +612,8 @@ fn parse_string_array(args: &Value, key: &str) -> Option<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
-    use proptest::prelude::*;
-
     use super::*;
+    use proptest::prelude::*;
 
     /// Edge-weighted snowflake strategy. A uniform `0u64..` hits 0 with
     /// probability ~1/2^64, so the zero arms in the tests below were dead
