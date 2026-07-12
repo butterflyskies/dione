@@ -13,7 +13,7 @@ use crate::contradictionary::{Action, BlockOutcome, append_diary_record};
 use crate::discord::chunk;
 use crate::gate::OutboundGate;
 use crate::pre_send::{
-    ChannelType as HookChannelType, ConstructId, HookContext, HookName, HookResult,
+    ChannelType as HookChannelType, ConstructId, HookContext, HookDecision, HookName,
     OutboundDestination, PreSendPipeline,
 };
 use crate::state::State;
@@ -89,12 +89,6 @@ pub(crate) async fn check_outbound(ctx: &MessagingCtx, channel_id: ChannelId) ->
     Ok(())
 }
 
-#[derive(Debug)]
-struct PreparedText {
-    channel_id: ChannelId,
-    content: String,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OutboundSurface {
     Reply,
@@ -102,7 +96,6 @@ pub(crate) enum OutboundSurface {
     SendFileCaption,
     RenderLatexCaption,
     SendDm,
-    SendDmRedirect,
     VoiceBeforeTts,
 }
 
@@ -125,57 +118,149 @@ impl OutboundSurface {
             Self::SendFileCaption => "send-file-caption",
             Self::RenderLatexCaption => "render-latex-caption",
             Self::SendDm => "send-dm",
-            Self::SendDmRedirect => "send-dm-redirect",
             Self::VoiceBeforeTts => "voice-before-tts",
         }
     }
 }
 
-/// Applies the configured hook pipeline before text reaches Discord.
-async fn prepare_outbound_text(
-    ctx: &MessagingCtx,
-    channel_id: ChannelId,
-    content: &str,
-    reply_to_message_id: Option<MessageId>,
+#[derive(Debug, Clone, Copy)]
+struct SurfacePolicy {
+    redirect_error: Option<&'static str>,
+}
+
+impl SurfacePolicy {
+    const fn for_surface(surface: OutboundSurface) -> Self {
+        let redirect_error = match surface {
+            OutboundSurface::Reply
+            | OutboundSurface::SendFileCaption
+            | OutboundSurface::RenderLatexCaption
+            | OutboundSurface::SendDm => None,
+            OutboundSurface::EditMessage => {
+                Some("pre-send redirect is not supported for message edits")
+            }
+            OutboundSurface::VoiceBeforeTts => {
+                Some("pre-send redirect is not supported for voice output")
+            }
+        };
+        Self { redirect_error }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PreSendOptions<'a> {
     surface: OutboundSurface,
-    no_rly_hooks: &[HookName],
-) -> Result<PreparedText, Value> {
+    bypasses: &'a [HookName],
+}
+
+struct OutboundDraft<'a> {
+    destination: OutboundDestination,
+    text: &'a str,
+    reply_to: Option<MessageId>,
+    pre_send: PreSendOptions<'a>,
+}
+
+impl<'a> OutboundDraft<'a> {
+    fn channel(
+        channel_id: ChannelId,
+        text: &'a str,
+        reply_to: Option<MessageId>,
+        pre_send: PreSendOptions<'a>,
+    ) -> Self {
+        Self {
+            destination: OutboundDestination::Channel(channel_id),
+            text,
+            reply_to,
+            pre_send,
+        }
+    }
+
+    fn dm_recipient(user_id: UserId, text: &'a str, pre_send: PreSendOptions<'a>) -> Self {
+        Self {
+            destination: OutboundDestination::DmRecipient(user_id),
+            text,
+            reply_to: None,
+            pre_send,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PreparedOutbound {
+    destination: OutboundDestination,
+    text: String,
+    reply_to: Option<MessageId>,
+    surface: OutboundSurface,
+}
+
+impl PreparedOutbound {
+    fn resolve_dm_channel(mut self, channel_id: ChannelId) -> Self {
+        debug_assert!(matches!(
+            self.destination,
+            OutboundDestination::DmRecipient(_)
+        ));
+        self.destination = OutboundDestination::Channel(channel_id);
+        self
+    }
+
+    fn channel_id(&self) -> Option<ChannelId> {
+        match self.destination {
+            OutboundDestination::Channel(channel_id) => Some(channel_id),
+            OutboundDestination::DmRecipient(_) => None,
+        }
+    }
+}
+
+/// Applies the configured hook pipeline before text reaches Discord.
+async fn prepare_outbound(
+    ctx: &MessagingCtx,
+    draft: OutboundDraft<'_>,
+) -> Result<PreparedOutbound, Value> {
+    if let OutboundDestination::Channel(channel_id) = draft.destination {
+        check_outbound(ctx, channel_id).await?;
+    }
     let Some(pipeline) = ctx.pre_send_pipeline.clone() else {
-        if !no_rly_hooks.is_empty() {
+        if !draft.pre_send.bypasses.is_empty() {
             return Err(json!({
                 "error": "no_rly_hooks named hooks, but no pre-send hooks are registered"
             }));
         }
-        return Ok(PreparedText {
-            channel_id,
-            content: content.to_owned(),
+        return Ok(PreparedOutbound {
+            destination: draft.destination,
+            text: draft.text.to_owned(),
+            reply_to: draft.reply_to,
+            surface: draft.pre_send.surface,
         });
     };
 
-    let state = ctx.state.read().await;
-    let channel_type = if state.dm_channel_ids.contains(&channel_id.get()) {
-        HookChannelType::DirectMessage
-    } else if state
-        .thread_parents
-        .get(&channel_id.get())
-        .is_some_and(Option::is_some)
-    {
-        HookChannelType::Thread
-    } else {
-        HookChannelType::Public
+    let channel_type = match draft.destination {
+        OutboundDestination::DmRecipient(_) => HookChannelType::DirectMessage,
+        OutboundDestination::Channel(channel_id) => {
+            let state = ctx.state.read().await;
+            if state.dm_channel_ids.contains(&channel_id.get()) {
+                HookChannelType::DirectMessage
+            } else if state
+                .thread_parents
+                .get(&channel_id.get())
+                .is_some_and(Option::is_some)
+            {
+                HookChannelType::Thread
+            } else {
+                HookChannelType::Public
+            }
+        }
     };
     let no_rly = pipeline
-        .no_rly(no_rly_hooks)
+        .no_rly(draft.pre_send.bypasses)
         .map_err(|error| json!({ "error": error.to_string() }))?;
     let hook_context = HookContext::new(
-        content,
-        OutboundDestination::Channel(channel_id),
+        draft.text,
+        draft.destination,
         channel_type,
         ctx.construct_id.clone(),
     )
     .with_author_id(ctx.author_id)
-    .with_reply_to(reply_to_message_id)
-    .with_metadata("outbound_surface", surface.as_str());
+    .with_reply_to(draft.reply_to)
+    .with_metadata("outbound_surface", draft.pre_send.surface.as_str());
     let outcome =
         match tokio::task::spawn_blocking(move || pipeline.run(&hook_context, &no_rly)).await {
             Ok(Ok(outcome)) => outcome,
@@ -195,13 +280,12 @@ async fn prepare_outbound_text(
         );
     }
 
-    let prepared_channel = match outcome.verdict() {
-        HookResult::Halt {
-            reason,
-            to_construct,
-            ..
-        } => {
-            let feedback: Vec<&str> = to_construct
+    let mut destination = draft.destination;
+    let mut reply_to = draft.reply_to;
+    match outcome.decision() {
+        HookDecision::Halt { reason } => {
+            let feedback: Vec<&str> = outcome
+                .to_construct()
                 .as_slice()
                 .iter()
                 .map(crate::pre_send::Assessment::detail)
@@ -211,30 +295,26 @@ async fn prepare_outbound_text(
                 "pre_send_feedback": feedback,
             }));
         }
-        HookResult::Redirect {
-            channel_id: target, ..
-        } => {
+        HookDecision::Redirect { channel_id: target } => {
+            if let Some(error) = SurfacePolicy::for_surface(draft.pre_send.surface).redirect_error {
+                return Err(json!({ "error": error }));
+            }
             let target = *target;
             check_outbound(ctx, target).await?;
-            target
+            if destination != OutboundDestination::Channel(target) {
+                reply_to = None;
+            }
+            destination = OutboundDestination::Channel(target);
         }
-        HookResult::Continue { .. } | HookResult::Rewrite { .. } => channel_id,
-    };
+        HookDecision::Continue | HookDecision::Rewrite { .. } => {}
+    }
 
-    Ok(PreparedText {
-        channel_id: prepared_channel,
-        content: outcome.final_text().unwrap_or(content).to_owned(),
+    Ok(PreparedOutbound {
+        destination,
+        text: outcome.final_text().unwrap_or(draft.text).to_owned(),
+        reply_to,
+        surface: draft.pre_send.surface,
     })
-}
-
-fn reply_reference_after_redirect(
-    original_channel: ChannelId,
-    prepared_channel: ChannelId,
-    reply_to: Option<MessageId>,
-) -> Option<MessageId> {
-    (original_channel == prepared_channel)
-        .then_some(reply_to)
-        .flatten()
 }
 
 /// Applies the same pre-send seam to text before a voice backend performs TTS.
@@ -244,16 +324,20 @@ pub async fn prepare_voice_text(
     content: &str,
     no_rly_hooks: &[HookName],
 ) -> Result<String, Value> {
-    prepare_outbound_text(
+    prepare_outbound(
         ctx,
-        channel_id,
-        content,
-        None,
-        OutboundSurface::VoiceBeforeTts,
-        no_rly_hooks,
+        OutboundDraft::channel(
+            channel_id,
+            content,
+            None,
+            PreSendOptions {
+                surface: OutboundSurface::VoiceBeforeTts,
+                bypasses: no_rly_hooks,
+            },
+        ),
     )
     .await
-    .map(|prepared| prepared.content)
+    .map(|prepared| prepared.text)
 }
 
 // ── reply ─────────────────────────────────────────────────────────────────────
@@ -287,66 +371,53 @@ pub async fn reply_with_hook_overrides(
     no_rly: bool,
     no_rly_hooks: &[HookName],
 ) -> Value {
-    reply_with_surface(
+    let prepared = match prepare_outbound(
         ctx,
-        channel_id,
-        content,
-        reply_to_message_id,
-        ReplyOptions {
+        OutboundDraft::channel(
+            channel_id,
+            content,
+            reply_to_message_id,
+            PreSendOptions {
+                surface: OutboundSurface::Reply,
+                bypasses: no_rly_hooks,
+            },
+        ),
+    )
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(error) => return error,
+    };
+    deliver_prepared_reply(
+        ctx,
+        prepared,
+        ReplyTransportOptions {
             suppress_ping,
             no_rly,
-            no_rly_hooks,
-            surface: OutboundSurface::Reply,
-            run_pipeline: true,
         },
     )
     .await
 }
 
-struct ReplyOptions<'a> {
+struct ReplyTransportOptions {
     suppress_ping: bool,
     no_rly: bool,
-    no_rly_hooks: &'a [HookName],
-    surface: OutboundSurface,
-    run_pipeline: bool,
 }
 
-async fn reply_with_surface(
+async fn deliver_prepared_reply(
     ctx: &MessagingCtx,
-    channel_id: ChannelId,
-    content: &str,
-    reply_to_message_id: Option<MessageId>,
-    options: ReplyOptions<'_>,
+    prepared: PreparedOutbound,
+    options: ReplyTransportOptions,
 ) -> Value {
-    let original_channel_id = channel_id;
-    if let Err(e) = check_outbound(ctx, channel_id).await {
-        return e;
-    }
-
-    let prepared = if options.run_pipeline {
-        match prepare_outbound_text(
-            ctx,
-            channel_id,
-            content,
-            reply_to_message_id,
-            options.surface,
-            options.no_rly_hooks,
-        )
-        .await
-        {
-            Ok(prepared) => prepared,
-            Err(error) => return error,
-        }
-    } else {
-        PreparedText {
-            channel_id,
-            content: content.to_owned(),
-        }
+    debug_assert!(matches!(
+        prepared.surface,
+        OutboundSurface::Reply | OutboundSurface::SendDm
+    ));
+    let Some(channel_id) = prepared.channel_id() else {
+        return json!({ "error": "prepared outbound destination is not a Discord channel" });
     };
-    let channel_id = prepared.channel_id;
-    let reply_to_message_id =
-        reply_reference_after_redirect(original_channel_id, channel_id, reply_to_message_id);
-    let content = prepared.content;
+    let reply_to_message_id = prepared.reply_to;
+    let content = prepared.text;
 
     let ch = channel_id;
 
@@ -551,28 +622,24 @@ pub async fn edit_message_with_hook_overrides(
     new_content: &str,
     no_rly_hooks: &[HookName],
 ) -> Value {
-    if let Err(e) = check_outbound(ctx, channel_id).await {
-        return e;
-    }
-
-    let prepared = match prepare_outbound_text(
+    let prepared = match prepare_outbound(
         ctx,
-        channel_id,
-        new_content,
-        Some(message_id),
-        OutboundSurface::EditMessage,
-        no_rly_hooks,
+        OutboundDraft::channel(
+            channel_id,
+            new_content,
+            Some(message_id),
+            PreSendOptions {
+                surface: OutboundSurface::EditMessage,
+                bypasses: no_rly_hooks,
+            },
+        ),
     )
     .await
     {
         Ok(prepared) => prepared,
         Err(error) => return error,
     };
-    if prepared.channel_id != channel_id {
-        return json!({ "error": "pre-send redirect is not supported for message edits" });
-    }
-
-    let builder = EditMessage::new().content(prepared.content);
+    let builder = EditMessage::new().content(prepared.text);
     match ctx
         .http
         .edit_message(channel_id, message_id, &builder, vec![])
@@ -742,22 +809,33 @@ pub(crate) async fn send_attachment_with_hook_overrides(
         return error;
     }
     let prepared = match caption {
-        Some(caption) => {
-            match prepare_outbound_text(ctx, channel_id, caption, None, surface, no_rly_hooks).await
-            {
-                Ok(prepared) => Some(prepared),
-                Err(error) => return error,
-            }
-        }
+        Some(caption) => match prepare_outbound(
+            ctx,
+            OutboundDraft::channel(
+                channel_id,
+                caption,
+                None,
+                PreSendOptions {
+                    surface,
+                    bypasses: no_rly_hooks,
+                },
+            ),
+        )
+        .await
+        {
+            Ok(prepared) => Some(prepared),
+            Err(error) => return error,
+        },
         None => None,
     };
     let channel_id = prepared
         .as_ref()
-        .map_or(channel_id, |prepared| prepared.channel_id);
+        .and_then(PreparedOutbound::channel_id)
+        .unwrap_or(channel_id);
     let _ = ctx.http.broadcast_typing(channel_id).await;
     let mut builder = CreateMessage::new().add_file(attachment);
     if let Some(prepared) = prepared {
-        builder = builder.content(prepared.content);
+        builder = builder.content(prepared.text);
     }
     match channel_id.send_message(&ctx.http, builder).await {
         Ok(msg) => {
@@ -839,84 +917,6 @@ pub async fn send_dm(ctx: &MessagingCtx, user_id: UserId, content: &str) -> Valu
     send_dm_with_hook_overrides(ctx, user_id, content, &[]).await
 }
 
-struct PreparedDmText {
-    redirect_channel_id: Option<ChannelId>,
-    content: String,
-}
-
-async fn prepare_dm_outbound_text(
-    ctx: &MessagingCtx,
-    user_id: UserId,
-    content: &str,
-    no_rly_hooks: &[HookName],
-) -> Result<PreparedDmText, Value> {
-    let Some(pipeline) = ctx.pre_send_pipeline.clone() else {
-        if !no_rly_hooks.is_empty() {
-            return Err(json!({
-                "error": "no_rly_hooks named hooks, but no pre-send hooks are registered"
-            }));
-        }
-        return Ok(PreparedDmText {
-            redirect_channel_id: None,
-            content: content.to_owned(),
-        });
-    };
-    let no_rly = pipeline
-        .no_rly(no_rly_hooks)
-        .map_err(|error| json!({ "error": error.to_string() }))?;
-    let hook_context = HookContext::new(
-        content,
-        OutboundDestination::DmRecipient(user_id),
-        HookChannelType::DirectMessage,
-        ctx.construct_id.clone(),
-    )
-    .with_author_id(ctx.author_id)
-    .with_metadata("outbound_surface", OutboundSurface::SendDm.as_str());
-    let outcome =
-        match tokio::task::spawn_blocking(move || pipeline.run(&hook_context, &no_rly)).await {
-            Ok(Ok(outcome)) => outcome,
-            Ok(Err(error)) => return Err(json!({ "error": error.to_string() })),
-            Err(error) => {
-                return Err(json!({
-                    "error": format!("pre-send pipeline task failed: {error}")
-                }));
-            }
-        };
-    for failure in outcome.sink_failures() {
-        tracing::warn!(
-            sink = failure.sink().as_str(),
-            error = failure.detail(),
-            "pre-send assessment sink degraded"
-        );
-    }
-    let redirect_channel_id = match outcome.verdict() {
-        HookResult::Halt {
-            reason,
-            to_construct,
-            ..
-        } => {
-            let feedback: Vec<&str> = to_construct
-                .as_slice()
-                .iter()
-                .map(crate::pre_send::Assessment::detail)
-                .collect();
-            return Err(json!({
-                "error": reason,
-                "pre_send_feedback": feedback,
-            }));
-        }
-        HookResult::Redirect { channel_id, .. } => {
-            check_outbound(ctx, *channel_id).await?;
-            Some(*channel_id)
-        }
-        HookResult::Continue { .. } | HookResult::Rewrite { .. } => None,
-    };
-    Ok(PreparedDmText {
-        redirect_channel_id,
-        content: outcome.final_text().unwrap_or(content).to_owned(),
-    })
-}
-
 pub async fn send_dm_with_hook_overrides(
     ctx: &MessagingCtx,
     user_id: UserId,
@@ -927,23 +927,30 @@ pub async fn send_dm_with_hook_overrides(
         return json!({ "error": "dm_policy is set to disabled; cannot initiate DMs" });
     }
 
-    let prepared = match prepare_dm_outbound_text(ctx, user_id, content, no_rly_hooks).await {
+    let prepared = match prepare_outbound(
+        ctx,
+        OutboundDraft::dm_recipient(
+            user_id,
+            content,
+            PreSendOptions {
+                surface: OutboundSurface::SendDm,
+                bypasses: no_rly_hooks,
+            },
+        ),
+    )
+    .await
+    {
         Ok(prepared) => prepared,
         Err(error) => return error,
     };
 
-    if let Some(redirect_channel_id) = prepared.redirect_channel_id {
-        return reply_with_surface(
+    if prepared.channel_id().is_some() {
+        return deliver_prepared_reply(
             ctx,
-            redirect_channel_id,
-            &prepared.content,
-            None,
-            ReplyOptions {
+            prepared,
+            ReplyTransportOptions {
                 suppress_ping: false,
                 no_rly: false,
-                no_rly_hooks: &[],
-                surface: OutboundSurface::SendDmRedirect,
-                run_pipeline: false,
             },
         )
         .await;
@@ -961,17 +968,12 @@ pub async fn send_dm_with_hook_overrides(
         state.record_dm_channel(user_id.get(), channel_id.get());
     }
 
-    let result = reply_with_surface(
+    let result = deliver_prepared_reply(
         ctx,
-        channel_id,
-        &prepared.content,
-        None,
-        ReplyOptions {
+        prepared.resolve_dm_channel(channel_id),
+        ReplyTransportOptions {
             suppress_ping: false,
             no_rly: false,
-            no_rly_hooks,
-            surface: OutboundSurface::SendDm,
-            run_pipeline: false,
         },
     )
     .await;
@@ -1104,11 +1106,13 @@ fn serenity_ts_to_rfc3339(ts: &Timestamp) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
     use crate::config::{ChannelConfig, Config};
     use crate::pre_send::{
-        Assessment, AuditTrail, ConstructFeedback, HookContext, HookResult, PipelineMode,
-        PreSendHook, PreSendPipeline,
+        Assessment, AuditTrail, ConstructFeedback, HookContext, HookDecision, HookOutput,
+        PipelineMode, PreSendHook, PreSendPipeline,
     };
     use crate::state::new_state;
 
@@ -1125,7 +1129,6 @@ mod tests {
             "render-latex-caption"
         );
         assert_eq!(OutboundSurface::SendDm.as_str(), "send-dm");
-        assert_eq!(OutboundSurface::SendDmRedirect.as_str(), "send-dm-redirect");
         assert_eq!(OutboundSurface::VoiceBeforeTts.as_str(), "voice-before-tts");
     }
 
@@ -1135,18 +1138,40 @@ mod tests {
 
     struct ContextCaptureHook(Arc<std::sync::Mutex<Option<HookContext>>>);
 
+    struct CountingDecisionHook {
+        decision: HookDecision,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl PreSendHook for CountingDecisionHook {
+        fn name(&self) -> HookName {
+            HookName::parse("counting-decision").unwrap()
+        }
+
+        fn execute(&self, _context: &HookContext) -> HookOutput {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            HookOutput::new(
+                self.decision.clone(),
+                ConstructFeedback::default(),
+                AuditTrail::default(),
+            )
+        }
+    }
+
     impl PreSendHook for ContextCaptureHook {
         fn name(&self) -> HookName {
             HookName::parse("context-capture").unwrap()
         }
 
-        fn execute(&self, context: &HookContext) -> HookResult {
+        fn execute(&self, context: &HookContext) -> HookOutput {
             *self.0.lock().expect("context lock") = Some(context.clone());
-            HookResult::Halt {
-                reason: "captured".to_owned(),
-                to_construct: ConstructFeedback::default(),
-                to_audit: AuditTrail::default(),
-            }
+            HookOutput::new(
+                HookDecision::Halt {
+                    reason: "captured".to_owned(),
+                },
+                ConstructFeedback::default(),
+                AuditTrail::default(),
+            )
         }
     }
 
@@ -1155,20 +1180,20 @@ mod tests {
             HookName::parse("surface-halt").unwrap()
         }
 
-        fn execute(&self, context: &HookContext) -> HookResult {
+        fn execute(&self, context: &HookContext) -> HookOutput {
             self.surfaces.lock().expect("surface lock").push(
                 context
                     .metadata("outbound_surface")
                     .unwrap_or_default()
                     .to_owned(),
             );
-            HookResult::Halt {
-                reason: "blocked by test hook".to_owned(),
-                to_construct: ConstructFeedback::new(vec![Assessment::new(
-                    "test", 1.0, "rephrase",
-                )]),
-                to_audit: AuditTrail::default(),
-            }
+            HookOutput::new(
+                HookDecision::Halt {
+                    reason: "blocked by test hook".to_owned(),
+                },
+                ConstructFeedback::new(vec![Assessment::new("test", 1.0, "rephrase")]),
+                AuditTrail::default(),
+            )
         }
     }
 
@@ -1204,13 +1229,17 @@ mod tests {
         let (ctx, _) = messaging_ctx_with_halt_pipeline(test_config());
         let unknown = HookName::parse("unknown-hook").unwrap();
 
-        let error = prepare_outbound_text(
+        let error = prepare_outbound(
             &ctx,
-            ChannelId::new(42),
-            "hello",
-            None,
-            OutboundSurface::Reply,
-            &[unknown],
+            OutboundDraft::channel(
+                ChannelId::new(42),
+                "hello",
+                None,
+                PreSendOptions {
+                    surface: OutboundSurface::Reply,
+                    bypasses: &[unknown],
+                },
+            ),
         )
         .await
         .unwrap_err();
@@ -1343,6 +1372,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dm_redirect_is_prepared_once_and_resolved_without_rerunning_hooks() {
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "43".to_owned(),
+            ..Default::default()
+        });
+        let calls = Arc::new(AtomicUsize::new(0));
+        let pipeline = PreSendPipeline::new(vec![Box::new(CountingDecisionHook {
+            decision: HookDecision::Redirect {
+                channel_id: ChannelId::new(43),
+            },
+            calls: Arc::clone(&calls),
+        })])
+        .unwrap()
+        .with_mode(PipelineMode::Enforce);
+        let ctx =
+            messaging_ctx(LoadedConfig::from_raw(raw)).with_pre_send_pipeline(Arc::new(pipeline));
+
+        let _ = send_dm(&ctx, UserId::new(77), "text").await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn captionless_send_file_rejects_hook_overrides_before_file_access() {
         let ctx = messaging_ctx(test_config());
         let hook = HookName::parse("surface-halt").unwrap();
@@ -1384,6 +1437,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn voice_redirect_is_rejected_instead_of_silently_discarded() {
+        let mut raw = Config::default();
+        for id in ["42", "43"] {
+            raw.channels.push(ChannelConfig {
+                id: id.to_owned(),
+                ..Default::default()
+            });
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let pipeline = PreSendPipeline::new(vec![Box::new(CountingDecisionHook {
+            decision: HookDecision::Redirect {
+                channel_id: ChannelId::new(43),
+            },
+            calls: Arc::clone(&calls),
+        })])
+        .unwrap()
+        .with_mode(PipelineMode::Enforce);
+        let ctx =
+            messaging_ctx(LoadedConfig::from_raw(raw)).with_pre_send_pipeline(Arc::new(pipeline));
+
+        let error = prepare_voice_text(&ctx, ChannelId::new(42), "speech", &[])
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error["error"],
+            "pre-send redirect is not supported for voice output"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn live_context_carries_construct_author_and_explicit_unknown_guild() {
         let mut raw = Config::default();
         raw.channels.push(ChannelConfig {
@@ -1411,19 +1496,6 @@ mod tests {
         assert_eq!(captured.construct_id(), "syne");
         assert_eq!(captured.author_id(), Some(UserId::new(1522260806975099030)));
         assert_eq!(captured.guild_id(), None);
-    }
-
-    #[test]
-    fn cross_channel_redirect_clears_reply_reference() {
-        let reply = Some(MessageId::new(7));
-        assert_eq!(
-            reply_reference_after_redirect(ChannelId::new(42), ChannelId::new(42), reply),
-            reply
-        );
-        assert_eq!(
-            reply_reference_after_redirect(ChannelId::new(42), ChannelId::new(43), reply),
-            None
-        );
     }
 
     // ── check_outbound ───────────────────────────────────────────────────────

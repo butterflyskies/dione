@@ -275,70 +275,60 @@ impl AuditTrail {
     }
 }
 
-/// The disposition and routed assessments returned by one hook.
+/// Assessment-free disposition returned by one hook.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
-pub enum HookResult {
-    Continue {
-        to_construct: ConstructFeedback,
-        to_audit: AuditTrail,
-    },
-    Rewrite {
-        text: String,
-        to_construct: ConstructFeedback,
-        to_audit: AuditTrail,
-    },
-    Halt {
-        reason: String,
-        to_construct: ConstructFeedback,
-        to_audit: AuditTrail,
-    },
-    Redirect {
-        channel_id: ChannelId,
-        to_construct: ConstructFeedback,
-        to_audit: AuditTrail,
-    },
+pub enum HookDecision {
+    Continue,
+    Rewrite { text: String },
+    Halt { reason: String },
+    Redirect { channel_id: ChannelId },
 }
 
-impl HookResult {
+impl HookDecision {
     fn strictness(&self) -> u8 {
         match self {
-            Self::Continue { .. } => 0,
+            Self::Continue => 0,
             Self::Rewrite { .. } => 1,
             Self::Redirect { .. } => 2,
             Self::Halt { .. } => 3,
         }
     }
+}
 
-    fn routed(&self) -> (&ConstructFeedback, &AuditTrail) {
-        match self {
-            Self::Continue {
-                to_construct,
-                to_audit,
-            }
-            | Self::Rewrite {
-                to_construct,
-                to_audit,
-                ..
-            }
-            | Self::Halt {
-                to_construct,
-                to_audit,
-                ..
-            }
-            | Self::Redirect {
-                to_construct,
-                to_audit,
-                ..
-            } => (to_construct, to_audit),
+/// One hook's decision plus its two assessment streams.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HookOutput {
+    decision: HookDecision,
+    to_construct: ConstructFeedback,
+    to_audit: AuditTrail,
+}
+
+impl HookOutput {
+    pub fn new(
+        decision: HookDecision,
+        to_construct: ConstructFeedback,
+        to_audit: AuditTrail,
+    ) -> Self {
+        Self {
+            decision,
+            to_construct,
+            to_audit,
         }
+    }
+
+    fn decision(&self) -> &HookDecision {
+        &self.decision
+    }
+    fn routed(&self) -> (&ConstructFeedback, &AuditTrail) {
+        (&self.to_construct, &self.to_audit)
     }
 }
 
 /// A synchronous, immutable pre-send hook.
 pub trait PreSendHook: Send + Sync {
     fn name(&self) -> HookName;
-    fn execute(&self, context: &HookContext) -> HookResult;
+    fn execute(&self, context: &HookContext) -> HookOutput;
 }
 
 /// A failure writing one assessment stream.
@@ -463,7 +453,7 @@ impl NoRly {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct PipelineOutcome {
-    verdict: HookResult,
+    decision: HookDecision,
     to_construct: ConstructFeedback,
     to_audit: AuditTrail,
     final_text: Option<String>,
@@ -471,8 +461,8 @@ pub struct PipelineOutcome {
 }
 
 impl PipelineOutcome {
-    pub fn verdict(&self) -> &HookResult {
-        &self.verdict
+    pub fn decision(&self) -> &HookDecision {
+        &self.decision
     }
     pub fn to_construct(&self) -> &ConstructFeedback {
         &self.to_construct
@@ -691,14 +681,15 @@ impl PreSendPipeline {
             let result = catch_unwind(AssertUnwindSafe(|| hook.execute(&working_context)));
             let result = match result {
                 Ok(result) => result,
-                Err(_) if self.mode == PipelineMode::Observe => HookResult::Continue {
-                    to_construct: ConstructFeedback::default(),
-                    to_audit: AuditTrail::new(vec![Assessment::new(
+                Err(_) if self.mode == PipelineMode::Observe => HookOutput::new(
+                    HookDecision::Continue,
+                    ConstructFeedback::default(),
+                    AuditTrail::new(vec![Assessment::new(
                         "internal-error",
                         1.0,
                         "hook panicked during execution",
                     )]),
-                },
+                ),
                 Err(_) => return Err(PipelineError::HookPanicked(hook_name.to_string())),
             };
             let (construct_assessments, audit_assessments) = result.routed();
@@ -711,34 +702,27 @@ impl PreSendPipeline {
                 continue;
             }
 
-            if let HookResult::Rewrite { text, .. } = &result {
+            if let HookDecision::Rewrite { text } = result.decision() {
                 working_context.text.clone_from(text);
             }
-            if strictest
-                .as_ref()
-                .is_none_or(|current: &HookResult| result.strictness() >= current.strictness())
-            {
-                strictest = Some(result.clone());
+            if strictest.as_ref().is_none_or(|current: &HookDecision| {
+                result.decision().strictness() >= current.strictness()
+            }) {
+                strictest = Some(result.decision().clone());
             }
-            if matches!(result, HookResult::Halt { .. }) {
+            if matches!(result.decision(), HookDecision::Halt { .. }) {
                 break;
             }
         }
 
-        let verdict = if self.mode == PipelineMode::Observe {
-            HookResult::Continue {
-                to_construct: ConstructFeedback::default(),
-                to_audit: AuditTrail::default(),
-            }
+        let decision = if self.mode == PipelineMode::Observe {
+            HookDecision::Continue
         } else {
-            strictest.unwrap_or_else(|| HookResult::Continue {
-                to_construct: ConstructFeedback::default(),
-                to_audit: AuditTrail::default(),
-            })
+            strictest.unwrap_or(HookDecision::Continue)
         };
         let final_text = if self.mode == PipelineMode::Observe {
             Some(original_text)
-        } else if matches!(verdict, HookResult::Halt { .. }) {
+        } else if matches!(decision, HookDecision::Halt { .. }) {
             None
         } else {
             Some(working_context.text.clone())
@@ -753,7 +737,7 @@ impl PreSendPipeline {
         }
 
         Ok(PipelineOutcome {
-            verdict,
+            decision,
             to_construct,
             to_audit,
             final_text,
@@ -833,7 +817,7 @@ mod tests {
 
     struct TestHook {
         name: HookName,
-        result: HookResult,
+        result: HookOutput,
     }
 
     impl PreSendHook for TestHook {
@@ -841,7 +825,7 @@ mod tests {
             self.name.clone()
         }
 
-        fn execute(&self, _context: &HookContext) -> HookResult {
+        fn execute(&self, _context: &HookContext) -> HookOutput {
             self.result.clone()
         }
     }
@@ -853,15 +837,12 @@ mod tests {
             HookName::parse("observer").expect("valid test hook name")
         }
 
-        fn execute(&self, context: &HookContext) -> HookResult {
+        fn execute(&self, context: &HookContext) -> HookOutput {
             self.0
                 .lock()
                 .expect("observation lock")
                 .push(context.text().to_owned());
-            HookResult::Continue {
-                to_construct: ConstructFeedback::default(),
-                to_audit: AuditTrail::default(),
-            }
+            output(HookDecision::Continue)
         }
     }
 
@@ -872,7 +853,7 @@ mod tests {
             HookName::parse("panicking-hook").expect("valid test hook name")
         }
 
-        fn execute(&self, _context: &HookContext) -> HookResult {
+        fn execute(&self, _context: &HookContext) -> HookOutput {
             panic!("hook panic")
         }
     }
@@ -890,6 +871,22 @@ mod tests {
         Assessment::new("test", 0.5, detail)
     }
 
+    fn output(decision: HookDecision) -> HookOutput {
+        HookOutput::new(
+            decision,
+            ConstructFeedback::default(),
+            AuditTrail::default(),
+        )
+    }
+
+    fn assessed(
+        decision: HookDecision,
+        to_construct: ConstructFeedback,
+        to_audit: AuditTrail,
+    ) -> HookOutput {
+        HookOutput::new(decision, to_construct, to_audit)
+    }
+
     fn pipeline(hooks: Vec<Box<dyn PreSendHook>>, mode: PipelineMode) -> PreSendPipeline {
         PreSendPipeline::new(hooks)
             .expect("valid pipeline")
@@ -900,18 +897,20 @@ mod tests {
     fn observe_is_default_and_preserves_original_text() {
         let pipeline = PreSendPipeline::new(vec![Box::new(TestHook {
             name: HookName::parse("halt").unwrap(),
-            result: HookResult::Halt {
-                reason: "stop".to_owned(),
-                to_construct: ConstructFeedback::new(vec![assessment("feedback")]),
-                to_audit: AuditTrail::new(vec![assessment("audit")]),
-            },
+            result: assessed(
+                HookDecision::Halt {
+                    reason: "stop".to_owned(),
+                },
+                ConstructFeedback::new(vec![assessment("feedback")]),
+                AuditTrail::new(vec![assessment("audit")]),
+            ),
         })])
         .expect("valid pipeline");
 
         let outcome = pipeline.run(&context(), &NoRly::default()).expect("run");
 
         assert_eq!(outcome.final_text.as_deref(), Some("original"));
-        assert!(matches!(outcome.verdict, HookResult::Continue { .. }));
+        assert!(matches!(outcome.decision, HookDecision::Continue));
         assert!(outcome.to_construct.as_slice().is_empty());
         assert_eq!(outcome.to_audit.as_slice()[0].detail(), "audit");
     }
@@ -939,11 +938,9 @@ mod tests {
             vec![
                 Box::new(TestHook {
                     name: HookName::parse("rewriter").unwrap(),
-                    result: HookResult::Rewrite {
+                    result: output(HookDecision::Rewrite {
                         text: "rewritten".to_owned(),
-                        to_construct: ConstructFeedback::default(),
-                        to_audit: AuditTrail::default(),
-                    },
+                    }),
                 }),
                 Box::new(ObservingHook(Arc::clone(&observed))),
             ],
@@ -961,11 +958,9 @@ mod tests {
         let rewrite = |name: &'static str, text: &str| {
             Box::new(TestHook {
                 name: HookName::parse(name).unwrap(),
-                result: HookResult::Rewrite {
+                result: output(HookDecision::Rewrite {
                     text: text.to_owned(),
-                    to_construct: ConstructFeedback::default(),
-                    to_audit: AuditTrail::default(),
-                },
+                }),
             }) as Box<dyn PreSendHook>
         };
         let pipeline = pipeline(
@@ -976,7 +971,7 @@ mod tests {
         let outcome = pipeline.run(&context(), &NoRly::default()).expect("run");
 
         assert_eq!(outcome.final_text.as_deref(), Some("two"));
-        assert!(matches!(outcome.verdict, HookResult::Rewrite { ref text, .. } if text == "two"));
+        assert!(matches!(outcome.decision, HookDecision::Rewrite { ref text } if text == "two"));
     }
 
     #[test]
@@ -986,10 +981,7 @@ mod tests {
         }
         let hook = TestHook {
             name: HookName::parse("immutable").unwrap(),
-            result: HookResult::Continue {
-                to_construct: ConstructFeedback::default(),
-                to_audit: AuditTrail::default(),
-            },
+            result: output(HookDecision::Continue),
         };
         let context = context();
 
@@ -1004,11 +996,9 @@ mod tests {
             vec![
                 Box::new(TestHook {
                     name: HookName::parse("bypassed").unwrap(),
-                    result: HookResult::Halt {
+                    result: output(HookDecision::Halt {
                         reason: "stop".to_owned(),
-                        to_construct: ConstructFeedback::default(),
-                        to_audit: AuditTrail::default(),
-                    },
+                    }),
                 }),
                 Box::new(ObservingHook(Arc::clone(&observed))),
             ],
@@ -1036,10 +1026,11 @@ mod tests {
         let pipeline = pipeline(
             vec![Box::new(TestHook {
                 name: HookName::parse("real-hook").unwrap(),
-                result: HookResult::Continue {
-                    to_construct: ConstructFeedback::default(),
-                    to_audit: AuditTrail::new(vec![assessment("finding")]),
-                },
+                result: assessed(
+                    HookDecision::Continue,
+                    ConstructFeedback::default(),
+                    AuditTrail::new(vec![assessment("finding")]),
+                ),
             })],
             PipelineMode::Observe,
         );
@@ -1049,6 +1040,45 @@ mod tests {
         assert_eq!(
             outcome.to_audit.as_slice()[0].hook_name().unwrap().as_str(),
             "real-hook"
+        );
+    }
+
+    #[test]
+    fn assessments_are_attributed_once_and_not_duplicated_into_decision() {
+        let pipeline = pipeline(
+            vec![Box::new(TestHook {
+                name: HookName::parse("one-source").unwrap(),
+                result: assessed(
+                    HookDecision::Rewrite {
+                        text: "rewritten".to_owned(),
+                    },
+                    ConstructFeedback::new(vec![assessment("construct")]),
+                    AuditTrail::new(vec![assessment("audit")]),
+                ),
+            })],
+            PipelineMode::Enforce,
+        );
+
+        let outcome = pipeline.run(&context(), &NoRly::default()).unwrap();
+
+        assert!(
+            matches!(outcome.decision(), HookDecision::Rewrite { text } if text == "rewritten")
+        );
+        assert_eq!(outcome.to_construct().as_slice().len(), 1);
+        assert_eq!(outcome.to_audit().as_slice().len(), 1);
+        assert_eq!(
+            outcome.to_construct().as_slice()[0]
+                .hook_name()
+                .unwrap()
+                .as_str(),
+            "one-source"
+        );
+        assert_eq!(
+            outcome.to_audit().as_slice()[0]
+                .hook_name()
+                .unwrap()
+                .as_str(),
+            "one-source"
         );
     }
 
@@ -1064,10 +1094,7 @@ mod tests {
 
     #[test]
     fn duplicate_and_invalid_hook_names_are_rejected() {
-        let empty = || HookResult::Continue {
-            to_construct: ConstructFeedback::default(),
-            to_audit: AuditTrail::default(),
-        };
+        let empty = || output(HookDecision::Continue);
         assert!(matches!(
             PreSendPipeline::new(vec![
                 Box::new(TestHook { name: HookName::parse("same").unwrap(), result: empty() }),
@@ -1099,10 +1126,7 @@ mod tests {
     fn unknown_hook_override_is_rejected_before_audit() {
         let pipeline = PreSendPipeline::new(vec![Box::new(TestHook {
             name: HookName::parse("known").unwrap(),
-            result: HookResult::Continue {
-                to_construct: ConstructFeedback::default(),
-                to_audit: AuditTrail::default(),
-            },
+            result: output(HookDecision::Continue),
         })])
         .unwrap();
         let unknown = HookName::parse("unknown").unwrap();
@@ -1140,7 +1164,7 @@ mod tests {
             .run(&context(), &NoRly::default())
             .unwrap();
 
-        assert!(matches!(outcome.verdict(), HookResult::Continue { .. }));
+        assert!(matches!(outcome.decision(), HookDecision::Continue));
         assert_eq!(outcome.final_text(), Some("original"));
         assert!(outcome.to_construct().as_slice().is_empty());
         assert!(outcome.to_audit().as_slice().is_empty());
@@ -1203,7 +1227,7 @@ mod tests {
             .expect("configured pipeline")
             .expect("enabled pipeline");
         let outcome = enabled.run(&context(), &NoRly::default()).expect("run");
-        assert!(matches!(outcome.verdict, HookResult::Continue { .. }));
+        assert!(matches!(outcome.decision, HookDecision::Continue));
 
         assert!(
             configured_pipeline(false, Vec::new())
