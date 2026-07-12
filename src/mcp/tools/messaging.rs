@@ -215,15 +215,24 @@ async fn prepare_outbound(
     ctx: &MessagingCtx,
     draft: OutboundDraft<'_>,
 ) -> Result<PreparedOutbound, Value> {
-    if let OutboundDestination::Channel(channel_id) = draft.destination {
-        check_outbound(ctx, channel_id).await?;
-    }
-    let Some(pipeline) = ctx.pre_send_pipeline.clone() else {
-        if !draft.pre_send.bypasses.is_empty() {
+    let prepared_pipeline = match ctx.pre_send_pipeline.clone() {
+        Some(pipeline) => {
+            let no_rly = pipeline
+                .no_rly(draft.pre_send.bypasses)
+                .map_err(|error| json!({ "error": error.to_string() }))?;
+            Some((pipeline, no_rly))
+        }
+        None if !draft.pre_send.bypasses.is_empty() => {
             return Err(json!({
                 "error": "no_rly_hooks named hooks, but no pre-send hooks are registered"
             }));
         }
+        None => None,
+    };
+    if let OutboundDestination::Channel(channel_id) = draft.destination {
+        check_outbound(ctx, channel_id).await?;
+    }
+    let Some((pipeline, no_rly)) = prepared_pipeline else {
         return Ok(PreparedOutbound {
             destination: draft.destination,
             text: draft.text.to_owned(),
@@ -249,9 +258,6 @@ async fn prepare_outbound(
             }
         }
     };
-    let no_rly = pipeline
-        .no_rly(draft.pre_send.bypasses)
-        .map_err(|error| json!({ "error": error.to_string() }))?;
     let hook_context = HookContext::new(
         draft.text,
         draft.destination,
