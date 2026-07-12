@@ -64,12 +64,12 @@ pub struct DioneServer {
 
 impl DioneServer {
     pub(crate) fn messaging_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> MessagingCtx {
-        MessagingCtx {
-            http: self.http.clone(),
-            state: self.state.clone(),
+        MessagingCtx::new(
+            self.http.clone(),
+            self.state.clone(),
             config,
-            state_dir: self.state_dir.clone(),
-        }
+            self.state_dir.clone(),
+        )
     }
 
     pub(crate) fn introspection_ctx(
@@ -576,6 +576,35 @@ mod tests {
         timestamp::Timestamp,
     };
     use serenity::model::id::{ChannelId, MessageId, UserId};
+
+    #[test]
+    fn messaging_context_uses_process_installed_pipeline() {
+        let pipeline = crate::pre_send::configured_pipeline(true, Vec::new())
+            .expect("configured pipeline")
+            .expect("enabled pipeline");
+        crate::pre_send::install_pipeline(Some(pipeline));
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let state_dir =
+            camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf-8 path");
+        let (notification_tx, _notification_rx) = mpsc::channel(1);
+        let server = DioneServer {
+            state: crate::state::new_state(),
+            queue: Arc::new(Mutex::new(crate::queue::AccessQueue::load(&state_dir))),
+            http: Arc::new(serenity::http::Http::new("fake")),
+            state_dir,
+            notification_tx,
+            discord_cmd_tx: None,
+            trace_controller: TraceLevelController::noop(),
+            mode: TransportMode::ClaudeCode,
+            codex_queue: None,
+            codex_thread_binding: None,
+        };
+
+        let context = server.messaging_ctx(Arc::new(LoadedConfig::from_raw(Config::default())));
+
+        assert!(context.has_pre_send_pipeline());
+        crate::pre_send::install_pipeline(None);
+    }
 
     fn config_with_channel_delay(channel_id: u64, delay_ms: u64) -> LoadedConfig {
         let mut raw = Config::default();

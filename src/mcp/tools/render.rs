@@ -111,7 +111,23 @@ pub async fn render_latex_to_channel(
     latex: &str,
     caption: Option<&str>,
 ) -> Value {
+    render_latex_to_channel_with_hook_overrides(ctx, channel_id, latex, caption, &[]).await
+}
+
+pub async fn render_latex_to_channel_with_hook_overrides(
+    ctx: &MessagingCtx,
+    channel_id: ChannelId,
+    latex: &str,
+    caption: Option<&str>,
+    no_rly_hooks: &[crate::pre_send::HookName],
+) -> Value {
     use serenity::builder::CreateAttachment;
+
+    if let Some(error) =
+        crate::mcp::tools::messaging::reject_captionless_hook_overrides(caption, no_rly_hooks)
+    {
+        return error;
+    }
 
     if let Err(e) = crate::mcp::tools::messaging::check_outbound(ctx, channel_id).await {
         return e;
@@ -123,5 +139,51 @@ pub async fn render_latex_to_channel(
     };
 
     let attachment = CreateAttachment::bytes(png_bytes.as_slice(), "math.png");
-    crate::mcp::tools::messaging::send_attachment(ctx, channel_id, attachment, caption).await
+    crate::mcp::tools::messaging::send_attachment_with_hook_overrides(
+        ctx,
+        channel_id,
+        attachment,
+        caption,
+        no_rly_hooks,
+        crate::mcp::tools::messaging::OutboundSurface::RenderLatexCaption,
+    )
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use camino::Utf8PathBuf;
+
+    use super::*;
+    use crate::config::{Config, LoadedConfig};
+    use crate::mcp::tools::messaging::MessagingCtx;
+    use crate::pre_send::HookName;
+    use crate::state::new_state;
+
+    #[tokio::test]
+    async fn captionless_render_to_channel_rejects_hook_overrides_before_rendering() {
+        let ctx = MessagingCtx::new(
+            Arc::new(serenity::http::Http::new("fake")),
+            new_state(),
+            Arc::new(LoadedConfig::from_raw(Config::default())),
+            Utf8PathBuf::from("/tmp"),
+        );
+        let hook = HookName::parse("tier-1").unwrap();
+
+        let result = render_latex_to_channel_with_hook_overrides(
+            &ctx,
+            ChannelId::new(42),
+            "this is deliberately not latex",
+            None,
+            &[hook],
+        )
+        .await;
+
+        assert_eq!(
+            result["error"],
+            "no_rly_hooks cannot be used when no caption is sent"
+        );
+    }
 }

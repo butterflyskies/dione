@@ -4,6 +4,11 @@
 # IANA timezone for timestamps (e.g. "America/Los_Angeles"). Defaults to UTC.
 # timezone = "America/Los_Angeles"
 
+[pre_send]
+# Enabled installs the log-only Observe pipeline. False explicitly bypasses it.
+enabled = true
+construct_id = "dione"
+
 [access]
 dm_policy = "queue"     # "queue", "drop", or "disabled"
 allow_from = []         # Discord user IDs that can DM the bot
