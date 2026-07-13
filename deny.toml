@@ -12,16 +12,14 @@ ignore = [
     { id = "RUSTSEC-2026-0098", reason = "rustls-webpki 0.102: transitive via serenity → tokio-tungstenite 0.21 → rustls 0.22" },
     { id = "RUSTSEC-2026-0099", reason = "rustls-webpki 0.102: transitive via serenity → tokio-tungstenite 0.21 → rustls 0.22" },
     { id = "RUSTSEC-2026-0104", reason = "rustls-webpki 0.102: transitive via serenity → tokio-tungstenite 0.21 → rustls 0.22" },
-    { id = "RUSTSEC-2021-0145", reason = "bincode: transitive via typst → syntect, no alternative" },
     { id = "RUSTSEC-2025-0141", reason = "bincode: transitive via typst → syntect, unmaintained, no alternative" },
-    { id = "RUSTSEC-2024-0437", reason = "fxhash: transitive via typst → two-face → syntect, no alternative" },
     { id = "RUSTSEC-2025-0057", reason = "fxhash: transitive via typst → two-face → syntect, unmaintained, no alternative" },
-    { id = "RUSTSEC-2023-0031", reason = "paste: transitive via typst, deep dep, no control" },
     { id = "RUSTSEC-2024-0436", reason = "paste: transitive via typst, unmaintained, no control" },
     { id = "RUSTSEC-2024-0320", reason = "yaml-rust: transitive via typst → syntect, no alternative" },
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser: unmaintained, transitive via typst → fontdb/rustybuzz/pixglyph, no control" },
     { id = "RUSTSEC-2026-0194", reason = "quick-xml: transitive via typst → citationberg/syntect, pinned by typst, no control" },
     { id = "RUSTSEC-2026-0195", reason = "quick-xml: transitive via typst → citationberg/syntect, pinned by typst, no control" },
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz: unmaintained, transitive via typst/usvg, no safe upgrade currently available" },
 ]
 
 # --- Licenses -------------------------------------------------------------
