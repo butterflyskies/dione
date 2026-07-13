@@ -6,8 +6,8 @@ use std::{env, io, time::Duration};
 use thiserror::Error;
 use tokio::net::UnixStream;
 use tokio_tungstenite::{
-    WebSocketStream, client_async,
-    tungstenite::{Error as WebSocketError, Message},
+    WebSocketStream, client_async_with_config,
+    tungstenite::{Error as WebSocketError, Message, protocol::WebSocketConfig},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -19,6 +19,7 @@ const EVENT_WAIT: Duration = Duration::from_secs(45);
 // reading the thread, and starting or steering a turn. Keep the lease well
 // beyond that bound so a successfully accepted turn can still be acknowledged.
 const EVENT_LEASE: Duration = Duration::from_secs(5 * 60);
+const MAX_WEBSOCKET_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct CodexDeliveryConfig {
@@ -72,6 +73,8 @@ pub enum CodexDeliveryError {
         #[source]
         source: Box<WebSocketError>,
     },
+    #[error("Codex app-server WebSocket handshake on `{path}` timed out")]
+    HandshakeTimeout { path: Utf8PathBuf },
     #[error("Codex app-server request `{method}` timed out")]
     Timeout { method: &'static str },
     #[error("Codex app-server closed the connection during `{method}`")]
@@ -111,8 +114,13 @@ impl AppServerClient {
                 path: config.socket_path.clone(),
                 source,
             })?;
-        let (stream, _) = client_async("ws://localhost/", unix_stream)
+        let handshake =
+            client_async_with_config("ws://localhost/", unix_stream, Some(websocket_config()));
+        let (stream, _) = tokio::time::timeout(config.request_timeout, handshake)
             .await
+            .map_err(|_| CodexDeliveryError::HandshakeTimeout {
+                path: config.socket_path.clone(),
+            })?
             .map_err(|source| CodexDeliveryError::Handshake {
                 path: config.socket_path.clone(),
                 source: Box::new(source),
@@ -248,13 +256,28 @@ impl AppServerClient {
         method: &'static str,
         message: Value,
     ) -> Result<(), CodexDeliveryError> {
-        self.stream
-            .send(Message::Text(message.to_string()))
-            .await
-            .map_err(|source| CodexDeliveryError::Protocol {
-                method,
-                source: Box::new(source),
-            })
+        tokio::time::timeout(
+            self.config.request_timeout,
+            self.stream.send(Message::Text(message.to_string())),
+        )
+        .await
+        .map_err(|_| CodexDeliveryError::Timeout { method })?
+        .map_err(|source| CodexDeliveryError::Protocol {
+            method,
+            source: Box::new(source),
+        })
+    }
+}
+
+fn websocket_config() -> WebSocketConfig {
+    WebSocketConfig {
+        // App-server responses such as `thread/resume` may contain an entire
+        // long-running thread in one frame. Tungstenite's default frame limit
+        // is 16 MiB even though its message limit is 64 MiB.
+        max_message_size: Some(MAX_WEBSOCKET_MESSAGE_SIZE),
+        max_frame_size: Some(MAX_WEBSOCKET_MESSAGE_SIZE),
+        max_write_buffer_size: MAX_WEBSOCKET_MESSAGE_SIZE + 128 * 1024,
+        ..WebSocketConfig::default()
     }
 }
 
@@ -287,8 +310,18 @@ fn event_input(event: &LeasedEvent) -> Value {
 pub async fn run_delivery_worker(
     queue: CodexEventQueue,
     config: CodexDeliveryConfig,
+    thread_binding: tokio::sync::watch::Receiver<Option<CodexThreadId>>,
+    cancel: CancellationToken,
+) -> Result<(), CodexDeliveryError> {
+    run_delivery_worker_with_lease(queue, config, thread_binding, cancel, EVENT_LEASE).await
+}
+
+async fn run_delivery_worker_with_lease(
+    queue: CodexEventQueue,
+    config: CodexDeliveryConfig,
     mut thread_binding: tokio::sync::watch::Receiver<Option<CodexThreadId>>,
     cancel: CancellationToken,
+    event_lease: Duration,
 ) -> Result<(), CodexDeliveryError> {
     let consumer_id = queue.register_live_consumer().await?;
     let mut client = None;
@@ -317,11 +350,28 @@ pub async fn run_delivery_worker(
                 client = None;
                 continue;
             },
-            event = queue.next_live_event(&consumer_id, &thread_id, EVENT_WAIT, EVENT_LEASE) => event?,
+            event = queue.next_live_event(&consumer_id, &thread_id, EVENT_WAIT, event_lease) => event?,
         };
-        let Some(event) = event else { continue };
+        let Some(mut event) = event else { continue };
 
         loop {
+            if event.lease_expires_at <= chrono::Utc::now() {
+                let replacement = queue
+                    .next_live_event(&consumer_id, &thread_id, Duration::ZERO, event_lease)
+                    .await?;
+                let Some(replacement) = replacement else {
+                    // The event may have been acknowledged or rerouted while
+                    // its lease expired. Return to the durable queue instead
+                    // of retrying a token that can no longer be acknowledged.
+                    break;
+                };
+                tracing::debug!(
+                    event_id = %replacement.event_id,
+                    "renewed expired Codex live-delivery lease"
+                );
+                event = replacement;
+            }
+
             if client.is_none() {
                 let connection = tokio::select! {
                     biased;
@@ -335,13 +385,26 @@ pub async fn run_delivery_worker(
                     connection = AppServerClient::connect(config.clone(), thread_id.clone()) => connection,
                 };
                 match connection {
-                    Ok(connected) => client = Some(connected),
+                    Ok(connected) => {
+                        client = Some(connected);
+                        // Recheck the lease after connection setup, which can
+                        // consume several request timeouts during an outage.
+                        continue;
+                    }
                     Err(error) => {
                         tracing::warn!(event_id = %event.event_id, error = %error, "failed to connect Codex live delivery");
-                        wait_to_retry(&cancel, retry_delay).await;
-                        retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
-                        if cancel.is_cancelled() {
-                            return Ok(());
+                        match wait_to_retry_or_rebind(&cancel, &mut thread_binding, retry_delay)
+                            .await
+                        {
+                            RetryWait::Elapsed => {
+                                retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
+                            }
+                            RetryWait::BindingChanged => {
+                                client = None;
+                                retry_delay = INITIAL_RETRY_DELAY;
+                                break;
+                            }
+                            RetryWait::Stopped => return Ok(()),
                         }
                         continue;
                     }
@@ -372,10 +435,15 @@ pub async fn run_delivery_worker(
                 Err(error) => {
                     tracing::warn!(event_id = %event.event_id, error = %error, "failed to deliver live Codex event; retrying before later events");
                     client = None;
-                    wait_to_retry(&cancel, retry_delay).await;
-                    retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
-                    if cancel.is_cancelled() {
-                        return Ok(());
+                    match wait_to_retry_or_rebind(&cancel, &mut thread_binding, retry_delay).await {
+                        RetryWait::Elapsed => {
+                            retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
+                        }
+                        RetryWait::BindingChanged => {
+                            retry_delay = INITIAL_RETRY_DELAY;
+                            break;
+                        }
+                        RetryWait::Stopped => return Ok(()),
                     }
                 }
             }
@@ -393,6 +461,20 @@ async fn acknowledge_with_retry(
     loop {
         match queue.acknowledge(consumer_id, &event.delivery_token).await {
             Ok(()) => return Ok(()),
+            Err(CodexQueueError::UnknownDeliveryToken) => {
+                // The durable event may already have been acknowledged, or a
+                // newer lease may own it. In either case this token can never
+                // succeed. Return to the queue; a still-pending event will be
+                // redelivered with the same clientUserMessageId.
+                tracing::warn!(
+                    event_id = %event.event_id,
+                    "Codex live-delivery acknowledgement token is no longer current"
+                );
+                return Ok(());
+            }
+            Err(error) if !matches!(error, CodexQueueError::InboxIo { .. }) => {
+                return Err(error.into());
+            }
             Err(error) => {
                 tracing::error!(event_id = %event.event_id, error = %error, "failed to persist live Codex acknowledgement; retrying");
                 wait_to_retry(cancel, delay).await;
@@ -410,6 +492,31 @@ async fn wait_to_retry(cancel: &CancellationToken, delay: Duration) {
         biased;
         _ = cancel.cancelled() => {},
         _ = tokio::time::sleep(delay) => {},
+    }
+}
+
+enum RetryWait {
+    Elapsed,
+    BindingChanged,
+    Stopped,
+}
+
+async fn wait_to_retry_or_rebind(
+    cancel: &CancellationToken,
+    thread_binding: &mut tokio::sync::watch::Receiver<Option<CodexThreadId>>,
+    delay: Duration,
+) -> RetryWait {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => RetryWait::Stopped,
+        changed = thread_binding.changed() => {
+            if changed.is_ok() {
+                RetryWait::BindingChanged
+            } else {
+                RetryWait::Stopped
+            }
+        },
+        _ = tokio::time::sleep(delay) => RetryWait::Elapsed,
     }
 }
 
@@ -444,6 +551,148 @@ mod tests {
             active_turn_id(&thread),
             Err(CodexDeliveryError::ActiveTurnUnknown)
         ));
+    }
+
+    #[test]
+    fn websocket_limits_are_bounded_above_tungstenite_frame_default() {
+        let config = websocket_config();
+        assert_eq!(config.max_message_size, Some(MAX_WEBSOCKET_MESSAGE_SIZE));
+        assert_eq!(config.max_frame_size, Some(MAX_WEBSOCKET_MESSAGE_SIZE));
+        assert_eq!(
+            config.max_write_buffer_size,
+            MAX_WEBSOCKET_MESSAGE_SIZE + 128 * 1024
+        );
+        assert!(MAX_WEBSOCKET_MESSAGE_SIZE > 16 * 1024 * 1024);
+    }
+
+    #[tokio::test]
+    async fn times_out_stalled_websocket_handshake() {
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let config = CodexDeliveryConfig {
+            socket_path: socket_path.clone(),
+            request_timeout: Duration::from_millis(100),
+        };
+
+        let error = match AppServerClient::connect(
+            config,
+            CodexThreadId::parse("thread-stalled-handshake").unwrap(),
+        )
+        .await
+        {
+            Ok(_) => panic!("stalled handshake unexpectedly succeeded"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            CodexDeliveryError::HandshakeTimeout { path } if path == socket_path
+        ));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn times_out_when_upgraded_peer_stops_reading() {
+        const OUTGOING_SIZE: usize = 8 * 1024 * 1024;
+
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            while let Some(message) = websocket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                websocket
+                    .send(Message::Text(json!({ "id": id, "result": {} }).to_string()))
+                    .await
+                    .unwrap();
+                if request["method"] == "thread/resume" {
+                    std::future::pending::<()>().await;
+                }
+            }
+        });
+        let config = CodexDeliveryConfig {
+            socket_path,
+            request_timeout: Duration::from_secs(5),
+        };
+        let mut client = AppServerClient::connect(
+            config,
+            CodexThreadId::parse("thread-stalled-write").unwrap(),
+        )
+        .await
+        .unwrap();
+        client.config.request_timeout = Duration::from_millis(100);
+
+        let error = client
+            .send(
+                "stalled/write",
+                json!({ "payload": "x".repeat(OUTGOING_SIZE) }),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            CodexDeliveryError::Timeout {
+                method: "stalled/write"
+            }
+        ));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn accepts_single_frame_larger_than_tungstenite_default() {
+        const PAYLOAD_SIZE: usize = 16 * 1024 * 1024 + 1;
+
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            while let Some(message) = websocket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                let result = if request["method"] == "initialize" {
+                    json!({ "payload": "x".repeat(PAYLOAD_SIZE) })
+                } else {
+                    json!({})
+                };
+                websocket
+                    .send(Message::Text(
+                        json!({ "id": id, "result": result }).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                if request["method"] == "thread/resume" {
+                    break;
+                }
+            }
+        });
+        let config = CodexDeliveryConfig {
+            socket_path,
+            request_timeout: Duration::from_secs(5),
+        };
+
+        AppServerClient::connect(config, CodexThreadId::parse("thread-large").unwrap())
+            .await
+            .unwrap();
+        server.await.unwrap();
     }
 
     #[tokio::test]
@@ -519,15 +768,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transient_failure_retries_same_event_before_later_events() {
+    async fn reset_peer_reacquires_expired_lease_and_retries_before_later_events() {
         let dir = TempDir::new().unwrap();
         let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
         let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
         let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
-        let rejected_first = Arc::new(AtomicBool::new(false));
+        let reset_first = Arc::new(AtomicBool::new(false));
         let (started_tx, mut started_rx) = mpsc::unbounded_channel();
         let server = tokio::spawn({
-            let rejected_first = rejected_first.clone();
+            let reset_first = reset_first.clone();
             async move {
                 loop {
                     let (stream, _) = listener.accept().await.unwrap();
@@ -544,19 +793,21 @@ mod tests {
                             continue;
                         };
                         let method = request["method"].as_str().unwrap();
-                        let response = if method == "thread/read" {
-                            json!({ "id": id, "result": { "thread": { "status": { "type": "idle" }, "turns": [] } } })
-                        } else if method == "turn/start" {
+                        if method == "turn/start" {
                             let message_id = request["params"]["clientUserMessageId"]
                                 .as_str()
                                 .unwrap()
                                 .to_owned();
                             started_tx.send(message_id).unwrap();
-                            if !rejected_first.swap(true, Ordering::SeqCst) {
-                                json!({ "id": id, "error": { "message": "transient" } })
-                            } else {
-                                json!({ "id": id, "result": {} })
+                            if !reset_first.swap(true, Ordering::SeqCst) {
+                                // Simulate the app-server peer vanishing after
+                                // it receives a request but before Dione sees
+                                // the response.
+                                break;
                             }
+                        }
+                        let response = if method == "thread/read" {
+                            json!({ "id": id, "result": { "thread": { "status": { "type": "idle" }, "turns": [] } } })
                         } else {
                             json!({ "id": id, "result": {} })
                         };
@@ -577,7 +828,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let (_binding_tx, binding_rx) =
             tokio::sync::watch::channel(Some(CodexThreadId::parse("thread-order").unwrap()));
-        let worker = tokio::spawn(run_delivery_worker(
+        let worker = tokio::spawn(run_delivery_worker_with_lease(
             queue.clone(),
             CodexDeliveryConfig {
                 socket_path,
@@ -585,6 +836,7 @@ mod tests {
             },
             binding_rx,
             cancel.clone(),
+            Duration::from_millis(50),
         ));
         tokio::time::timeout(Duration::from_secs(1), async {
             while queue.status().await.primary_consumer.is_none() {
@@ -623,6 +875,169 @@ mod tests {
         cancel.cancel();
         worker.await.unwrap().unwrap();
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn transient_rejection_retries_same_event_before_later_events() {
+        let dir = TempDir::new().unwrap();
+        let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let rejected_first = Arc::new(AtomicBool::new(false));
+        let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+        let server = tokio::spawn({
+            let rejected_first = rejected_first.clone();
+            async move {
+                loop {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut websocket = accept_async(stream).await.unwrap();
+                    while let Some(message) = websocket.next().await {
+                        let Ok(Message::Text(text)) = message else {
+                            break;
+                        };
+                        let request: Value = serde_json::from_str(&text).unwrap();
+                        let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                            continue;
+                        };
+                        let method = request["method"].as_str().unwrap();
+                        let response = if method == "thread/read" {
+                            json!({ "id": id, "result": { "thread": { "status": { "type": "idle" }, "turns": [] } } })
+                        } else if method == "turn/start" {
+                            started_tx
+                                .send(
+                                    request["params"]["clientUserMessageId"]
+                                        .as_str()
+                                        .unwrap()
+                                        .to_owned(),
+                                )
+                                .unwrap();
+                            if !rejected_first.swap(true, Ordering::SeqCst) {
+                                json!({ "id": id, "error": { "message": "transient" } })
+                            } else {
+                                json!({ "id": id, "result": {} })
+                            }
+                        } else {
+                            json!({ "id": id, "result": {} })
+                        };
+                        websocket
+                            .send(Message::Text(response.to_string()))
+                            .await
+                            .unwrap();
+                    }
+                }
+            }
+        });
+
+        let queue = CodexEventQueue::load(&state_path).unwrap();
+        queue
+            .bind_live_thread(Some(CodexThreadId::parse("thread-reject").unwrap()))
+            .await
+            .unwrap();
+        let cancel = CancellationToken::new();
+        let (_binding_tx, binding_rx) =
+            tokio::sync::watch::channel(Some(CodexThreadId::parse("thread-reject").unwrap()));
+        let worker = tokio::spawn(run_delivery_worker(
+            queue.clone(),
+            CodexDeliveryConfig {
+                socket_path,
+                request_timeout: Duration::from_secs(1),
+            },
+            binding_rx,
+            cancel.clone(),
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while queue.status().await.primary_consumer.is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        queue
+            .enqueue(json!({ "params": { "meta": { "message_id": "first" } } }))
+            .await
+            .unwrap();
+        queue
+            .enqueue(json!({ "params": { "meta": { "message_id": "second" } } }))
+            .await
+            .unwrap();
+
+        let mut starts = Vec::new();
+        for _ in 0..3 {
+            starts.push(
+                tokio::time::timeout(Duration::from_secs(5), started_rx.recv())
+                    .await
+                    .unwrap()
+                    .unwrap(),
+            );
+        }
+        assert_eq!(starts, ["dione-0", "dione-0", "dione-1"]);
+
+        cancel.cancel();
+        worker.await.unwrap().unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn stale_acknowledgement_token_does_not_retry_forever() {
+        let dir = TempDir::new().unwrap();
+        let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
+        let queue = CodexEventQueue::load(&state_path).unwrap();
+        let thread_id = CodexThreadId::parse("thread-stale-ack").unwrap();
+        queue
+            .bind_live_thread(Some(thread_id.clone()))
+            .await
+            .unwrap();
+        let consumer_id = queue.register_live_consumer().await.unwrap();
+        queue
+            .enqueue(json!({ "params": { "meta": { "message_id": "stale" } } }))
+            .await
+            .unwrap();
+        let stale = queue
+            .next_live_event(&consumer_id, &thread_id, Duration::ZERO, Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+        let current = queue
+            .next_live_event(
+                &consumer_id,
+                &thread_id,
+                Duration::ZERO,
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(stale.delivery_token, current.delivery_token);
+
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            acknowledge_with_retry(&queue, &consumer_id, &stale, &CancellationToken::new()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        queue
+            .acknowledge(&consumer_id, &current.delivery_token)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn thread_rebind_interrupts_retry_backoff() {
+        let cancel = CancellationToken::new();
+        let (binding_tx, mut binding_rx) = tokio::sync::watch::channel(Some(
+            CodexThreadId::parse("thread-before-rebind").unwrap(),
+        ));
+        let wait = wait_to_retry_or_rebind(&cancel, &mut binding_rx, Duration::from_secs(30));
+        tokio::pin!(wait);
+
+        binding_tx
+            .send(Some(CodexThreadId::parse("thread-after-rebind").unwrap()))
+            .unwrap();
+        let outcome = tokio::time::timeout(Duration::from_millis(100), wait)
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RetryWait::BindingChanged));
     }
 
     #[tokio::test]
