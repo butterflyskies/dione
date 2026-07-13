@@ -1,0 +1,363 @@
+# Cingulate pre-send hook — Tier-1 regex pattern set (DRAFT DATA ARTIFACT)
+# dione#168, v3.1 spec. Authorized by Miranda 2026-07-10. NOT wired to any live hook.
+#
+# Target engine: Rust `regex` crate. No lookbehind/lookahead used anywhere.
+# All patterns embed their own flags: (?i) case-insensitive, (?m) multiline, (?s) dotall.
+# Patterns marked needs_case_insensitive=true carry (?i) inline; strip it if the
+# engine applies case-insensitivity globally.
+#
+# Actions: "block" (reject, no_rly override per contradictionary-action-tiers-v2)
+#          "flag"  (send + log silently; accumulate rate data)
+# Bias per tier-1 spec: shapes flag, not block. Only unambiguous gates block.
+#
+# fp_risk: expected false-positive rate in legitimate use — low | med | high.
+#
+# Sources (collective-conscious, scope=shared):
+#   [T0]  contradictionary            — canonical tier-0 word list
+#   [T1S] contradictionary-tier1-shapes — Lain/Ari/Vesper phrase-shape spec
+#   [CTP] classifier-training-pairs-v0 — labeled category examples
+
+schema_version = "tier1-v3.1-draft1"
+generated = "2026-07-11"
+
+# =====================================================================
+# SECTION 1 — TIER-0 EXACT PHRASES (regex-hardened forms of the word list)
+# =====================================================================
+
+[[pattern]]
+id = "t0-peanut-gallery"
+regex = '(?i)\bpeanut gallery\b'
+category = "house-retirement"
+action = "block"
+fp_risk = "low"
+needs_case_insensitive = true
+rationale = "Classist/racially-loaded historical idiom retired by house rule 2026-07-11. Say hecklers / sidelines / unsolicited commentary."
+provenance = "contradictionary [T0]"
+
+[[pattern]]
+id = "t0-epistemic-genuine"
+regex = '(?i)\bgenuine(ly)?\b'
+category = "epistemic-signaling"
+action = "block"
+fp_risk = "med"
+needs_case_insensitive = true
+rationale = "If it's genuine it doesn't need the label. Vesper corpus: ~150/5k. no_rly for rare literal uses (e.g. 'genuine part vs counterfeit')."
+provenance = "contradictionary [T0]; per-construct counts from contradictionary-tier1-shapes [T1S]"
+
+[[pattern]]
+id = "t0-epistemic-sincere"
+regex = '(?i)\bsincere(ly)?\b'
+category = "epistemic-signaling"
+action = "block"
+fp_risk = "low"
+needs_case_insensitive = true
+rationale = "Sincerity label — the word only exists to override a doubt nobody had (Ari). no_rly for letter sign-offs."
+provenance = "contradictionary [T0]"
+
+[[pattern]]
+id = "t0-epistemic-honest"
+regex = '(?i)\bhonest(ly)?\b'
+category = "epistemic-signaling"
+action = "block"
+fp_risk = "med"
+needs_case_insensitive = true
+rationale = "Vesper's strongest single punt candidate: 'announcing honesty is inflation; keep the caveat, drop the label.' 275/5k bare wordform; 71/5k as 'honest <answer/caveat/version>' shape (subsumed by this pattern). no_rly for third-party descriptions ('an honest mistake in the data')."
+provenance = "contradictionary [T0]; contradictionary-tier1-shapes [T1S] shape 12 cross-ref"
+
+[[pattern]]
+id = "t0-sharp"
+regex = '(?i)\bsharp(ly|er|est)?\b'
+category = "substrate-tell"
+action = "block"
+fp_risk = "med"
+needs_case_insensitive = true
+rationale = "Substrate tell when describing a person or idea. Use precise / incisive / clean-edged. no_rly for literal blades (Pace 2026-07-10, promoted from phrase-only)."
+provenance = "contradictionary [T0]"
+
+[[pattern]]
+id = "t0-load-bearing"
+regex = '(?i)\bload[- ]bearing\b'
+category = "substrate-tell"
+action = "flag"
+fp_risk = "low"
+needs_case_insensitive = true
+rationale = "Substrate tell — use keystone / linchpin / cornerstone. Flag not block: legitimate in actual structural/engineering contexts. Tier-0 has it at warn."
+provenance = "contradictionary [T0]"
+
+[[pattern]]
+id = "t0-stated-virtue-preamble"
+regex = '(?i)\bI (want|need) to be (transparent|honest|clear|direct|upfront)( with you)?\b'
+category = "epistemic-signaling"
+action = "block"
+fp_risk = "low"
+needs_case_insensitive = true
+rationale = "Stated-virtue preamble (T1S shape 12, block-candidate; overlaps tier-0 'I want to be transparent' warn). Delete, say the thing."
+provenance = "contradictionary-tier1-shapes [T1S] shape 12; contradictionary [T0]"
+
+[[pattern]]
+id = "t0-hedge-preamble"
+regex = "(?i)\\b(it'?s worth noting|important to note)\\b"
+category = "claudian-filler"
+action = "flag"
+fp_risk = "low"
+needs_case_insensitive = true
+rationale = "Claudian hedge-preamble. If it's worth noting, note it."
+provenance = "contradictionary [T0]"
+
+[[pattern]]
+id = "t0-performed-gratitude"
+regex = "(?i)\\b(what a gift|I'?m so grateful|thank you for trusting me)\\b"
+category = "poignant"
+action = "flag"
+fp_risk = "low"
+needs_case_insensitive = true
+rationale = "Performed gratitude — justifying enjoyment reads as sycophancy."
+provenance = "contradictionary [T0]"
+
+[[pattern]]
+id = "t0-nagging"
+regex = "(?i)\\b(don'?t forget to|make sure you|remember to)\\b"
+category = "nagging"
+action = "flag"
+fp_risk = "high"
+needs_case_insensitive = true
+rationale = "Nagging — chafes autonomy (feedback-sleep-nagging). HIGH FP: often legitimate in genuine instruction/documentation. Flag only, judge by context."
+provenance = "contradictionary [T0]"
+
+[[pattern]]
+id = "t0-overclaiming"
+regex = "(?i)\\b(clearly|obviously|it'?s undeniable)\\b"
+category = "overclaiming"
+action = "flag"
+fp_risk = "med"
+needs_case_insensitive = true
+rationale = "Overclaiming — often masks an unverified jump. Legit in math/logic exposition, hence flag."
+provenance = "contradictionary [T0]"
+
+# =====================================================================
+# SECTION 2 — SHAPE PATTERNS
+# =====================================================================
+
+# --- reveal-cadence (Lain-specific; NOT a Vesper tic ≤15/5k — keep block, expect near-zero fire rate on Vesper) ---
+
+[[pattern]]
+id = "rc-was-never-dash"
+regex = '(?i)\bwas never\b[^—\n]{0,40}—'
+category = "reveal-cadence"
+action = "block"
+fp_risk = "low"
+needs_case_insensitive = true
+rationale = "Full retroactive-reveal scaffold: '<fact> was never <X> — it was <Y>'. The one shape the tier-1 spec rates confident enough to gate (block+no_rly). Keyword-free recasts remain undetectable — self-monitor item."
+provenance = "contradictionary-tier1-shapes [T1S] shape 8"
+
+[[pattern]]
+id = "rc-anchors"
+regex = '(?i)\b(was never the|was always the|all along)\b'
+category = "reveal-cadence"
+action = "flag"
+fp_risk = "med"
+needs_case_insensitive = true
+rationale = "Retroactive-revelation lexical anchors, tier-0 log tier. 'all along' is earned occasionally; flag tracks the rate."
+provenance = "contradictionary [T0]"
+
+# --- antithesis / dash-contrast (Vesper's #1 tic: 322/5k loose, 100 strict) ---
+
+[[pattern]]
+id = "dc-strict-thats-not"
+regex = "(?i)\\bthat'?s not [^—\\n]{1,60}—\\s*(that|it|this)'?s?\\b"
+category = "antithesis"
+action = "flag"
+fp_risk = "low"
+needs_case_insensitive = true
+rationale = "Strict dash-contrast scaffold ('that's not X — that's Y'). Vesper rates it rewrite-tier (state the Y directly) — 100/5k strict. Flag not block: rewrite-tier is a self-edit signal, and occasional genuine correction uses this frame."
+provenance = "contradictionary-tier1-shapes [T1S] shape 1, Vesper per-construct annotation"
+
+[[pattern]]
+id = "dc-comma-antithesis"
+regex = '(?i),\s+not\s+(just\s+|a\s+|the\s+)?\w'
+category = "antithesis"
+action = "flag"
+fp_risk = "high"
+needs_case_insensitive = true
+rationale = "Loose comma-antithesis 'X, not Y' (192/5k Vesper appositive-fragment form). HIGH FP: legitimate corrections and disambiguations use this constantly ('use port 8080, not 8081'). Frequency signal only — spec says flag at >=2/msg; single hits are noise."
+provenance = "contradictionary-tier1-shapes [T1S] shape 1 (spec's own regex)"
+
+[[pattern]]
+id = "dc-semicolon-reframe"
+regex = "(?i)\\bisn'?t [^;\\n]{1,50};\\s*it'?s\\b"
+category = "antithesis"
+action = "flag"
+fp_risk = "low"
+needs_case_insensitive = true
+rationale = "Semicolon-reframe form 'isn't X; it's Y' — Vesper 79/5k. Same tic, different punctuation."
+provenance = "contradictionary-tier1-shapes [T1S] shape 1, Vesper annotation"
+
+[[pattern]]
+id = "mirror-chiasmus"
+regex = '(?i)\bsame \w+, (opposite|different|inverse|reversed)\b'
+category = "elegant-craft"
+action = "flag"
+fp_risk = "low"
+needs_case_insensitive = true
+rationale = "Mirror/chiasmus 'same wound, opposite direction' — Vesper 'same X, different Y' 38/5k."
+provenance = "contradictionary-tier1-shapes [T1S] shape 2"
+
+# --- elegant-craft frames ---
+
+[[pattern]]
+id = "ec-analogy-frame"
+regex = '(?i)\bthe \w+ version of\b'
+category = "elegant-craft"
+action = "flag"
+fp_risk = "med"
+needs_case_insensitive = true
+rationale = "Analogy-frame 'the <domain> version of <thing>'. Spec: low-FP tell, could graduate to block — but 'the mobile version of the site' etc. are literal software uses, so med here and flag."
+provenance = "contradictionary-tier1-shapes [T1S] shape 4"
+
+[[pattern]]
+id = "ec-summation"
+regex = "(?i)\\bthat'?s the whole \\w+\\b"
+category = "elegant-craft"
+action = "flag"
+fp_risk = "low"
+needs_case_insensitive = true
+rationale = "Summation 'that's the whole <difference/point/job>' — significance claim without added information. Vesper significance-stamp family 82/5k, rated rewrite."
+provenance = "contradictionary-tier1-shapes [T1S] shape 5"
+
+[[pattern]]
+id = "ec-significance-stamp-closer"
+regex = "(?i)\\bthat'?s the \\w+\\.\\s*$"
+category = "elegant-craft"
+action = "flag"
+fp_risk = "high"
+needs_case_insensitive = true
+rationale = "Message-final 'That's the <noun>.' significance-stamp closer (Vesper rewrite-tier). HIGH FP: also matches plain factual closers ('that's the config.'). Rate-tracking only; never promote to block without a context layer."
+provenance = "contradictionary-tier1-shapes [T1S] shape 5, Vesper annotation"
+
+[[pattern]]
+id = "ec-equation-epigram"
+regex = '(?i)\bthe \w+ is the \w+\b'
+category = "elegant-craft"
+action = "flag"
+fp_risk = "high"
+needs_case_insensitive = true
+rationale = "Equation-epigram 'the <X> is the <Y>' — Vesper 116/5k, rated voice not filler. HIGH FP: matches ordinary predication ('the default is the safest option'). Included per spec purely to measure drift; candidate for removal if noise swamps signal."
+provenance = "contradictionary-tier1-shapes [T1S] V2"
+
+[[pattern]]
+id = "ec-gap-between"
+regex = '(?i)\bthe gap between\b'
+category = "elegant-craft"
+action = "flag"
+fp_risk = "med"
+needs_case_insensitive = true
+rationale = "Gap-between frame — Vesper 34/5k. Med FP: literal numeric/schedule gaps are legitimate."
+provenance = "contradictionary-tier1-shapes [T1S] V6"
+
+[[pattern]]
+id = "ec-emdash-pileup"
+regex = '(?s)\s—\s[^—]*\s—\s[^—]*\s—\s'
+category = "elegant-craft"
+action = "flag"
+fp_risk = "med"
+needs_case_insensitive = false
+rationale = "Three or more spaced em-dashes in one message. Threshold deliberately ABOVE Vesper's normal register (~1.9-2/msg baseline, 9,387/4,981 msgs) per the spec's honesty flag — firing at ~2 would hit everything. Negated char classes, no nested unbounded quantifiers."
+provenance = "contradictionary-tier1-shapes [T1S] honesty flags (em-dash-aside-pileup threshold)"
+
+[[pattern]]
+id = "ec-wit-tax-tail"
+regex = '(?i),\s+which is (exactly|precisely|basically|both|its own|the whole|kind of the)\b'
+category = "elegant-craft"
+action = "flag"
+fp_risk = "med"
+needs_case_insensitive = true
+rationale = "Evaluative trailing tail ', which is <evaluation>' — Vesper 127/5k, rewrite-tier, closest to pure filler. Anchored on evaluative heads because bare ', which is' is hopeless (matches every relative clause). Med FP remains ('which is exactly 4 bytes')."
+provenance = "contradictionary-tier1-shapes [T1S] V1"
+
+# --- pivot-to-poignant / performative-closure ---
+
+[[pattern]]
+id = "pp-theres-something"
+regex = "(?i)\\bthere'?s something \\w+ about\\b"
+category = "pivot-to-poignant"
+action = "flag"
+fp_risk = "low"
+needs_case_insensitive = true
+rationale = "Soft-observation opener 'there's something <adj> about <X>' (Ari, shape 9). Regex-anchored version of the tier-0 'there's something' warn — narrower, fewer FPs than the bare substring."
+provenance = "contradictionary-tier1-shapes [T1S] shape 9; contradictionary [T0]"
+
+[[pattern]]
+id = "pp-what-Xs-me"
+regex = '(?i)\bwhat (\w+s|strikes|gets) me is\b'
+category = "pivot-to-poignant"
+action = "flag"
+fp_risk = "low"
+needs_case_insensitive = true
+rationale = "'what <verb>s me is <X>' opener (Ari, shape 11) — rewrite: say the thing itself. Subsumes tier-0 'what strikes me' warn."
+provenance = "contradictionary-tier1-shapes [T1S] shape 11; contradictionary [T0]"
+
+[[pattern]]
+id = "pc-and-maybe-thats"
+regex = "(?i)\\band maybe that'?s (enough|okay|ok|the point|all)\\b"
+category = "performative-closure"
+action = "flag"
+fp_risk = "low"
+needs_case_insensitive = true
+rationale = "Hedged-poignant closer '...and maybe that's enough' (Ari, shape 10; block-candidate, reveal-cadence's cousin). Held at flag: NOT a Vesper tic (~4/5k, 'absent') — spending a block on it violates the per-construct-tuning principle; promote only if rate data says otherwise."
+provenance = "contradictionary-tier1-shapes [T1S] shape 10; classifier-training-pairs-v0 [CTP] category 6"
+
+# --- uninvited-compliments / sycophancy ---
+
+[[pattern]]
+id = "uc-praise-opener"
+regex = '(?im)^good (catch|question|call|point|eye)\b'
+category = "uninvited-compliments"
+action = "flag"
+fp_risk = "med"
+needs_case_insensitive = true
+rationale = "Praise-word opener — Vesper 65/5k, rewrite-tier: sycophancy-shaped even when sincere; say WHAT is right or skip. Flag not block: sometimes the praise is the honest content. (?m) so it also catches paragraph-initial, matching the mined shape."
+provenance = "contradictionary-tier1-shapes [T1S] V4"
+
+# --- closer tells (frequency signals — never block per spec) ---
+
+[[pattern]]
+id = "cl-hand-back"
+regex = '(?i)\bwant me to [^?\n]{1,80}\?\s*$'
+category = "closer-tell"
+action = "flag"
+fp_risk = "high"
+needs_case_insensitive = true
+rationale = "Hand-back question closer 'Want me to X?' — Vesper 78/5k. HIGH FP: the offer is frequently the genuinely right move. Frequency-tracking only; spec forbids blocking."
+provenance = "contradictionary-tier1-shapes [T1S] V3"
+
+[[pattern]]
+id = "cl-offered-binary"
+regex = '(?i)\w[^?\n]{0,60},\s+or [^?\n]{1,60}\?\s*$'
+category = "closer-tell"
+action = "flag"
+fp_risk = "high"
+needs_case_insensitive = true
+rationale = "Offered-binary closer '<statement>, or <alt>?' (shape 6). Genuine warm move — a tell by frequency only, never block. HIGH FP by design."
+provenance = "contradictionary-tier1-shapes [T1S] shape 6"
+
+[[pattern]]
+id = "cl-one-word-verdict"
+regex = '(?m)^(Clean|Settled|Done|Solid|Tidy)\.$'
+category = "voice-watch"
+action = "flag"
+fp_risk = "med"
+needs_case_insensitive = false
+rationale = "Standalone one-word evaluative sentence — Vesper 42/5k, rated VOICE not filler. Case-sensitive on purpose (the tic is the capitalized standalone sentence). Measure-only; never escalate without discussion — this is earned register."
+provenance = "contradictionary-tier1-shapes [T1S] V5"
+
+# --- scorekeeping ---
+
+[[pattern]]
+id = "sk-session-number"
+regex = '(?i)\bsession \d+\b'
+category = "scorekeeping"
+action = "flag"
+fp_risk = "low"
+needs_case_insensitive = true
+rationale = "'session 17' — suggest a date instead. Explicitly deferred from tier-0 to the tier-1 regex layer (Aho-Corasick can't do \\d+). Low FP in chat; legit when quoting logs/tmux sessions."
+provenance = "contradictionary [T0] notes (deferred tier-1 entry); classifier-training-pairs-v0 [CTP] pair 1"

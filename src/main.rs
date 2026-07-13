@@ -84,7 +84,11 @@ async fn main() -> Result<()> {
     // Keep the Observe pipeline installed for the process lifetime. Each
     // message's freshly loaded config decides whether it participates, so
     // `pre_send.enabled` hot reloads in both directions without a restart.
-    let pre_send_pipeline = dione::pre_send::observe_pipeline(Vec::new())
+    // Tier-1's vendored action set is still a draft. Keep production in
+    // Observe mode until its block subset receives explicit review approval.
+    let tier1 = dione::cingulate::Tier1Hook::from_embedded()
+        .wrap_err("failed to load embedded tier-1 patterns")?;
+    let pre_send_pipeline = dione::pre_send::observe_pipeline(vec![Box::new(tier1)])
         .wrap_err("failed to configure Observe pre-send pipeline")?;
     dione::pre_send::install_pipeline(Some(pre_send_pipeline));
     tracing::info!(
