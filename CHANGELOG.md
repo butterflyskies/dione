@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-07-14
+
+### Added
+- **Generic pre-send hook pipeline.** Typed `PreSendHook` trait with
+  observe-only outbound seam. Hooks run before text reaches Discord;
+  decisions (pass/halt/redirect) are composable, with per-send bypass
+  via `no_rly_hooks`. Surfaces: reply, edit, send_dm, send_file caption,
+  render_latex caption, voice-before-TTS. (#177)
+- **Cursor pagination for `fetch_messages`** (`before`/`after` optional
+  snowflake params). Enables backward and forward pagination through
+  channel history, including DMs. Mutually exclusive; results always
+  sorted oldest-first; `count` and `has_more` hint included when a
+  cursor is provided. Strict cursor validation rejects null, bool,
+  object, array, and empty-string values instead of silently ignoring
+  them. (#185, #186)
+
+### Fixed
+- **Codex WebSocket delivery hardening.** 64 MiB frame/message bounds,
+  bounded WebSocket handshake/write operations, lease/retry/acknowledgement
+  and rebind correctness. (#181)
+
 ## [0.20.0] - 2026-07-11
 
 ### Added
