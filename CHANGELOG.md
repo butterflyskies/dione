@@ -24,9 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   them. (#185, #186)
 
 ### Fixed
-- **Codex WebSocket delivery hardening.** 64 MiB message-size bounds,
-  connect/read timeouts, lease/retry correctness, and advisory cleanup
-  on disconnect. (#181)
+- **Codex WebSocket delivery hardening.** 64 MiB frame/message bounds,
+  bounded WebSocket handshake/write operations, lease/retry/acknowledgement
+  and rebind correctness. (#181)
 
 ## [0.20.0] - 2026-07-11
 
