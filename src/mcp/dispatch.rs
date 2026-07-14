@@ -227,8 +227,10 @@ pub(crate) async fn call_tool(
         "fetch_messages" => {
             let ctx = server.messaging_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?.channel();
+            let before = parse_strict_optional_id(&args, "before")?.map(|s| s.message());
+            let after = parse_strict_optional_id(&args, "after")?.map(|s| s.message());
             let limit = parse_limit(&args, 20);
-            fetch_messages(&ctx, channel_id, limit).await
+            fetch_messages(&ctx, channel_id, before, after, limit).await
         }
         "fetch_new_since" => {
             let ctx = server.messaging_ctx(config.clone());
@@ -620,6 +622,38 @@ pub(crate) fn parse_optional_id(args: &Value, key: &str) -> Result<Option<Snowfl
     Ok(None)
 }
 
+fn parse_strict_optional_id(args: &Value, key: &str) -> Result<Option<Snowflake>, String> {
+    match args.get(key) {
+        None => Ok(None),
+        Some(v) if v.is_null() => Err(format!(
+            "invalid {key}: null is not a valid snowflake; omit the field instead"
+        )),
+        Some(v) if v.is_u64() => {
+            let n = v.as_u64().unwrap();
+            Snowflake::new(n)
+                .map(Some)
+                .ok_or_else(|| format!("invalid {key}: must be a nonzero Discord snowflake"))
+        }
+        Some(v) if v.is_string() => {
+            let s = v.as_str().unwrap();
+            if s.is_empty() {
+                return Err(format!(
+                    "invalid {key}: empty string is not a valid snowflake"
+                ));
+            }
+            let n = s
+                .parse::<u64>()
+                .map_err(|_| format!("invalid {key}: not a valid u64"))?;
+            Snowflake::new(n)
+                .map(Some)
+                .ok_or_else(|| format!("invalid {key}: must be a nonzero Discord snowflake"))
+        }
+        Some(_) => Err(format!(
+            "invalid {key}: expected a Discord snowflake (string or integer), got unexpected type"
+        )),
+    }
+}
+
 fn parse_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     args.get(key)
         .and_then(Value::as_str)
@@ -768,5 +802,58 @@ mod tests {
                 Some(l) => prop_assert_eq!(u64::from(parsed), l.clamp(1, 100)),
             }
         }
+    }
+
+    #[test]
+    fn strict_optional_id_absent_yields_none() {
+        assert_eq!(
+            parse_strict_optional_id(&json!({}), "id").map(|o| o.map(|s| s.get())),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn strict_optional_id_valid_snowflake() {
+        let result = parse_strict_optional_id(&json!({"id": "1234567890"}), "id");
+        assert_eq!(result.map(|o| o.map(|s| s.get())), Ok(Some(1234567890)));
+
+        let result = parse_strict_optional_id(&json!({"id": 1234567890u64}), "id");
+        assert_eq!(result.map(|o| o.map(|s| s.get())), Ok(Some(1234567890)));
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_null() {
+        assert!(parse_strict_optional_id(&json!({"id": null}), "id").is_err());
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_bool() {
+        assert!(parse_strict_optional_id(&json!({"id": true}), "id").is_err());
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_object() {
+        assert!(parse_strict_optional_id(&json!({"id": {}}), "id").is_err());
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_array() {
+        assert!(parse_strict_optional_id(&json!({"id": []}), "id").is_err());
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_empty_string() {
+        assert!(parse_strict_optional_id(&json!({"id": ""}), "id").is_err());
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_zero() {
+        assert!(parse_strict_optional_id(&json!({"id": 0}), "id").is_err());
+        assert!(parse_strict_optional_id(&json!({"id": "0"}), "id").is_err());
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_non_numeric_string() {
+        assert!(parse_strict_optional_id(&json!({"id": "abc"}), "id").is_err());
     }
 }

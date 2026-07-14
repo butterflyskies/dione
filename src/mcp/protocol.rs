@@ -61,11 +61,13 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                     "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass; every bypass is audited." }
                 }
             })),
-            tool("fetch_messages", "Fetch recent messages from a channel", json!({
+            tool("fetch_messages", "Fetch messages from a channel. Returns messages oldest-first. Without cursors, returns the most recent messages. With before/after, paginates through history; use the first returned id as the next before cursor (backward) or the last returned id as the next after cursor (forward). before and after are mutually exclusive. count and has_more (a hint, not a guarantee) are included when a cursor is provided.", json!({
                 "type": "object",
                 "required": ["channel_id"],
                 "properties": {
                     "channel_id": { "type": "string" },
+                    "before": { "type": "string", "description": "Discord message ID (snowflake); return messages older than this ID. Mutually exclusive with after." },
+                    "after": { "type": "string", "description": "Discord message ID (snowflake); return messages newer than this ID. Mutually exclusive with before." },
                     "limit": { "type": "integer", "default": 20, "maximum": 100 }
                 }
             })),
@@ -443,4 +445,67 @@ pub(crate) fn tool(name: &str, description: &str, input_schema: Value) -> Value 
         "description": description,
         "inputSchema": input_schema,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fetch_messages_schema() -> Value {
+        let list = tools_list(TransportMode::ClaudeCode);
+        list["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "fetch_messages")
+            .expect("fetch_messages must be in tools list")
+            .clone()
+    }
+
+    #[test]
+    fn fetch_messages_schema_has_cursor_fields() {
+        let tool = fetch_messages_schema();
+        let props = &tool["inputSchema"]["properties"];
+        assert!(
+            props.get("before").is_some(),
+            "schema must include 'before'"
+        );
+        assert!(props.get("after").is_some(), "schema must include 'after'");
+    }
+
+    #[test]
+    fn fetch_messages_schema_documents_mutual_exclusion() {
+        let tool = fetch_messages_schema();
+        let desc = tool["description"].as_str().unwrap();
+        assert!(
+            desc.contains("mutually exclusive") || desc.contains("Mutually exclusive"),
+            "tool description must document mutual exclusion of before/after"
+        );
+    }
+
+    #[test]
+    fn fetch_messages_schema_documents_ordering() {
+        let tool = fetch_messages_schema();
+        let desc = tool["description"].as_str().unwrap();
+        assert!(
+            desc.contains("oldest-first"),
+            "tool description must document oldest-first ordering"
+        );
+    }
+
+    #[test]
+    fn fetch_messages_schema_cursor_descriptions_mention_exclusivity() {
+        let tool = fetch_messages_schema();
+        let props = &tool["inputSchema"]["properties"];
+        let before_desc = props["before"]["description"].as_str().unwrap();
+        let after_desc = props["after"]["description"].as_str().unwrap();
+        assert!(
+            before_desc.contains("Mutually exclusive"),
+            "before description must mention mutual exclusivity"
+        );
+        assert!(
+            after_desc.contains("Mutually exclusive"),
+            "after description must mention mutual exclusivity"
+        );
+    }
 }

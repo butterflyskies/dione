@@ -658,19 +658,58 @@ pub async fn edit_message_with_hook_overrides(
 
 // ── fetch_messages ────────────────────────────────────────────────────────────
 
-pub async fn fetch_messages(ctx: &MessagingCtx, channel_id: ChannelId, limit: u8) -> Value {
+fn resolve_pagination(
+    before: Option<MessageId>,
+    after: Option<MessageId>,
+) -> Result<Option<MessagePagination>, Value> {
+    match (before, after) {
+        (Some(_), Some(_)) => Err(json!({ "error": "cannot specify both 'before' and 'after'" })),
+        (Some(id), None) => Ok(Some(MessagePagination::Before(id))),
+        (None, Some(id)) => Ok(Some(MessagePagination::After(id))),
+        (None, None) => Ok(None),
+    }
+}
+
+fn build_fetch_response(
+    config: &LoadedConfig,
+    mut messages: Vec<Message>,
+    paginating: bool,
+    limit: u8,
+) -> Value {
+    messages.sort_unstable_by_key(|m| m.id);
+    let count = messages.len();
+    let msgs: Vec<Value> = messages.iter().map(|m| message_json(config, m)).collect();
+    let mut result = json!({ "messages": msgs });
+    if paginating {
+        result["count"] = json!(count);
+        result["has_more"] = json!(limit > 0 && count == usize::from(limit));
+    }
+    result
+}
+
+pub async fn fetch_messages(
+    ctx: &MessagingCtx,
+    channel_id: ChannelId,
+    before: Option<MessageId>,
+    after: Option<MessageId>,
+    limit: u8,
+) -> Value {
     if let Err(e) = check_outbound(ctx, channel_id).await {
         return e;
     }
 
-    match ctx.http.get_messages(channel_id, None, Some(limit)).await {
-        Ok(messages) => {
-            let msgs: Vec<Value> = messages
-                .iter()
-                .map(|m| message_json(&ctx.config, m))
-                .collect();
-            json!({ "messages": msgs })
-        }
+    let pagination = match resolve_pagination(before, after) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let paginating = before.is_some() || after.is_some();
+
+    match ctx
+        .http
+        .get_messages(channel_id, pagination, Some(limit))
+        .await
+    {
+        Ok(messages) => build_fetch_response(&ctx.config, messages, paginating, limit),
         Err(e) => json!({ "error": e.to_string() }),
     }
 }
@@ -1906,5 +1945,99 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── fetch_messages cursor feature tests ──────────────────────────────────
+
+    #[test]
+    fn resolve_pagination_neither_yields_none() {
+        assert!(resolve_pagination(None, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn resolve_pagination_before_yields_before() {
+        let id = MessageId::new(1234);
+        let result = resolve_pagination(Some(id), None).unwrap();
+        assert!(matches!(result, Some(MessagePagination::Before(m)) if m == id));
+    }
+
+    #[test]
+    fn resolve_pagination_after_yields_after() {
+        let id = MessageId::new(5678);
+        let result = resolve_pagination(None, Some(id)).unwrap();
+        assert!(matches!(result, Some(MessagePagination::After(m)) if m == id));
+    }
+
+    #[test]
+    fn resolve_pagination_both_is_error() {
+        let a = MessageId::new(1);
+        let b = MessageId::new(2);
+        let result = resolve_pagination(Some(a), Some(b));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err["error"]
+                .as_str()
+                .unwrap()
+                .contains("cannot specify both")
+        );
+    }
+
+    #[test]
+    fn build_fetch_response_sorts_oldest_first() {
+        let msgs = newest_first_batch();
+        let resp = build_fetch_response(&test_config(), msgs, false, 20);
+        let ids: Vec<&str> = resp["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["3001", "3002", "3003"]);
+    }
+
+    #[test]
+    fn build_fetch_response_no_metadata_without_pagination() {
+        let msgs = newest_first_batch();
+        let resp = build_fetch_response(&test_config(), msgs, false, 20);
+        assert!(resp.get("count").is_none());
+        assert!(resp.get("has_more").is_none());
+    }
+
+    #[test]
+    fn build_fetch_response_includes_metadata_with_pagination() {
+        let msgs = newest_first_batch();
+        let resp = build_fetch_response(&test_config(), msgs, true, 20);
+        assert_eq!(resp["count"], 3);
+        assert_eq!(resp["has_more"], false);
+    }
+
+    #[test]
+    fn build_fetch_response_has_more_when_full_page() {
+        let msgs = newest_first_batch();
+        let resp = build_fetch_response(&test_config(), msgs, true, 3);
+        assert_eq!(resp["count"], 3);
+        assert_eq!(resp["has_more"], true);
+    }
+
+    #[test]
+    fn build_fetch_response_no_has_more_on_short_page() {
+        let msgs = from_wire(json!([wire_message(
+            1001,
+            "only",
+            "2026-06-09T12:00:00.000000+00:00",
+            json!([])
+        ),]));
+        let resp = build_fetch_response(&test_config(), msgs, true, 20);
+        assert_eq!(resp["count"], 1);
+        assert_eq!(resp["has_more"], false);
+    }
+
+    #[test]
+    fn build_fetch_response_empty_page() {
+        let resp = build_fetch_response(&test_config(), vec![], true, 20);
+        assert_eq!(resp["count"], 0);
+        assert_eq!(resp["has_more"], false);
+        assert!(resp["messages"].as_array().unwrap().is_empty());
     }
 }
