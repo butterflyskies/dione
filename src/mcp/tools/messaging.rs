@@ -658,18 +658,46 @@ pub async fn edit_message_with_hook_overrides(
 
 // ── fetch_messages ────────────────────────────────────────────────────────────
 
-pub async fn fetch_messages(ctx: &MessagingCtx, channel_id: ChannelId, limit: u8) -> Value {
+pub async fn fetch_messages(
+    ctx: &MessagingCtx,
+    channel_id: ChannelId,
+    before: Option<MessageId>,
+    after: Option<MessageId>,
+    limit: u8,
+) -> Value {
     if let Err(e) = check_outbound(ctx, channel_id).await {
         return e;
     }
 
-    match ctx.http.get_messages(channel_id, None, Some(limit)).await {
-        Ok(messages) => {
+    let pagination = match (before, after) {
+        (Some(_), Some(_)) => {
+            return json!({ "error": "cannot specify both 'before' and 'after'" });
+        }
+        (Some(id), None) => Some(MessagePagination::Before(id)),
+        (None, Some(id)) => Some(MessagePagination::After(id)),
+        (None, None) => None,
+    };
+
+    match ctx
+        .http
+        .get_messages(channel_id, pagination, Some(limit))
+        .await
+    {
+        Ok(mut messages) => {
+            if before.is_some() || after.is_some() {
+                messages.sort_unstable_by_key(|m| m.id);
+            }
+            let count = messages.len();
             let msgs: Vec<Value> = messages
                 .iter()
                 .map(|m| message_json(&ctx.config, m))
                 .collect();
-            json!({ "messages": msgs })
+            let mut result = json!({ "messages": msgs });
+            if before.is_some() || after.is_some() {
+                result["count"] = json!(count);
+                result["has_more"] = json!(limit > 0 && count == usize::from(limit));
+            }
+            result
         }
         Err(e) => json!({ "error": e.to_string() }),
     }

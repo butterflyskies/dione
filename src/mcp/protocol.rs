@@ -66,6 +66,8 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                 "required": ["channel_id"],
                 "properties": {
                     "channel_id": { "type": "string" },
+                    "before": { "type": "string", "description": "Discord message ID (snowflake); return messages older than this ID" },
+                    "after": { "type": "string", "description": "Discord message ID (snowflake); return messages newer than this ID" },
                     "limit": { "type": "integer", "default": 20, "maximum": 100 }
                 }
             })),
