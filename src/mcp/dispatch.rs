@@ -637,7 +637,9 @@ fn parse_strict_optional_id(args: &Value, key: &str) -> Result<Option<Snowflake>
         Some(v) if v.is_string() => {
             let s = v.as_str().unwrap();
             if s.is_empty() {
-                return Err(format!("invalid {key}: empty string is not a valid snowflake"));
+                return Err(format!(
+                    "invalid {key}: empty string is not a valid snowflake"
+                ));
             }
             let n = s
                 .parse::<u64>()
