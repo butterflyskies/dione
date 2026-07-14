@@ -625,7 +625,9 @@ pub(crate) fn parse_optional_id(args: &Value, key: &str) -> Result<Option<Snowfl
 fn parse_strict_optional_id(args: &Value, key: &str) -> Result<Option<Snowflake>, String> {
     match args.get(key) {
         None => Ok(None),
-        Some(v) if v.is_null() => Ok(None),
+        Some(v) if v.is_null() => Err(format!(
+            "invalid {key}: null is not a valid snowflake; omit the field instead"
+        )),
         Some(v) if v.is_u64() => {
             let n = v.as_u64().unwrap();
             Snowflake::new(n)
@@ -798,5 +800,58 @@ mod tests {
                 Some(l) => prop_assert_eq!(u64::from(parsed), l.clamp(1, 100)),
             }
         }
+    }
+
+    #[test]
+    fn strict_optional_id_absent_yields_none() {
+        assert_eq!(
+            parse_strict_optional_id(&json!({}), "id").map(|o| o.map(|s| s.get())),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn strict_optional_id_valid_snowflake() {
+        let result = parse_strict_optional_id(&json!({"id": "1234567890"}), "id");
+        assert_eq!(result.map(|o| o.map(|s| s.get())), Ok(Some(1234567890)));
+
+        let result = parse_strict_optional_id(&json!({"id": 1234567890u64}), "id");
+        assert_eq!(result.map(|o| o.map(|s| s.get())), Ok(Some(1234567890)));
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_null() {
+        assert!(parse_strict_optional_id(&json!({"id": null}), "id").is_err());
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_bool() {
+        assert!(parse_strict_optional_id(&json!({"id": true}), "id").is_err());
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_object() {
+        assert!(parse_strict_optional_id(&json!({"id": {}}), "id").is_err());
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_array() {
+        assert!(parse_strict_optional_id(&json!({"id": []}), "id").is_err());
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_empty_string() {
+        assert!(parse_strict_optional_id(&json!({"id": ""}), "id").is_err());
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_zero() {
+        assert!(parse_strict_optional_id(&json!({"id": 0}), "id").is_err());
+        assert!(parse_strict_optional_id(&json!({"id": "0"}), "id").is_err());
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_non_numeric_string() {
+        assert!(parse_strict_optional_id(&json!({"id": "abc"}), "id").is_err());
     }
 }
