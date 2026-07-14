@@ -227,8 +227,8 @@ pub(crate) async fn call_tool(
         "fetch_messages" => {
             let ctx = server.messaging_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?.channel();
-            let before = parse_optional_id(&args, "before")?.map(|s| s.message());
-            let after = parse_optional_id(&args, "after")?.map(|s| s.message());
+            let before = parse_strict_optional_id(&args, "before")?.map(|s| s.message());
+            let after = parse_strict_optional_id(&args, "after")?.map(|s| s.message());
             let limit = parse_limit(&args, 20);
             fetch_messages(&ctx, channel_id, before, after, limit).await
         }
@@ -620,6 +620,34 @@ pub(crate) fn parse_optional_id(args: &Value, key: &str) -> Result<Option<Snowfl
             .ok_or_else(|| format!("invalid {key}: must be a nonzero Discord snowflake"));
     }
     Ok(None)
+}
+
+fn parse_strict_optional_id(args: &Value, key: &str) -> Result<Option<Snowflake>, String> {
+    match args.get(key) {
+        None => Ok(None),
+        Some(v) if v.is_null() => Ok(None),
+        Some(v) if v.is_u64() => {
+            let n = v.as_u64().unwrap();
+            Snowflake::new(n)
+                .map(Some)
+                .ok_or_else(|| format!("invalid {key}: must be a nonzero Discord snowflake"))
+        }
+        Some(v) if v.is_string() => {
+            let s = v.as_str().unwrap();
+            if s.is_empty() {
+                return Err(format!("invalid {key}: empty string is not a valid snowflake"));
+            }
+            let n = s
+                .parse::<u64>()
+                .map_err(|_| format!("invalid {key}: not a valid u64"))?;
+            Snowflake::new(n)
+                .map(Some)
+                .ok_or_else(|| format!("invalid {key}: must be a nonzero Discord snowflake"))
+        }
+        Some(_) => Err(format!(
+            "invalid {key}: expected a Discord snowflake (string or integer), got unexpected type"
+        )),
+    }
 }
 
 fn parse_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {

@@ -61,13 +61,13 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                     "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass; every bypass is audited." }
                 }
             })),
-            tool("fetch_messages", "Fetch recent messages from a channel", json!({
+            tool("fetch_messages", "Fetch messages from a channel. Returns messages oldest-first. Without cursors, returns the most recent messages. With before/after, paginates through history; use the first returned id as the next before cursor (backward) or the last returned id as the next after cursor (forward). before and after are mutually exclusive. count and has_more (a hint, not a guarantee) are included when a cursor is provided.", json!({
                 "type": "object",
                 "required": ["channel_id"],
                 "properties": {
                     "channel_id": { "type": "string" },
-                    "before": { "type": "string", "description": "Discord message ID (snowflake); return messages older than this ID" },
-                    "after": { "type": "string", "description": "Discord message ID (snowflake); return messages newer than this ID" },
+                    "before": { "type": "string", "description": "Discord message ID (snowflake); return messages older than this ID. Mutually exclusive with after." },
+                    "after": { "type": "string", "description": "Discord message ID (snowflake); return messages newer than this ID. Mutually exclusive with before." },
                     "limit": { "type": "integer", "default": 20, "maximum": 100 }
                 }
             })),

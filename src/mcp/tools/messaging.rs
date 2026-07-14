@@ -678,22 +678,22 @@ pub async fn fetch_messages(
         (None, None) => None,
     };
 
+    let paginating = before.is_some() || after.is_some();
+
     match ctx
         .http
         .get_messages(channel_id, pagination, Some(limit))
         .await
     {
         Ok(mut messages) => {
-            if before.is_some() || after.is_some() {
-                messages.sort_unstable_by_key(|m| m.id);
-            }
+            messages.sort_unstable_by_key(|m| m.id);
             let count = messages.len();
             let msgs: Vec<Value> = messages
                 .iter()
                 .map(|m| message_json(&ctx.config, m))
                 .collect();
             let mut result = json!({ "messages": msgs });
-            if before.is_some() || after.is_some() {
+            if paginating {
                 result["count"] = json!(count);
                 result["has_more"] = json!(limit > 0 && count == usize::from(limit));
             }
