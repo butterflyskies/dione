@@ -922,6 +922,23 @@ fn test_notification_reaction_snapshot() {
     insta::assert_json_snapshot!(notif);
 }
 
+/// Tool-initiated self-reacts (contradictionary celebrate/warn) must carry
+/// `self_react: true` in the notification meta so the construct can tell its
+/// own reinforcement signal apart from other users' reactions.
+#[test]
+fn test_notification_self_react_snapshot() {
+    let event = NotificationEvent::Reaction {
+        chat_id: ChannelId::new(1001),
+        message_id: MessageId::new(2001),
+        user: "construct".to_string(),
+        user_id: UserId::new(3001),
+        emoji: "✨".to_string(),
+        self_react: true,
+    };
+    let notif = test_helpers::make_notification(event);
+    insta::assert_json_snapshot!(notif);
+}
+
 #[test]
 fn test_notification_permission_response_snapshot() {
     let event = NotificationEvent::PermissionResponse {
