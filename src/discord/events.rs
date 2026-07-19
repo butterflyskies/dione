@@ -340,14 +340,25 @@ impl EventHandler for Handler {
             _ => return,
         };
 
-        let user_name = {
+        let cached_name = {
             let state = self.state.read().await;
-            state
-                .user_names
-                .get(&user_id.get())
-                .cloned()
-                .unwrap_or_default()
+            state.user_names.get(&user_id.get()).cloned()
         };
+
+        // When we have no cached display name for the reactor, fall back to
+        // their Discord username before defaulting to "dione" (#153). Resolve
+        // the username from the event's member payload when present, else via a
+        // direct user fetch. Skip the fetch entirely on the common cache-hit
+        // path.
+        let username = if is_blank(cached_name.as_deref()) {
+            match &reaction.member {
+                Some(member) => Some(member.user.name.clone()),
+                None => ctx.http.get_user(user_id).await.map(|u| u.name).ok(),
+            }
+        } else {
+            None
+        };
+        let user_name = resolve_user_identity(cached_name.as_deref(), username.as_deref());
 
         let event = NotificationEvent::Reaction {
             chat_id: channel_id,
@@ -432,10 +443,11 @@ impl EventHandler for Handler {
             if is_dm {
                 state.record_dm_channel(author.id.get(), channel_id);
             }
-            let sender_name = new
+            let resolved = new
                 .as_ref()
                 .map(display_name)
                 .unwrap_or_else(|| display_name_from_user(author));
+            let sender_name = resolve_user_identity(Some(&resolved), Some(&author.name));
             state.cache_username(author.id.get(), sender_name.clone());
             sender_name
         };
@@ -749,6 +761,31 @@ fn display_name_from_user(user: &serenity::model::user::User) -> String {
     strip_invisible(raw)
 }
 
+/// Literal identity used for an outbound notification's `user` field when
+/// neither a resolved display name nor a Discord username is available.
+const FALLBACK_USER_IDENTITY: &str = "dione";
+
+/// Returns `true` when the candidate is absent or whitespace-only.
+fn is_blank(candidate: Option<&str>) -> bool {
+    candidate.map(str::trim).unwrap_or("").is_empty()
+}
+
+/// Resolves the `user` field for an outbound notification.
+///
+/// Fallback chain (see #153): resolved display name → Discord username →
+/// the literal `"dione"`. Blank or whitespace-only candidates are treated as
+/// absent so an empty display name never leaks into a notification (which
+/// would otherwise surface as the substrate name "dione" downstream).
+fn resolve_user_identity(display_name: Option<&str>, username: Option<&str>) -> String {
+    [display_name, username]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+        .unwrap_or(FALLBACK_USER_IDENTITY)
+        .to_string()
+}
+
 /// Strip invisible/zero-width characters that proxy bots (e.g. PluralKit)
 /// pad onto short names to prevent Discord formatting issues.
 fn strip_invisible(s: &str) -> String {
@@ -809,7 +846,7 @@ fn build_message_event(
     NotificationEvent::Message(MessageEvent {
         chat_id: msg.channel_id,
         message_id: msg.id,
-        user: display_name(msg),
+        user: resolve_user_identity(Some(&display_name(msg)), Some(&msg.author.name)),
         user_id: msg.author.id,
         content: msg.content.clone(),
         targeting,
@@ -1367,6 +1404,45 @@ mod tests {
         let user: serenity::model::user::User =
             serde_json::from_value(user_json).expect("valid User JSON");
         assert_eq!(display_name_from_user(&user), "Bob Iverse");
+    }
+
+    // ── resolve_user_identity tests (#153) ───────────────────────────────────
+
+    #[test]
+    fn resolve_user_identity_prefers_display_name() {
+        assert_eq!(
+            resolve_user_identity(Some("Vesper"), Some("vesper_bot")),
+            "Vesper"
+        );
+    }
+
+    #[test]
+    fn resolve_user_identity_falls_back_to_username_when_display_name_unset() {
+        assert_eq!(
+            resolve_user_identity(None, Some("vesper_bot")),
+            "vesper_bot"
+        );
+    }
+
+    #[test]
+    fn resolve_user_identity_falls_back_to_username_when_display_name_blank() {
+        // An empty (or whitespace-only) display name must not leak through; it
+        // is treated as absent so the Discord username is used instead.
+        assert_eq!(
+            resolve_user_identity(Some(""), Some("vesper_bot")),
+            "vesper_bot"
+        );
+        assert_eq!(
+            resolve_user_identity(Some("   "), Some("vesper_bot")),
+            "vesper_bot"
+        );
+    }
+
+    #[test]
+    fn resolve_user_identity_defaults_to_dione_when_neither_present() {
+        assert_eq!(resolve_user_identity(None, None), "dione");
+        assert_eq!(resolve_user_identity(Some(""), Some("")), "dione");
+        assert_eq!(resolve_user_identity(Some("  "), None), "dione");
     }
 
     // ── strip_invisible tests ────────────────────────────────────────────────
