@@ -6,10 +6,12 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use camino::{Utf8Path, Utf8PathBuf};
 use regex::RegexSet;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, de::Error as _};
+use serenity::model::id::UserId;
 use thiserror::Error;
 
 use crate::contradictionary::{Contradictionary, ContradictionaryConfig, load_sidecar_entries};
+use crate::pre_send::ConstructId;
 use crate::timestamp::Timestamp;
 
 // ── Error type ───────────────────────────────────────────────────────────────
@@ -43,6 +45,238 @@ pub struct Config {
     pub voice: VoiceConfig,
     pub rate_limit: RateLimitTomlConfig,
     pub contradictionary: ContradictionaryConfig,
+    pub pre_send: PreSendConfig,
+    /// Inbound memory-bell shadow evaluation.
+    pub bell_rings: BellRingsConfig,
+}
+
+/// Shadow-only inbound memory-bell configuration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BellRingsConfig {
+    /// Enables evaluation. Results never alter delivery in this slice.
+    pub enabled: bool,
+    /// The single memory-mcp provider. A singular field makes multi-provider
+    /// fan-out unrepresentable in the first slice.
+    pub provider: Option<BellProviderConfig>,
+    /// Largest admitted cosine distance.
+    pub max_semantic_distance: f64,
+    /// Maximum candidates requested and bells retained.
+    pub max_bells: usize,
+    /// Total evaluation deadline in milliseconds.
+    pub deadline_ms: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(default)]
+struct BellRingsConfigWire {
+    enabled: bool,
+    provider: Option<BellProviderConfig>,
+    #[serde(deserialize_with = "deserialize_max_semantic_distance")]
+    max_semantic_distance: f64,
+    #[serde(deserialize_with = "deserialize_max_bells")]
+    max_bells: usize,
+    #[serde(deserialize_with = "deserialize_bell_deadline")]
+    deadline_ms: u64,
+}
+
+impl Default for BellRingsConfigWire {
+    fn default() -> Self {
+        let defaults = BellRingsConfig::default();
+        Self {
+            enabled: defaults.enabled,
+            provider: defaults.provider,
+            max_semantic_distance: defaults.max_semantic_distance,
+            max_bells: defaults.max_bells,
+            deadline_ms: defaults.deadline_ms,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BellRingsConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = BellRingsConfigWire::deserialize(deserializer)?;
+        if wire.enabled && wire.provider.is_none() {
+            return Err(D::Error::custom(
+                "enabled bell_rings requires exactly one provider",
+            ));
+        }
+        Ok(Self {
+            enabled: wire.enabled,
+            provider: wire.provider,
+            max_semantic_distance: wire.max_semantic_distance,
+            max_bells: wire.max_bells,
+            deadline_ms: wire.deadline_ms,
+        })
+    }
+}
+
+impl Default for BellRingsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: None,
+            max_semantic_distance: 0.3,
+            max_bells: 3,
+            deadline_ms: 300,
+        }
+    }
+}
+
+/// One memory-mcp endpoint and one explicit allowed scope.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BellProviderConfig {
+    /// Streamable HTTP MCP endpoint.
+    pub url: BellProviderUrl,
+    /// Explicit recall scope. `all` and empty scopes are rejected while parsing.
+    pub scope: BellScope,
+}
+
+/// A validated HTTP(S) memory-mcp endpoint without embedded credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BellProviderUrl(String);
+
+impl BellProviderUrl {
+    pub fn parse(value: impl Into<String>) -> Result<Self, String> {
+        let value = value.into();
+        let parsed = value
+            .parse::<reqwest::Url>()
+            .map_err(|_| "bell_rings provider url must be a valid HTTP(S) URL".to_owned())?;
+        if !matches!(parsed.scheme(), "http" | "https")
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err(
+                "bell_rings provider url must be HTTP(S) without embedded credentials".to_owned(),
+            );
+        }
+        Ok(Self(parsed.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for BellProviderUrl {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::parse(String::deserialize(deserializer)?).map_err(D::Error::custom)
+    }
+}
+
+/// A validated memory scope which cannot represent the cross-scope `all` value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BellScope(String);
+
+impl BellScope {
+    pub fn parse(value: impl Into<String>) -> Result<Self, String> {
+        let value = value.into();
+        let trimmed = value.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("all") {
+            Err("bell_rings provider scope must be explicit and cannot be `all`".to_owned())
+        } else {
+            Ok(Self(trimmed.to_owned()))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for BellScope {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::parse(String::deserialize(deserializer)?).map_err(D::Error::custom)
+    }
+}
+
+fn deserialize_max_semantic_distance<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = f64::deserialize(deserializer)?;
+    (value.is_finite() && (0.0..=2.0).contains(&value))
+        .then_some(value)
+        .ok_or_else(|| D::Error::custom("max_semantic_distance must be finite and between 0 and 2"))
+}
+
+fn deserialize_max_bells<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = usize::deserialize(deserializer)?;
+    (1..=100)
+        .contains(&value)
+        .then_some(value)
+        .ok_or_else(|| D::Error::custom("max_bells must be between 1 and 100"))
+}
+
+fn deserialize_bell_deadline<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = u64::deserialize(deserializer)?;
+    (1..=300)
+        .contains(&value)
+        .then_some(value)
+        .ok_or_else(|| D::Error::custom("deadline_ms must be between 1 and 300"))
+}
+
+/// Pre-send hook lifecycle configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct PreSendConfig {
+    /// Disables the pipeline entirely when false. The enabled default is
+    /// always Observe mode; enforcement is intentionally not configurable yet.
+    pub enabled: bool,
+    /// Stable construct identity included in hook context and bypass audits.
+    pub construct_id: String,
+    /// Discord bot user ID when known before gateway readiness.
+    #[serde(default, deserialize_with = "deserialize_optional_user_id")]
+    pub author_id: Option<UserId>,
+}
+
+fn deserialize_optional_user_id<'de, D>(deserializer: D) -> Result<Option<UserId>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum UserIdValue {
+        String(String),
+        Integer(u64),
+    }
+
+    Option::<UserIdValue>::deserialize(deserializer)?
+        .map(|value| {
+            let raw = match value {
+                UserIdValue::String(value) => value.parse::<u64>().map_err(D::Error::custom)?,
+                UserIdValue::Integer(value) => value,
+            };
+            crate::mcp::ids::Snowflake::new(raw)
+                .map(crate::mcp::ids::Snowflake::user)
+                .ok_or_else(|| D::Error::custom("Discord user ID must be nonzero"))
+        })
+        .transpose()
+}
+
+impl Default for PreSendConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            construct_id: "dione".to_owned(),
+            author_id: None,
+        }
+    }
 }
 
 /// Access control configuration.
@@ -277,6 +511,10 @@ pub struct LoadedConfig {
     rate_limit_runtime: crate::rate_limiter::RateLimitConfig,
     /// Pre-built Aho-Corasick concordance for outbound text scanning.
     pub contradictionary: Option<Arc<Contradictionary>>,
+    /// Validated configured Discord identity for outbound hook context.
+    pub pre_send_author_id: Option<UserId>,
+    /// Validated construct identity for outbound hook context.
+    pub pre_send_construct_id: ConstructId,
 }
 
 /// Pre-parsed per-channel access policy.
@@ -297,7 +535,7 @@ impl std::ops::Deref for LoadedConfig {
 
 impl LoadedConfig {
     /// Build from raw Config, parsing IDs and compiling regexes.
-    pub fn from_raw(raw: Config) -> Self {
+    pub fn from_raw(mut raw: Config) -> Self {
         let allowed_ids = parse_id_set(&raw.access.allow_from);
         let admin_ids = parse_id_set(&raw.access.admins);
         let channel_policies = raw
@@ -337,6 +575,18 @@ impl LoadedConfig {
             } else {
                 None
             };
+        let pre_send_author_id = raw.pre_send.author_id;
+        let pre_send_construct_id = match ConstructId::parse(raw.pre_send.construct_id.clone()) {
+            Ok(construct_id) => construct_id,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "invalid pre_send.construct_id; disabling pre-send pipeline"
+                );
+                raw.pre_send.enabled = false;
+                ConstructId::default()
+            }
+        };
         Self {
             raw,
             allowed_ids,
@@ -346,6 +596,8 @@ impl LoadedConfig {
             tz,
             rate_limit_runtime,
             contradictionary,
+            pre_send_author_id,
+            pre_send_construct_id,
         }
     }
 
@@ -1287,5 +1539,44 @@ action = "celebrate"
         let hits = c.check("custom-word");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].action, crate::contradictionary::Action::Celebrate);
+    }
+
+    #[test]
+    fn pre_send_author_id_deserializes_string_and_integer_snowflakes() {
+        for value in ["\"42\"", "42"] {
+            let raw: Config = toml::from_str(&format!("[pre_send]\nauthor_id = {value}"))
+                .expect("valid author id config");
+            assert_eq!(raw.pre_send.author_id, Some(UserId::new(42)));
+            assert_eq!(
+                LoadedConfig::from_raw(raw).pre_send_author_id,
+                Some(UserId::new(42))
+            );
+        }
+    }
+
+    #[test]
+    fn pre_send_author_id_rejects_zero_and_nonnumeric_at_serde_boundary() {
+        for invalid in ["0", "not-a-snowflake"] {
+            let source = format!("[pre_send]\nauthor_id = \"{invalid}\"");
+            assert!(toml::from_str::<Config>(&source).is_err());
+        }
+    }
+
+    #[test]
+    fn pre_send_construct_id_is_validated_once_when_config_is_loaded() {
+        let mut raw = Config::default();
+        raw.pre_send.construct_id = "syne".to_owned();
+        assert_eq!(
+            LoadedConfig::from_raw(raw).pre_send_construct_id.as_str(),
+            "syne"
+        );
+    }
+
+    #[test]
+    fn invalid_pre_send_construct_id_disables_pipeline() {
+        let mut raw = Config::default();
+        raw.pre_send.construct_id = "Not Valid".to_owned();
+        let loaded = LoadedConfig::from_raw(raw);
+        assert!(!loaded.pre_send.enabled);
     }
 }

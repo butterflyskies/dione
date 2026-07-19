@@ -97,12 +97,12 @@ fn config_with_contradictionary(entries: Vec<Entry>) -> LoadedConfig {
 /// state dir is where the durable contradictionary diary is written, so
 /// override tests inject a temp dir to avoid touching the real home dir.
 fn test_ctx_with_state_dir(config: LoadedConfig, state_dir: Utf8PathBuf) -> MessagingCtx {
-    MessagingCtx {
-        http: Arc::new(serenity::http::Http::new("fake-token-for-testing")),
-        state: new_state(),
-        config: Arc::new(config),
+    MessagingCtx::new(
+        Arc::new(serenity::http::Http::new("fake-token-for-testing")),
+        new_state(),
+        Arc::new(config),
         state_dir,
-    }
+    )
 }
 
 /// Build a MessagingCtx with a fake HTTP client. Good enough for testing paths

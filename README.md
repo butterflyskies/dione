@@ -1,11 +1,12 @@
 # Dione
 
-A Rust MCP channel server that bridges Discord to [Claude Code](https://claude.ai/code).
+A Rust MCP channel server that bridges Discord to Claude Code or
+[Codex](https://developers.openai.com/codex/).
 
 Dione connects to the Discord gateway, gates access, and exposes tools for
-Claude to interact with Discord — replying, reacting, fetching history,
-managing channels, and more. Claude Code provides inference; Dione provides
-the Discord bridge.
+an agent to interact with Discord — replying, reacting, fetching history,
+managing channels, and more. The agent provides inference; Dione provides the
+Discord bridge.
 
 ## Quick start
 
@@ -28,16 +29,66 @@ EOF
 claude --channels dione
 ```
 
+### Codex mode
+
+Codex does not wake an idle thread for unsolicited MCP notifications. Dione's
+Codex transport therefore persists accepted Discord events, then connects to
+the Codex app-server control socket over WebSocket and injects each new event
+into one exact thread. It starts a turn while the thread is idle and steers the
+active turn otherwise. The queue entry is acknowledged only after app-server
+accepts the request.
+
+Configure Dione as a Codex MCP server with `--mode codex`:
+
+```bash
+codex mcp add dione \
+  --env DIONE_STATE_DIR="$PWD/dione" \
+  -- dione --mode codex
+```
+
+After MCP startup, read the current session's `CODEX_THREAD_ID` and call
+`bind_codex_thread`. Repeat that binding for every new, resumed, forked, or
+switched conversation. The optional `--codex-thread-id` or inherited
+`CODEX_THREAD_ID` provides an initial binding for standalone deployments, but
+MCP startup does not require one. Dione never guesses among loaded threads. The default
+app-server socket is `$CODEX_HOME/app-server-control/app-server-control.sock`
+or `$HOME/.codex/app-server-control/app-server-control.sock`; override it with
+`--codex-app-server-socket` or `CODEX_APP_SERVER_SOCKET`.
+
+The lease/ACK MCP tools remain available for explicit pull consumers:
+
+1. Call `register_event_consumer`. Set `make_primary=true` only when no live
+   primary exists. Set `claim_unassigned=false` to preserve an old backlog
+   without replaying it.
+2. Repeatedly call `next_event` with the returned `consumer_id`.
+3. After successfully handling an event, call `ack_event` with that consumer id
+   and the event's `delivery_token`.
+4. Re-enter `next_event`. An unacknowledged lease becomes eligible for
+   redelivery after it expires.
+
+To move future delivery to another Codex conversation, register the destination
+consumer and call `handoff_event_consumer` from the active primary. Handoff is
+explicit: Dione never guesses among threads. If a primary expires,
+`claim_event_consumer` can promote a registered replacement. The consumer is a
+conversation routing identity; model selection remains a Codex concern.
+
+Pending events live in `$DIONE_STATE_DIR/codex-inbox.json`. A lifetime lock on
+`codex-inbox.lock` rejects a second Dione process using the same Codex state
+directory. When live delivery starts, it becomes primary for future events but
+does not claim an arbitrary old backlog. Use the explicit consumer handoff and
+claim tools when replay is intentional.
+
 ## What it does
 
-Dione is an MCP server (stdio transport) that Claude Code spawns via
-`--channels`. It:
+Dione is an MCP server (stdio transport) spawned by Claude Code or Codex. It:
 
 - Connects to Discord and listens for messages, reactions, and interactions
 - Gates access: only configured users/channels reach Claude
 - Queues messages from unknown senders for admin review
-- Exposes 21 tools for Claude to interact with Discord
+- Exposes MCP tools for the agent to interact with Discord
 - Relays Claude Code permission prompts to admin via Discord buttons
+- Delivers structured Codex events live through app-server with a durable
+  lease/ack queue underneath
 
 ## Tools
 

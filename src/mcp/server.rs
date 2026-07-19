@@ -13,7 +13,9 @@
 
 pub use crate::tracing_channel::TraceLevelController;
 use crate::{
+    bell_rings::BellShadow,
     coalesce::{CoalesceResult, coalesce},
+    codex::{CodexEventQueue, TransportMode},
     delivery_buffer::{BufferResult, DeliveryBuffer},
     discord::events::{MessageEvent, NotificationEvent},
     mcp::{
@@ -39,7 +41,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    sync::{Mutex, mpsc},
+    sync::{Mutex, mpsc, watch},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -54,18 +56,21 @@ pub struct DioneServer {
     pub notification_tx: mpsc::Sender<Value>,
     pub discord_cmd_tx: Option<mpsc::Sender<DiscordCommand>>,
     pub trace_controller: TraceLevelController,
+    pub mode: TransportMode,
+    pub codex_queue: Option<CodexEventQueue>,
+    pub codex_thread_binding: Option<watch::Sender<Option<crate::codex::CodexThreadId>>>,
 }
 
 // ── Context factory methods ───────────────────────────────────────────────────
 
 impl DioneServer {
     pub(crate) fn messaging_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> MessagingCtx {
-        MessagingCtx {
-            http: self.http.clone(),
-            state: self.state.clone(),
+        MessagingCtx::new(
+            self.http.clone(),
+            self.state.clone(),
             config,
-            state_dir: self.state_dir.clone(),
-        }
+            self.state_dir.clone(),
+        )
     }
 
     pub(crate) fn introspection_ctx(
@@ -130,6 +135,7 @@ pub async fn run(
     let config = crate::config::load_config(&server.state_dir);
     let mut rate_limiter = RateLimiter::new(config.rate_limit_runtime().clone());
     let mut delivery_buffer = DeliveryBuffer::new();
+    let bell_shadow = Arc::new(BellShadow::new());
 
     // Resolve timezone once at startup so `deliver_flushed` doesn't need to
     // load config just for the tz. Updated opportunistically when we already
@@ -140,7 +146,9 @@ pub async fn run(
 
     // Notification forwarding task.
     // Exits on cancellation or when the event channel closes.
-    let stdout_notif = stdout.clone();
+    let notification_sink =
+        NotificationSink::new(server.mode, stdout.clone(), server.codex_queue.clone())
+            .map_err(std::io::Error::other)?;
     let cancel_notif = cancel.clone();
     let notif_task = tokio::spawn(async move {
         let mut rx = event_rx;
@@ -169,7 +177,11 @@ pub async fn run(
                 } => {
                     let now = tokio::time::Instant::now();
                     let flushed = delivery_buffer.flush_ready(now);
-                    deliver_flushed(&stdout_notif, flushed, tz).await;
+                    if let Err(error) = deliver_flushed(&notification_sink, flushed, tz).await {
+                        tracing::error!(error = %error, "inbound delivery failed; shutting down");
+                        cancel_notif.cancel();
+                        break;
+                    }
                 }
 
                 // New event arrives from Discord.
@@ -222,13 +234,27 @@ pub async fn run(
                         }
                     }
 
+                    // Advisory recall never sits on the delivery or buffer-flush
+                    // critical path. The observer owns a clone and cannot mutate
+                    // the event that continues through normal delivery.
+                    let shadow = Arc::clone(&bell_shadow);
+                    let shadow_event = event.clone();
+                    let shadow_config = cfg.bell_rings.clone();
+                    tokio::spawn(async move {
+                        let _ = shadow.observe(shadow_event, &shadow_config).await;
+                    });
+
                     // Delivery buffer: coalesce channel events per channel.
                     let delay_ms = extract_delay_ms(&event, &cfg);
 
                     match delivery_buffer.buffer_event(event, delay_ms) {
                         BufferResult::Immediate(event) => {
                             let notification = (*event).into_notification();
-                            write_line(&stdout_notif, &notification).await;
+                            if let Err(error) = notification_sink.deliver(&notification).await {
+                                tracing::error!(error = %error, "inbound delivery failed; shutting down");
+                                cancel_notif.cancel();
+                                break;
+                            }
                         }
                         BufferResult::Buffered => {
                             // Will be flushed when the deadline fires.
@@ -247,7 +273,10 @@ pub async fn run(
 
         // Channel closed — flush any remaining buffered events.
         let remaining = delivery_buffer.flush_all();
-        deliver_flushed(&stdout_notif, remaining, tz).await;
+        if let Err(error) = deliver_flushed(&notification_sink, remaining, tz).await {
+            tracing::error!(error = %error, "failed to persist final inbound events");
+            cancel_notif.cancel();
+        }
     });
 
     // Main request loop.
@@ -338,11 +367,11 @@ async fn handle_request(server: &DioneServer, req: Value) -> Option<Value> {
 async fn dispatch(server: &DioneServer, method: &str, params: Value) -> Result<Value, String> {
     match method {
         // ── MCP lifecycle ─────────────────────────────────────────────────────
-        "initialize" => Ok(initialize_response()),
+        "initialize" => Ok(initialize_response(server.mode)),
         "notifications/initialized" => Ok(json!({})),
 
         // ── Tool discovery ────────────────────────────────────────────────────
-        "tools/list" => Ok(tools_list()),
+        "tools/list" => Ok(tools_list(server.mode)),
 
         // ── Tool invocation ───────────────────────────────────────────────────
         "tools/call" => {
@@ -355,7 +384,9 @@ async fn dispatch(server: &DioneServer, method: &str, params: Value) -> Result<V
         }
 
         // ── Permission relay (inbound from Claude Code) ──────────────────────
-        "notifications/claude/channel/permission_request" => {
+        "notifications/claude/channel/permission_request"
+            if server.mode == TransportMode::ClaudeCode =>
+        {
             let request_id = params
                 .get("request_id")
                 .and_then(Value::as_str)
@@ -403,6 +434,43 @@ async fn dispatch(server: &DioneServer, method: &str, params: Value) -> Result<V
 
 // ── I/O helpers ───────────────────────────────────────────────────────────────
 
+#[derive(Clone)]
+enum NotificationSink {
+    ClaudeCode(Arc<Mutex<tokio::io::Stdout>>),
+    Codex(CodexEventQueue),
+}
+
+impl NotificationSink {
+    fn new(
+        mode: TransportMode,
+        stdout: Arc<Mutex<tokio::io::Stdout>>,
+        codex_queue: Option<CodexEventQueue>,
+    ) -> Result<Self, &'static str> {
+        match mode {
+            // Claude Code must always retain the original MCP stdout path,
+            // even if a stray Codex sender is present in the server fixture.
+            TransportMode::ClaudeCode => Ok(Self::ClaudeCode(stdout)),
+            TransportMode::Codex => codex_queue
+                .map(Self::Codex)
+                .ok_or("Codex mode requires a durable event queue"),
+        }
+    }
+
+    async fn deliver(&self, value: &Value) -> Result<(), String> {
+        match self {
+            Self::ClaudeCode(stdout) => {
+                write_line(stdout, value).await;
+                Ok(())
+            }
+            Self::Codex(queue) => queue
+                .enqueue(value.clone())
+                .await
+                .map(|_| ())
+                .map_err(|error| error.to_string()),
+        }
+    }
+}
+
 async fn write_line(stdout: &Arc<Mutex<tokio::io::Stdout>>, value: &Value) {
     let mut line = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string());
     line.push('\n');
@@ -423,12 +491,12 @@ async fn write_line(stdout: &Arc<Mutex<tokio::io::Stdout>>, value: &Value) {
 /// are coalesced into a single batched notification so the LLM receives one
 /// prompt injection per batch window instead of N.
 async fn deliver_flushed(
-    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    sink: &NotificationSink,
     events: Vec<NotificationEvent>,
     tz: Option<chrono_tz::Tz>,
-) {
+) -> Result<(), String> {
     if events.is_empty() {
-        return;
+        return Ok(());
     }
 
     let event_count = events.len();
@@ -436,19 +504,20 @@ async fn deliver_flushed(
     match coalesce(events, tz) {
         Some(CoalesceResult::Single(event)) => {
             let notification = event.into_notification();
-            write_line(stdout, &notification).await;
+            sink.deliver(&notification).await?;
         }
         Some(CoalesceResult::Coalesced(notification)) => {
             tracing::debug!(
                 event_count,
                 "coalesced {event_count} events into single delivery"
             );
-            write_line(stdout, &notification).await;
+            sink.deliver(&notification).await?;
         }
         None => {
             // Empty — nothing to deliver.
         }
     }
+    Ok(())
 }
 
 /// Extract the delivery delay (ms) for an event based on its channel ID.
@@ -486,12 +555,21 @@ pub mod test_helpers {
 
     /// Exposes `tools_list` for unit testing tool discovery.
     pub fn get_tools_list() -> Value {
-        crate::mcp::protocol::tools_list()
+        crate::mcp::protocol::tools_list(TransportMode::ClaudeCode)
+    }
+
+    pub fn get_codex_tools_list() -> Value {
+        crate::mcp::protocol::tools_list(TransportMode::Codex)
     }
 
     /// Exposes `initialize_response` for unit testing the handshake.
     pub fn get_initialize_response() -> Value {
-        crate::mcp::protocol::initialize_response()
+        crate::mcp::protocol::initialize_response(TransportMode::ClaudeCode)
+    }
+
+    /// Exposes the Codex initialize response for protocol tests.
+    pub fn get_codex_initialize_response() -> Value {
+        crate::mcp::protocol::initialize_response(TransportMode::Codex)
     }
 
     /// Exposes `handle_request` for unit testing request dispatch.
@@ -511,6 +589,35 @@ mod tests {
     };
     use serenity::model::id::{ChannelId, MessageId, UserId};
 
+    #[test]
+    fn messaging_context_uses_process_installed_pipeline() {
+        let pipeline = crate::pre_send::configured_pipeline(true, Vec::new())
+            .expect("configured pipeline")
+            .expect("enabled pipeline");
+        crate::pre_send::install_pipeline(Some(pipeline));
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let state_dir =
+            camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf-8 path");
+        let (notification_tx, _notification_rx) = mpsc::channel(1);
+        let server = DioneServer {
+            state: crate::state::new_state(),
+            queue: Arc::new(Mutex::new(crate::queue::AccessQueue::load(&state_dir))),
+            http: Arc::new(serenity::http::Http::new("fake")),
+            state_dir,
+            notification_tx,
+            discord_cmd_tx: None,
+            trace_controller: TraceLevelController::noop(),
+            mode: TransportMode::ClaudeCode,
+            codex_queue: None,
+            codex_thread_binding: None,
+        };
+
+        let context = server.messaging_ctx(Arc::new(LoadedConfig::from_raw(Config::default())));
+
+        assert!(context.has_pre_send_pipeline());
+        crate::pre_send::install_pipeline(None);
+    }
+
     fn config_with_channel_delay(channel_id: u64, delay_ms: u64) -> LoadedConfig {
         let mut raw = Config::default();
         raw.channels.push(ChannelConfig {
@@ -519,6 +626,41 @@ mod tests {
             ..Default::default()
         });
         LoadedConfig::from_raw(raw)
+    }
+
+    #[test]
+    fn claude_code_mode_always_selects_mcp_stdout() {
+        let sink = NotificationSink::new(
+            TransportMode::ClaudeCode,
+            Arc::new(Mutex::new(tokio::io::stdout())),
+            None,
+        )
+        .unwrap();
+        assert!(matches!(sink, NotificationSink::ClaudeCode(_)));
+    }
+
+    #[test]
+    fn codex_mode_requires_durable_event_queue() {
+        let result = NotificationSink::new(
+            TransportMode::Codex,
+            Arc::new(Mutex::new(tokio::io::stdout())),
+            None,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn codex_mode_selects_durable_event_queue() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let queue = crate::codex::CodexEventQueue::load(&path).unwrap();
+        let sink = NotificationSink::new(
+            TransportMode::Codex,
+            Arc::new(Mutex::new(tokio::io::stdout())),
+            Some(queue),
+        )
+        .unwrap();
+        assert!(matches!(sink, NotificationSink::Codex(_)));
     }
 
     fn config_with_global_delay(delay_ms: u64) -> LoadedConfig {
@@ -534,6 +676,7 @@ mod tests {
             user: "u".into(),
             user_id: UserId::new(1),
             content: "c".into(),
+            targeting: crate::discord::events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,

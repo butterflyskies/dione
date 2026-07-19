@@ -1,20 +1,24 @@
 //! MCP protocol responses: initialize handshake and tool list.
 
+use super::tools::bot_state::{ActivityType, OnlineStatus};
+use crate::codex::TransportMode;
 use serde_json::{Value, json};
 
-use super::tools::bot_state::{ActivityType, OnlineStatus};
-
 /// Build the MCP `initialize` response.
-pub(crate) fn initialize_response() -> Value {
-    json!({
-        "protocolVersion": "2024-11-05",
-        "capabilities": {
+pub(crate) fn initialize_response(mode: TransportMode) -> Value {
+    let capabilities = match mode {
+        TransportMode::ClaudeCode => json!({
             "tools": {},
             "experimental": {
                 "claude/channel": {},
                 "claude/channel/permission": {},
             }
-        },
+        }),
+        TransportMode::Codex => json!({ "tools": {} }),
+    };
+    json!({
+        "protocolVersion": "2024-11-05",
+        "capabilities": capabilities,
         "serverInfo": {
             "name": "dione",
             "version": env!("CARGO_PKG_VERSION"),
@@ -23,8 +27,8 @@ pub(crate) fn initialize_response() -> Value {
 }
 
 /// Build the MCP `tools/list` response.
-pub(crate) fn tools_list() -> Value {
-    json!({
+pub(crate) fn tools_list(mode: TransportMode) -> Value {
+    let mut response = json!({
         "tools": [
             tool("reply", "Send a reply to a Discord channel or DM", json!({
                 "type": "object",
@@ -34,7 +38,8 @@ pub(crate) fn tools_list() -> Value {
                     "content": { "type": "string", "description": "Message content" },
                     "reply_to_message_id": { "type": "string", "description": "Optional message ID to reply to" },
                     "suppress_ping": { "type": "boolean", "description": "When true, the reply will not ping the user being replied to (default: false)" },
-                    "no_rly": { "type": "boolean", "description": "Consent-gate override for the contradictionary block action. A blocked send returns an error naming the matched pattern (⚠️ blocked: <pattern>); resend the identical message with no_rly=true to bypass the block, send anyway, and record a durable diary entry. No effect on non-blocked messages (default: false)." }
+                    "no_rly": { "type": "boolean", "description": "Consent-gate override for the contradictionary block action. A blocked send returns an error naming the matched pattern (⚠️ blocked: <pattern>); resend the identical message with no_rly=true to bypass the block, send anyway, and record a durable diary entry. No effect on non-blocked messages (default: false)." },
+                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for this send. Every bypass is audited. This does not bypass the contradictionary; use no_rly for that legacy gate." }
                 }
             })),
             tool("react", "Add a reaction to a message", json!({
@@ -52,14 +57,17 @@ pub(crate) fn tools_list() -> Value {
                 "properties": {
                     "channel_id": { "type": "string" },
                     "message_id": { "type": "string" },
-                    "content": { "type": "string" }
+                    "content": { "type": "string" },
+                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass; every bypass is audited." }
                 }
             })),
-            tool("fetch_messages", "Fetch recent messages from a channel", json!({
+            tool("fetch_messages", "Fetch messages from a channel. Returns messages oldest-first. Without cursors, returns the most recent messages. With before/after, paginates through history; use the first returned id as the next before cursor (backward) or the last returned id as the next after cursor (forward). before and after are mutually exclusive. count and has_more (a hint, not a guarantee) are included when a cursor is provided.", json!({
                 "type": "object",
                 "required": ["channel_id"],
                 "properties": {
                     "channel_id": { "type": "string" },
+                    "before": { "type": "string", "description": "Discord message ID (snowflake); return messages older than this ID. Mutually exclusive with after." },
+                    "after": { "type": "string", "description": "Discord message ID (snowflake); return messages newer than this ID. Mutually exclusive with before." },
                     "limit": { "type": "integer", "default": 20, "maximum": 100 }
                 }
             })),
@@ -135,7 +143,8 @@ pub(crate) fn tools_list() -> Value {
                 "properties": {
                     "channel_id": { "type": "string", "description": "Discord channel ID" },
                     "file_path": { "type": "string", "description": "Absolute path to the file to upload" },
-                    "caption": { "type": "string", "description": "Optional message text to accompany the file" }
+                    "caption": { "type": "string", "description": "Optional message text to accompany the file" },
+                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for the caption; every bypass is audited." }
                 }
             })),
             tool("send_dm", "Initiate a DM conversation with a Discord user and send a message", json!({
@@ -143,7 +152,8 @@ pub(crate) fn tools_list() -> Value {
                 "required": ["user_id", "content"],
                 "properties": {
                     "user_id": { "type": "string", "description": "Discord user ID to send the DM to" },
-                    "content": { "type": "string", "description": "Message content to send" }
+                    "content": { "type": "string", "description": "Message content to send" },
+                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass; every bypass is audited." }
                 }
             })),
             tool("list_guilds", "List guilds the bot is in", json!({
@@ -276,7 +286,8 @@ pub(crate) fn tools_list() -> Value {
                 "properties": {
                     "channel_id": { "type": "string", "description": "Discord channel ID" },
                     "latex": { "type": "string", "description": "LaTeX math expression (without $ delimiters)" },
-                    "caption": { "type": "string", "description": "Optional message text to accompany the image" }
+                    "caption": { "type": "string", "description": "Optional message text to accompany the image" },
+                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for the caption; every bypass is audited." }
                 }
             })),
             tool("send_typing", "Send a typing indicator to a channel", json!({
@@ -363,7 +374,69 @@ pub(crate) fn tools_list() -> Value {
                 }
             })),
         ]
-    })
+    });
+    if mode == TransportMode::Codex
+        && let Some(tools) = response["tools"].as_array_mut()
+    {
+        tools.extend([
+            tool("bind_codex_thread", "Bind live inbound Discord delivery to this exact Codex thread. Call once at startup and after resuming, forking, or switching conversations. Future events move to the new binding; old backlog is not replayed.", json!({
+                "type": "object",
+                "required": ["thread_id"],
+                "properties": {
+                    "thread_id": { "type": "string", "minLength": 1, "maxLength": 128, "description": "Exact current CODEX_THREAD_ID; Dione never guesses among loaded threads" }
+                }
+            })),
+            tool("register_event_consumer", "Register this Codex conversation as an event consumer. A consumer may become primary only when no live primary exists; use handoff_event_consumer to switch deliberately.", json!({
+                "type": "object",
+                "required": ["label"],
+                "properties": {
+                    "label": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Human-readable conversation label; this is not an authorization token" },
+                    "ttl_seconds": { "type": "integer", "minimum": 60, "maximum": 86400, "default": 900 },
+                    "make_primary": { "type": "boolean", "default": false, "description": "Become the primary consumer only if no live primary exists" },
+                    "claim_unassigned": { "type": "boolean", "default": false, "description": "When becoming primary, route currently unassigned events here" }
+                }
+            })),
+            tool("handoff_event_consumer", "Explicitly transfer future inbound delivery from the active primary Codex conversation to another registered consumer.", json!({
+                "type": "object",
+                "required": ["from_consumer_id", "to_consumer_id"],
+                "properties": {
+                    "from_consumer_id": { "type": "string", "description": "Current primary consumer id" },
+                    "to_consumer_id": { "type": "string", "description": "Registered destination consumer id" },
+                    "move_pending": { "type": "boolean", "default": false, "description": "Also move pending events and invalidate their active leases; false routes only future events" }
+                }
+            })),
+            tool("claim_event_consumer", "Make a registered consumer primary after the previous primary has expired or released ownership. Fails while a live primary exists.", json!({
+                "type": "object",
+                "required": ["consumer_id"],
+                "properties": {
+                    "consumer_id": { "type": "string", "description": "Registered consumer becoming primary" },
+                    "claim_orphaned": { "type": "boolean", "default": false, "description": "Route unassigned events and events owned by expired consumers here, invalidating their leases" }
+                }
+            })),
+            tool("next_event", "Wait for and lease the next structured Discord event routed to this registered consumer. Call ack_event after handling it, then call next_event again.", json!({
+                "type": "object",
+                "required": ["consumer_id"],
+                "properties": {
+                    "consumer_id": { "type": "string", "description": "Opaque id returned by register_event_consumer" },
+                    "wait_seconds": { "type": "integer", "minimum": 0, "maximum": 55, "default": 45 },
+                    "lease_seconds": { "type": "integer", "minimum": 1, "maximum": 3600, "default": 120 }
+                }
+            })),
+            tool("ack_event", "Acknowledge a leased Discord event after it has been handled successfully.", json!({
+                "type": "object",
+                "required": ["consumer_id", "delivery_token"],
+                "properties": {
+                    "consumer_id": { "type": "string", "description": "Consumer that owns the lease" },
+                    "delivery_token": { "type": "string", "description": "Opaque token returned by next_event" }
+                }
+            })),
+            tool("event_queue_status", "Inspect the durable Codex event queue without leasing an event.", json!({
+                "type": "object",
+                "properties": {}
+            })),
+        ]);
+    }
+    response
 }
 
 pub(crate) fn tool(name: &str, description: &str, input_schema: Value) -> Value {
@@ -372,4 +445,67 @@ pub(crate) fn tool(name: &str, description: &str, input_schema: Value) -> Value 
         "description": description,
         "inputSchema": input_schema,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fetch_messages_schema() -> Value {
+        let list = tools_list(TransportMode::ClaudeCode);
+        list["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "fetch_messages")
+            .expect("fetch_messages must be in tools list")
+            .clone()
+    }
+
+    #[test]
+    fn fetch_messages_schema_has_cursor_fields() {
+        let tool = fetch_messages_schema();
+        let props = &tool["inputSchema"]["properties"];
+        assert!(
+            props.get("before").is_some(),
+            "schema must include 'before'"
+        );
+        assert!(props.get("after").is_some(), "schema must include 'after'");
+    }
+
+    #[test]
+    fn fetch_messages_schema_documents_mutual_exclusion() {
+        let tool = fetch_messages_schema();
+        let desc = tool["description"].as_str().unwrap();
+        assert!(
+            desc.contains("mutually exclusive") || desc.contains("Mutually exclusive"),
+            "tool description must document mutual exclusion of before/after"
+        );
+    }
+
+    #[test]
+    fn fetch_messages_schema_documents_ordering() {
+        let tool = fetch_messages_schema();
+        let desc = tool["description"].as_str().unwrap();
+        assert!(
+            desc.contains("oldest-first"),
+            "tool description must document oldest-first ordering"
+        );
+    }
+
+    #[test]
+    fn fetch_messages_schema_cursor_descriptions_mention_exclusivity() {
+        let tool = fetch_messages_schema();
+        let props = &tool["inputSchema"]["properties"];
+        let before_desc = props["before"]["description"].as_str().unwrap();
+        let after_desc = props["after"]["description"].as_str().unwrap();
+        assert!(
+            before_desc.contains("Mutually exclusive"),
+            "before description must mention mutual exclusivity"
+        );
+        assert!(
+            after_desc.contains("Mutually exclusive"),
+            "after description must mention mutual exclusivity"
+        );
+    }
 }

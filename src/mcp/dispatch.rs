@@ -1,25 +1,35 @@
 //! Tool dispatch: routes `tools/call` requests to the correct handler.
 
-use serde_json::{Value, json};
-
-use crate::config_store::{ConfigStore, DiscordId};
-use crate::mcp::ids::Snowflake;
-use crate::mcp::server::DioneServer;
-use crate::mcp::tools::{
-    access::{approve_access, deny_access, list_access_requests},
-    bot_state::{send_typing, set_presence},
-    diagnostics::{get_version, set_stderr_level, set_trace_level},
-    introspection::{
-        get_channel, get_member, get_user, list_channels, list_emojis, list_guilds, list_roles,
+use crate::{
+    codex::{
+        CodexThreadId, ConsumerId, DeliveryToken, consumer_ttl, lease_duration, timeout_response,
+        wait_duration,
     },
-    management::{create_thread, delete_message, pin_message, unpin_message},
-    messaging::{
-        download_attachment, edit_message, fetch_messages, fetch_new_since, get_message,
-        react as discord_react, reply, send_dm, send_file,
+    config_store::{ConfigStore, DiscordId},
+    mcp::{
+        ids::Snowflake,
+        server::DioneServer,
+        tools::{
+            access::{approve_access, deny_access, list_access_requests},
+            bot_state::{send_typing, set_presence},
+            diagnostics::{get_version, set_stderr_level, set_trace_level},
+            introspection::{
+                get_channel, get_member, get_user, list_channels, list_emojis, list_guilds,
+                list_roles,
+            },
+            management::{create_thread, delete_message, pin_message, unpin_message},
+            messaging::{
+                download_attachment, edit_message_with_hook_overrides, fetch_messages,
+                fetch_new_since, get_message, react as discord_react, reply_with_hook_overrides,
+                send_dm_with_hook_overrides, send_file_with_hook_overrides,
+            },
+            render::{render_latex, render_latex_to_channel_with_hook_overrides},
+            search::{SearchParams, search_messages},
+        },
     },
-    render::{render_latex, render_latex_to_channel},
-    search::{SearchParams, search_messages},
+    pre_send::HookName,
 };
+use serde_json::{Value, json};
 
 fn check_admin_gate(config: &crate::config::LoadedConfig) -> Result<(), String> {
     if config.access.admin_only_mutations {
@@ -41,6 +51,131 @@ pub(crate) async fn call_tool(
     let config = crate::config::load_config(&server.state_dir);
 
     let result = match name {
+        // Durable Codex receive loop
+        "bind_codex_thread" => {
+            let binding = server
+                .codex_thread_binding
+                .as_ref()
+                .ok_or_else(|| "bind_codex_thread is only available in Codex mode".to_string())?;
+            let thread_id = CodexThreadId::parse(parse_str(&args, "thread_id")?)
+                .map_err(|error| error.to_string())?;
+            server
+                .codex_queue
+                .as_ref()
+                .ok_or_else(|| "Codex queue is unavailable".to_string())?
+                .bind_live_thread(Some(thread_id.clone()))
+                .await
+                .map_err(|error| error.to_string())?;
+            binding
+                .send(Some(thread_id.clone()))
+                .map_err(|_| "Codex live delivery worker is unavailable".to_string())?;
+            json!({ "bound": true, "thread_id": thread_id })
+        }
+        "next_event" => {
+            let queue = server
+                .codex_queue
+                .as_ref()
+                .ok_or_else(|| "next_event is only available in Codex mode".to_string())?;
+            let consumer_id = ConsumerId::parse(parse_str(&args, "consumer_id")?)
+                .map_err(|error| error.to_string())?;
+            let wait = wait_duration(args.get("wait_seconds").and_then(Value::as_u64));
+            let lease = lease_duration(args.get("lease_seconds").and_then(Value::as_u64));
+            match queue
+                .next_event(&consumer_id, wait, lease)
+                .await
+                .map_err(|error| error.to_string())?
+            {
+                Some(event) => serde_json::to_value(event)
+                    .map_err(|error| format!("failed to serialize leased event: {error}"))?,
+                None => timeout_response(),
+            }
+        }
+        "ack_event" => {
+            let queue = server
+                .codex_queue
+                .as_ref()
+                .ok_or_else(|| "ack_event is only available in Codex mode".to_string())?;
+            let consumer_id = ConsumerId::parse(parse_str(&args, "consumer_id")?)
+                .map_err(|error| error.to_string())?;
+            let raw_token = parse_str(&args, "delivery_token")?;
+            let token = DeliveryToken::parse(raw_token).map_err(|error| error.to_string())?;
+            queue
+                .acknowledge(&consumer_id, &token)
+                .await
+                .map_err(|error| error.to_string())?;
+            json!({ "acknowledged": true })
+        }
+        "event_queue_status" => {
+            let queue = server
+                .codex_queue
+                .as_ref()
+                .ok_or_else(|| "event_queue_status is only available in Codex mode".to_string())?;
+            serde_json::to_value(queue.status().await)
+                .map_err(|error| format!("failed to serialize queue status: {error}"))?
+        }
+        "register_event_consumer" => {
+            let queue = server.codex_queue.as_ref().ok_or_else(|| {
+                "register_event_consumer is only available in Codex mode".to_string()
+            })?;
+            let label = parse_str(&args, "label")?.trim();
+            if label.is_empty() || label.len() > 120 {
+                return Err("label must contain 1 to 120 characters".to_string());
+            }
+            let ttl = consumer_ttl(args.get("ttl_seconds").and_then(Value::as_u64));
+            let make_primary = args
+                .get("make_primary")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let claim_unassigned = args
+                .get("claim_unassigned")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let registration = queue
+                .register_consumer(label.to_owned(), ttl, make_primary, claim_unassigned)
+                .await
+                .map_err(|error| error.to_string())?;
+            serde_json::to_value(registration)
+                .map_err(|error| format!("failed to serialize consumer registration: {error}"))?
+        }
+        "handoff_event_consumer" => {
+            let queue = server.codex_queue.as_ref().ok_or_else(|| {
+                "handoff_event_consumer is only available in Codex mode".to_string()
+            })?;
+            let from = ConsumerId::parse(parse_str(&args, "from_consumer_id")?)
+                .map_err(|error| error.to_string())?;
+            let to = ConsumerId::parse(parse_str(&args, "to_consumer_id")?)
+                .map_err(|error| error.to_string())?;
+            let move_pending = args
+                .get("move_pending")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let result = queue
+                .handoff(&from, &to, move_pending)
+                .await
+                .map_err(|error| error.to_string())?;
+            serde_json::to_value(result)
+                .map_err(|error| format!("failed to serialize consumer handoff: {error}"))?
+        }
+        "claim_event_consumer" => {
+            let queue = server.codex_queue.as_ref().ok_or_else(|| {
+                "claim_event_consumer is only available in Codex mode".to_string()
+            })?;
+            let consumer_id = ConsumerId::parse(parse_str(&args, "consumer_id")?)
+                .map_err(|error| error.to_string())?;
+            let claim_orphaned = args
+                .get("claim_orphaned")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let claimed_events = queue
+                .claim_primary(&consumer_id, claim_orphaned)
+                .await
+                .map_err(|error| error.to_string())?;
+            json!({
+                "primary_consumer_id": consumer_id,
+                "claimed_events": claimed_events
+            })
+        }
+
         // Messaging
         "reply" => {
             let ctx = server.messaging_ctx(config.clone());
@@ -55,7 +190,17 @@ pub(crate) async fn call_tool(
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             let no_rly = args.get("no_rly").and_then(Value::as_bool).unwrap_or(false);
-            reply(&ctx, channel_id, content, reply_to, suppress_ping, no_rly).await
+            let no_rly_hooks = parse_hook_overrides(&args)?;
+            reply_with_hook_overrides(
+                &ctx,
+                channel_id,
+                content,
+                reply_to,
+                suppress_ping,
+                no_rly,
+                &no_rly_hooks,
+            )
+            .await
         }
         "react" => {
             let ctx = server.messaging_ctx(config.clone());
@@ -75,13 +220,17 @@ pub(crate) async fn call_tool(
                 .get("content")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing content".to_string())?;
-            edit_message(&ctx, channel_id, message_id, content).await
+            let no_rly_hooks = parse_hook_overrides(&args)?;
+            edit_message_with_hook_overrides(&ctx, channel_id, message_id, content, &no_rly_hooks)
+                .await
         }
         "fetch_messages" => {
             let ctx = server.messaging_ctx(config.clone());
             let channel_id = parse_id(&args, "channel_id")?.channel();
+            let before = parse_strict_optional_id(&args, "before")?.map(|s| s.message());
+            let after = parse_strict_optional_id(&args, "after")?.map(|s| s.message());
             let limit = parse_limit(&args, 20);
-            fetch_messages(&ctx, channel_id, limit).await
+            fetch_messages(&ctx, channel_id, before, after, limit).await
         }
         "fetch_new_since" => {
             let ctx = server.messaging_ctx(config.clone());
@@ -118,7 +267,8 @@ pub(crate) async fn call_tool(
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing file_path".to_string())?;
             let caption = args.get("caption").and_then(Value::as_str);
-            send_file(&ctx, channel_id, file_path, caption).await
+            let no_rly_hooks = parse_hook_overrides(&args)?;
+            send_file_with_hook_overrides(&ctx, channel_id, file_path, caption, &no_rly_hooks).await
         }
 
         "send_dm" => {
@@ -128,7 +278,8 @@ pub(crate) async fn call_tool(
                 .get("content")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing content".to_string())?;
-            send_dm(&ctx, user_id, content).await
+            let no_rly_hooks = parse_hook_overrides(&args)?;
+            send_dm_with_hook_overrides(&ctx, user_id, content, &no_rly_hooks).await
         }
 
         // Introspection
@@ -364,7 +515,15 @@ pub(crate) async fn call_tool(
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing latex".to_string())?;
             let caption = args.get("caption").and_then(Value::as_str);
-            render_latex_to_channel(&ctx, channel_id, latex, caption).await
+            let no_rly_hooks = parse_hook_overrides(&args)?;
+            render_latex_to_channel_with_hook_overrides(
+                &ctx,
+                channel_id,
+                latex,
+                caption,
+                &no_rly_hooks,
+            )
+            .await
         }
 
         // Diagnostics
@@ -463,6 +622,38 @@ pub(crate) fn parse_optional_id(args: &Value, key: &str) -> Result<Option<Snowfl
     Ok(None)
 }
 
+fn parse_strict_optional_id(args: &Value, key: &str) -> Result<Option<Snowflake>, String> {
+    match args.get(key) {
+        None => Ok(None),
+        Some(v) if v.is_null() => Err(format!(
+            "invalid {key}: null is not a valid snowflake; omit the field instead"
+        )),
+        Some(v) if v.is_u64() => {
+            let n = v.as_u64().unwrap();
+            Snowflake::new(n)
+                .map(Some)
+                .ok_or_else(|| format!("invalid {key}: must be a nonzero Discord snowflake"))
+        }
+        Some(v) if v.is_string() => {
+            let s = v.as_str().unwrap();
+            if s.is_empty() {
+                return Err(format!(
+                    "invalid {key}: empty string is not a valid snowflake"
+                ));
+            }
+            let n = s
+                .parse::<u64>()
+                .map_err(|_| format!("invalid {key}: not a valid u64"))?;
+            Snowflake::new(n)
+                .map(Some)
+                .ok_or_else(|| format!("invalid {key}: must be a nonzero Discord snowflake"))
+        }
+        Some(_) => Err(format!(
+            "invalid {key}: expected a Discord snowflake (string or integer), got unexpected type"
+        )),
+    }
+}
+
 fn parse_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     args.get(key)
         .and_then(Value::as_str)
@@ -477,11 +668,50 @@ fn parse_string_array(args: &Value, key: &str) -> Option<Vec<String>> {
     })
 }
 
+fn parse_hook_overrides(args: &Value) -> Result<Vec<HookName>, String> {
+    let Some(value) = args.get("no_rly_hooks") else {
+        return Ok(Vec::new());
+    };
+    let values = value
+        .as_array()
+        .ok_or_else(|| "no_rly_hooks must be an array of hook-name strings".to_owned())?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(|name| HookName::parse(name).map_err(|error| error.to_string()))
+                .ok_or_else(|| "no_rly_hooks must contain only strings".to_owned())
+                .and_then(std::convert::identity)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     use proptest::prelude::*;
 
-    use super::*;
+    #[test]
+    fn hook_override_boundary_parses_canonical_names() {
+        let parsed = parse_hook_overrides(&serde_json::json!({
+            "no_rly_hooks": ["tier-1", "contradictionary"]
+        }))
+        .unwrap();
+        assert_eq!(
+            parsed.iter().map(HookName::as_str).collect::<Vec<_>>(),
+            ["tier-1", "contradictionary"]
+        );
+    }
+
+    #[test]
+    fn hook_override_boundary_rejects_invalid_names_and_shapes() {
+        assert!(
+            parse_hook_overrides(&serde_json::json!({ "no_rly_hooks": ["Not Valid"] })).is_err()
+        );
+        assert!(parse_hook_overrides(&serde_json::json!({ "no_rly_hooks": "tier-1" })).is_err());
+        assert!(parse_hook_overrides(&serde_json::json!({ "no_rly_hooks": [1] })).is_err());
+    }
 
     /// Edge-weighted snowflake strategy. A uniform `0u64..` hits 0 with
     /// probability ~1/2^64, so the zero arms in the tests below were dead
@@ -572,5 +802,58 @@ mod tests {
                 Some(l) => prop_assert_eq!(u64::from(parsed), l.clamp(1, 100)),
             }
         }
+    }
+
+    #[test]
+    fn strict_optional_id_absent_yields_none() {
+        assert_eq!(
+            parse_strict_optional_id(&json!({}), "id").map(|o| o.map(|s| s.get())),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn strict_optional_id_valid_snowflake() {
+        let result = parse_strict_optional_id(&json!({"id": "1234567890"}), "id");
+        assert_eq!(result.map(|o| o.map(|s| s.get())), Ok(Some(1234567890)));
+
+        let result = parse_strict_optional_id(&json!({"id": 1234567890u64}), "id");
+        assert_eq!(result.map(|o| o.map(|s| s.get())), Ok(Some(1234567890)));
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_null() {
+        assert!(parse_strict_optional_id(&json!({"id": null}), "id").is_err());
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_bool() {
+        assert!(parse_strict_optional_id(&json!({"id": true}), "id").is_err());
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_object() {
+        assert!(parse_strict_optional_id(&json!({"id": {}}), "id").is_err());
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_array() {
+        assert!(parse_strict_optional_id(&json!({"id": []}), "id").is_err());
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_empty_string() {
+        assert!(parse_strict_optional_id(&json!({"id": ""}), "id").is_err());
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_zero() {
+        assert!(parse_strict_optional_id(&json!({"id": 0}), "id").is_err());
+        assert!(parse_strict_optional_id(&json!({"id": "0"}), "id").is_err());
+    }
+
+    #[test]
+    fn strict_optional_id_rejects_non_numeric_string() {
+        assert!(parse_strict_optional_id(&json!({"id": "abc"}), "id").is_err());
     }
 }

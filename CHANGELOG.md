@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [0.22.0] - 2026-07-18
+
+### Added
+- **Inbound bell shadow evaluation** (`bell_rings`) — shadow-mode memory recall
+  prefetch on inbound messages carrying typed directed-delivery evidence. Calls
+  a single configured memory-mcp provider/scope, computes typed bells (semantic
+  distance, loudness, provenance preserved for later rendering and feedback
+  slices), and emits low-cardinality telemetry. Hard 300 ms deadline with
+  fail-open on timeout, provider error, or malformed response — the delivered
+  event is never rewritten. Disabled by default (`enabled = false`); provider
+  scope must be explicit (`all` is rejected). (#200)
+
+## [0.21.0] - 2026-07-14
+
+### Added
+- **Generic pre-send hook pipeline.** Typed `PreSendHook` trait with
+  observe-only outbound seam. Hooks run before text reaches Discord;
+  decisions (pass/halt/redirect) are composable, with per-send bypass
+  via `no_rly_hooks`. Surfaces: reply, edit, send_dm, send_file caption,
+  render_latex caption, voice-before-TTS. (#177)
+- **Cursor pagination for `fetch_messages`** (`before`/`after` optional
+  snowflake params). Enables backward and forward pagination through
+  channel history, including DMs. Mutually exclusive; results always
+  sorted oldest-first; `count` and `has_more` hint included when a
+  cursor is provided. Strict cursor validation rejects null, bool,
+  object, array, and empty-string values instead of silently ignoring
+  them. (#185, #186)
+
+### Fixed
+- **Codex WebSocket delivery hardening.** 64 MiB frame/message bounds,
+  bounded WebSocket handshake/write operations, lease/retry/acknowledgement
+  and rebind correctness. (#181)
+
+## [0.20.0] - 2026-07-11
+
+### Added
+- Native Codex transport via `--mode codex`. Dione persists inbound Discord
+  events to `codex-inbox.json`, delivers new events live to an exact Codex
+  thread through app-server WebSocket `turn/start`/`turn/steer`, and exposes
+  structured lease/ack pull tools. `bind_codex_thread` explicitly routes every
+  new, resumed, forked, or switched conversation without startup-time guessing.
+  Codex conversations register as consumers; an explicit primary receives new
+  events and may hand future delivery to another registered conversation.
+  Expired leases are redelivered, Discord message IDs remain deduplicated after
+  acknowledgement, and a lifetime file lock prevents multiple Dione processes
+  from sharing one Codex inbox.
+
 ## [0.19.0] - 2026-07-06
 
 ### Added

@@ -1,5 +1,7 @@
 pub mod batch;
+pub mod bell_rings;
 pub mod coalesce;
+pub mod codex;
 pub mod config;
 pub mod config_store;
 pub mod config_watcher;
@@ -9,6 +11,7 @@ pub mod discord;
 pub mod gate;
 pub mod mcp;
 pub mod permissions;
+pub mod pre_send;
 pub mod queue;
 pub mod rate_limiter;
 pub mod state;

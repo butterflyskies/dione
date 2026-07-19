@@ -6,6 +6,7 @@
 //! only up to the gate-rejection path.
 
 use dione::{
+    codex::TransportMode,
     discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
     mcp::server::{DioneServer, test_helpers},
     queue::AccessQueue,
@@ -76,6 +77,9 @@ fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
         notification_tx: tx,
         discord_cmd_tx: None,
         trace_controller: TraceLevelController::noop(),
+        mode: TransportMode::ClaudeCode,
+        codex_queue: None,
+        codex_thread_binding: None,
     }
 }
 
@@ -116,6 +120,13 @@ async fn test_initialize_returns_capabilities() {
         resp.get("protocolVersion").is_some(),
         "initialize response must include protocolVersion"
     );
+}
+
+#[test]
+fn test_codex_initialize_omits_claude_experimental_capabilities() {
+    let response = test_helpers::get_codex_initialize_response();
+    assert!(response["capabilities"].get("tools").is_some());
+    assert!(response["capabilities"].get("experimental").is_none());
 }
 
 #[tokio::test]
@@ -486,6 +497,29 @@ async fn test_tools_call_send_file_rejects_relative_path() {
 }
 
 #[tokio::test]
+async fn test_tools_call_send_file_rejects_captionless_hook_override() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 311,
+        "method": "tools/call",
+        "params": {
+            "name": "send_file",
+            "arguments": {
+                "channel_id": "999999",
+                "file_path": "/does/not/exist",
+                "no_rly_hooks": ["tier-1"]
+            }
+        }
+    });
+
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("no_rly_hooks cannot be used when no caption is sent"));
+}
+
+#[tokio::test]
 async fn test_tools_call_render_latex_to_channel_rejected_unknown_channel() {
     let (_dir, state_dir) = temp_state_dir();
     let server = make_server(&state_dir);
@@ -501,6 +535,29 @@ async fn test_tools_call_render_latex_to_channel_rejected_unknown_channel() {
     });
     let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
     assert_eq!(resp["result"]["isError"], json!(true));
+}
+
+#[tokio::test]
+async fn test_tools_call_render_rejects_captionless_hook_override() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 321,
+        "method": "tools/call",
+        "params": {
+            "name": "render_latex_to_channel",
+            "arguments": {
+                "channel_id": "999999",
+                "latex": "deliberately invalid",
+                "no_rly_hooks": ["tier-1"]
+            }
+        }
+    });
+
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("no_rly_hooks cannot be used when no caption is sent"));
 }
 
 #[tokio::test]
@@ -628,6 +685,39 @@ async fn test_tools_call_list_access_requests_empty() {
     );
 }
 
+#[tokio::test]
+async fn test_bind_codex_thread_updates_live_binding() {
+    let (_dir, state_dir) = temp_state_dir();
+    let mut server = make_server(&state_dir);
+    let (binding_tx, binding_rx) = tokio::sync::watch::channel(None);
+    server.mode = TransportMode::Codex;
+    server.codex_queue = Some(dione::codex::CodexEventQueue::load(&state_dir).unwrap());
+    server.codex_thread_binding = Some(binding_tx);
+    let thread_id = "019f4b14-ccc7-7db2-80c8-fe2b888c8844";
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": 71,
+        "method": "tools/call",
+        "params": {
+            "name": "bind_codex_thread",
+            "arguments": { "thread_id": thread_id }
+        }
+    });
+
+    let response = test_helpers::dispatch_request(&server, request)
+        .await
+        .unwrap();
+
+    assert!(response.get("error").is_none());
+    assert_eq!(
+        binding_rx
+            .borrow()
+            .as_ref()
+            .map(dione::codex::CodexThreadId::as_str),
+        Some(thread_id)
+    );
+}
+
 // ── Notification format tests ─────────────────────────────────────────────────
 
 // Semantic property tests — wire format is pinned by snapshots below.
@@ -640,6 +730,7 @@ fn test_notification_has_no_id_field() {
         user: "x".to_string(),
         user_id: UserId::new(3),
         content: "hi".to_string(),
+        targeting: dione::discord::events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -664,6 +755,7 @@ fn test_notification_attachment_metadata_present() {
         user: "x".to_string(),
         user_id: UserId::new(3),
         content: "see file".to_string(),
+        targeting: dione::discord::events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![AttachmentMeta {
             name: "photo.png".to_string(),
@@ -691,6 +783,7 @@ fn test_notification_voice_flag_in_meta() {
         user: "x".to_string(),
         user_id: UserId::new(3),
         content: String::new(),
+        targeting: dione::discord::events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: true,
@@ -725,6 +818,7 @@ fn test_notification_message_snapshot() {
         user: "snapuser".to_string(),
         user_id: UserId::new(3000),
         content: "snapshot content".to_string(),
+        targeting: dione::discord::events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00+00:00").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -814,6 +908,7 @@ fn test_notification_message_in_thread_snapshot() {
         user: "threaduser".to_string(),
         user_id: UserId::new(3000),
         content: "reply in thread".to_string(),
+        targeting: dione::discord::events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00+00:00").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -837,6 +932,7 @@ fn test_notification_message_reply_snapshot() {
         user: "replyuser".to_string(),
         user_id: UserId::new(3000),
         content: "replying to someone".to_string(),
+        targeting: dione::discord::events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00+00:00").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -858,6 +954,7 @@ fn test_notification_message_reply_in_thread_snapshot() {
         user: "threaduser".to_string(),
         user_id: UserId::new(3000),
         content: "reply in thread".to_string(),
+        targeting: dione::discord::events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00+00:00").unwrap(),
         attachments: vec![],
         is_voice_message: false,
