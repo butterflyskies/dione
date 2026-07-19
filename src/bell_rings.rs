@@ -263,7 +263,8 @@ struct RecallHit {
     name: String,
     scope: String,
     distance: f64,
-    match_type: String,
+    #[serde(default)]
+    match_type: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -290,7 +291,7 @@ fn parse_bells(
         if hit.scope != provider.scope.as_str() && hit.scope != "global" {
             return Err(());
         }
-        let match_type = match hit.match_type.as_str() {
+        let match_type = match hit.match_type.as_deref().unwrap_or("semantic") {
             "semantic" => SemanticMatchType::Semantic,
             "both" => SemanticMatchType::Both,
             "lexical" if hit.distance == -1.0 => continue,
