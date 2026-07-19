@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-07-18
+
+### Added
+- **Inbound bell shadow evaluation** (`bell_rings`) — shadow-mode memory recall
+  prefetch on inbound messages carrying typed directed-delivery evidence. Calls
+  a single configured memory-mcp provider/scope, computes typed bells (semantic
+  distance, loudness, provenance preserved for later rendering and feedback
+  slices), and emits low-cardinality telemetry. Hard 300 ms deadline with
+  fail-open on timeout, provider error, or malformed response — the delivered
+  event is never rewritten. Disabled by default (`enabled = false`); provider
+  scope must be explicit (`all` is rejected). (#200)
+
 ## [0.21.0] - 2026-07-14
 
 ### Added
