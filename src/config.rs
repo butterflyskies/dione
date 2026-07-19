@@ -46,6 +46,189 @@ pub struct Config {
     pub rate_limit: RateLimitTomlConfig,
     pub contradictionary: ContradictionaryConfig,
     pub pre_send: PreSendConfig,
+    /// Inbound memory-bell shadow evaluation.
+    pub bell_rings: BellRingsConfig,
+}
+
+/// Shadow-only inbound memory-bell configuration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BellRingsConfig {
+    /// Enables evaluation. Results never alter delivery in this slice.
+    pub enabled: bool,
+    /// The single memory-mcp provider. A singular field makes multi-provider
+    /// fan-out unrepresentable in the first slice.
+    pub provider: Option<BellProviderConfig>,
+    /// Largest admitted cosine distance.
+    pub max_semantic_distance: f64,
+    /// Maximum candidates requested and bells retained.
+    pub max_bells: usize,
+    /// Total evaluation deadline in milliseconds.
+    pub deadline_ms: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(default)]
+struct BellRingsConfigWire {
+    enabled: bool,
+    provider: Option<BellProviderConfig>,
+    #[serde(deserialize_with = "deserialize_max_semantic_distance")]
+    max_semantic_distance: f64,
+    #[serde(deserialize_with = "deserialize_max_bells")]
+    max_bells: usize,
+    #[serde(deserialize_with = "deserialize_bell_deadline")]
+    deadline_ms: u64,
+}
+
+impl Default for BellRingsConfigWire {
+    fn default() -> Self {
+        let defaults = BellRingsConfig::default();
+        Self {
+            enabled: defaults.enabled,
+            provider: defaults.provider,
+            max_semantic_distance: defaults.max_semantic_distance,
+            max_bells: defaults.max_bells,
+            deadline_ms: defaults.deadline_ms,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BellRingsConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = BellRingsConfigWire::deserialize(deserializer)?;
+        if wire.enabled && wire.provider.is_none() {
+            return Err(D::Error::custom(
+                "enabled bell_rings requires exactly one provider",
+            ));
+        }
+        Ok(Self {
+            enabled: wire.enabled,
+            provider: wire.provider,
+            max_semantic_distance: wire.max_semantic_distance,
+            max_bells: wire.max_bells,
+            deadline_ms: wire.deadline_ms,
+        })
+    }
+}
+
+impl Default for BellRingsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: None,
+            max_semantic_distance: 0.3,
+            max_bells: 3,
+            deadline_ms: 300,
+        }
+    }
+}
+
+/// One memory-mcp endpoint and one explicit allowed scope.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BellProviderConfig {
+    /// Streamable HTTP MCP endpoint.
+    pub url: BellProviderUrl,
+    /// Explicit recall scope. `all` and empty scopes are rejected while parsing.
+    pub scope: BellScope,
+}
+
+/// A validated HTTP(S) memory-mcp endpoint without embedded credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BellProviderUrl(String);
+
+impl BellProviderUrl {
+    pub fn parse(value: impl Into<String>) -> Result<Self, String> {
+        let value = value.into();
+        let parsed = value
+            .parse::<reqwest::Url>()
+            .map_err(|_| "bell_rings provider url must be a valid HTTP(S) URL".to_owned())?;
+        if !matches!(parsed.scheme(), "http" | "https")
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err(
+                "bell_rings provider url must be HTTP(S) without embedded credentials".to_owned(),
+            );
+        }
+        Ok(Self(parsed.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for BellProviderUrl {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::parse(String::deserialize(deserializer)?).map_err(D::Error::custom)
+    }
+}
+
+/// A validated memory scope which cannot represent the cross-scope `all` value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BellScope(String);
+
+impl BellScope {
+    pub fn parse(value: impl Into<String>) -> Result<Self, String> {
+        let value = value.into();
+        let trimmed = value.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("all") {
+            Err("bell_rings provider scope must be explicit and cannot be `all`".to_owned())
+        } else {
+            Ok(Self(trimmed.to_owned()))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for BellScope {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::parse(String::deserialize(deserializer)?).map_err(D::Error::custom)
+    }
+}
+
+fn deserialize_max_semantic_distance<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = f64::deserialize(deserializer)?;
+    (value.is_finite() && (0.0..=2.0).contains(&value))
+        .then_some(value)
+        .ok_or_else(|| D::Error::custom("max_semantic_distance must be finite and between 0 and 2"))
+}
+
+fn deserialize_max_bells<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = usize::deserialize(deserializer)?;
+    (1..=100)
+        .contains(&value)
+        .then_some(value)
+        .ok_or_else(|| D::Error::custom("max_bells must be between 1 and 100"))
+}
+
+fn deserialize_bell_deadline<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = u64::deserialize(deserializer)?;
+    (1..=300)
+        .contains(&value)
+        .then_some(value)
+        .ok_or_else(|| D::Error::custom("deadline_ms must be between 1 and 300"))
 }
 
 /// Pre-send hook lifecycle configuration.

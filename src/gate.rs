@@ -198,6 +198,18 @@ impl OutboundGate {
 /// Detects whether a message constitutes a mention of the bot.
 pub struct MentionDetector;
 
+/// Typed evidence that a guild message was directed to the construct.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MentionKind {
+    /// Discord carried an explicit mention of the construct's bot user.
+    DirectMention,
+    /// The message replied to one authored by the construct's bot user.
+    ReplyToConstruct,
+    /// A configured mention pattern matched the message content.
+    ConfiguredPattern,
+}
+
 impl MentionDetector {
     /// Returns `true` if the message counts as a bot mention.
     ///
@@ -212,26 +224,44 @@ impl MentionDetector {
         referenced_author_id: Option<u64>,
         mention_patterns: Option<&RegexSet>,
     ) -> bool {
+        Self::classify(
+            bot_user_id,
+            message_mentions,
+            message_content,
+            referenced_author_id,
+            mention_patterns,
+        )
+        .is_some()
+    }
+
+    /// Returns the first typed reason that makes a message directed.
+    pub fn classify(
+        bot_user_id: u64,
+        message_mentions: &[u64],
+        message_content: &str,
+        referenced_author_id: Option<u64>,
+        mention_patterns: Option<&RegexSet>,
+    ) -> Option<MentionKind> {
         // 1. Direct @mention.
         if message_mentions.contains(&bot_user_id) {
-            return true;
+            return Some(MentionKind::DirectMention);
         }
 
         // 2. Reply to a message the bot sent.
         if let Some(author_id) = referenced_author_id
             && author_id == bot_user_id
         {
-            return true;
+            return Some(MentionKind::ReplyToConstruct);
         }
 
         // 3. Regex pattern match (pre-compiled set).
         if let Some(set) = mention_patterns
             && set.is_match(message_content)
         {
-            return true;
+            return Some(MentionKind::ConfiguredPattern);
         }
 
-        false
+        None
     }
 }
 
@@ -482,6 +512,10 @@ mod tests {
 
     #[test]
     fn test_mention_at_mention() {
+        assert_eq!(
+            MentionDetector::classify(42, &[42], "hello", None, None),
+            Some(MentionKind::DirectMention)
+        );
         assert!(MentionDetector::is_mentioned(
             42,    // bot_user_id
             &[42], // message_mentions includes bot
@@ -493,6 +527,10 @@ mod tests {
 
     #[test]
     fn test_mention_reply_to_bot() {
+        assert_eq!(
+            MentionDetector::classify(42, &[], "what did you say?", Some(42), None),
+            Some(MentionKind::ReplyToConstruct)
+        );
         assert!(MentionDetector::is_mentioned(
             42,
             &[],
@@ -509,6 +547,16 @@ mod tests {
             patterns: vec!["(?i)\\bdione\\b".to_string()],
         };
         let config = loaded(raw);
+        assert_eq!(
+            MentionDetector::classify(
+                42,
+                &[],
+                "hey Dione, how are you?",
+                None,
+                config.mention_patterns.as_ref(),
+            ),
+            Some(MentionKind::ConfiguredPattern)
+        );
         assert!(MentionDetector::is_mentioned(
             42,
             &[],
