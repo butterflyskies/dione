@@ -67,6 +67,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `match_mode = "substring"` preserves original Aho-Corasick behavior for
   chom-chom game entries and stem-matching.
 
+### Fixed
+- Reaction and message notifications no longer emit an empty `user` field when
+  no cached display name is available. Identity resolution now follows a full
+  fallback chain — resolved display name → Discord username → the literal
+  `"dione"` — so a reactor's username is used instead of surfacing the substrate
+  name downstream (#153).
+
 ## [0.18.0] - 2026-07-05
 
 ### Added
@@ -79,6 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   sink so override history survives process restarts and context clears —
   unlike stderr, which the harness captures but does not persist. warn/log/
   celebrate are unaffected, and `no_rly` on a non-blocked message is a no-op.
+
 ## [0.17.0] - 2026-07-04
 
 ### Added
