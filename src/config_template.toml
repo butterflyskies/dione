@@ -9,6 +9,17 @@
 enabled = true
 construct_id = "dione"
 
+# Memory recall shadow evaluation. It never changes inbound delivery.
+[bell_rings]
+enabled = false
+max_semantic_distance = 0.3
+max_bells = 3
+deadline_ms = 300
+
+# [bell_rings.provider]
+# url = "http://memory-mcp:8080/mcp"
+# scope = "my-project" # explicit only; `all` is rejected
+
 [access]
 dm_policy = "queue"     # "queue", "drop", or "disabled"
 allow_from = []         # Discord user IDs that can DM the bot

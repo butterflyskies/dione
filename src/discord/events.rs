@@ -1,5 +1,5 @@
 use crate::{
-    gate::{GateDecision, InboundGate, MentionDetector},
+    gate::{GateDecision, InboundGate, MentionDetector, MentionKind},
     mcp::tools::bot_state::DiscordCommand,
     mcp::tools::messaging::create_dm_channel,
     queue::AccessRequest,
@@ -34,6 +34,8 @@ pub struct MessageEvent {
     pub user: String,
     pub user_id: UserId,
     pub content: String,
+    /// Typed targeting evidence captured at the Discord ingress boundary.
+    pub targeting: MessageTargeting,
     pub timestamp: Timestamp,
     pub attachments: Vec<AttachmentMeta>,
     pub is_voice_message: bool,
@@ -47,6 +49,25 @@ pub struct MessageEvent {
     pub reply_to_user: Option<String>,
     /// If the message is a reply, a short preview of the replied-to content.
     pub reply_to_content_preview: Option<String>,
+}
+
+/// Whether Discord ingress had explicit evidence that a message targeted this construct.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageTargeting {
+    /// An accepted direct message.
+    DirectMessage,
+    /// A guild message with explicit typed mention evidence.
+    GuildDirected(MentionKind),
+    /// An opted-in guild message delivered without directed evidence.
+    Ambient,
+}
+
+impl MessageTargeting {
+    /// Returns whether the message is eligible for directed-only processing.
+    pub fn is_directed(self) -> bool {
+        !matches!(self, Self::Ambient)
+    }
 }
 
 /// Events forwarded from the Discord gateway to the MCP notification stream.
@@ -166,7 +187,8 @@ impl EventHandler for Handler {
                         state.record_dm_channel(sender_id, channel_id);
                     }
 
-                    let event = build_message_event(&msg, &config, None);
+                    let event =
+                        build_message_event(&msg, &config, None, MessageTargeting::DirectMessage);
                     if let Err(e) = self.tx.send(event).await {
                         tracing::warn!(error = %e, "failed to send DM notification event");
                     }
@@ -216,7 +238,7 @@ impl EventHandler for Handler {
             // Guild message.
             let message_mentions: Vec<u64> = msg.mentions.iter().map(|u| u.id.get()).collect();
             let referenced_author_id = msg.referenced_message.as_deref().map(|m| m.author.id.get());
-            let is_mentioned = MentionDetector::is_mentioned(
+            let mention_kind = MentionDetector::classify(
                 bot_user_id,
                 &message_mentions,
                 &msg.content,
@@ -233,12 +255,15 @@ impl EventHandler for Handler {
                 &config,
                 resolved.gate_channel_id,
                 msg.author.id.get(),
-                is_mentioned,
+                mention_kind.is_some(),
             );
 
             match decision {
                 GateDecision::Deliver => {
-                    let event = build_message_event(&msg, &config, resolved.thread_parent_id);
+                    let targeting = mention_kind
+                        .map_or(MessageTargeting::Ambient, MessageTargeting::GuildDirected);
+                    let event =
+                        build_message_event(&msg, &config, resolved.thread_parent_id, targeting);
                     if let Err(e) = self.tx.send(event).await {
                         tracing::warn!(error = %e, "failed to send guild notification event");
                     }
@@ -761,6 +786,7 @@ fn build_message_event(
     msg: &Message,
     config: &crate::config::LoadedConfig,
     thread_parent_id: Option<u64>,
+    targeting: MessageTargeting,
 ) -> NotificationEvent {
     let attachments = msg
         .attachments
@@ -786,6 +812,7 @@ fn build_message_event(
         user: display_name(msg),
         user_id: msg.author.id,
         content: msg.content.clone(),
+        targeting,
         timestamp: config
             .localize_rfc3339(&serenity_ts_to_rfc3339("msg.timestamp", &msg.timestamp)),
         attachments,
@@ -1268,7 +1295,7 @@ mod tests {
             )),
         );
 
-        let event = build_message_event(&msg, &config, None);
+        let event = build_message_event(&msg, &config, None, MessageTargeting::Ambient);
         let NotificationEvent::Message(MessageEvent {
             reply_to_message_id,
             reply_to_user_id,

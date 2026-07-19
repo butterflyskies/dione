@@ -13,6 +13,7 @@
 
 pub use crate::tracing_channel::TraceLevelController;
 use crate::{
+    bell_rings::BellShadow,
     coalesce::{CoalesceResult, coalesce},
     codex::{CodexEventQueue, TransportMode},
     delivery_buffer::{BufferResult, DeliveryBuffer},
@@ -134,6 +135,7 @@ pub async fn run(
     let config = crate::config::load_config(&server.state_dir);
     let mut rate_limiter = RateLimiter::new(config.rate_limit_runtime().clone());
     let mut delivery_buffer = DeliveryBuffer::new();
+    let bell_shadow = Arc::new(BellShadow::new());
 
     // Resolve timezone once at startup so `deliver_flushed` doesn't need to
     // load config just for the tz. Updated opportunistically when we already
@@ -231,6 +233,16 @@ pub async fn run(
                             }
                         }
                     }
+
+                    // Advisory recall never sits on the delivery or buffer-flush
+                    // critical path. The observer owns a clone and cannot mutate
+                    // the event that continues through normal delivery.
+                    let shadow = Arc::clone(&bell_shadow);
+                    let shadow_event = event.clone();
+                    let shadow_config = cfg.bell_rings.clone();
+                    tokio::spawn(async move {
+                        let _ = shadow.observe(shadow_event, &shadow_config).await;
+                    });
 
                     // Delivery buffer: coalesce channel events per channel.
                     let delay_ms = extract_delay_ms(&event, &cfg);
@@ -664,6 +676,7 @@ mod tests {
             user: "u".into(),
             user_id: UserId::new(1),
             content: "c".into(),
+            targeting: crate::discord::events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
