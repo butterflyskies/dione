@@ -79,7 +79,7 @@ impl IntoNotification for NotificationEvent {
                     meta["bells"] = json!(bells);
                 }
                 if let Some(status) = bells_status {
-                    meta["bells_status"] = json!(status);
+                    meta["bells_status"] = json!(status.as_str());
                 }
                 json!({
                     "jsonrpc": "2.0",
@@ -225,6 +225,7 @@ impl IntoNotification for NotificationEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bell_rings::BellStatus;
     use crate::timestamp::Timestamp;
     use serenity::model::id::{ChannelId, MessageId, UserId};
 
@@ -490,7 +491,7 @@ mod tests {
             reply_to_user: None,
             reply_to_content_preview: None,
             bells: Some("3s lain/person-pace;2b lain/feedback-no-platitudes".into()),
-            bells_status: Some("ok".into()),
+            bells_status: Some(BellStatus::Ok),
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];

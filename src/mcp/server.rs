@@ -252,7 +252,7 @@ pub async fn run(
                             event = returned_event;
                             if let NotificationEvent::Message(ref mut msg) = event {
                                 if let Some(status) = status {
-                                    msg.bells_status = Some(status.as_str().to_owned());
+                                    msg.bells_status = Some(status);
                                 }
                                 if !bells.is_empty() {
                                     msg.bells = Some(render_bells(&bells));

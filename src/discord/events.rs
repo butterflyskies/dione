@@ -1,4 +1,5 @@
 use crate::{
+    bell_rings::BellStatus,
     gate::{GateDecision, InboundGate, MentionDetector, MentionKind},
     mcp::tools::bot_state::DiscordCommand,
     mcp::tools::messaging::create_dm_channel,
@@ -51,8 +52,8 @@ pub struct MessageEvent {
     pub reply_to_content_preview: Option<String>,
     /// Pre-rendered bell metadata (live mode only).
     pub bells: Option<String>,
-    /// Retrieval status for bell evaluation: "ok", "partial", "timeout", or "error".
-    pub bells_status: Option<String>,
+    /// Retrieval status for bell evaluation.
+    pub bells_status: Option<BellStatus>,
 }
 
 /// Whether Discord ingress had explicit evidence that a message targeted this construct.
