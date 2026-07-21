@@ -34,6 +34,7 @@ impl IntoNotification for NotificationEvent {
                 reply_to_user_id,
                 reply_to_user,
                 reply_to_content_preview,
+                bells,
                 ..
             }) => {
                 let mut meta = json!({
@@ -72,6 +73,9 @@ impl IntoNotification for NotificationEvent {
                         })
                         .collect();
                     meta["attachments"] = json!(att_desc.join("; "));
+                }
+                if let Some(bells) = bells {
+                    meta["mem_hits"] = json!(bells);
                 }
                 json!({
                     "jsonrpc": "2.0",
@@ -297,6 +301,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
+            bells: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -320,6 +325,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
+            bells: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -345,6 +351,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
+            bells: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -368,6 +375,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
+            bells: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -391,6 +399,7 @@ mod tests {
             reply_to_user_id: Some(UserId::new(888)),
             reply_to_user: Some("bob".into()),
             reply_to_content_preview: Some("original message".into()),
+            bells: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -416,6 +425,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
+            bells: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -441,6 +451,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
+            bells: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -467,6 +478,7 @@ mod tests {
             reply_to_user_id: Some(UserId::new(888)),
             reply_to_user: Some("bob".into()),
             reply_to_content_preview: None,
+            bells: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];

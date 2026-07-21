@@ -479,6 +479,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
+            bells: None,
         })
     }
 
@@ -696,6 +697,7 @@ mod tests {
                 reply_to_user_id: None,
                 reply_to_user: None,
                 reply_to_content_preview: None,
+            bells: None,
             }),
             NotificationEvent::Reaction {
                 chat_id: ChannelId::new(555),

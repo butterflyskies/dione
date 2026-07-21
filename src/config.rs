@@ -50,11 +50,24 @@ pub struct Config {
     pub bell_rings: BellRingsConfig,
 }
 
-/// Shadow-only inbound memory-bell configuration.
+/// Whether bell evaluation results are injected into delivery metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BellMode {
+    /// Evaluate and log, but do not alter delivery.
+    #[default]
+    Shadow,
+    /// Evaluate and inject `mem_hits` into notification metadata.
+    Live,
+}
+
+/// Inbound memory-bell configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BellRingsConfig {
-    /// Enables evaluation. Results never alter delivery in this slice.
+    /// Enables evaluation.
     pub enabled: bool,
+    /// Shadow (log only) or live (inject into metadata).
+    pub mode: BellMode,
     /// The single memory-mcp provider. A singular field makes multi-provider
     /// fan-out unrepresentable in the first slice.
     pub provider: Option<BellProviderConfig>,
@@ -70,6 +83,7 @@ pub struct BellRingsConfig {
 #[serde(default)]
 struct BellRingsConfigWire {
     enabled: bool,
+    mode: BellMode,
     provider: Option<BellProviderConfig>,
     #[serde(deserialize_with = "deserialize_max_semantic_distance")]
     max_semantic_distance: f64,
@@ -84,6 +98,7 @@ impl Default for BellRingsConfigWire {
         let defaults = BellRingsConfig::default();
         Self {
             enabled: defaults.enabled,
+            mode: defaults.mode,
             provider: defaults.provider,
             max_semantic_distance: defaults.max_semantic_distance,
             max_bells: defaults.max_bells,
@@ -105,6 +120,7 @@ impl<'de> Deserialize<'de> for BellRingsConfig {
         }
         Ok(Self {
             enabled: wire.enabled,
+            mode: wire.mode,
             provider: wire.provider,
             max_semantic_distance: wire.max_semantic_distance,
             max_bells: wire.max_bells,
@@ -117,6 +133,7 @@ impl Default for BellRingsConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            mode: BellMode::Shadow,
             provider: None,
             max_semantic_distance: 0.3,
             max_bells: 3,
