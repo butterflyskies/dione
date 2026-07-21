@@ -1,0 +1,18 @@
+[
+  {
+    "schema_version":"1","corpus_id":"fixture","archive_seq":1,"event_id":"<uuid>","event_kind":"message_create","observed_at":"<time>",
+    "source":{"platform":"discord","guild_id":"1","channel_id":"2","thread_id":null,"message_id":"3","actor_id":"4","created_at":"2026-01-01T00:00:00Z","edited_at":null},
+    "payload":{"content":"hello","content_sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824","attachments":[]},
+    "relations":{"reply_to_message_id":null,"thread_parent_channel_id":null},
+    "lineage":{"observed_version_ordinal":null,"predecessor_event_id":null,"history_status":"complete"},
+    "ingest":{"collector_version":"gaie-alpha-0.8.0","raw_payload_sha256":"32b82c1a67c432cfb136ee886881b699ab95ae4b69db378c900f4669e76147f5"}
+  },
+  {
+    "schema_version":"1","corpus_id":"fixture","archive_seq":2,"event_id":"<uuid>","event_kind":"reaction_snapshot","observed_at":"<time>",
+    "source":{"platform":"discord","guild_id":"1","channel_id":"2","thread_id":null,"message_id":"3","actor_id":null,"created_at":null,"edited_at":null},
+    "payload":{"content":"💜","content_sha256":"baef3d547ea1aa7fbd0e87eecb80dc89c10a070f165b1c535a98579312a8231f","attachments":[],"count":2,"normal_count":2,"burst_count":0},
+    "relations":{"reply_to_message_id":null,"thread_parent_channel_id":null},
+    "lineage":{"observed_version_ordinal":null,"predecessor_event_id":null,"history_status":"complete"},
+    "ingest":{"collector_version":"gaie-alpha-0.8.0","raw_payload_sha256":"c679d9678790d608e061230a5e644112585c457dcf611de83053445caac71a0c"}
+  }
+]

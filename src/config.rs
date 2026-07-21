@@ -48,6 +48,82 @@ pub struct Config {
     pub pre_send: PreSendConfig,
     /// Inbound memory-bell shadow evaluation.
     pub bell_rings: BellRingsConfig,
+    /// Restart-only, one-shot GAIE archive configuration.
+    pub archive: ArchiveConfig,
+}
+
+/// Configuration for the opt-in GAIE one-shot archive commands.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ArchiveConfig {
+    /// Enables archive commands. The daemon never starts an archive job.
+    pub enabled: bool,
+    /// The sole parent channel admitted to the archive.
+    pub channel_id: String,
+    /// The guild which owns the parent channel.
+    pub guild_id: String,
+    /// The filesystem-safe corpus identifier.
+    pub corpus_id: String,
+    /// The local directory containing archive artifacts.
+    pub data_dir: Utf8PathBuf,
+    /// Permits successful completion when Discord coverage is incomplete.
+    pub allow_partial: bool,
+}
+
+impl Default for ArchiveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            channel_id: String::new(),
+            guild_id: String::new(),
+            corpus_id: String::new(),
+            data_dir: Utf8PathBuf::new(),
+            allow_partial: false,
+        }
+    }
+}
+
+impl ArchiveConfig {
+    /// Validates the archive gate and its relationship to configured channels.
+    pub fn validate(&self, channels: &[ChannelConfig]) -> Result<(), String> {
+        if !self.enabled {
+            return Err("archive is disabled; set archive.enabled = true".to_owned());
+        }
+        let channel_id = self
+            .channel_id
+            .parse::<u64>()
+            .map_err(|_| "archive.channel_id must be a nonzero Discord ID".to_owned())?;
+        if channel_id == 0 {
+            return Err("archive.channel_id must be a nonzero Discord ID".to_owned());
+        }
+        let guild_id = self
+            .guild_id
+            .parse::<u64>()
+            .map_err(|_| "archive.guild_id must be a nonzero Discord ID".to_owned())?;
+        if guild_id == 0 {
+            return Err("archive.guild_id must be a nonzero Discord ID".to_owned());
+        }
+        crate::gaie::CorpusId::parse(&self.corpus_id).map_err(|error| error.to_string())?;
+        if self.data_dir.as_str().is_empty()
+            || !self.data_dir.is_absolute()
+            || self
+                .data_dir
+                .components()
+                .any(|component| component.as_str() == "..")
+        {
+            return Err("archive.data_dir must be an absolute path without `..`".to_owned());
+        }
+        let occurrences = channels
+            .iter()
+            .filter(|channel| channel.id == self.channel_id)
+            .count();
+        if occurrences != 1 {
+            return Err(format!(
+                "archive.channel_id must appear exactly once in [[channels]]; found {occurrences}"
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Whether bell evaluation results are injected into delivery metadata.
@@ -892,6 +968,65 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         (dir, path)
+    }
+
+    #[test]
+    fn test_archive_config_is_disabled_by_default() {
+        assert!(!Config::default().archive.enabled);
+    }
+
+    #[test]
+    fn test_archive_config_requires_exactly_one_allowlisted_channel() {
+        let archive = ArchiveConfig {
+            enabled: true,
+            channel_id: "42".to_owned(),
+            guild_id: "7".to_owned(),
+            corpus_id: "fixture-v1".to_owned(),
+            data_dir: Utf8PathBuf::from("/tmp/gaie-fixture"),
+            allow_partial: false,
+        };
+        assert!(archive.validate(&[]).is_err());
+        assert!(
+            archive
+                .validate(&[ChannelConfig {
+                    id: "42".to_owned(),
+                    ..ChannelConfig::default()
+                }])
+                .is_ok()
+        );
+        assert!(
+            archive
+                .validate(&[
+                    ChannelConfig {
+                        id: "42".to_owned(),
+                        ..ChannelConfig::default()
+                    },
+                    ChannelConfig {
+                        id: "42".to_owned(),
+                        ..ChannelConfig::default()
+                    },
+                ])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_archive_config_rejects_path_like_corpus_and_relative_data_dir() {
+        let mut archive = ArchiveConfig {
+            enabled: true,
+            channel_id: "42".into(),
+            guild_id: "7".into(),
+            corpus_id: "../escape".into(),
+            data_dir: Utf8PathBuf::from("relative"),
+            allow_partial: false,
+        };
+        let channels = [ChannelConfig {
+            id: "42".into(),
+            ..ChannelConfig::default()
+        }];
+        assert!(archive.validate(&channels).is_err());
+        archive.corpus_id = "safe".into();
+        assert!(archive.validate(&channels).is_err());
     }
 
     #[test]

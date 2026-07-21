@@ -4,6 +4,15 @@
 # IANA timezone for timestamps (e.g. "America/Los_Angeles"). Defaults to UTC.
 # timezone = "America/Los_Angeles"
 
+# GAIE archive jobs are explicit one-shot commands and never run in the daemon.
+[archive]
+enabled = false
+channel_id = ""
+guild_id = ""
+corpus_id = ""
+data_dir = ""
+allow_partial = false
+
 [pre_send]
 # Enabled installs the log-only Observe pipeline. False explicitly bypasses it.
 enabled = true
