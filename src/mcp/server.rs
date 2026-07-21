@@ -15,8 +15,8 @@ pub use crate::tracing_channel::TraceLevelController;
 use crate::{
     bell_rings::{BellEvaluator, render_bells},
     coalesce::{CoalesceResult, coalesce},
-    config::BellMode,
     codex::{CodexEventQueue, TransportMode},
+    config::BellMode,
     delivery_buffer::{BufferResult, DeliveryBuffer},
     discord::events::{MessageEvent, NotificationEvent},
     mcp::{

@@ -19,7 +19,7 @@ fn msg(message_id: u64, user: &str, user_id: u64, content: &str) -> Notification
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-            bells: None,
+        bells: None,
     })
 }
 
@@ -45,7 +45,7 @@ fn msg_with_reply(
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-            bells: None,
+        bells: None,
     })
 }
 
@@ -79,7 +79,7 @@ fn msg_with_attachments(
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-            bells: None,
+        bells: None,
     })
 }
 
@@ -209,7 +209,7 @@ fn timestamp_with_nonzero_seconds() {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-            bells: None,
+        bells: None,
     })];
     let result = serialize_batch(&events, &ctx_basic()).expect("should serialize");
 
@@ -258,7 +258,7 @@ fn reply_and_attachments_both_present() {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-            bells: None,
+        bells: None,
     })];
     let result = serialize_batch(&events, &ctx_basic()).expect("should serialize");
 
@@ -409,7 +409,7 @@ fn multiline_message_content() {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-            bells: None,
+        bells: None,
     })];
     let result = serialize_batch(&events, &ctx_basic()).expect("should serialize");
 
@@ -515,7 +515,7 @@ fn channel_mismatch_returns_error() {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
-            bells: None,
+        bells: None,
     })];
     let result = serialize_batch(&events, &ctx_basic());
     assert!(result.is_err());

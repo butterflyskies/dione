@@ -667,7 +667,10 @@ mod tests {
                 provider_rank: 1,
             },
         ];
-        assert_eq!(render_bells(&bells), "person-pace 12;feedback-no-platitudes 25");
+        assert_eq!(
+            render_bells(&bells),
+            "person-pace 12;feedback-no-platitudes 25"
+        );
     }
 
     #[tokio::test]
