@@ -1,16 +1,68 @@
-# GAIE archive atom 1
+# GAIE archive atoms 1 and 1b
 
 GAIE archive support is disabled by default and runs only through the explicit
 `gaie_archive` one-shot binary. Normal Dione daemon startup never backfills.
 
-This atom archives one configured parent channel through Discord's raw HTTP
+Atom 1 archives the configured parent channel through Discord's raw HTTP
 message response, emits `message_create` plus aggregate `reaction_snapshot`
 events, downloads attachments into `attachments/<sha256>.<safe-extension>`, and
 advances the parent checkpoint only after the corresponding event batch has
 been fsynced. A first run safely walks full history with `before`; a resumed run
 uses the durable message ID with `after`. Repeated or malformed cursors fail
-closed. Owned-thread enumeration remains outside this bounded atom, so
-`allow_partial = true` is required for parent-only backfill.
+closed.
+
+Atom 1b expands one allowlisted capture root to the parent plus every active or
+archived thread visible to the authenticated Discord principal. Completeness is
+therefore **principal-visible and non-atomic**, not global or historical: a
+thread the principal cannot enumerate is outside the claim, and threads may
+change while the two discovery snapshots are taken. Discovery uses the official
+Discord routes for guild-active threads, parent public archives, and private
+archives. A 403 from the all-private route falls back to joined-private. Public
+and private archive routes paginate with an ISO-8601 `before` cursor;
+joined-private uses a snowflake cursor. `has_more`, never page length, decides
+whether another page is required. The target set is the union of active
+snapshot A, all archive pages, and active snapshot B.
+
+Every discovered child is validated against the configured guild, exact parent
+ID, and admitted thread types before it can become a verified capture target.
+Message retrieval accepts only verified targets, not arbitrary child IDs. The
+default path completes enumeration before mutating the archive and fails closed
+if enumeration or validation fails. `allow_partial = true` remains an explicit
+parent-only break-glass mode; Atom 1b does not claim durable partial-thread
+semantics.
+
+Capture order is deterministic: parent first, then threads by numeric snowflake;
+messages within each stream are numeric ascending. Message identity remains the
+Discord-global `message_id`. A forum or thread starter observed once through
+the parent and once through the child stream produces one message, while its
+embedded thread relationship is retained. Reaction ordering remains unchanged.
+
+## Checkpoint v2
+
+Atom 1b replaces the single parent cursor with a versioned checkpoint:
+
+```json
+{
+  "version": 2,
+  "corpus_id": "example",
+  "guild_id": "10",
+  "parent_channel_id": "100",
+  "streams": {
+    "100": { "after_message_id": "150" },
+    "200": { "after_message_id": null }
+  },
+  "updated_at": "2026-07-21T00:00:00Z"
+}
+```
+
+`streams` is a deterministic `BTreeMap`; nullable cursors represent discovered
+but empty streams. The exact Atom 1 v1 object migrates to v2 with one parent
+stream. Unknown versions, mixed v1/v2 fields, foreign corpus/guild/parent IDs,
+and corrupt shapes fail closed. Each stream advances independently, and only
+after its corresponding message batch is committed and fsynced. Reprocessing a
+committed batch after a checkpoint-write fault must deduplicate globally and
+repair only that stream cursor. A semantic no-op rerun appends no events and
+does not rewrite the checkpoint merely to churn `updated_at`.
 
 The latest-state replayer additionally understands message edit/delete and
 reaction add/remove events, but this collector does not claim live delta
@@ -24,9 +76,16 @@ of byte-for-byte equality for newly collected archives: generated UUIDs and
 observation timestamps differ. Format framing, compact event bytes used for
 batch SHA-256, and oracle-defined raw-payload hashing are tested separately.
 
-Run the focused acceptance slice with `cargo test gaie_archive`; the filter
-executes recovery, corruption, checkpoint-ordering, retry, producer, replay,
-and CAS parity tests.
+Run the Atom 1b acceptance slice with:
+
+```console
+cargo nextest run -E 'test(/atom_1b|capture_root_accepts_optional_category_parent|incremental_backfill|incremental_short_after|fresh_backfill_short_before|pagination_cursor|repairs_stale_stream_cursor|default_backfill|wrong_parent|checkpoint|discovery_permutations|root_thread_route_matrix|incompatible_thread_type|http_trace_endpoint|archive_cursors/)'
+```
+
+The expression selects the production discovery/backfill transcripts, root
+validation matrix, checkpoint migration/corruption cases, and deterministic
+planning contracts without relying on a broad substring shared by unrelated
+tests.
 
 ## Tested invariants
 
@@ -45,6 +104,14 @@ The example and property suites make these contracts explicit:
 - corpus identifiers and archive paths cannot introduce traversal;
 - pagination derives strict numeric snowflake bounds and rejects repeated or
   malformed cursors;
+- discovery validates the principal-visible thread set before archive mutation,
+  unions two active snapshots with archived pages, and produces deterministic
+  verified targets;
+- checkpoint v1 migrates exactly to a v2 parent-only stream map, independent
+  stream cursors recover commit-before-checkpoint faults, and no-op reruns do
+  not churn durable bytes;
+- Discord-global message identity deduplicates parent/thread starter aliases
+  without discarding their embedded thread relationship;
 - corrected Python-v11 fixtures remain the differential replay and CAS oracle
   anchors.
 

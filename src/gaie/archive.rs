@@ -1,10 +1,11 @@
 use crate::gaie::{CorpusId, Event};
+use crate::gaie::backfill::parse_or_migrate_checkpoint;
 use camino::{Utf8Path, Utf8PathBuf};
 use fs2::FileExt as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write as _};
 #[cfg(unix)]
@@ -62,12 +63,24 @@ impl ArchivePaths {
     }
 }
 
-/// A durable incremental cursor for the configured parent channel.
+/// A durable incremental cursor for one verified capture stream.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct StreamCheckpoint {
+    pub after_message_id: Option<String>,
+}
+
+/// A durable, root-bound set of independent capture-stream cursors.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct Checkpoint {
+    pub version: u8,
     pub corpus_id: String,
-    pub channel_id: String,
-    pub after_message_id: String,
+    pub guild_id: String,
+    pub parent_channel_id: String,
+    pub streams: BTreeMap<String, StreamCheckpoint>,
     pub updated_at: String,
 }
 
@@ -255,9 +268,20 @@ impl Archive {
 
     /// Atomically replaces and fsyncs the incremental checkpoint.
     pub fn save_checkpoint(&self, checkpoint: &Checkpoint) -> Result<(), ArchiveError> {
-        if checkpoint.corpus_id != self.corpus.as_str() {
+        if checkpoint.version != 2 || checkpoint.corpus_id != self.corpus.as_str() {
             return Err(ArchiveError::Integrity(
                 "checkpoint corpus does not match archive".to_owned(),
+            ));
+        }
+        if checkpoint.streams.iter().any(|(stream_id, stream)| {
+            !is_nonzero_snowflake(stream_id)
+                || stream
+                    .after_message_id
+                    .as_deref()
+                    .is_some_and(|cursor| !is_nonzero_snowflake(cursor))
+        }) {
+            return Err(ArchiveError::Integrity(
+                "checkpoint stream identifiers must be nonzero Discord snowflakes".to_owned(),
             ));
         }
         reject_symlink(&self.paths.checkpoint)?;
@@ -285,27 +309,60 @@ impl Archive {
     }
 
     /// Loads a checkpoint after verifying that it belongs to this corpus.
-    pub fn load_checkpoint(&self) -> Result<Option<Checkpoint>, ArchiveError> {
+    pub fn load_checkpoint(
+        &self,
+        guild_id: &str,
+        parent_channel_id: &str,
+    ) -> Result<Option<Checkpoint>, ArchiveError> {
         reject_symlink(&self.paths.checkpoint)?;
         let bytes = match fs::read(self.paths.checkpoint.as_std_path()) {
             Ok(bytes) => bytes,
             Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(source) => return Err(io_error(&self.paths.checkpoint, source)),
         };
-        let checkpoint: Checkpoint = serde_json::from_slice(&bytes)
+        parse_or_migrate_checkpoint(
+            &bytes,
+            self.corpus.as_str(),
+            guild_id,
+            parent_channel_id,
+        )
+        .map(Some)
+        .map_err(|error| ArchiveError::Integrity(error.to_string()))
+    }
+
+    /// Reports whether the durable checkpoint is the exact legacy v1 shape.
+    pub(crate) fn checkpoint_is_legacy(&self) -> Result<bool, ArchiveError> {
+        reject_symlink(&self.paths.checkpoint)?;
+        let bytes = match fs::read(self.paths.checkpoint.as_std_path()) {
+            Ok(bytes) => bytes,
+            Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(source) => return Err(io_error(&self.paths.checkpoint, source)),
+        };
+        let value: Value = serde_json::from_slice(&bytes)
             .map_err(|source| ArchiveError::Json { line: 0, source })?;
-        if checkpoint.corpus_id != self.corpus.as_str() {
-            return Err(ArchiveError::Integrity(
-                "checkpoint corpus does not match archive".to_owned(),
-            ));
-        }
-        Ok(Some(checkpoint))
+        let Some(object) = value.as_object() else {
+            return Ok(false);
+        };
+        let expected: BTreeSet<_> = [
+            "after_message_id",
+            "channel_id",
+            "corpus_id",
+            "updated_at",
+        ]
+        .into_iter()
+        .collect();
+        let actual: BTreeSet<_> = object.keys().map(String::as_str).collect();
+        Ok(actual == expected && object.values().all(Value::is_string))
     }
 
     /// Reads the current committed snapshot while retaining the writer lock.
     pub fn read_committed(&self) -> Result<ReadResult, ArchiveError> {
         read_committed_unlocked(&self.paths.events)
     }
+}
+
+fn is_nonzero_snowflake(value: &str) -> bool {
+    value.parse::<u64>().is_ok_and(|value| value != 0)
 }
 
 fn read_committed_unlocked(path: &Utf8Path) -> Result<ReadResult, ArchiveError> {
@@ -676,14 +733,92 @@ mod tests {
         let paths = ArchivePaths::new(root, &corpus).unwrap();
         let archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
         let checkpoint = Checkpoint {
+            version: 2,
             corpus_id: "fixture".into(),
-            channel_id: "2".into(),
-            after_message_id: "3".into(),
+            guild_id: "1".into(),
+            parent_channel_id: "2".into(),
+            streams: BTreeMap::from([(
+                "2".into(),
+                StreamCheckpoint {
+                    after_message_id: Some("3".into()),
+                },
+            )]),
             updated_at: "2026-01-01T00:00:00Z".into(),
         };
         archive.save_checkpoint(&checkpoint).unwrap();
         archive.save_checkpoint(&checkpoint).unwrap();
-        assert_eq!(archive.load_checkpoint().unwrap(), Some(checkpoint));
+        assert_eq!(
+            archive.load_checkpoint("1", "2").unwrap(),
+            Some(checkpoint)
+        );
+    }
+
+    #[test]
+    fn test_checkpoint_save_rejects_invalid_stream_snowflakes() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let corpus = CorpusId::parse("fixture").unwrap();
+        let paths = ArchivePaths::new(root, &corpus).unwrap();
+        let archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+        for streams in [
+            BTreeMap::from([(
+                "0".into(),
+                StreamCheckpoint {
+                    after_message_id: None,
+                },
+            )]),
+            BTreeMap::from([(
+                "2".into(),
+                StreamCheckpoint {
+                    after_message_id: Some("not-a-snowflake".into()),
+                },
+            )]),
+        ] {
+            let error = archive
+                .save_checkpoint(&Checkpoint {
+                    version: 2,
+                    corpus_id: "fixture".into(),
+                    guild_id: "1".into(),
+                    parent_channel_id: "2".into(),
+                    streams,
+                    updated_at: "2026-01-01T00:00:00Z".into(),
+                })
+                .unwrap_err();
+            assert!(matches!(error, ArchiveError::Integrity(_)));
+        }
+    }
+
+    #[test]
+    fn test_checkpoint_exact_v1_fixture_migrates_and_saves_exact_v2_shape() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let corpus = CorpusId::parse("fixture").unwrap();
+        let paths = ArchivePaths::new(root, &corpus).unwrap();
+        let archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+        fs::write(
+            archive.paths.checkpoint.as_std_path(),
+            br#"{"corpus_id":"fixture","channel_id":"2","after_message_id":"3","updated_at":"2026-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+
+        let migrated = archive.load_checkpoint("1", "2").unwrap().unwrap();
+        assert_eq!(
+            serde_json::to_value(&migrated).unwrap(),
+            serde_json::json!({
+                "version":2,
+                "corpus_id":"fixture",
+                "guild_id":"1",
+                "parent_channel_id":"2",
+                "streams":{"2":{"after_message_id":"3"}},
+                "updated_at":"2026-01-01T00:00:00Z"
+            })
+        );
+        archive.save_checkpoint(&migrated).unwrap();
+        let saved: Value = serde_json::from_slice(
+            &fs::read(archive.paths.checkpoint.as_std_path()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved, serde_json::to_value(migrated).unwrap());
     }
 
     #[cfg(unix)]
@@ -835,9 +970,16 @@ mod tests {
             .unwrap();
         fs::create_dir(archive.paths.checkpoint.as_std_path()).unwrap();
         let checkpoint = Checkpoint {
+            version: 2,
             corpus_id: "fixture".into(),
-            channel_id: "2".into(),
-            after_message_id: "3".into(),
+            guild_id: "1".into(),
+            parent_channel_id: "2".into(),
+            streams: BTreeMap::from([(
+                "2".into(),
+                StreamCheckpoint {
+                    after_message_id: Some("3".into()),
+                },
+            )]),
             updated_at: "2026-01-01T00:00:00Z".into(),
         };
         assert!(archive.save_checkpoint(&checkpoint).is_err());

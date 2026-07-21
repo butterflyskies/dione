@@ -357,3 +357,34 @@ enabled = false
 2. Config file is TOML, re-read on every inbound message
 3. Missing file → all defaults (queue policy, empty lists)
 4. Parse error → rename to `.corrupt-{timestamp}`, log error, use defaults
+## GAIE archive Atom 1b requirements
+
+- **GAIE-1B-R1:** One configured capture root shall include its parent and all
+  principal-visible active and archived threads with the exact expected guild,
+  parent ID, and admitted thread type.
+- **GAIE-1B-R2:** Discovery shall use guild-active, parent-public-archived, and
+  private-archived Discord routes; a 403 on private-all shall fall back to
+  joined-private.
+- **GAIE-1B-R3:** Public/private archives shall use ISO-8601 `before` cursors,
+  joined-private shall use a snowflake cursor, and `has_more` shall control
+  pagination.
+- **GAIE-1B-R4:** Discovery shall union active snapshot A, all archive pages,
+  and active snapshot B, then order the parent first and threads by numeric
+  snowflake.
+- **GAIE-1B-R5:** The default mode shall complete discovery and validation
+  before archive mutation or fail closed. `allow_partial` shall remain an
+  explicit parent-only break-glass mode.
+- **GAIE-1B-R6:** Child message fetches shall accept only verified capture
+  targets. Wrong-parent, wrong-guild, and wrong-type candidates shall be
+  rejected before any child message request.
+- **GAIE-1B-R7:** Message identity shall remain Discord-global by `message_id`.
+  Parent/thread starter aliases shall deduplicate while preserving the embedded
+  thread relation. Reaction ordering shall remain stable.
+- **GAIE-1B-R8:** Checkpoint v2 shall identify corpus, guild, and parent and use
+  a deterministic stream map with nullable `after_message_id` values.
+- **GAIE-1B-R9:** The exact v1 checkpoint shall migrate to a v2 parent-only
+  stream. Unknown, mixed, foreign, and corrupt forms shall fail closed.
+- **GAIE-1B-R10:** Each stream cursor shall advance only after its batch commit
+  is fsynced. A later run shall discover new threads without replaying completed
+  streams, and an identical rerun shall append zero events without semantic
+  checkpoint churn.
