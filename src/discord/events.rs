@@ -51,6 +51,8 @@ pub struct MessageEvent {
     pub reply_to_content_preview: Option<String>,
     /// Pre-rendered bell metadata (live mode only).
     pub bells: Option<String>,
+    /// Retrieval status for bell evaluation: "ok", "timeout", or "error".
+    pub bells_status: Option<String>,
 }
 
 /// Whether Discord ingress had explicit evidence that a message targeted this construct.
@@ -862,6 +864,7 @@ fn build_message_event(
         reply_to_user,
         reply_to_content_preview,
         bells: None,
+        bells_status: None,
     })
 }
 

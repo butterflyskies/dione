@@ -740,6 +740,7 @@ fn test_notification_has_no_id_field() {
         reply_to_user: None,
         reply_to_content_preview: None,
         bells: None,
+        bells_status: None,
     });
     let notif = test_helpers::make_notification(event);
     assert!(
@@ -770,6 +771,7 @@ fn test_notification_attachment_metadata_present() {
         reply_to_user: None,
         reply_to_content_preview: None,
         bells: None,
+        bells_status: None,
     });
     let notif = test_helpers::make_notification(event);
     let meta = &notif["params"]["meta"];
@@ -795,6 +797,7 @@ fn test_notification_voice_flag_in_meta() {
         reply_to_user: None,
         reply_to_content_preview: None,
         bells: None,
+        bells_status: None,
     });
     let notif = test_helpers::make_notification(event);
     assert_eq!(notif["params"]["meta"]["is_voice_message"], true);
@@ -831,6 +834,7 @@ fn test_notification_message_snapshot() {
         reply_to_user: None,
         reply_to_content_preview: None,
         bells: None,
+        bells_status: None,
     });
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
@@ -922,6 +926,7 @@ fn test_notification_message_in_thread_snapshot() {
         reply_to_user: None,
         reply_to_content_preview: None,
         bells: None,
+        bells_status: None,
     });
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
@@ -947,6 +952,7 @@ fn test_notification_message_reply_snapshot() {
         reply_to_user: Some("parentuser".to_string()),
         reply_to_content_preview: Some("the original message".to_string()),
         bells: None,
+        bells_status: None,
     });
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);
@@ -970,6 +976,7 @@ fn test_notification_message_reply_in_thread_snapshot() {
         reply_to_user: None,
         reply_to_content_preview: None,
         bells: None,
+        bells_status: None,
     });
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);

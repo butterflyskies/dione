@@ -35,6 +35,7 @@ impl IntoNotification for NotificationEvent {
                 reply_to_user,
                 reply_to_content_preview,
                 bells,
+                bells_status,
                 ..
             }) => {
                 let mut meta = json!({
@@ -75,7 +76,10 @@ impl IntoNotification for NotificationEvent {
                     meta["attachments"] = json!(att_desc.join("; "));
                 }
                 if let Some(bells) = bells {
-                    meta["mem_hits"] = json!(bells);
+                    meta["bells"] = json!(bells);
+                }
+                if let Some(status) = bells_status {
+                    meta["bells_status"] = json!(status);
                 }
                 json!({
                     "jsonrpc": "2.0",
@@ -302,6 +306,7 @@ mod tests {
             reply_to_user: None,
             reply_to_content_preview: None,
             bells: None,
+            bells_status: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -326,6 +331,7 @@ mod tests {
             reply_to_user: None,
             reply_to_content_preview: None,
             bells: None,
+            bells_status: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -352,6 +358,7 @@ mod tests {
             reply_to_user: None,
             reply_to_content_preview: None,
             bells: None,
+            bells_status: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -376,6 +383,7 @@ mod tests {
             reply_to_user: None,
             reply_to_content_preview: None,
             bells: None,
+            bells_status: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -400,6 +408,7 @@ mod tests {
             reply_to_user: Some("bob".into()),
             reply_to_content_preview: Some("original message".into()),
             bells: None,
+            bells_status: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -426,6 +435,7 @@ mod tests {
             reply_to_user: None,
             reply_to_content_preview: None,
             bells: None,
+            bells_status: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -452,6 +462,7 @@ mod tests {
             reply_to_user: None,
             reply_to_content_preview: None,
             bells: None,
+            bells_status: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -462,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn test_message_includes_mem_hits_when_bells_present() {
+    fn test_message_includes_bells_when_present() {
         let event = NotificationEvent::Message(MessageEvent {
             chat_id: ChannelId::new(100),
             message_id: MessageId::new(200),
@@ -478,15 +489,20 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
-            bells: Some("person-pace 12;feedback-no-platitudes 25".into()),
+            bells: Some("3s lain/person-pace;2b lain/feedback-no-platitudes".into()),
+            bells_status: Some("ok".into()),
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
-        assert_eq!(meta["mem_hits"], "person-pace 12;feedback-no-platitudes 25");
+        assert_eq!(
+            meta["bells"],
+            "3s lain/person-pace;2b lain/feedback-no-platitudes"
+        );
+        assert_eq!(meta["bells_status"], "ok");
     }
 
     #[test]
-    fn test_message_omits_mem_hits_when_bells_none() {
+    fn test_message_omits_bells_when_none() {
         let event = NotificationEvent::Message(MessageEvent {
             chat_id: ChannelId::new(100),
             message_id: MessageId::new(200),
@@ -503,10 +519,11 @@ mod tests {
             reply_to_user: None,
             reply_to_content_preview: None,
             bells: None,
+            bells_status: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
-        assert!(meta.get("mem_hits").is_none());
+        assert!(meta.get("bells").is_none());
     }
 
     #[test]
@@ -527,6 +544,7 @@ mod tests {
             reply_to_user: Some("bob".into()),
             reply_to_content_preview: None,
             bells: None,
+            bells_status: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];

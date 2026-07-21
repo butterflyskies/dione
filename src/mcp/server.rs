@@ -237,7 +237,7 @@ pub async fn run(
 
                     // Bell evaluation: in shadow mode, fire-and-forget off the
                     // critical path. In live mode, await inline and inject
-                    // mem_hits into the event before delivery.
+                    // bells into the event before delivery.
                     match cfg.bell_rings.mode {
                         BellMode::Shadow => {
                             let evaluator = Arc::clone(&bell_evaluator);
@@ -248,12 +248,15 @@ pub async fn run(
                             });
                         }
                         BellMode::Live => {
-                            let (returned_event, bells) = bell_evaluator.evaluate(event, &cfg.bell_rings).await;
+                            let (returned_event, bells, status) = bell_evaluator.evaluate(event, &cfg.bell_rings).await;
                             event = returned_event;
-                            if !bells.is_empty()
-                                && let NotificationEvent::Message(ref mut msg) = event
-                            {
-                                msg.bells = Some(render_bells(&bells));
+                            if let NotificationEvent::Message(ref mut msg) = event {
+                                if let Some(status) = status {
+                                    msg.bells_status = Some(status.as_str().to_owned());
+                                }
+                                if !bells.is_empty() {
+                                    msg.bells = Some(render_bells(&bells));
+                                }
                             }
                         }
                     }
@@ -700,6 +703,7 @@ mod tests {
             reply_to_user: None,
             reply_to_content_preview: None,
             bells: None,
+            bells_status: None,
         })
     }
 

@@ -28,22 +28,57 @@ pub struct Bell {
     pub recall_id: String,
     pub memory_id: String,
     pub memory_name: String,
-    pub match_type: SemanticMatchType,
+    pub timbre: BellTimbre,
     pub distance: f64,
     pub loudness: u8,
     pub provider_rank: usize,
 }
 
-/// Match strategies that carry a meaningful semantic distance.
+/// Match type / "timbre" of a bell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SemanticMatchType {
+pub enum BellTimbre {
+    /// Semantic similarity match.
     Semantic,
+    /// Lexical/BM25 match.
+    Lexical,
+    /// Both semantic and lexical matched.
     Both,
 }
 
-/// Result of one shadow evaluation.
+impl BellTimbre {
+    pub fn code(self) -> char {
+        match self {
+            BellTimbre::Semantic => 's',
+            BellTimbre::Lexical => 'l',
+            BellTimbre::Both => 'b',
+        }
+    }
+}
+
+/// Retrieval status for bell evaluation — orthogonal to bell results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BellStatus {
+    /// Retrieval completed successfully (bells may still be empty).
+    Ok,
+    /// Total deadline elapsed before retrieval completed.
+    Timeout,
+    /// Retrieval failed due to provider error or malformed response.
+    Error,
+}
+
+impl BellStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BellStatus::Ok => "ok",
+            BellStatus::Timeout => "timeout",
+            BellStatus::Error => "error",
+        }
+    }
+}
+
+/// Result of one bell evaluation.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ShadowOutcome {
+pub enum BellOutcome {
     /// The event was outside the enabled, directed, configured slice.
     Skipped,
     /// Recall completed and produced zero or more admitted bells.
@@ -54,6 +89,18 @@ pub enum ShadowOutcome {
     ProviderError,
     /// The provider response did not satisfy the recall wire contract.
     MalformedResponse,
+}
+
+impl BellOutcome {
+    /// The retrieval status for this outcome — orthogonal to whether any bells rang.
+    pub fn status(&self) -> Option<BellStatus> {
+        match self {
+            BellOutcome::Skipped => None,
+            BellOutcome::Success(_) => Some(BellStatus::Ok),
+            BellOutcome::Timeout => Some(BellStatus::Timeout),
+            BellOutcome::ProviderError | BellOutcome::MalformedResponse => Some(BellStatus::Error),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -153,16 +200,21 @@ struct ProviderSlot {
     provider: Option<Arc<MemoryMcpProvider>>,
 }
 
-/// Render admitted bells into the compact `mem_hits` metadata format.
+/// Render admitted bells into the compact wire format.
 ///
-/// Format: `"name 91;other-name 42"` — memory name + similarity score
-/// (cosine distance × 100, rounded, lower = more similar).
+/// Format: `"3s lain/person-pace;1l shared/construct-cosmology"`
+/// — `{loudness}{timbre} {scope}/{name}`.
 pub fn render_bells(bells: &[Bell]) -> String {
     bells
         .iter()
         .map(|bell| {
-            let score = (bell.distance * 100.0).round() as u32;
-            format!("{} {score}", bell.memory_name)
+            format!(
+                "{}{} {}/{}",
+                bell.loudness,
+                bell.timbre.code(),
+                bell.scope,
+                bell.memory_name,
+            )
         })
         .collect::<Vec<_>>()
         .join(";")
@@ -179,12 +231,12 @@ impl BellEvaluator {
         Self::default()
     }
 
-    /// Evaluates one event and returns bells (if any) alongside it.
+    /// Evaluates one event and returns bells (if any) alongside it plus retrieval status.
     pub async fn evaluate(
         &self,
         event: NotificationEvent,
         config: &BellRingsConfig,
-    ) -> (NotificationEvent, Vec<Bell>) {
+    ) -> (NotificationEvent, Vec<Bell>, Option<BellStatus>) {
         let eligible = matches!(
             &event,
             NotificationEvent::Message(message)
@@ -194,8 +246,8 @@ impl BellEvaluator {
             let provider = self.provider(provider_config).await;
             return evaluate_with_provider(event, config, provider.as_ref()).await;
         }
-        record_outcome(&ShadowOutcome::Skipped);
-        (event, vec![])
+        record_outcome(&BellOutcome::Skipped);
+        (event, vec![], None)
     }
 
     async fn provider(&self, config: &BellProviderConfig) -> Arc<MemoryMcpProvider> {
@@ -216,22 +268,23 @@ impl BellEvaluator {
     }
 }
 
-/// Testable evaluation seam. Returns the event and any admitted bells.
+/// Testable evaluation seam. Returns the event, admitted bells, and retrieval status.
 pub(crate) async fn evaluate_with_provider<P: BellProvider + ?Sized>(
     event: NotificationEvent,
     config: &BellRingsConfig,
     provider: &P,
-) -> (NotificationEvent, Vec<Bell>) {
+) -> (NotificationEvent, Vec<Bell>, Option<BellStatus>) {
     let outcome = match &event {
         NotificationEvent::Message(message) => evaluate_message(message, config, provider).await,
-        _ => ShadowOutcome::Skipped,
+        _ => BellOutcome::Skipped,
     };
     record_outcome(&outcome);
+    let status = outcome.status();
     let bells = match outcome {
-        ShadowOutcome::Success(bells) => bells,
+        BellOutcome::Success(bells) => bells,
         _ => vec![],
     };
-    (event, bells)
+    (event, bells, status)
 }
 
 /// Computes bells for one message without mutating the message or its delivery envelope.
@@ -239,12 +292,12 @@ pub async fn evaluate_message<P: BellProvider + ?Sized>(
     message: &MessageEvent,
     config: &BellRingsConfig,
     provider: &P,
-) -> ShadowOutcome {
+) -> BellOutcome {
     let Some(provider_config) = config.provider.as_ref() else {
-        return ShadowOutcome::Skipped;
+        return BellOutcome::Skipped;
     };
     if !config.enabled || !message.targeting.is_directed() || config.max_bells == 0 {
-        return ShadowOutcome::Skipped;
+        return BellOutcome::Skipped;
     }
     let request = RecallRequest {
         query: message.content.clone(),
@@ -257,10 +310,10 @@ pub async fn evaluate_message<P: BellProvider + ?Sized>(
     )
     .await;
     let response = match recall {
-        Err(_) => return ShadowOutcome::Timeout,
-        Ok(Err(BellProviderError::Transport)) => return ShadowOutcome::ProviderError,
+        Err(_) => return BellOutcome::Timeout,
+        Ok(Err(BellProviderError::Transport)) => return BellOutcome::ProviderError,
         Ok(Err(BellProviderError::MalformedResponse)) => {
-            return ShadowOutcome::MalformedResponse;
+            return BellOutcome::MalformedResponse;
         }
         Ok(Ok(response)) => response,
     };
@@ -271,8 +324,8 @@ pub async fn evaluate_message<P: BellProvider + ?Sized>(
         config.max_semantic_distance,
         config.max_bells,
     ) {
-        Ok(bells) => ShadowOutcome::Success(bells),
-        Err(()) => ShadowOutcome::MalformedResponse,
+        Ok(bells) => BellOutcome::Success(bells),
+        Err(()) => BellOutcome::MalformedResponse,
     }
 }
 
@@ -310,24 +363,41 @@ fn parse_bells(
         if hit.scope != provider.scope.as_str() && hit.scope != "global" {
             return Err(());
         }
-        let match_type = match hit.match_type.as_deref().unwrap_or("semantic") {
-            "semantic" => SemanticMatchType::Semantic,
-            "both" => SemanticMatchType::Both,
-            "lexical" if hit.distance == -1.0 => continue,
+        let (timbre, effective_loudness) = match hit.match_type.as_deref().unwrap_or("semantic") {
+            "semantic" => {
+                if !hit.distance.is_finite() || hit.distance < 0.0 || hit.distance > max_distance {
+                    continue;
+                }
+                (BellTimbre::Semantic, loudness(hit.distance, max_distance))
+            }
+            "both" => {
+                if !hit.distance.is_finite() || hit.distance < 0.0 || hit.distance > max_distance {
+                    continue;
+                }
+                let semantic_loudness = loudness(hit.distance, max_distance);
+                // Both = semantic + lexical(1), capped at 3.
+                (BellTimbre::Both, (semantic_loudness + 1).min(3))
+            }
+            "lexical" => {
+                // Lexical-only: distance -1.0 is a sentinel, not strength.
+                // Flat loudness 1 per spec.
+                (BellTimbre::Lexical, 1)
+            }
             _ => return Err(()),
         };
-        if !hit.distance.is_finite() || hit.distance < 0.0 || hit.distance > max_distance {
-            continue;
-        }
         bells.push(Bell {
             provider_url: provider.url.as_str().to_owned(),
             scope: hit.scope,
             recall_id: envelope.recall_id.clone(),
             memory_id: hit.id,
             memory_name: hit.name,
-            match_type,
-            distance: hit.distance,
-            loudness: loudness(hit.distance, max_distance),
+            timbre,
+            distance: if timbre == BellTimbre::Lexical {
+                0.0
+            } else {
+                hit.distance
+            },
+            loudness: effective_loudness,
             provider_rank,
         });
     }
@@ -351,26 +421,20 @@ fn loudness(distance: f64, max_distance: f64) -> u8 {
     }
 }
 
-fn record_outcome(outcome: &ShadowOutcome) {
+fn record_outcome(outcome: &BellOutcome) {
     match outcome {
-        ShadowOutcome::Skipped => {}
-        ShadowOutcome::Success(bells) => {
-            tracing::info!(bell_count = bells.len(), "bell shadow evaluation completed");
+        BellOutcome::Skipped => {}
+        BellOutcome::Success(bells) => {
+            tracing::info!(bell_count = bells.len(), "bell evaluation completed");
         }
-        ShadowOutcome::Timeout => {
-            tracing::warn!(outcome = "timeout", "bell shadow evaluation degraded");
+        BellOutcome::Timeout => {
+            tracing::warn!(outcome = "timeout", "bell evaluation degraded");
         }
-        ShadowOutcome::ProviderError => {
-            tracing::warn!(
-                outcome = "provider_error",
-                "bell shadow evaluation degraded"
-            );
+        BellOutcome::ProviderError => {
+            tracing::warn!(outcome = "provider_error", "bell evaluation degraded");
         }
-        ShadowOutcome::MalformedResponse => {
-            tracing::warn!(
-                outcome = "malformed_response",
-                "bell shadow evaluation degraded"
-            );
+        BellOutcome::MalformedResponse => {
+            tracing::warn!(outcome = "malformed_response", "bell evaluation degraded");
         }
     }
 }
@@ -461,6 +525,7 @@ mod tests {
             reply_to_user: None,
             reply_to_content_preview: None,
             bells: None,
+            bells_status: None,
         }
     }
 
@@ -487,7 +552,7 @@ mod tests {
             &provider,
         )
         .await;
-        assert_eq!(outcome, ShadowOutcome::Success(vec![]));
+        assert_eq!(outcome, BellOutcome::Success(vec![]));
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
         let requests = provider.requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
@@ -507,11 +572,11 @@ mod tests {
                 &provider
             )
             .await,
-            ShadowOutcome::Skipped
+            BellOutcome::Skipped
         );
         assert_eq!(
             evaluate_message(&message(MessageTargeting::Ambient), &config(), &provider).await,
-            ShadowOutcome::Skipped
+            BellOutcome::Skipped
         );
         let mut missing = config();
         missing.provider = None;
@@ -522,7 +587,7 @@ mod tests {
                 &provider
             )
             .await,
-            ShadowOutcome::Skipped
+            BellOutcome::Skipped
         );
         assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
     }
@@ -559,12 +624,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn semantic_distance_maps_inverse_thirds_and_lexical_is_excluded() {
+    async fn loudness_tiers_and_timbre_mapping() {
         let provider = MockProvider::value(envelope(vec![
             hit("a", "loud", 0.05, "semantic"),
             hit("b", "middle", 0.15, "both"),
             hit("c", "quiet", 0.28, "semantic"),
-            hit("d", "lexical", -1.0, "lexical"),
+            hit("d", "lexical-hit", -1.0, "lexical"),
             hit("e", "far", 0.31, "semantic"),
         ]));
         let outcome = evaluate_message(
@@ -573,12 +638,21 @@ mod tests {
             &provider,
         )
         .await;
-        let ShadowOutcome::Success(bells) = outcome else {
+        let BellOutcome::Success(bells) = outcome else {
             panic!("expected success");
         };
+        // max_bells=3, sorted by distance. lexical sorts at distance=0.0
+        // lexical(d)=1, semantic(a)=3, both(b)=min(2+1,3)=3
         assert_eq!(
-            bells.iter().map(|bell| bell.loudness).collect::<Vec<_>>(),
-            vec![3, 2, 1]
+            bells
+                .iter()
+                .map(|bell| (bell.loudness, bell.timbre))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, BellTimbre::Lexical),
+                (3, BellTimbre::Semantic),
+                (3, BellTimbre::Both),
+            ]
         );
         assert!(bells.iter().all(|bell| bell.recall_id == "r_test"));
     }
@@ -607,7 +681,8 @@ mod tests {
             };
             let original = NotificationEvent::Message(message(MessageTargeting::DirectMessage));
             let before = original.clone().into_notification();
-            let (observed, bells) = evaluate_with_provider(original, &config(), &provider).await;
+            let (observed, bells, _status) =
+                evaluate_with_provider(original, &config(), &provider).await;
             assert_eq!(observed.into_notification(), before);
             assert!(bells.is_empty());
             assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
@@ -622,7 +697,7 @@ mod tests {
         short.deadline_ms = 1;
         let original = NotificationEvent::Message(message(MessageTargeting::DirectMessage));
         let before = original.clone().into_notification();
-        let (observed, bells) = evaluate_with_provider(original, &short, &provider).await;
+        let (observed, bells, _status) = evaluate_with_provider(original, &short, &provider).await;
         assert_eq!(observed.into_notification(), before);
         assert!(bells.is_empty());
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
@@ -634,7 +709,8 @@ mod tests {
             MockProvider::value(envelope(vec![hit("a", "memory-name", 0.1, "semantic")]));
         let original = NotificationEvent::Message(message(MessageTargeting::DirectMessage));
         let before = original.clone().into_notification();
-        let (observed, bells) = evaluate_with_provider(original, &config(), &provider).await;
+        let (observed, bells, _status) =
+            evaluate_with_provider(original, &config(), &provider).await;
         assert_eq!(observed.into_notification(), before);
         assert_eq!(bells.len(), 1);
         assert_eq!(bells[0].memory_name, "memory-name");
@@ -650,7 +726,7 @@ mod tests {
                 recall_id: "r_test".to_owned(),
                 memory_id: "a".to_owned(),
                 memory_name: "person-pace".to_owned(),
-                match_type: SemanticMatchType::Semantic,
+                timbre: BellTimbre::Semantic,
                 distance: 0.12,
                 loudness: 3,
                 provider_rank: 0,
@@ -661,7 +737,7 @@ mod tests {
                 recall_id: "r_test".to_owned(),
                 memory_id: "b".to_owned(),
                 memory_name: "feedback-no-platitudes".to_owned(),
-                match_type: SemanticMatchType::Both,
+                timbre: BellTimbre::Both,
                 distance: 0.25,
                 loudness: 2,
                 provider_rank: 1,
@@ -669,7 +745,7 @@ mod tests {
         ];
         assert_eq!(
             render_bells(&bells),
-            "person-pace 12;feedback-no-platitudes 25"
+            "3s lain/person-pace;2b lain/feedback-no-platitudes"
         );
     }
 
@@ -688,7 +764,7 @@ mod tests {
             &provider,
         )
         .await;
-        let ShadowOutcome::Success(bells) = outcome else {
+        let BellOutcome::Success(bells) = outcome else {
             panic!("expected success");
         };
         assert_eq!(
