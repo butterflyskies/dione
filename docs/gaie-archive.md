@@ -52,12 +52,16 @@ Five filesystem-heavy properties use 32 generated cases each; five pure replay,
 validation, and pagination properties use 128 cases each, for 800 generated
 cases per run.
 
-Two bounded Kani harnesses specify the pure corpus grammar and reaction-counter
-contract. Both are **UNEXECUTED**. Their commands are
-`cargo kani --harness corpus_acceptance_matches_bounded_ascii_grammar` and
-`cargo kani --harness reaction_transition_satisfies_checked_counter_contract`.
-They deliberately do not claim proofs for I/O, fsync, locking, or HTTP behavior.
-Kani 0.67.0 is installed in the development environment, but its bundled
-Rust 1.93 nightly cannot compile this crate's Rust 1.95 minimum; the harnesses
-are therefore compile-gated from normal builds but were not executed in this
-change. Re-run both commands after Kani ships a compatible toolchain.
+Two bounded Kani harnesses prove the corpus acceptance grammar for ASCII inputs
+of 0–8 bytes and the reaction-counter contract exhaustively over `u64 × bool`.
+They were executed with Kani 0.67.0 using the exact commands:
+
+- `cargo kani --harness gaie::model::proofs::corpus_acceptance_matches_bounded_ascii_grammar --exact`
+  — verification successful, 0 of 548 checks failed (26 unreachable).
+- `cargo kani --harness gaie::replay::proofs::reaction_transition_satisfies_checked_counter_contract --exact`
+  — verification successful, 0 of 60 checks failed.
+
+These proofs deliberately do not cover I/O, fsync, locking, or HTTP behavior.
+The crate's declared minimum Rust version is 1.93, matching the nightly bundled
+with Kani 0.67.0. CI enforces that boundary with Rust 1.93.0 and
+`cargo check --locked --all-targets`; Kani is not installed or run in CI.

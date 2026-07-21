@@ -133,7 +133,7 @@ phase: 2
 
 | ID | Requirement | Source |
 |----|-------------|--------|
-| P-01 | Rust edition 2024, MSRV 1.95 (work down if deps require it; edition 2024 stable since 1.85) | Convention |
+| P-01 | Rust edition 2024, MSRV 1.93 (edition 2024 stable since 1.85) | Convention |
 | P-02 | License: MIT OR Apache-2.0 (dual) | Convention |
 | P-03 | CI pipeline: `cargo fmt --check` → `cargo clippy -- -D warnings` → `cargo nextest run` → cross-compile check → MSRV check → cargo-deny | Convention |
 | P-04 | PR titles enforce conventional commits (feat, fix, chore, docs, refactor, revert, test, ci, perf, build) | Convention |
@@ -147,7 +147,7 @@ phase: 2
 | P-12 | CHANGELOG.md in Keep a Changelog format | Convention |
 | P-13 | Cross-compile targets: x86_64-unknown-linux-gnu, universal-apple-darwin | Convention |
 | P-14 | No Docker/container build in CI | User decision |
-| P-15 | Use native async traits (no `async-trait` crate), let chains, `gen` blocks where appropriate — leverage Rust 1.95 features | Convention |
+| P-15 | Use native async traits (no `async-trait` crate) and language/library features stable in Rust 1.93; adopting newer features requires an explicit MSRV change | Convention |
 | P-16 | No `async-trait` dependency; native `impl Trait` in return position for async | Convention |
 
 ## ASVS & ISO 27001 Review

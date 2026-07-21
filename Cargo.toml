@@ -2,7 +2,7 @@
 name = "dione"
 version = "0.22.1"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.93"
 license = "MIT OR Apache-2.0"
 description = "Discord MCP channel server for Claude Code and Codex"
 repository = "https://github.com/butterflyskies/dione"

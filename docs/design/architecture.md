@@ -95,23 +95,22 @@ GatewayIntents::DIRECT_MESSAGES
 | `chrono` | Timestamps | Minimal features (clock, serde) |
 | `camino` | UTF-8 path types | |
 
-Not used: `async-trait` (native async traits on 1.95), `anyhow` (color-eyre
+Not used: `async-trait` (native async traits are available at the MSRV), `anyhow` (color-eyre
 at boundaries, thiserror for domain).
 
-### 9. Modern Rust features leveraged (1.89–1.95)
+### 9. Modern Rust features leveraged (1.89–1.93)
 
 | Feature | Use |
 |---------|-----|
 | `str::ceil_char_boundary` (1.91) | Message chunking at valid UTF-8 split points |
-| `if let` guards (1.95) | Gate logic match arms with secondary checks |
 | `BTreeMap::extract_if` (1.91) | Pruning expired access requests |
 | `VecDeque::pop_front_if` (1.93) | Queue management |
 | `File::try_lock()` (1.89) | Safe concurrent config reads |
 | `Result::flatten()` (1.89) | API call chains |
-| `core::hint::cold_path` (1.95) | Error branch codegen hints |
 | `fmt::from_fn` (1.93) | Custom formatters for Discord rendering |
-| `LazyLock::get` (1.94) | Lazy initialization patterns |
 | Native async traits (1.75+) | No `async-trait` crate needed |
+
+Features stabilized after Rust 1.93 require an explicit MSRV change before use.
 
 ## Module Structure
 
