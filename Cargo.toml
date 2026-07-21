@@ -57,3 +57,6 @@ tokio = { version = "1", features = ["test-util"] }
 lto = true
 strip = true
 codegen-units = 1
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }

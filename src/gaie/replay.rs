@@ -1,6 +1,16 @@
 use crate::gaie::{Attachment, Event, EventKind};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
+use thiserror::Error;
+
+/// Errors that make a latest-state replay unsafe to continue.
+#[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ReplayError {
+    /// A reaction-add event exceeded the representable aggregate count.
+    #[error("reaction count overflow for message `{message_id}` and emoji `{emoji}`")]
+    ReactionCountOverflow { message_id: String, emoji: String },
+}
 
 /// The Python-v11-compatible latest view of one Discord message.
 #[derive(Debug, Clone, Serialize)]
@@ -21,7 +31,7 @@ pub struct LatestMessage {
 }
 
 /// Replays committed create/edit/delete and reaction events into latest state.
-pub fn build_latest_state(events: &[Event]) -> HashMap<String, LatestMessage> {
+pub fn build_latest_state(events: &[Event]) -> Result<HashMap<String, LatestMessage>, ReplayError> {
     let mut messages = HashMap::new();
     for event in events {
         let message_id = &event.source.message_id;
@@ -47,11 +57,11 @@ pub fn build_latest_state(events: &[Event]) -> HashMap<String, LatestMessage> {
                 }
             }
             EventKind::ReactionSnapshot => set_reaction(&mut messages, event),
-            EventKind::ReactionAdd => change_reaction(&mut messages, event, true),
-            EventKind::ReactionRemove => change_reaction(&mut messages, event, false),
+            EventKind::ReactionAdd => change_reaction(&mut messages, event, true)?,
+            EventKind::ReactionRemove => change_reaction(&mut messages, event, false)?,
         }
     }
-    messages
+    Ok(messages)
 }
 
 fn from_event(event: &Event, history_status: &str) -> LatestMessage {
@@ -91,17 +101,38 @@ fn set_reaction(messages: &mut HashMap<String, LatestMessage>, event: &Event) {
     }
 }
 
-fn change_reaction(messages: &mut HashMap<String, LatestMessage>, event: &Event, add: bool) {
+fn change_reaction(
+    messages: &mut HashMap<String, LatestMessage>,
+    event: &Event,
+    add: bool,
+) -> Result<(), ReplayError> {
     if let Some(message) = messages.get_mut(&event.source.message_id) {
         let key = reaction_key(event);
         let count = message.reactions.get(&key).copied().unwrap_or(0);
-        if add {
-            message.reactions.insert(key, count + 1);
-        } else if count > 1 {
-            message.reactions.insert(key, count - 1);
-        } else {
-            message.reactions.remove(&key);
+        match reaction_count_after(count, add).ok_or_else(|| {
+            ReplayError::ReactionCountOverflow {
+                message_id: event.source.message_id.clone(),
+                emoji: key.clone(),
+            }
+        })? {
+            Some(count) => {
+                message.reactions.insert(key, count);
+            }
+            None => {
+                message.reactions.remove(&key);
+            }
         }
+    }
+    Ok(())
+}
+
+fn reaction_count_after(current: u64, add: bool) -> Option<Option<u64>> {
+    if add {
+        current.checked_add(1).map(Some)
+    } else if current > 1 {
+        Some(Some(current - 1))
+    } else {
+        Some(None)
     }
 }
 
@@ -109,6 +140,7 @@ fn change_reaction(messages: &mut HashMap<String, LatestMessage>, event: &Event,
 mod tests {
     use super::*;
     use crate::gaie::{Ingest, Lineage, Payload, Relations, Source};
+    use proptest::prelude::*;
 
     fn event(kind: EventKind, sequence: u64) -> Event {
         Event {
@@ -160,16 +192,66 @@ mod tests {
         }
     }
 
+    // The oracle stores one nonnegative integer and does not reuse the
+    // production map transition.
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn prop_gaie_archive_reaction_replay_matches_nonnegative_model(
+            operations in prop::collection::vec(any::<bool>(), 0..128),
+        ) {
+            let mut events = vec![event(EventKind::MessageCreate, 1)];
+            let mut expected = 0_u64;
+            for (index, add) in operations.into_iter().enumerate() {
+                events.push(event(
+                    if add { EventKind::ReactionAdd } else { EventKind::ReactionRemove },
+                    index as u64 + 2,
+                ));
+                expected = if add { expected + 1 } else { expected.saturating_sub(1) };
+            }
+            let first = build_latest_state(&events).unwrap();
+            let actual = first["3"].reactions.get("💜").copied().unwrap_or(0);
+            prop_assert_eq!(actual, expected);
+        }
+    }
+
     #[test]
-    fn test_replay_is_idempotent_for_same_committed_snapshot() {
-        let events = vec![
+    fn test_gaie_archive_reaction_overflow_fails_closed() {
+        let mut snapshot = event(EventKind::ReactionSnapshot, 2);
+        snapshot.payload.count = Some(u64::MAX);
+        snapshot.payload.content = Some("💜".to_owned());
+        let events = [
             event(EventKind::MessageCreate, 1),
-            event(EventKind::ReactionAdd, 2),
-            event(EventKind::ReactionRemove, 3),
+            snapshot,
+            event(EventKind::ReactionAdd, 3),
         ];
-        assert_eq!(
-            serde_json::to_value(build_latest_state(&events)).unwrap(),
-            serde_json::to_value(build_latest_state(&events)).unwrap()
-        );
+        assert!(matches!(
+            build_latest_state(&events),
+            Err(ReplayError::ReactionCountOverflow { .. })
+        ));
+    }
+}
+
+#[cfg(kani)]
+mod proofs {
+    use super::reaction_count_after;
+
+    #[kani::proof]
+    fn reaction_transition_satisfies_checked_counter_contract() {
+        let current: u64 = kani::any();
+        let add: bool = kani::any();
+        let actual = reaction_count_after(current, add);
+        if add {
+            if current == u64::MAX {
+                assert_eq!(actual, None);
+            } else {
+                assert_eq!(actual, Some(Some(current + 1)));
+            }
+        } else if current > 1 {
+            assert_eq!(actual, Some(Some(current - 1)));
+        } else {
+            assert_eq!(actual, Some(None));
+        }
     }
 }

@@ -216,9 +216,14 @@ impl Archive {
         let mut previous = self.sequence;
         let mut batch_ids = HashSet::new();
         for event in events {
-            if event.corpus_id != self.corpus.as_str() || event.archive_seq <= previous {
+            if event.corpus_id != self.corpus.as_str() {
                 return Err(ArchiveError::Integrity(
-                    "event corpus or archive_seq is invalid".to_owned(),
+                    "event corpus does not match archive".to_owned(),
+                ));
+            }
+            if event.archive_seq <= previous {
+                return Err(ArchiveError::Integrity(
+                    "archive_seq must increase monotonically".to_owned(),
                 ));
             }
             if self.event_ids.contains(&event.event_id) || !batch_ids.insert(event.event_id.clone())
@@ -559,6 +564,7 @@ pub(crate) fn hex_sha256(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::gaie::{EventKind, Ingest, Lineage, Payload, Relations, Source};
+    use proptest::prelude::*;
 
     fn fixture_event(sequence: u64) -> Event {
         Event {
@@ -870,5 +876,140 @@ mod tests {
                 & 0o777,
             0o600
         );
+    }
+
+    // Property invariants: accepted batches round-trip with validated framing;
+    // duplicate identities/non-monotonic sequences fail before durable write;
+    // and an arbitrary torn suffix never becomes visible or rewrites the prefix.
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        #[test]
+        fn prop_gaie_archive_valid_batch_round_trips(
+            message_id in "[1-9][0-9]{0,8}",
+            contents in prop::collection::vec("[a-zA-Z0-9 ]{0,24}", 1..6),
+        ) {
+            let temp = tempfile::tempdir().unwrap();
+            let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+            let corpus = CorpusId::parse("property").unwrap();
+            let paths = ArchivePaths::new(root, &corpus).unwrap();
+            let mut archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+            let events: Vec<_> = contents.iter().enumerate().map(|(index, content)| {
+                let mut event = fixture_event(index as u64 + 1);
+                event.corpus_id = "property".to_owned();
+                event.event_id = format!("property-{index}");
+                event.source.message_id.clone_from(&message_id);
+                event.payload.content = Some(content.clone());
+                event
+            }).collect();
+            let expected = serde_json::to_value(&events).unwrap();
+            archive.append_batch(&events, &message_id, "2026-01-01T00:00:00Z").unwrap();
+            let actual = serde_json::to_value(archive.read_committed().unwrap().events).unwrap();
+            prop_assert_eq!(actual, expected);
+            let archive_text = fs::read_to_string(archive.paths.events.as_std_path()).unwrap();
+            let lines: Vec<_> = archive_text.lines().collect();
+            let framed = lines[1..=events.len()].iter().map(|line| format!("{line}\n")).collect::<String>();
+            let commit: Value = serde_json::from_str(lines[events.len() + 1]).unwrap();
+            let independent_hash = format!("{:x}", Sha256::digest(framed.as_bytes()));
+            prop_assert_eq!(commit["batch_sha256"].as_str(), Some(independent_hash.as_str()));
+        }
+
+        #[test]
+        fn prop_gaie_archive_rejects_archive_duplicate_id(previous in 1_u64..1000) {
+            let temp = tempfile::tempdir().unwrap();
+            let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+            let corpus = CorpusId::parse("property").unwrap();
+            let paths = ArchivePaths::new(root, &corpus).unwrap();
+            let mut archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+            let mut first = fixture_event(previous);
+            first.corpus_id = "property".to_owned();
+            archive.append_batch(std::slice::from_ref(&first), "3", "2026-01-01T00:00:00Z").unwrap();
+            let mut rejected = fixture_event(previous + 1);
+            rejected.corpus_id = "property".to_owned();
+            rejected.event_id.clone_from(&first.event_id);
+            let result = archive.append_batch(&[rejected], "3", "2026-01-01T00:00:00Z");
+            prop_assert!(matches!(result, Err(ArchiveError::Integrity(reason)) if reason == "duplicate event_id"));
+            prop_assert_eq!(archive.read_committed().unwrap().events.len(), 1);
+        }
+
+        #[test]
+        fn prop_gaie_archive_rejects_nonmonotonic_sequence(
+            (previous, next) in (1_u64..1000).prop_flat_map(|previous| (Just(previous), 0..=previous)),
+        ) {
+            let temp = tempfile::tempdir().unwrap();
+            let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+            let corpus = CorpusId::parse("property").unwrap();
+            let paths = ArchivePaths::new(root, &corpus).unwrap();
+            let mut archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+            let mut first = fixture_event(previous);
+            first.corpus_id = "property".to_owned();
+            first.event_id = "fresh-previous-id".to_owned();
+            archive.append_batch(std::slice::from_ref(&first), "3", "2026-01-01T00:00:00Z").unwrap();
+            let mut rejected = fixture_event(next);
+            rejected.corpus_id = "property".to_owned();
+            rejected.event_id = "fresh-next-id".to_owned();
+            let result = archive.append_batch(&[rejected], "3", "2026-01-01T00:00:00Z");
+            prop_assert!(matches!(result, Err(ArchiveError::Integrity(reason)) if reason == "archive_seq must increase monotonically"));
+            prop_assert_eq!(archive.read_committed().unwrap().events.len(), 1);
+        }
+
+        #[test]
+        fn prop_gaie_archive_arbitrary_torn_tail_preserves_committed_prefix(
+            tail in prop::collection::vec(any::<u8>().prop_filter("no physical newline", |byte| *byte != b'\n'), 0..64),
+        ) {
+            let temp = tempfile::tempdir().unwrap();
+            let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+            let corpus = CorpusId::parse("property").unwrap();
+            let paths = ArchivePaths::new(root, &corpus).unwrap();
+            {
+                let mut archive = Archive::open(paths.clone(), corpus.clone(), "2026-01-01T00:00:00Z").unwrap();
+                let mut event = fixture_event(1);
+                event.corpus_id = "property".to_owned();
+                archive.append_batch(&[event], "3", "2026-01-01T00:00:00Z").unwrap();
+            }
+            let prefix = fs::read(paths.events.as_std_path()).unwrap();
+            let mut file = OpenOptions::new().append(true).open(paths.events.as_std_path()).unwrap();
+            file.write_all(b"{broken:").unwrap();
+            file.write_all(&tail).unwrap();
+            drop(file);
+            let archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+            prop_assert_eq!(archive.read_committed().unwrap().events.len(), 1);
+            prop_assert_eq!(fs::read(archive.paths.events.as_std_path()).unwrap(), prefix);
+        }
+
+        #[test]
+        fn prop_gaie_archive_arbitrary_interior_line_prefix_mutation_fails_closed(
+            replacement in any::<u8>().prop_filter("not a valid object opener or newline", |byte| !matches!(*byte, b'{' | b'\n')),
+        ) {
+            let temp = tempfile::tempdir().unwrap();
+            let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+            let corpus = CorpusId::parse("property").unwrap();
+            let paths = ArchivePaths::new(root, &corpus).unwrap();
+            {
+                let mut archive = Archive::open(paths.clone(), corpus.clone(), "2026-01-01T00:00:00Z").unwrap();
+                let mut event = fixture_event(1);
+                event.corpus_id = "property".to_owned();
+                archive.append_batch(&[event], "3", "2026-01-01T00:00:00Z").unwrap();
+            }
+            let mut bytes = fs::read(paths.events.as_std_path()).unwrap();
+            let event_start = bytes.iter().position(|byte| *byte == b'\n').unwrap() + 1;
+            bytes[event_start] = replacement;
+            fs::write(paths.events.as_std_path(), bytes).unwrap();
+            prop_assert!(Archive::open(paths, corpus, "2026-01-01T00:00:00Z").is_err());
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn prop_gaie_archive_valid_corpus_paths_stay_under_root(corpus in "[A-Za-z0-9_-]{1,32}") {
+            let root = Utf8PathBuf::from("/tmp/gaie-property-root");
+            let corpus = CorpusId::parse(corpus).unwrap();
+            let paths = ArchivePaths::new(root.clone(), &corpus).unwrap();
+            prop_assert_eq!(paths.events.parent(), Some(root.as_path()));
+            prop_assert_eq!(paths.checkpoint.parent(), Some(root.as_path()));
+            prop_assert!(ArchivePaths::new(Utf8PathBuf::from("relative/path"), &corpus).is_err());
+        }
     }
 }

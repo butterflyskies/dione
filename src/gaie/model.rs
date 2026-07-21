@@ -30,6 +30,58 @@ impl CorpusId {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+    use test_case::test_case;
+
+    #[test_case("a"; "letter")]
+    #[test_case("A0_-"; "all admitted classes")]
+    #[test_case(""; "empty")]
+    #[test_case("../escape"; "traversal punctuation")]
+    #[test_case("space here"; "space")]
+    fn test_gaie_archive_corpus_examples(value: &str) {
+        let expected = !value.is_empty()
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-');
+        assert_eq!(CorpusId::parse(value).is_ok(), expected);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn prop_gaie_archive_corpus_matches_ascii_grammar(value in ".{0,48}") {
+            let expected = !value.is_empty() && value.bytes().all(|byte| {
+                matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-')
+            });
+            prop_assert_eq!(CorpusId::parse(&value).is_ok(), expected);
+        }
+    }
+}
+
+#[cfg(kani)]
+mod proofs {
+    use super::CorpusId;
+
+    #[kani::proof]
+    #[kani::unwind(9)]
+    fn corpus_acceptance_matches_bounded_ascii_grammar() {
+        let bytes: [u8; 8] = kani::any();
+        let length: usize = kani::any();
+        kani::assume(length <= bytes.len());
+        kani::assume(bytes[..length].iter().all(u8::is_ascii));
+        let value = std::str::from_utf8(&bytes[..length]).unwrap_or("");
+        let expected = length > 0
+            && bytes[..length]
+                .iter()
+                .all(|byte| matches!(*byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-'));
+        assert_eq!(CorpusId::parse(value).is_ok(), expected);
+    }
+}
+
 /// A GAIE event kind supported by the collector or latest-state replayer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

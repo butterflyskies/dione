@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
     let mut archive = Archive::open(paths, corpus, &now)?;
     match cli.command {
         Command::LatestState => {
-            let mut messages: Vec<_> = build_latest_state(&archive.read_committed()?.events)
+            let mut messages: Vec<_> = build_latest_state(&archive.read_committed()?.events)?
                 .into_values()
                 .collect();
             messages.sort_by(|left, right| left.created_at.cmp(&right.created_at));
@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
         }
         Command::Reconcile => {
             let events = archive.read_committed()?.events;
-            let messages = build_latest_state(&events);
+            let messages = build_latest_state(&events)?;
             println!("Total messages in latest-state view: {}", messages.len());
             println!("Total committed events: {}", events.len());
         }
@@ -246,6 +246,7 @@ fn advance_cursor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn page_bounds_rejects_malformed_ids_and_orders_snowflakes() {
@@ -270,5 +271,37 @@ mod tests {
         );
         assert!(advance_cursor(Some("10"), &mut seen, "10".to_owned()).is_err());
         assert!(advance_cursor(Some("9"), &mut seen, "10".to_owned()).is_err());
+    }
+
+    // The oracle sorts generated numeric IDs independently of page_bounds and
+    // models cursor admission with a standard HashSet.
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn prop_gaie_archive_page_bounds_match_numeric_min_max(ids in prop::collection::vec(1_u64..u64::MAX, 1..100)) {
+            let page: Vec<_> = ids.iter().map(|id| serde_json::json!({"id":id.to_string()})).collect();
+            let expected_min = ids.iter().min().unwrap().to_string();
+            let expected_max = ids.iter().max().unwrap().to_string();
+            prop_assert_eq!(page_bounds(&page).unwrap(), (expected_min, expected_max));
+        }
+
+        #[test]
+        fn prop_gaie_archive_cursor_acceptance_matches_dedup_model(candidates in prop::collection::vec(1_u64..10_000, 0..100)) {
+            let mut production_seen = HashSet::new();
+            let mut accepted_prefix = Vec::new();
+            let mut current: Option<String> = None;
+            for candidate in candidates {
+                let candidate = candidate.to_string();
+                let expected = current.as_deref() != Some(candidate.as_str())
+                    && !accepted_prefix.iter().any(|accepted| accepted == &candidate);
+                let actual = advance_cursor(current.as_deref(), &mut production_seen, candidate.clone()).is_ok();
+                prop_assert_eq!(actual, expected);
+                if actual {
+                    accepted_prefix.push(candidate.clone());
+                    current = Some(candidate);
+                }
+            }
+        }
     }
 }

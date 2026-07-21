@@ -19,9 +19,9 @@ fn gaie_archive_corrected_python_v11_fixture_has_semantic_replay_parity() {
     )
     .unwrap();
     let archive = Archive::open(paths, corpus, "2026-07-21T00:00:00Z").unwrap();
-    let actual = serde_json::to_value(build_latest_state(
-        &archive.read_committed().unwrap().events,
-    ))
+    let actual = serde_json::to_value(
+        build_latest_state(&archive.read_committed().unwrap().events).unwrap(),
+    )
     .unwrap();
     let expected: serde_json::Value = serde_json::from_slice(
         &std::fs::read("tests/fixtures/gaie-v11/golden-latest-state.json").unwrap(),
