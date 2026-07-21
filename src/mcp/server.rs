@@ -13,9 +13,10 @@
 
 pub use crate::tracing_channel::TraceLevelController;
 use crate::{
-    bell_rings::BellShadow,
+    bell_rings::{BellEvaluator, render_bells},
     coalesce::{CoalesceResult, coalesce},
     codex::{CodexEventQueue, TransportMode},
+    config::BellMode,
     delivery_buffer::{BufferResult, DeliveryBuffer},
     discord::events::{MessageEvent, NotificationEvent},
     mcp::{
@@ -135,7 +136,7 @@ pub async fn run(
     let config = crate::config::load_config(&server.state_dir);
     let mut rate_limiter = RateLimiter::new(config.rate_limit_runtime().clone());
     let mut delivery_buffer = DeliveryBuffer::new();
-    let bell_shadow = Arc::new(BellShadow::new());
+    let bell_evaluator = Arc::new(BellEvaluator::new());
 
     // Resolve timezone once at startup so `deliver_flushed` doesn't need to
     // load config just for the tz. Updated opportunistically when we already
@@ -186,7 +187,7 @@ pub async fn run(
 
                 // New event arrives from Discord.
                 event = rx.recv() => {
-                    let Some(event) = event else { break };
+                    let Some(mut event) = event else { break };
 
                     // Reload config from ArcSwap (cheap Arc pointer load).
                     let cfg = crate::config::load_config(&state_dir_notif);
@@ -234,15 +235,28 @@ pub async fn run(
                         }
                     }
 
-                    // Advisory recall never sits on the delivery or buffer-flush
-                    // critical path. The observer owns a clone and cannot mutate
-                    // the event that continues through normal delivery.
-                    let shadow = Arc::clone(&bell_shadow);
-                    let shadow_event = event.clone();
-                    let shadow_config = cfg.bell_rings.clone();
-                    tokio::spawn(async move {
-                        let _ = shadow.observe(shadow_event, &shadow_config).await;
-                    });
+                    // Bell evaluation: in shadow mode, fire-and-forget off the
+                    // critical path. In live mode, await inline and inject
+                    // mem_hits into the event before delivery.
+                    match cfg.bell_rings.mode {
+                        BellMode::Shadow => {
+                            let evaluator = Arc::clone(&bell_evaluator);
+                            let shadow_event = event.clone();
+                            let shadow_config = cfg.bell_rings.clone();
+                            tokio::spawn(async move {
+                                let _ = evaluator.evaluate(shadow_event, &shadow_config).await;
+                            });
+                        }
+                        BellMode::Live => {
+                            let (returned_event, bells) = bell_evaluator.evaluate(event, &cfg.bell_rings).await;
+                            event = returned_event;
+                            if !bells.is_empty()
+                                && let NotificationEvent::Message(ref mut msg) = event
+                            {
+                                msg.bells = Some(render_bells(&bells));
+                            }
+                        }
+                    }
 
                     // Delivery buffer: coalesce channel events per channel.
                     let delay_ms = extract_delay_ms(&event, &cfg);
@@ -685,6 +699,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
+            bells: None,
         })
     }
 

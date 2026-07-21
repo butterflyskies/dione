@@ -34,6 +34,7 @@ impl IntoNotification for NotificationEvent {
                 reply_to_user_id,
                 reply_to_user,
                 reply_to_content_preview,
+                bells,
                 ..
             }) => {
                 let mut meta = json!({
@@ -72,6 +73,9 @@ impl IntoNotification for NotificationEvent {
                         })
                         .collect();
                     meta["attachments"] = json!(att_desc.join("; "));
+                }
+                if let Some(bells) = bells {
+                    meta["mem_hits"] = json!(bells);
                 }
                 json!({
                     "jsonrpc": "2.0",
@@ -297,6 +301,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
+            bells: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -320,6 +325,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
+            bells: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -345,6 +351,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
+            bells: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -368,6 +375,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
+            bells: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -391,6 +399,7 @@ mod tests {
             reply_to_user_id: Some(UserId::new(888)),
             reply_to_user: Some("bob".into()),
             reply_to_content_preview: Some("original message".into()),
+            bells: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -416,6 +425,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
+            bells: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -441,6 +451,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
+            bells: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
@@ -448,6 +459,54 @@ mod tests {
         assert!(meta.get("reply_to_user_id").is_none());
         assert!(meta.get("reply_to_user").is_none());
         assert!(meta.get("reply_to_content_preview").is_none());
+    }
+
+    #[test]
+    fn test_message_includes_mem_hits_when_bells_present() {
+        let event = NotificationEvent::Message(MessageEvent {
+            chat_id: ChannelId::new(100),
+            message_id: MessageId::new(200),
+            user: "alice".into(),
+            user_id: UserId::new(300),
+            content: "hello with bells".into(),
+            targeting: crate::discord::events::MessageTargeting::Ambient,
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            attachments: vec![],
+            is_voice_message: false,
+            thread_parent_id: None,
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            reply_to_user: None,
+            reply_to_content_preview: None,
+            bells: Some("person-pace 12;feedback-no-platitudes 25".into()),
+        });
+        let json = event.into_notification();
+        let meta = &json["params"]["meta"];
+        assert_eq!(meta["mem_hits"], "person-pace 12;feedback-no-platitudes 25");
+    }
+
+    #[test]
+    fn test_message_omits_mem_hits_when_bells_none() {
+        let event = NotificationEvent::Message(MessageEvent {
+            chat_id: ChannelId::new(100),
+            message_id: MessageId::new(200),
+            user: "alice".into(),
+            user_id: UserId::new(300),
+            content: "hello without bells".into(),
+            targeting: crate::discord::events::MessageTargeting::Ambient,
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            attachments: vec![],
+            is_voice_message: false,
+            thread_parent_id: None,
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            reply_to_user: None,
+            reply_to_content_preview: None,
+            bells: None,
+        });
+        let json = event.into_notification();
+        let meta = &json["params"]["meta"];
+        assert!(meta.get("mem_hits").is_none());
     }
 
     #[test]
@@ -467,6 +526,7 @@ mod tests {
             reply_to_user_id: Some(UserId::new(888)),
             reply_to_user: Some("bob".into()),
             reply_to_content_preview: None,
+            bells: None,
         });
         let json = event.into_notification();
         let meta = &json["params"]["meta"];

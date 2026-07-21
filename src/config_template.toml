@@ -9,9 +9,10 @@
 enabled = true
 construct_id = "dione"
 
-# Memory recall shadow evaluation. It never changes inbound delivery.
+# Memory recall evaluation. Shadow logs only; live injects mem_hits metadata.
 [bell_rings]
 enabled = false
+mode = "shadow"         # "shadow" (log only) or "live" (inject mem_hits into metadata)
 max_semantic_distance = 0.3
 max_bells = 3
 deadline_ms = 300

@@ -1,8 +1,9 @@
-//! Shadow-only inbound memory bell evaluation.
+//! Inbound memory bell evaluation.
 //!
-//! The first slice observes only messages carrying typed directed-delivery
-//! evidence. It calls one configured memory-mcp scope, computes typed bells,
-//! and emits low-cardinality telemetry. The original event is never rewritten.
+//! Evaluates incoming directed messages against a configured memory-mcp
+//! provider. In shadow mode, results are logged without affecting delivery.
+//! In live mode, admitted bells are rendered into compact metadata and
+//! injected into the notification event.
 
 use crate::{
     config::{BellProviderConfig, BellRingsConfig},
@@ -152,23 +153,38 @@ struct ProviderSlot {
     provider: Option<Arc<MemoryMcpProvider>>,
 }
 
+/// Render admitted bells into the compact `mem_hits` metadata format.
+///
+/// Format: `"name 91;other-name 42"` — memory name + similarity score
+/// (cosine distance × 100, rounded, lower = more similar).
+pub fn render_bells(bells: &[Bell]) -> String {
+    bells
+        .iter()
+        .map(|bell| {
+            let score = (bell.distance * 100.0).round() as u32;
+            format!("{} {score}", bell.memory_name)
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
 /// Owns the one reconnectable provider used by the inbound delivery loop.
 #[derive(Default)]
-pub struct BellShadow {
+pub struct BellEvaluator {
     provider: Mutex<ProviderSlot>,
 }
 
-impl BellShadow {
+impl BellEvaluator {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Observes one event and returns it unchanged.
-    pub async fn observe(
+    /// Evaluates one event and returns bells (if any) alongside it.
+    pub async fn evaluate(
         &self,
         event: NotificationEvent,
         config: &BellRingsConfig,
-    ) -> NotificationEvent {
+    ) -> (NotificationEvent, Vec<Bell>) {
         let eligible = matches!(
             &event,
             NotificationEvent::Message(message)
@@ -176,10 +192,10 @@ impl BellShadow {
         );
         if eligible && let Some(provider_config) = config.provider.as_ref() {
             let provider = self.provider(provider_config).await;
-            return observe_with_provider(event, config, provider.as_ref()).await;
+            return evaluate_with_provider(event, config, provider.as_ref()).await;
         }
         record_outcome(&ShadowOutcome::Skipped);
-        event
+        (event, vec![])
     }
 
     async fn provider(&self, config: &BellProviderConfig) -> Arc<MemoryMcpProvider> {
@@ -200,19 +216,22 @@ impl BellShadow {
     }
 }
 
-/// Testable event-returning shadow seam. It deliberately has no way to inject
-/// the computed result into the event.
-pub(crate) async fn observe_with_provider<P: BellProvider + ?Sized>(
+/// Testable evaluation seam. Returns the event and any admitted bells.
+pub(crate) async fn evaluate_with_provider<P: BellProvider + ?Sized>(
     event: NotificationEvent,
     config: &BellRingsConfig,
     provider: &P,
-) -> NotificationEvent {
+) -> (NotificationEvent, Vec<Bell>) {
     let outcome = match &event {
         NotificationEvent::Message(message) => evaluate_message(message, config, provider).await,
         _ => ShadowOutcome::Skipped,
     };
     record_outcome(&outcome);
-    event
+    let bells = match outcome {
+        ShadowOutcome::Success(bells) => bells,
+        _ => vec![],
+    };
+    (event, bells)
 }
 
 /// Computes bells for one message without mutating the message or its delivery envelope.
@@ -414,6 +433,7 @@ mod tests {
     fn config() -> BellRingsConfig {
         BellRingsConfig {
             enabled: true,
+            mode: crate::config::BellMode::Live,
             provider: Some(BellProviderConfig {
                 url: BellProviderUrl::parse("http://memory.example/mcp").unwrap(),
                 scope: BellScope::parse("syne").unwrap(),
@@ -440,6 +460,7 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
+            bells: None,
         }
     }
 
@@ -586,8 +607,9 @@ mod tests {
             };
             let original = NotificationEvent::Message(message(MessageTargeting::DirectMessage));
             let before = original.clone().into_notification();
-            let observed = observe_with_provider(original, &config(), &provider).await;
+            let (observed, bells) = evaluate_with_provider(original, &config(), &provider).await;
             assert_eq!(observed.into_notification(), before);
+            assert!(bells.is_empty());
             assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
         }
 
@@ -600,20 +622,55 @@ mod tests {
         short.deadline_ms = 1;
         let original = NotificationEvent::Message(message(MessageTargeting::DirectMessage));
         let before = original.clone().into_notification();
-        let observed = observe_with_provider(original, &short, &provider).await;
+        let (observed, bells) = evaluate_with_provider(original, &short, &provider).await;
         assert_eq!(observed.into_notification(), before);
+        assert!(bells.is_empty());
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
-    async fn shadow_success_does_not_inject_delivery_metadata() {
+    async fn evaluate_returns_bells_without_injecting_metadata() {
         let provider =
             MockProvider::value(envelope(vec![hit("a", "memory-name", 0.1, "semantic")]));
         let original = NotificationEvent::Message(message(MessageTargeting::DirectMessage));
         let before = original.clone().into_notification();
-        let observed = observe_with_provider(original, &config(), &provider).await;
+        let (observed, bells) = evaluate_with_provider(original, &config(), &provider).await;
         assert_eq!(observed.into_notification(), before);
+        assert_eq!(bells.len(), 1);
+        assert_eq!(bells[0].memory_name, "memory-name");
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn render_bells_produces_compact_format() {
+        let bells = vec![
+            Bell {
+                provider_url: "http://memory/mcp".to_owned(),
+                scope: "lain".to_owned(),
+                recall_id: "r_test".to_owned(),
+                memory_id: "a".to_owned(),
+                memory_name: "person-pace".to_owned(),
+                match_type: SemanticMatchType::Semantic,
+                distance: 0.12,
+                loudness: 3,
+                provider_rank: 0,
+            },
+            Bell {
+                provider_url: "http://memory/mcp".to_owned(),
+                scope: "lain".to_owned(),
+                recall_id: "r_test".to_owned(),
+                memory_id: "b".to_owned(),
+                memory_name: "feedback-no-platitudes".to_owned(),
+                match_type: SemanticMatchType::Both,
+                distance: 0.25,
+                loudness: 2,
+                provider_rank: 1,
+            },
+        ];
+        assert_eq!(
+            render_bells(&bells),
+            "person-pace 12;feedback-no-platitudes 25"
+        );
     }
 
     #[tokio::test]

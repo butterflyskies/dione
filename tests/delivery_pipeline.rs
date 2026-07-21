@@ -44,6 +44,7 @@ fn msg_event_with_id(chat_id: u64, user_id: u64, msg_id: u64, content: &str) -> 
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
+        bells: None,
     })
 }
 
@@ -704,6 +705,7 @@ fn notification_format_preserved_through_pipeline() {
         reply_to_user_id: None,
         reply_to_user: None,
         reply_to_content_preview: None,
+        bells: None,
     });
 
     let result = pipeline_step(event, &mut limiter, &mut buffer, 0, now);
