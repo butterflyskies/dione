@@ -51,7 +51,7 @@ pub struct MessageEvent {
     pub reply_to_content_preview: Option<String>,
     /// Pre-rendered bell metadata (live mode only).
     pub bells: Option<String>,
-    /// Retrieval status for bell evaluation: "ok", "timeout", or "error".
+    /// Retrieval status for bell evaluation: "ok", "partial", "timeout", or "error".
     pub bells_status: Option<String>,
 }
 
