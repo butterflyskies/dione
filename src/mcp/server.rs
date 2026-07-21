@@ -250,10 +250,10 @@ pub async fn run(
                         BellMode::Live => {
                             let (returned_event, bells) = bell_evaluator.evaluate(event, &cfg.bell_rings).await;
                             event = returned_event;
-                            if !bells.is_empty() {
-                                if let NotificationEvent::Message(ref mut msg) = event {
-                                    msg.bells = Some(render_bells(&bells));
-                                }
+                            if !bells.is_empty()
+                                && let NotificationEvent::Message(ref mut msg) = event
+                            {
+                                msg.bells = Some(render_bells(&bells));
                             }
                         }
                     }
