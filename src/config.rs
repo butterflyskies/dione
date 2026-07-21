@@ -133,7 +133,7 @@ pub enum BellMode {
     /// Evaluate and log, but do not alter delivery.
     #[default]
     Shadow,
-    /// Evaluate and inject `mem_hits` into notification metadata.
+    /// Evaluate and inject `bells` into notification metadata.
     Live,
 }
 

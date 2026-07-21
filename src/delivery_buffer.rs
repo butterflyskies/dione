@@ -170,6 +170,7 @@ mod tests {
             reply_to_user: None,
             reply_to_content_preview: None,
             bells: None,
+            bells_status: None,
         })
     }
 
@@ -280,6 +281,7 @@ mod tests {
             reply_to_user: None,
             reply_to_content_preview: None,
             bells: None,
+            bells_status: None,
         });
         buf.buffer_event(ch2_event, 500);
 
@@ -388,6 +390,7 @@ mod proptests {
                     reply_to_user: None,
                     reply_to_content_preview: None,
             bells: None,
+            bells_status: None,
                 }))
                 .collect();
 
@@ -455,6 +458,7 @@ mod proptests {
                     reply_to_user: None,
                     reply_to_content_preview: None,
             bells: None,
+            bells_status: None,
                 });
                 let result = buf.buffer_event(event, delay_ms);
                 prop_assert!(matches!(result, BufferResult::Buffered));
@@ -505,6 +509,7 @@ mod proptests {
                     reply_to_user: None,
                     reply_to_content_preview: None,
             bells: None,
+            bells_status: None,
                 }))
                 .collect();
 
