@@ -1,5 +1,5 @@
-use crate::gaie::{CorpusId, Event};
 use crate::gaie::backfill::parse_or_migrate_checkpoint;
+use crate::gaie::{CorpusId, Event};
 use camino::{Utf8Path, Utf8PathBuf};
 use fs2::FileExt as _;
 use serde::{Deserialize, Serialize};
@@ -320,14 +320,9 @@ impl Archive {
             Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(source) => return Err(io_error(&self.paths.checkpoint, source)),
         };
-        parse_or_migrate_checkpoint(
-            &bytes,
-            self.corpus.as_str(),
-            guild_id,
-            parent_channel_id,
-        )
-        .map(Some)
-        .map_err(|error| ArchiveError::Integrity(error.to_string()))
+        parse_or_migrate_checkpoint(&bytes, self.corpus.as_str(), guild_id, parent_channel_id)
+            .map(Some)
+            .map_err(|error| ArchiveError::Integrity(error.to_string()))
     }
 
     /// Reports whether the durable checkpoint is the exact legacy v1 shape.
@@ -343,14 +338,9 @@ impl Archive {
         let Some(object) = value.as_object() else {
             return Ok(false);
         };
-        let expected: BTreeSet<_> = [
-            "after_message_id",
-            "channel_id",
-            "corpus_id",
-            "updated_at",
-        ]
-        .into_iter()
-        .collect();
+        let expected: BTreeSet<_> = ["after_message_id", "channel_id", "corpus_id", "updated_at"]
+            .into_iter()
+            .collect();
         let actual: BTreeSet<_> = object.keys().map(String::as_str).collect();
         Ok(actual == expected && object.values().all(Value::is_string))
     }
@@ -747,10 +737,7 @@ mod tests {
         };
         archive.save_checkpoint(&checkpoint).unwrap();
         archive.save_checkpoint(&checkpoint).unwrap();
-        assert_eq!(
-            archive.load_checkpoint("1", "2").unwrap(),
-            Some(checkpoint)
-        );
+        assert_eq!(archive.load_checkpoint("1", "2").unwrap(), Some(checkpoint));
     }
 
     #[test]
@@ -814,10 +801,9 @@ mod tests {
             })
         );
         archive.save_checkpoint(&migrated).unwrap();
-        let saved: Value = serde_json::from_slice(
-            &fs::read(archive.paths.checkpoint.as_std_path()).unwrap(),
-        )
-        .unwrap();
+        let saved: Value =
+            serde_json::from_slice(&fs::read(archive.paths.checkpoint.as_std_path()).unwrap())
+                .unwrap();
         assert_eq!(saved, serde_json::to_value(migrated).unwrap());
     }
 

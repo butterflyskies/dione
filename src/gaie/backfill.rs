@@ -33,11 +33,13 @@ impl RootKind {
 
 impl CaptureRoot {
     pub fn parent_target(&self) -> Option<CaptureTarget> {
-        self.kind.has_parent_message_stream().then(|| CaptureTarget {
-            channel_id: self.parent_channel_id.clone(),
-            thread_id: None,
-            thread_parent_channel_id: None,
-        })
+        self.kind
+            .has_parent_message_stream()
+            .then(|| CaptureTarget {
+                channel_id: self.parent_channel_id.clone(),
+                thread_id: None,
+                thread_parent_channel_id: None,
+            })
     }
 }
 
@@ -205,13 +207,8 @@ pub async fn run_backfill(
         let original_after = previous_stream
             .as_ref()
             .and_then(|stream| stream.after_message_id.clone());
-        let mut messages = fetch_target_messages(
-            client,
-            token,
-            &target,
-            original_after.as_deref(),
-        )
-        .await?;
+        let mut messages =
+            fetch_target_messages(client, token, &target, original_after.as_deref()).await?;
         messages.sort_by_key(|message| {
             message
                 .get("id")
@@ -326,8 +323,8 @@ async fn fetch_target_messages(
         };
         validate_message_page_request_bounds(&page, before.as_deref(), request_after)?;
         let (minimum, _) = message_page_bounds(&page)?;
-        let minimum_numeric = parse_snowflake(&minimum)
-            .map_err(|_| BackfillRunError::InvalidMessage)?;
+        let minimum_numeric =
+            parse_snowflake(&minimum).map_err(|_| BackfillRunError::InvalidMessage)?;
         let reached_bound = lower_bound.is_some_and(|bound| minimum_numeric <= bound);
         let short_page = page.len() < 100;
         messages.extend(page.into_iter().filter(|message| {
@@ -372,11 +369,11 @@ fn message_page_bounds(page: &[Value]) -> Result<(String, String), BackfillRunEr
     let mut ids = page
         .iter()
         .map(|message| -> Result<(u64, String), BackfillRunError> {
-        let id = message
-            .get("id")
-            .and_then(Value::as_str)
-            .ok_or(BackfillRunError::InvalidMessage)?;
-        let numeric = parse_snowflake(id).map_err(|_| BackfillRunError::InvalidMessage)?;
+            let id = message
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or(BackfillRunError::InvalidMessage)?;
+            let numeric = parse_snowflake(id).map_err(|_| BackfillRunError::InvalidMessage)?;
             Ok((numeric, id.to_owned()))
         });
     let first = ids.next().ok_or(BackfillRunError::InvalidMessage)??;
@@ -446,7 +443,8 @@ pub(crate) fn discover_capture_targets(
     let mut threads = BTreeMap::<u64, CaptureTarget>::new();
     for page in pages {
         for candidate in &page.candidates {
-            if candidate.guild_id != root.guild_id || candidate.parent_id != root.parent_channel_id {
+            if candidate.guild_id != root.guild_id || candidate.parent_id != root.parent_channel_id
+            {
                 if matches!(
                     page.route,
                     DiscoveryRoute::ActiveSnapshotA | DiscoveryRoute::ActiveSnapshotB
@@ -458,13 +456,19 @@ pub(crate) fn discover_capture_targets(
             let root_compatible = matches!(
                 (root.kind, candidate.kind),
                 (RootKind::Announcement, ThreadKind::Announcement)
-                    | (RootKind::Text | RootKind::Forum | RootKind::Media, ThreadKind::Public)
+                    | (
+                        RootKind::Text | RootKind::Forum | RootKind::Media,
+                        ThreadKind::Public
+                    )
                     | (RootKind::Text, ThreadKind::Private)
             );
             let route_compatible = match page.route {
                 DiscoveryRoute::ActiveSnapshotA | DiscoveryRoute::ActiveSnapshotB => true,
                 DiscoveryRoute::PublicArchived => {
-                    matches!(candidate.kind, ThreadKind::Announcement | ThreadKind::Public)
+                    matches!(
+                        candidate.kind,
+                        ThreadKind::Announcement | ThreadKind::Public
+                    )
                 }
                 DiscoveryRoute::PrivateArchived | DiscoveryRoute::JoinedPrivateArchived => {
                     candidate.kind == ThreadKind::Private
@@ -498,8 +502,8 @@ pub(crate) fn parse_or_migrate_checkpoint(
     guild_id: &str,
     parent_channel_id: &str,
 ) -> Result<Checkpoint, BackfillContractError> {
-    let value: Value = serde_json::from_slice(bytes)
-        .map_err(|_| BackfillContractError::InvalidCheckpoint)?;
+    let value: Value =
+        serde_json::from_slice(bytes).map_err(|_| BackfillContractError::InvalidCheckpoint)?;
     let object = value
         .as_object()
         .ok_or(BackfillContractError::InvalidCheckpoint)?;
@@ -507,19 +511,14 @@ pub(crate) fn parse_or_migrate_checkpoint(
         if object.contains_key("channel_id") || object.contains_key("after_message_id") {
             return Err(BackfillContractError::InvalidCheckpoint);
         }
-        let checkpoint: Checkpoint = serde_json::from_value(value)
-            .map_err(|_| BackfillContractError::InvalidCheckpoint)?;
+        let checkpoint: Checkpoint =
+            serde_json::from_value(value).map_err(|_| BackfillContractError::InvalidCheckpoint)?;
         if checkpoint.version != 2 {
             return Err(BackfillContractError::InvalidCheckpoint);
         }
         checkpoint
     } else {
-        const V1_KEYS: [&str; 4] = [
-            "after_message_id",
-            "channel_id",
-            "corpus_id",
-            "updated_at",
-        ];
+        const V1_KEYS: [&str; 4] = ["after_message_id", "channel_id", "corpus_id", "updated_at"];
         let actual: BTreeSet<_> = object.keys().map(String::as_str).collect();
         let expected: BTreeSet<_> = V1_KEYS.into_iter().collect();
         if actual != expected {
@@ -670,22 +669,86 @@ mod tests {
             DiscoveryRoute::ActiveSnapshotB,
         ];
         let allowed = [
-            (RootKind::Text, ThreadKind::Public, DiscoveryRoute::ActiveSnapshotA),
-            (RootKind::Text, ThreadKind::Public, DiscoveryRoute::PublicArchived),
-            (RootKind::Text, ThreadKind::Public, DiscoveryRoute::ActiveSnapshotB),
-            (RootKind::Text, ThreadKind::Private, DiscoveryRoute::ActiveSnapshotA),
-            (RootKind::Text, ThreadKind::Private, DiscoveryRoute::PrivateArchived),
-            (RootKind::Text, ThreadKind::Private, DiscoveryRoute::JoinedPrivateArchived),
-            (RootKind::Text, ThreadKind::Private, DiscoveryRoute::ActiveSnapshotB),
-            (RootKind::Announcement, ThreadKind::Announcement, DiscoveryRoute::ActiveSnapshotA),
-            (RootKind::Announcement, ThreadKind::Announcement, DiscoveryRoute::PublicArchived),
-            (RootKind::Announcement, ThreadKind::Announcement, DiscoveryRoute::ActiveSnapshotB),
-            (RootKind::Forum, ThreadKind::Public, DiscoveryRoute::ActiveSnapshotA),
-            (RootKind::Forum, ThreadKind::Public, DiscoveryRoute::PublicArchived),
-            (RootKind::Forum, ThreadKind::Public, DiscoveryRoute::ActiveSnapshotB),
-            (RootKind::Media, ThreadKind::Public, DiscoveryRoute::ActiveSnapshotA),
-            (RootKind::Media, ThreadKind::Public, DiscoveryRoute::PublicArchived),
-            (RootKind::Media, ThreadKind::Public, DiscoveryRoute::ActiveSnapshotB),
+            (
+                RootKind::Text,
+                ThreadKind::Public,
+                DiscoveryRoute::ActiveSnapshotA,
+            ),
+            (
+                RootKind::Text,
+                ThreadKind::Public,
+                DiscoveryRoute::PublicArchived,
+            ),
+            (
+                RootKind::Text,
+                ThreadKind::Public,
+                DiscoveryRoute::ActiveSnapshotB,
+            ),
+            (
+                RootKind::Text,
+                ThreadKind::Private,
+                DiscoveryRoute::ActiveSnapshotA,
+            ),
+            (
+                RootKind::Text,
+                ThreadKind::Private,
+                DiscoveryRoute::PrivateArchived,
+            ),
+            (
+                RootKind::Text,
+                ThreadKind::Private,
+                DiscoveryRoute::JoinedPrivateArchived,
+            ),
+            (
+                RootKind::Text,
+                ThreadKind::Private,
+                DiscoveryRoute::ActiveSnapshotB,
+            ),
+            (
+                RootKind::Announcement,
+                ThreadKind::Announcement,
+                DiscoveryRoute::ActiveSnapshotA,
+            ),
+            (
+                RootKind::Announcement,
+                ThreadKind::Announcement,
+                DiscoveryRoute::PublicArchived,
+            ),
+            (
+                RootKind::Announcement,
+                ThreadKind::Announcement,
+                DiscoveryRoute::ActiveSnapshotB,
+            ),
+            (
+                RootKind::Forum,
+                ThreadKind::Public,
+                DiscoveryRoute::ActiveSnapshotA,
+            ),
+            (
+                RootKind::Forum,
+                ThreadKind::Public,
+                DiscoveryRoute::PublicArchived,
+            ),
+            (
+                RootKind::Forum,
+                ThreadKind::Public,
+                DiscoveryRoute::ActiveSnapshotB,
+            ),
+            (
+                RootKind::Media,
+                ThreadKind::Public,
+                DiscoveryRoute::ActiveSnapshotA,
+            ),
+            (
+                RootKind::Media,
+                ThreadKind::Public,
+                DiscoveryRoute::PublicArchived,
+            ),
+            (
+                RootKind::Media,
+                ThreadKind::Public,
+                DiscoveryRoute::ActiveSnapshotB,
+            ),
         ];
 
         for root_kind in roots {

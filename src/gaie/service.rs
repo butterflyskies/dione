@@ -1,10 +1,9 @@
+use crate::gaie::backfill::{
+    DiscoveryPage, DiscoveryRoute, RootKind, ThreadCandidate, ThreadKind, discover_capture_targets,
+};
 use crate::gaie::{
     Attachment, CaptureRoot, CaptureTarget, Event, EventKind, Ingest, Lineage, Payload, Relations,
     Source,
-};
-use crate::gaie::backfill::{
-    DiscoveryPage, DiscoveryRoute, RootKind, ThreadCandidate, ThreadKind,
-    discover_capture_targets,
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use serde_json::Value;
@@ -210,9 +209,9 @@ impl DiscordArchiveClient {
                 .await
             {
                 Ok(private) => pages.extend(private),
-                Err(DiscordArchiveError::OutsideScope { .. }) => pages.extend(
-                    self.joined_private_threads(token, root).await?,
-                ),
+                Err(DiscordArchiveError::OutsideScope { .. }) => {
+                    pages.extend(self.joined_private_threads(token, root).await?)
+                }
                 Err(error) => return Err(error),
             }
         }
@@ -359,7 +358,9 @@ impl DiscordArchiveClient {
                 .and_then(Value::as_bool)
                 .ok_or(DiscordArchiveError::Shape)?;
             let candidates = parse_thread_candidates(&value, root)?;
-            let next = candidates.last().map(|candidate| candidate.channel_id.clone());
+            let next = candidates
+                .last()
+                .map(|candidate| candidate.channel_id.clone());
             pages.push(DiscoveryPage {
                 route: DiscoveryRoute::JoinedPrivateArchived,
                 candidates,
@@ -519,8 +520,8 @@ fn advance_archive_timestamp_cursor(
     seen: &mut std::collections::HashSet<String>,
     next: String,
 ) -> Result<String, DiscordArchiveError> {
-    let next_timestamp = chrono::DateTime::parse_from_rfc3339(&next)
-        .map_err(|_| DiscordArchiveError::Shape)?;
+    let next_timestamp =
+        chrono::DateTime::parse_from_rfc3339(&next).map_err(|_| DiscordArchiveError::Shape)?;
     if current
         .map(chrono::DateTime::parse_from_rfc3339)
         .transpose()
@@ -929,7 +930,11 @@ mod tests {
 
     async fn scripted_client(
         responses: Vec<Vec<u8>>,
-    ) -> (DiscordArchiveClient, Arc<Mutex<Vec<String>>>, JoinHandle<()>) {
+    ) -> (
+        DiscordArchiveClient,
+        Arc<Mutex<Vec<String>>>,
+        JoinHandle<()>,
+    ) {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1051,9 +1056,7 @@ mod tests {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let body = format!(
-            r#"{{"id":"100","guild_id":"10","parent_id":{parent_id},"type":0}}"#
-        );
+        let body = format!(r#"{{"id":"100","guild_id":"10","parent_id":{parent_id},"type":0}}"#);
         let response = http_json("200 OK", &body);
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
@@ -1388,12 +1391,7 @@ mod tests {
         let directory = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
         let corpus = CorpusId::parse("fixture").unwrap();
         let paths = ArchivePaths::new(directory.clone(), &corpus).unwrap();
-        Archive::open(
-            paths.clone(),
-            corpus.clone(),
-            "2026-07-21T00:00:00Z",
-        )
-        .unwrap();
+        Archive::open(paths.clone(), corpus.clone(), "2026-07-21T00:00:00Z").unwrap();
         let checkpoint_path = directory.join("fixture.checkpoint.json");
         let v1 = br#"{"corpus_id":"fixture","channel_id":"100","after_message_id":"123","updated_at":"2026-07-21T00:00:00Z"}"#;
         fs::write(checkpoint_path.as_std_path(), v1).unwrap();
@@ -1566,12 +1564,7 @@ mod tests {
         .unwrap();
         run_one_server.await.unwrap();
 
-        let archive = Archive::open(
-            paths.clone(),
-            corpus.clone(),
-            "2026-07-21T00:00:00Z",
-        )
-        .unwrap();
+        let archive = Archive::open(paths.clone(), corpus.clone(), "2026-07-21T00:00:00Z").unwrap();
         let events = archive.read_committed().unwrap().events;
         let create_ids: Vec<_> = events
             .iter()
@@ -1591,11 +1584,7 @@ mod tests {
         );
 
         let mut stale = archive.load_checkpoint("10", "100").unwrap().unwrap();
-        stale
-            .streams
-            .get_mut("300")
-            .unwrap()
-            .after_message_id = Some("300".to_owned());
+        stale.streams.get_mut("300").unwrap().after_message_id = Some("300".to_owned());
         archive.save_checkpoint(&stale).unwrap();
         drop(archive);
 
@@ -1646,12 +1635,7 @@ mod tests {
         assert_eq!(calls[8], "GET /channels/400/messages?limit=100 HTTP/1.1");
         drop(calls);
 
-        let archive = Archive::open(
-            paths.clone(),
-            corpus.clone(),
-            "2026-07-21T00:00:00Z",
-        )
-        .unwrap();
+        let archive = Archive::open(paths.clone(), corpus.clone(), "2026-07-21T00:00:00Z").unwrap();
         let checkpoint = archive.load_checkpoint("10", "100").unwrap().unwrap();
         assert_eq!(
             checkpoint.streams["300"].after_message_id.as_deref(),
@@ -1702,7 +1686,10 @@ mod tests {
         run_three_server.await.unwrap();
 
         assert_eq!(third_added, 0);
-        assert_eq!(fs::read(events_path.as_std_path()).unwrap(), events_before_noop);
+        assert_eq!(
+            fs::read(events_path.as_std_path()).unwrap(),
+            events_before_noop
+        );
         assert_eq!(
             fs::read(checkpoint_path.as_std_path()).unwrap(),
             checkpoint_before_noop
@@ -1721,12 +1708,7 @@ mod tests {
         let directory = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
         let corpus = CorpusId::parse("fixture").unwrap();
         let paths = ArchivePaths::new(directory, &corpus).unwrap();
-        let archive = Archive::open(
-            paths.clone(),
-            corpus.clone(),
-            "2026-07-21T00:00:00Z",
-        )
-        .unwrap();
+        let archive = Archive::open(paths.clone(), corpus.clone(), "2026-07-21T00:00:00Z").unwrap();
         archive
             .save_checkpoint(&Checkpoint {
                 version: 2,
@@ -1830,12 +1812,8 @@ mod tests {
         let corpus = CorpusId::parse("fixture").unwrap();
         let paths = ArchivePaths::new(directory, &corpus).unwrap();
         {
-            let archive = Archive::open(
-                paths.clone(),
-                corpus.clone(),
-                "2026-07-21T00:00:00Z",
-            )
-            .unwrap();
+            let archive =
+                Archive::open(paths.clone(), corpus.clone(), "2026-07-21T00:00:00Z").unwrap();
             archive
                 .save_checkpoint(&Checkpoint {
                     version: 2,
@@ -1948,12 +1926,8 @@ mod tests {
         let corpus = CorpusId::parse("fixture").unwrap();
         let paths = ArchivePaths::new(directory, &corpus).unwrap();
         {
-            let mut archive = Archive::open(
-                paths.clone(),
-                corpus.clone(),
-                "2026-07-21T00:00:00Z",
-            )
-            .unwrap();
+            let mut archive =
+                Archive::open(paths.clone(), corpus.clone(), "2026-07-21T00:00:00Z").unwrap();
             let message = serde_json::json!({
                 "id":"160", "channel_id":"100", "content":"already committed",
                 "author":{"id":"9"}, "attachments":[], "reactions":[]
