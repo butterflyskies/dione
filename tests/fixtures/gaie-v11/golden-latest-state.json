@@ -1,0 +1,90 @@
+{
+  "100000000000000001": {
+    "attachments": [],
+    "author_id": "200000000000000001",
+    "channel_id": "000000000000000010",
+    "content": "Hello, this is a synthetic test message.",
+    "created_at": "2026-07-20T10:00:00Z",
+    "deleted": false,
+    "edited_at": null,
+    "history_status": "complete",
+    "message_id": "100000000000000001",
+    "reactions": {
+      "\ud83d\udc9c": 3
+    },
+    "reply_to": null,
+    "thread_id": null,
+    "versions": 1
+  },
+  "100000000000000002": {
+    "attachments": [
+      {
+        "filename": "test-blob.txt",
+        "id": "900000000000000001",
+        "media_type": "text/plain",
+        "sha256": "9ba8b09774b2212931628b425971d17ba04e7e8f7f6892bb880f602e4aba9085",
+        "size": 35,
+        "url": "https://cdn.discordapp.com/attachments/test/test-blob.txt"
+      }
+    ],
+    "author_id": "200000000000000002",
+    "channel_id": "000000000000000010",
+    "content": "Here is a file for you.",
+    "created_at": "2026-07-20T10:01:00Z",
+    "deleted": false,
+    "edited_at": null,
+    "history_status": "complete",
+    "message_id": "100000000000000002",
+    "reactions": {},
+    "reply_to": null,
+    "thread_id": null,
+    "versions": 1
+  },
+  "100000000000000003": {
+    "attachments": [],
+    "author_id": "200000000000000001",
+    "channel_id": "000000000000000010",
+    "content": "This message had a typo, now fixed.",
+    "created_at": "2026-07-20T10:02:00Z",
+    "deleted": false,
+    "edited_at": "2026-07-20T10:05:00Z",
+    "history_status": "complete",
+    "message_id": "100000000000000003",
+    "reactions": {},
+    "reply_to": null,
+    "thread_id": null,
+    "versions": 2
+  },
+  "100000000000000004": {
+    "attachments": [],
+    "author_id": "200000000000000002",
+    "channel_id": "000000000000000010",
+    "content": "I agree with the first message.",
+    "created_at": "2026-07-20T10:03:00Z",
+    "deleted": false,
+    "edited_at": null,
+    "history_status": "complete",
+    "message_id": "100000000000000004",
+    "reactions": {
+      "\ud83d\udc4d": 1
+    },
+    "reply_to": "100000000000000001",
+    "thread_id": null,
+    "versions": 1
+  },
+  "100000000000000005": {
+    "attachments": [],
+    "author_id": "200000000000000001",
+    "channel_id": "000000000000000010",
+    "content": "This message will be deleted.",
+    "created_at": "2026-07-20T10:04:00Z",
+    "deleted": true,
+    "edited_at": null,
+    "history_status": "complete",
+    "message_id": "100000000000000005",
+    "reactions": {},
+    "reply_to": null,
+    "thread_id": null,
+    "versions": 1
+  }
+}
