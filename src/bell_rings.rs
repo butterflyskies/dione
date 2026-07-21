@@ -60,6 +60,8 @@ impl BellTimbre {
 pub enum BellStatus {
     /// Retrieval completed successfully (bells may still be empty).
     Ok,
+    /// Some providers completed, others timed out. Partial results available.
+    PartialTimeout,
     /// Total deadline elapsed before retrieval completed.
     Timeout,
     /// Retrieval failed due to provider error or malformed response.
@@ -70,6 +72,7 @@ impl BellStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             BellStatus::Ok => "ok",
+            BellStatus::PartialTimeout => "partial",
             BellStatus::Timeout => "timeout",
             BellStatus::Error => "error",
         }
@@ -402,8 +405,14 @@ fn parse_bells(
         });
     }
     bells.sort_by(|left, right| {
-        left.distance
-            .total_cmp(&right.distance)
+        // Sort by loudness descending (loudest first), then distance ascending
+        // as tiebreaker among same-loudness bells. This prevents lexical bells
+        // (loudness 1, synthetic distance 0.0) from displacing louder semantic
+        // hits when max_bells truncation applies.
+        right
+            .loudness
+            .cmp(&left.loudness)
+            .then_with(|| left.distance.total_cmp(&right.distance))
             .then_with(|| left.memory_name.cmp(&right.memory_name))
             .then_with(|| left.memory_id.cmp(&right.memory_id))
     });
@@ -641,17 +650,17 @@ mod tests {
         let BellOutcome::Success(bells) = outcome else {
             panic!("expected success");
         };
-        // max_bells=3, sorted by distance. lexical sorts at distance=0.0
-        // lexical(d)=1, semantic(a)=3, both(b)=min(2+1,3)=3
+        // max_bells=3, sorted by loudness descending then distance ascending.
+        // semantic(a)=3 dist=0.05, both(b)=3 dist=0.15, lexical(d)=1 dist=0.0
         assert_eq!(
             bells
                 .iter()
                 .map(|bell| (bell.loudness, bell.timbre))
                 .collect::<Vec<_>>(),
             vec![
-                (1, BellTimbre::Lexical),
                 (3, BellTimbre::Semantic),
                 (3, BellTimbre::Both),
+                (1, BellTimbre::Lexical),
             ]
         );
         assert!(bells.iter().all(|bell| bell.recall_id == "r_test"));
@@ -774,5 +783,28 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["a", "b"]
         );
+    }
+
+    #[tokio::test]
+    async fn lexical_bell_does_not_displace_louder_semantic_on_truncation() {
+        let provider = MockProvider::value(envelope(vec![
+            hit("semantic-hit", "loud-semantic", 0.05, "semantic"),
+            hit("lexical-hit", "quiet-lexical", -1.0, "lexical"),
+        ]));
+        let mut limited = config();
+        limited.max_bells = 1;
+        let outcome = evaluate_message(
+            &message(MessageTargeting::DirectMessage),
+            &limited,
+            &provider,
+        )
+        .await;
+        let BellOutcome::Success(bells) = outcome else {
+            panic!("expected success");
+        };
+        assert_eq!(bells.len(), 1);
+        assert_eq!(bells[0].memory_id, "semantic-hit");
+        assert_eq!(bells[0].loudness, 3);
+        assert_eq!(bells[0].timbre, BellTimbre::Semantic);
     }
 }
