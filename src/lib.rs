@@ -15,7 +15,8 @@ pub mod permissions;
 pub mod pre_send;
 pub mod queue;
 pub mod rate_limiter;
-pub mod receipt_gate;
+#[allow(dead_code, unused_imports)]
+pub(crate) mod receipt_gate;
 pub mod state;
 pub mod timestamp;
 pub mod tracing_channel;
