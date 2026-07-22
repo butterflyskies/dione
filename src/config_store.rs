@@ -303,7 +303,19 @@ include_pronouns = ["42", "43"]
         let included = access["include_pronouns"]
             .as_array()
             .expect("include_pronouns");
-        assert_eq!(allowed.iter().filter_map(|value| value.as_str()).collect::<Vec<_>>(), ["43"]);
-        assert_eq!(included.iter().filter_map(|value| value.as_str()).collect::<Vec<_>>(), ["43"]);
+        assert_eq!(
+            allowed
+                .iter()
+                .filter_map(|value| value.as_str())
+                .collect::<Vec<_>>(),
+            ["43"]
+        );
+        assert_eq!(
+            included
+                .iter()
+                .filter_map(|value| value.as_str())
+                .collect::<Vec<_>>(),
+            ["43"]
+        );
     }
 }

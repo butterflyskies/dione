@@ -2,8 +2,8 @@ use crate::{
     bell_rings::BellStatus,
     gate::{GateDecision, InboundGate, MentionDetector, MentionKind},
     mcp::tools::bot_state::DiscordCommand,
-    pronouns::{PronounProvider, PronounProviderError},
     mcp::tools::messaging::create_dm_channel,
+    pronouns::{PronounProvider, PronounProviderError},
     queue::AccessRequest,
     timestamp::Timestamp,
 };
@@ -1099,7 +1099,7 @@ async fn is_proxy_webhook(
 mod tests {
     use super::*;
     use crate::config::{AccessConfig, Config, DmPolicy, LoadedConfig};
-    use crate::pronouns::{PronounSelection, PronounProviderError};
+    use crate::pronouns::{PronounProviderError, PronounSelection};
     use std::future;
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
@@ -1142,9 +1142,9 @@ mod tests {
                     PronounSelection::from_codes(&["she".to_owned()]).expect("supported set"),
                 )))),
                 FakePronounResponse::Absent => Box::pin(future::ready(Ok(None))),
-                FakePronounResponse::Error => Box::pin(future::ready(Err(
-                    PronounProviderError::Transport,
-                ))),
+                FakePronounResponse::Error => {
+                    Box::pin(future::ready(Err(PronounProviderError::Transport)))
+                }
                 FakePronounResponse::Pending => Box::pin(future::pending()),
             }
         }
@@ -1452,14 +1452,8 @@ mod tests {
             )),
         );
 
-        let event = build_message_event(
-            &msg,
-            &config,
-            None,
-            MessageTargeting::Ambient,
-            &provider,
-        )
-        .await;
+        let event =
+            build_message_event(&msg, &config, None, MessageTargeting::Ambient, &provider).await;
         let NotificationEvent::Message(MessageEvent {
             reply_to_message_id,
             reply_to_user_id,
@@ -1493,14 +1487,8 @@ mod tests {
         let provider = FakePronounProvider::new(FakePronounResponse::Found);
         let msg = message_from_wire(wire_message_body(1, wire_author(1, "alice"), "hi"));
 
-        let event = build_message_event(
-            &msg,
-            &config,
-            None,
-            MessageTargeting::Ambient,
-            &provider,
-        )
-        .await;
+        let event =
+            build_message_event(&msg, &config, None, MessageTargeting::Ambient, &provider).await;
         let NotificationEvent::Message(event) = event else {
             panic!("expected message");
         };

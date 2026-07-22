@@ -1273,7 +1273,11 @@ enabled = true
         for (allow_from, include_pronouns, expected) in [
             (vec!["42"], vec!["not-an-id"], "nonzero Discord user ID"),
             (vec!["42"], vec!["0"], "nonzero Discord user ID"),
-            (vec!["42"], vec!["43"], "must also appear in access.allow_from"),
+            (
+                vec!["42"],
+                vec!["43"],
+                "must also appear in access.allow_from",
+            ),
         ] {
             let mut config = Config::default();
             config.access.allow_from = allow_from.into_iter().map(String::from).collect();

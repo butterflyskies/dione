@@ -81,10 +81,7 @@ impl PronounDbProvider {
         let response = self
             .client
             .get(&self.endpoint)
-            .query(&[
-                ("platform", "discord"),
-                ("ids", &user_id.get().to_string()),
-            ])
+            .query(&[("platform", "discord"), ("ids", &user_id.get().to_string())])
             .send()
             .await
             .map_err(|_| PronounProviderError::Transport)?
@@ -111,9 +108,7 @@ impl PronounDbProvider {
     }
 }
 
-async fn read_bounded_body(
-    response: reqwest::Response,
-) -> Result<Vec<u8>, PronounProviderError> {
+async fn read_bounded_body(response: reqwest::Response) -> Result<Vec<u8>, PronounProviderError> {
     if response
         .content_length()
         .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
@@ -179,12 +174,7 @@ impl PronounCache {
         }
     }
 
-    fn insert(
-        &mut self,
-        user_id: UserId,
-        selection: Option<PronounSelection>,
-        now: Instant,
-    ) {
+    fn insert(&mut self, user_id: UserId, selection: Option<PronounSelection>, now: Instant) {
         if self.entries.len() >= CACHE_CAPACITY
             && !self.entries.contains_key(&user_id)
             && let Some(oldest) = self
@@ -214,7 +204,10 @@ struct CacheEntry {
 mod tests {
     use super::*;
     use futures_util::future::join_all;
-    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio::net::TcpListener;
     use tokio::task::JoinHandle;
@@ -229,7 +222,10 @@ mod tests {
 
     async fn spawn_server(expected: usize, raw_response: Vec<u8>, delay_ms: u64) -> TestServer {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let endpoint = format!("http://{}/api/v2/lookup", listener.local_addr().expect("addr"));
+        let endpoint = format!(
+            "http://{}/api/v2/lookup",
+            listener.local_addr().expect("addr")
+        );
         let requests = Arc::new(AtomicUsize::new(0));
         let max_active = Arc::new(AtomicUsize::new(0));
         let captured = Arc::new(Mutex::new(Vec::new()));
@@ -253,9 +249,10 @@ mod tests {
                     requests.fetch_add(1, Ordering::SeqCst);
                     let mut request = vec![0; 4096];
                     let read = socket.read(&mut request).await.expect("read request");
-                    captured.lock().await.push(
-                        String::from_utf8_lossy(&request[..read]).into_owned(),
-                    );
+                    captured
+                        .lock()
+                        .await
+                        .push(String::from_utf8_lossy(&request[..read]).into_owned());
                     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                     socket.write_all(&response).await.expect("write response");
                     active.fetch_sub(1, Ordering::SeqCst);
@@ -288,8 +285,8 @@ mod tests {
             "42": { "sets": { "en": ["she", "they"] } }
         }))
         .expect("documented response");
-        let selection = PronounSelection::from_codes(&records["42"].sets["en"])
-            .expect("supported pronouns");
+        let selection =
+            PronounSelection::from_codes(&records["42"].sets["en"]).expect("supported pronouns");
         assert_eq!(selection.display(), "she/they");
     }
 
@@ -298,14 +295,19 @@ mod tests {
         let body = br#"{"42":{"sets":{"en":["she"]}}}"#;
         let server = spawn_server(1, response("200 OK", body), 0).await;
         let provider = PronounDbProvider::with_endpoint("9.8.7", &server.endpoint).expect("client");
-        let selection = provider.lookup_inner(UserId::new(42)).await.expect("lookup");
+        let selection = provider
+            .lookup_inner(UserId::new(42))
+            .await
+            .expect("lookup");
         assert_eq!(selection.expect("record").display(), "she/her");
         server.task.await.expect("server");
         let request = &server.captured.lock().await[0];
         assert!(request.starts_with("GET /api/v2/lookup?platform=discord&ids=42 HTTP/1.1"));
-        assert!(request.to_ascii_lowercase().contains(
-            "user-agent: dione/9.8.7 (https://github.com/butterflyskies/dione)"
-        ));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("user-agent: dione/9.8.7 (https://github.com/butterflyskies/dione)")
+        );
     }
 
     #[tokio::test]
@@ -325,7 +327,8 @@ mod tests {
 
         let first = vec![b'a'; MAX_RESPONSE_BYTES];
         let second = [b'b'];
-        let mut chunked = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec();
+        let mut chunked =
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec();
         chunked.extend_from_slice(format!("{:X}\r\n", first.len()).as_bytes());
         chunked.extend_from_slice(&first);
         chunked.extend_from_slice(b"\r\n1\r\n");
@@ -343,27 +346,35 @@ mod tests {
     #[tokio::test]
     async fn coalesces_same_id_and_bounds_distinct_upstream_calls() {
         let server = spawn_server(1, response("200 OK", b"{}"), 25).await;
-        let provider = Arc::new(
-            PronounDbProvider::with_endpoint("1.0.0", &server.endpoint).expect("client"),
-        );
+        let provider =
+            Arc::new(PronounDbProvider::with_endpoint("1.0.0", &server.endpoint).expect("client"));
         let lookups = (0..32).map(|_| {
             let provider = Arc::clone(&provider);
             async move { provider.lookup_inner(UserId::new(42)).await }
         });
-        assert!(join_all(lookups).await.into_iter().all(|result| result == Ok(None)));
+        assert!(
+            join_all(lookups)
+                .await
+                .into_iter()
+                .all(|result| result == Ok(None))
+        );
         server.task.await.expect("server");
         assert_eq!(server.requests.load(Ordering::SeqCst), 1);
 
         let count = MAX_CONCURRENT_LOOKUPS * 2;
         let server = spawn_server(count, response("200 OK", b"{}"), 25).await;
-        let provider = Arc::new(
-            PronounDbProvider::with_endpoint("1.0.0", &server.endpoint).expect("client"),
-        );
+        let provider =
+            Arc::new(PronounDbProvider::with_endpoint("1.0.0", &server.endpoint).expect("client"));
         let lookups = (1..=count).map(|id| {
             let provider = Arc::clone(&provider);
             async move { provider.lookup_inner(UserId::new(id as u64)).await }
         });
-        assert!(join_all(lookups).await.into_iter().all(|result| result == Ok(None)));
+        assert!(
+            join_all(lookups)
+                .await
+                .into_iter()
+                .all(|result| result == Ok(None))
+        );
         server.task.await.expect("server");
         assert!(server.max_active.load(Ordering::SeqCst) <= MAX_CONCURRENT_LOOKUPS);
     }

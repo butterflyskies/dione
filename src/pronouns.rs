@@ -76,9 +76,7 @@ impl PronounSelection {
     }
 
     pub fn display(&self) -> String {
-        if self.0.len() > 1
-            && self.0.iter().all(|set| set.nominative().is_some())
-        {
+        if self.0.len() > 1 && self.0.iter().all(|set| set.nominative().is_some()) {
             return self
                 .0
                 .iter()
@@ -138,8 +136,8 @@ mod tests {
             PronounSelection::from_codes(&["she".to_owned(), "she".to_owned()]),
             None
         );
-        let all_documented = ["he", "it", "she", "they", "any", "ask", "avoid", "other"]
-            .map(String::from);
+        let all_documented =
+            ["he", "it", "she", "they", "any", "ask", "avoid", "other"].map(String::from);
         assert!(PronounSelection::from_codes(&all_documented).is_some());
     }
 
