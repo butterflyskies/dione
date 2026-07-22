@@ -17,7 +17,6 @@ pub mod queue;
 pub mod rate_limiter;
 #[expect(
     dead_code,
-    unused_imports,
     reason = "standalone receipt-gate fixture is runtime-wired in a follow-up PR"
 )]
 pub(crate) mod receipt_gate;

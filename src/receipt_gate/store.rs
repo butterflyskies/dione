@@ -359,7 +359,7 @@ impl ReceiptStore {
 
     /// Evaluates an action proposal and atomically claims its invocation on allow.
     pub(crate) fn verify(&self, request: &VerifyRequest) -> GateResult {
-        let receipt = {
+        let authority_expires = {
             let receipts = match self.receipts.lock() {
                 Ok(receipts) => receipts,
                 Err(_) => return request.result(GateVerdict::Deny, GateReason::StoreUnavailable),
@@ -382,7 +382,7 @@ impl ReceiptStore {
                 return request.result(GateVerdict::Deny, GateReason::AuthorityExpired);
             }
 
-            receipt.clone()
+            receipt.expires
         };
 
         let mut claimed = match self.claimed_invocations.lock() {
@@ -393,7 +393,7 @@ impl ReceiptStore {
         Self::claim_invocation_at(
             &mut claimed,
             request,
-            receipt.expires,
+            authority_expires,
             now,
             self.max_active_invocations,
         )
