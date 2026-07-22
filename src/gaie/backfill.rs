@@ -1,11 +1,11 @@
 //! Verified capture targets and deterministic Atom 1b backfill planning.
 
+use crate::gaie::archive::StoredOriginEvidence;
+use crate::gaie::service::{MessageOriginEvidence, message_batch_with_origin};
 use crate::gaie::{
     Archive, ArchiveError, ArchivePaths, Checkpoint, CorpusId, DiscordArchiveClient,
     DiscordArchiveError, MessageContext, StreamCheckpoint,
 };
-use crate::gaie::archive::StoredOriginEvidence;
-use crate::gaie::service::{MessageOriginEvidence, message_batch_with_origin};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
@@ -210,14 +210,9 @@ pub async fn run_backfill(
         let original_after = previous_stream
             .as_ref()
             .and_then(|stream| stream.after_message_id.clone());
-        let mut messages = fetch_target_messages(
-            client,
-            token,
-            &target,
-            original_after.as_deref(),
-            &archive,
-        )
-        .await?;
+        let mut messages =
+            fetch_target_messages(client, token, &target, original_after.as_deref(), &archive)
+                .await?;
         messages.sort_by_key(|message| {
             message
                 .value
@@ -343,9 +338,7 @@ async fn fetch_target_messages(
             break;
         }
         let parsed = Arc::new(page.into_parsed());
-        let page_messages = parsed
-            .as_array()
-            .ok_or(BackfillRunError::InvalidMessage)?;
+        let page_messages = parsed.as_array().ok_or(BackfillRunError::InvalidMessage)?;
         let request_after = if before.is_none() {
             original_after
         } else {

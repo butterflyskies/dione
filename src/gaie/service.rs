@@ -1,7 +1,7 @@
+use crate::gaie::archive::StoredOriginEvidence;
 use crate::gaie::backfill::{
     DiscoveryPage, DiscoveryRoute, RootKind, ThreadCandidate, ThreadKind, discover_capture_targets,
 };
-use crate::gaie::archive::StoredOriginEvidence;
 use crate::gaie::origin::{
     DISCORD_COLLECTOR_VERSION, DISCORD_HTTP_ADAPTER_NAME, DISCORD_HTTP_ADAPTER_VERSION,
     project_discord_message, project_discord_reaction,
@@ -48,9 +48,7 @@ pub(crate) struct ObservedMessagePage {
 
 impl ObservedMessagePage {
     pub(crate) fn is_empty(&self) -> bool {
-        self.parsed
-            .as_array()
-            .is_none_or(std::vec::Vec::is_empty)
+        self.parsed.as_array().is_none_or(std::vec::Vec::is_empty)
     }
 
     pub(crate) fn exact_bytes(&self) -> &[u8] {
@@ -91,10 +89,7 @@ impl MessageOriginEvidence<'_> {
         })
     }
 
-    fn message_reference(
-        &self,
-        message: &Value,
-    ) -> Result<OriginEvidenceRef, DiscordArchiveError> {
+    fn message_reference(&self, message: &Value) -> Result<OriginEvidenceRef, DiscordArchiveError> {
         self.reference(format!("/{}", self.message_index), message)
     }
 
@@ -719,13 +714,7 @@ pub fn message_batch(
     first_sequence: u64,
     attachment_hashes: &std::collections::HashMap<String, String>,
 ) -> Result<Vec<Event>, DiscordArchiveError> {
-    message_batch_with_origin(
-        message,
-        context,
-        first_sequence,
-        attachment_hashes,
-        None,
-    )
+    message_batch_with_origin(message, context, first_sequence, attachment_hashes, None)
 }
 
 pub(crate) fn message_batch_with_origin(

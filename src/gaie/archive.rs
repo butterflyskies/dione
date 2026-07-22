@@ -600,8 +600,8 @@ fn validate_event_origin(paths: &ArchivePaths, event: &Event) -> Result<(), Arch
             "origin-evidence object does not match its digest".to_owned(),
         ));
     }
-    let page: Value = serde_json::from_slice(&bytes)
-        .map_err(|source| ArchiveError::Json { line: 0, source })?;
+    let page: Value =
+        serde_json::from_slice(&bytes).map_err(|source| ArchiveError::Json { line: 0, source })?;
     crate::gaie::origin::validate_discord_projection(&page, &origin.selector, event)
         .map_err(|message| ArchiveError::Integrity(format!("origin evidence: {message}")))?;
     Ok(())
@@ -977,14 +977,7 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.location, format!("origin-evidence/{}", first.sha256));
         assert_eq!(
-            fs::read(
-                archive
-                    .paths
-                    .data_dir
-                    .join(&first.location)
-                    .as_std_path()
-            )
-            .unwrap(),
+            fs::read(archive.paths.data_dir.join(&first.location).as_std_path()).unwrap(),
             bytes
         );
     }
