@@ -189,6 +189,7 @@ mod tests {
                 collector_version: "fixture".into(),
                 raw_payload_sha256: "00".into(),
             },
+            origin_evidence: None,
         }
     }
 

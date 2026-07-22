@@ -41,22 +41,38 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::LatestState => {
             let archive = Archive::open(paths, corpus, &now)?;
-            let mut messages: Vec<_> = build_latest_state(&archive.read_committed()?.events)?
-                .into_values()
-                .collect();
+            let read = archive.read_committed()?;
+            report_quarantine(&read);
+            let mut messages: Vec<_> = build_latest_state(&read.events)?.into_values().collect();
             messages.sort_by(|left, right| left.created_at.cmp(&right.created_at));
             println!("{}", serde_json::to_string_pretty(&messages)?);
         }
         Command::Reconcile => {
             let archive = Archive::open(paths, corpus, &now)?;
-            let events = archive.read_committed()?.events;
-            let messages = build_latest_state(&events)?;
+            let read = archive.read_committed()?;
+            report_quarantine(&read);
+            let messages = build_latest_state(&read.events)?;
             println!("Total messages in latest-state view: {}", messages.len());
-            println!("Total committed events: {}", events.len());
+            println!(
+                "Total committed events: {}",
+                read.events.len() + read.quarantined_events.len()
+            );
+            println!("Quarantined events: {}", read.quarantined_events.len());
         }
         Command::Backfill => backfill_parent(&loaded, paths, corpus, &now).await?,
     }
     Ok(())
+}
+
+fn report_quarantine(read: &dione::gaie::ReadResult) {
+    for quarantined in &read.quarantined_events {
+        eprintln!(
+            "WARNING: quarantined GAIE event {} (message {}): {}",
+            quarantined.event.event_id,
+            quarantined.event.source.message_id,
+            quarantined.origin_error
+        );
+    }
 }
 
 async fn backfill_parent(
