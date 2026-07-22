@@ -156,6 +156,35 @@ pub struct Ingest {
     pub raw_payload_sha256: String,
 }
 
+/// The adapter which transformed retained origin bytes into a GAIE event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct OriginAdapter {
+    pub name: String,
+    pub version: String,
+}
+
+/// Optional agent-harness identity supplied by adapters which have one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct OriginHarness {
+    pub name: String,
+    pub version: String,
+}
+
+/// A typed reference from a normalized event to retained byte-exact evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct OriginEvidenceRef {
+    pub adapter: OriginAdapter,
+    pub sha256: String,
+    pub location: String,
+    pub media_type: String,
+    pub selector: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<OriginHarness>,
+}
+
 /// A typed GAIE schema-v1 event inside a format-v2 archive.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
@@ -170,4 +199,41 @@ pub struct Event {
     pub relations: Relations,
     pub lineage: Lineage,
     pub ingest: Ingest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_evidence: Option<OriginEvidenceRef>,
+}
+
+#[cfg(test)]
+mod event_tests {
+    use super::*;
+
+    #[test]
+    fn historical_event_without_origin_evidence_deserializes_and_serializes_unchanged() {
+        let historical = serde_json::json!({
+            "schema_version":"1",
+            "corpus_id":"fixture",
+            "archive_seq":1,
+            "event_id":"00000000-0000-4000-8000-000000000001",
+            "event_kind":"message_create",
+            "observed_at":"2026-01-01T00:00:00Z",
+            "source":{
+                "platform":"discord","guild_id":"1","channel_id":"2","thread_id":null,
+                "message_id":"3","actor_id":"4","created_at":"2026-01-01T00:00:00Z",
+                "edited_at":null
+            },
+            "payload":{
+                "content":"hello","content_sha256":null,"attachments":[]
+            },
+            "relations":{"reply_to_message_id":null,"thread_parent_channel_id":null},
+            "lineage":{
+                "observed_version_ordinal":null,"predecessor_event_id":null,
+                "history_status":"complete"
+            },
+            "ingest":{"collector_version":"fixture","raw_payload_sha256":"00"}
+        });
+
+        let event: Event = serde_json::from_value(historical.clone()).unwrap();
+        assert!(event.origin_evidence.is_none());
+        assert_eq!(serde_json::to_value(event).unwrap(), historical);
+    }
 }

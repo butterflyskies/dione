@@ -2,10 +2,13 @@
 
 use crate::gaie::{
     Archive, ArchiveError, ArchivePaths, Checkpoint, CorpusId, DiscordArchiveClient,
-    DiscordArchiveError, MessageContext, StreamCheckpoint, message_batch,
+    DiscordArchiveError, MessageContext, StreamCheckpoint,
 };
+use crate::gaie::archive::StoredOriginEvidence;
+use crate::gaie::service::{MessageOriginEvidence, message_batch_with_origin};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,10 +210,17 @@ pub async fn run_backfill(
         let original_after = previous_stream
             .as_ref()
             .and_then(|stream| stream.after_message_id.clone());
-        let mut messages =
-            fetch_target_messages(client, token, &target, original_after.as_deref()).await?;
+        let mut messages = fetch_target_messages(
+            client,
+            token,
+            &target,
+            original_after.as_deref(),
+            &archive,
+        )
+        .await?;
         messages.sort_by_key(|message| {
             message
+                .value
                 .get("id")
                 .and_then(Value::as_str)
                 .and_then(|id| id.parse::<u64>().ok())
@@ -222,7 +232,8 @@ pub async fn run_backfill(
         if let Some(committed_max) = committed_stream_max.get(target.channel_id()) {
             stream_max = maximum_message_id(stream_max.as_deref(), Some(*committed_max))?;
         }
-        for message in messages {
+        for observed in messages {
+            let message = &observed.value;
             let message_id = message
                 .get("id")
                 .and_then(Value::as_str)
@@ -233,7 +244,7 @@ pub async fn run_backfill(
             if seen.contains(&message_id) {
                 continue;
             }
-            let observed = archive_timestamp();
+            let observed_at = archive_timestamp();
             let mut attachment_hashes = std::collections::HashMap::new();
             for attachment in message
                 .get("attachments")
@@ -254,20 +265,26 @@ pub async fn run_backfill(
                     .await?;
                 attachment_hashes.insert(attachment_id.to_owned(), digest);
             }
-            let batch = message_batch(
-                &message,
+            let origin = MessageOriginEvidence {
+                page: &observed.page,
+                message_index: observed.message_index,
+                stored: &observed.stored,
+            };
+            let batch = message_batch_with_origin(
+                message,
                 MessageContext {
                     corpus_id: options.corpus_id,
                     guild_id: options.guild_id,
                     channel_id: target.channel_id(),
                     thread_id: target.thread_id(),
                     thread_parent_channel_id: target.thread_parent_channel_id(),
-                    observed_at: &observed,
+                    observed_at: &observed_at,
                 },
                 sequence,
                 &attachment_hashes,
+                Some(&origin),
             )?;
-            archive.append_batch(&batch, &message_id, &observed)?;
+            archive.append_batch(&batch, &message_id, &observed_at)?;
             sequence += batch.len() as u64;
             seen.insert(message_id);
             added += 1;
@@ -290,12 +307,20 @@ pub async fn run_backfill(
     Ok(added)
 }
 
+struct FetchedMessage {
+    value: Value,
+    page: Arc<Value>,
+    message_index: usize,
+    stored: StoredOriginEvidence,
+}
+
 async fn fetch_target_messages(
     client: &DiscordArchiveClient,
     token: &str,
     target: &CaptureTarget,
     original_after: Option<&str>,
-) -> Result<Vec<Value>, BackfillRunError> {
+    archive: &Archive,
+) -> Result<Vec<FetchedMessage>, BackfillRunError> {
     let lower_bound = original_after
         .map(parse_snowflake)
         .transpose()
@@ -306,34 +331,50 @@ async fn fetch_target_messages(
     loop {
         let page = if before.is_none() {
             client
-                .raw_message_page(token, target, None, original_after)
+                .observed_message_page(token, target, None, original_after)
                 .await?
         } else {
             client
-                .raw_message_page(token, target, before.as_deref(), None)
+                .observed_message_page(token, target, before.as_deref(), None)
                 .await?
         };
+        let stored = archive.store_origin_evidence(page.exact_bytes())?;
         if page.is_empty() {
             break;
         }
+        let parsed = Arc::new(page.into_parsed());
+        let page_messages = parsed
+            .as_array()
+            .ok_or(BackfillRunError::InvalidMessage)?;
         let request_after = if before.is_none() {
             original_after
         } else {
             None
         };
-        validate_message_page_request_bounds(&page, before.as_deref(), request_after)?;
-        let (minimum, _) = message_page_bounds(&page)?;
+        validate_message_page_request_bounds(page_messages, before.as_deref(), request_after)?;
+        let (minimum, _) = message_page_bounds(page_messages)?;
         let minimum_numeric =
             parse_snowflake(&minimum).map_err(|_| BackfillRunError::InvalidMessage)?;
         let reached_bound = lower_bound.is_some_and(|bound| minimum_numeric <= bound);
-        let short_page = page.len() < 100;
-        messages.extend(page.into_iter().filter(|message| {
-            message
-                .get("id")
-                .and_then(Value::as_str)
-                .and_then(|id| id.parse::<u64>().ok())
-                .is_some_and(|id| lower_bound.is_none_or(|bound| id > bound))
-        }));
+        let short_page = page_messages.len() < 100;
+        messages.extend(
+            page_messages
+                .iter()
+                .enumerate()
+                .filter(|(_, message)| {
+                    message
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .and_then(|id| id.parse::<u64>().ok())
+                        .is_some_and(|id| lower_bound.is_none_or(|bound| id > bound))
+                })
+                .map(|(message_index, message)| FetchedMessage {
+                    value: message.clone(),
+                    page: Arc::clone(&parsed),
+                    message_index,
+                    stored: stored.clone(),
+                }),
+        );
         if reached_bound || short_page {
             break;
         }

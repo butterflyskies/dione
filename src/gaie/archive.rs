@@ -7,7 +7,7 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write as _};
+use std::io::{self, Read as _, Write as _};
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use thiserror::Error;
@@ -38,6 +38,7 @@ pub struct ArchivePaths {
     checkpoint: Utf8PathBuf,
     lock: Utf8PathBuf,
     attachments: Utf8PathBuf,
+    origin_evidence: Utf8PathBuf,
     corpus_id: String,
 }
 
@@ -56,6 +57,7 @@ impl ArchivePaths {
             checkpoint: data_dir.join(format!("{}.checkpoint.json", corpus.as_str())),
             lock: data_dir.join(format!("{}.lock", corpus.as_str())),
             attachments: data_dir.join("attachments"),
+            origin_evidence: data_dir.join("origin-evidence"),
             corpus_id: corpus.as_str().to_owned(),
             data_dir,
         };
@@ -93,6 +95,13 @@ pub struct ReadResult {
     committed_prefix: Vec<u8>,
 }
 
+/// A stored byte-exact origin observation awaiting event-specific selectors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredOriginEvidence {
+    pub(crate) sha256: String,
+    pub(crate) location: String,
+}
+
 /// Errors raised by archive validation or durable I/O.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -125,6 +134,7 @@ pub struct Archive {
     events: File,
     sequence: u64,
     event_ids: HashSet<String>,
+    sync_directory: fn(&Utf8Path) -> Result<(), ArchiveError>,
 }
 
 impl Archive {
@@ -141,6 +151,8 @@ impl Archive {
         }
         create_hardened_dir(&paths.data_dir)?;
         create_hardened_dir(&paths.attachments)?;
+        create_hardened_dir(&paths.origin_evidence)?;
+        sync_directory(&paths.data_dir)?;
         reject_symlink(&paths.lock)?;
         reject_symlink(&paths.events)?;
         let mut lock_options = OpenOptions::new();
@@ -157,7 +169,7 @@ impl Archive {
         harden_file(&lock, &paths.lock)?;
         lock.try_lock_exclusive()
             .map_err(|_| ArchiveError::Locked(paths.lock.clone()))?;
-        let read = read_committed_unlocked(&paths.events)?;
+        let read = read_committed_unlocked(&paths)?;
         if read.torn_or_uncommitted_tail {
             recover_committed_prefix(&paths, &read.committed_prefix)?;
         }
@@ -196,6 +208,7 @@ impl Archive {
             events,
             sequence: read.last_sequence,
             event_ids,
+            sync_directory,
         })
     }
 
@@ -207,6 +220,88 @@ impl Archive {
     /// Returns the hardened content-addressed attachment directory.
     pub fn attachments_dir(&self) -> &Utf8Path {
         &self.paths.attachments
+    }
+
+    /// Durably stores one exact HTTP response body in the origin-evidence CAS.
+    pub(crate) fn store_origin_evidence(
+        &self,
+        bytes: &[u8],
+    ) -> Result<StoredOriginEvidence, ArchiveError> {
+        let digest = hex_sha256(bytes);
+        let destination = self.paths.origin_evidence.join(&digest);
+        validate_evidence_directory(&self.paths.origin_evidence)?;
+        reject_symlink(&destination)?;
+        if destination.exists() {
+            let stored = read_regular_file(&destination)?;
+            if stored != bytes || hex_sha256(&stored) != digest {
+                return Err(ArchiveError::Integrity(
+                    "origin-evidence object does not match its digest".to_owned(),
+                ));
+            }
+            validate_evidence_directory(&self.paths.origin_evidence)?;
+            (self.sync_directory)(&self.paths.origin_evidence)?;
+            return Ok(StoredOriginEvidence {
+                sha256: digest.clone(),
+                location: format!("origin-evidence/{digest}"),
+            });
+        }
+
+        let temporary = self
+            .paths
+            .origin_evidence
+            .join(format!(".observation-{}", uuid::Uuid::new_v4().simple()));
+        reject_symlink(&temporary)?;
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        let mut file = options
+            .open(temporary.as_std_path())
+            .map_err(|source| io_error(&temporary, source))?;
+        if let Err(source) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+            let _ = fs::remove_file(temporary.as_std_path());
+            return Err(io_error(&temporary, source));
+        }
+        let written = match fs::read(temporary.as_std_path()) {
+            Ok(written) => written,
+            Err(source) => {
+                let _ = fs::remove_file(temporary.as_std_path());
+                return Err(io_error(&temporary, source));
+            }
+        };
+        if written != bytes || hex_sha256(&written) != digest {
+            let _ = fs::remove_file(temporary.as_std_path());
+            return Err(ArchiveError::Integrity(
+                "origin-evidence write verification failed".to_owned(),
+            ));
+        }
+
+        match fs::hard_link(temporary.as_std_path(), destination.as_std_path()) {
+            Ok(()) => {
+                fs::remove_file(temporary.as_std_path())
+                    .map_err(|source| io_error(&temporary, source))?;
+            }
+            Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
+                fs::remove_file(temporary.as_std_path())
+                    .map_err(|source| io_error(&temporary, source))?;
+                let stored = read_regular_file(&destination)?;
+                if stored != bytes || hex_sha256(&stored) != digest {
+                    return Err(ArchiveError::Integrity(
+                        "origin-evidence object does not match its digest".to_owned(),
+                    ));
+                }
+            }
+            Err(source) => {
+                let _ = fs::remove_file(temporary.as_std_path());
+                return Err(io_error(&destination, source));
+            }
+        }
+        validate_evidence_directory(&self.paths.origin_evidence)?;
+        (self.sync_directory)(&self.paths.origin_evidence)?;
+        Ok(StoredOriginEvidence {
+            sha256: digest.clone(),
+            location: format!("origin-evidence/{digest}"),
+        })
     }
 
     /// Appends and fsyncs one message-scoped event batch and its commit marker.
@@ -228,6 +323,7 @@ impl Archive {
         let mut content = String::new();
         let mut previous = self.sequence;
         let mut batch_ids = HashSet::new();
+        let mut has_origin_evidence = false;
         for event in events {
             if event.corpus_id != self.corpus.as_str() {
                 return Err(ArchiveError::Integrity(
@@ -243,6 +339,10 @@ impl Archive {
             {
                 return Err(ArchiveError::Integrity("duplicate event_id".to_owned()));
             }
+            if event.origin_evidence.is_some() {
+                validate_event_origin(&self.paths, event)?;
+                has_origin_evidence = true;
+            }
             previous = event.archive_seq;
             content.push_str(&compact(event)?);
             content.push('\n');
@@ -256,6 +356,10 @@ impl Archive {
             committed_at,
         };
         let commit_line = compact(&commit)?;
+        if has_origin_evidence {
+            validate_evidence_directory(&self.paths.origin_evidence)?;
+            (self.sync_directory)(&self.paths.origin_evidence)?;
+        }
         self.events
             .write_all(content.as_bytes())
             .and_then(|()| writeln!(self.events, "{commit_line}"))
@@ -347,7 +451,7 @@ impl Archive {
 
     /// Reads the current committed snapshot while retaining the writer lock.
     pub fn read_committed(&self) -> Result<ReadResult, ArchiveError> {
-        read_committed_unlocked(&self.paths.events)
+        read_committed_unlocked(&self.paths)
     }
 }
 
@@ -355,7 +459,8 @@ fn is_nonzero_snowflake(value: &str) -> bool {
     value.parse::<u64>().is_ok_and(|value| value != 0)
 }
 
-fn read_committed_unlocked(path: &Utf8Path) -> Result<ReadResult, ArchiveError> {
+fn read_committed_unlocked(paths: &ArchivePaths) -> Result<ReadResult, ArchiveError> {
+    let path = &paths.events;
     reject_symlink(path)?;
     let bytes = match fs::read(path.as_std_path()) {
         Ok(bytes) => bytes,
@@ -440,10 +545,10 @@ fn read_committed_unlocked(path: &Utf8Path) -> Result<ReadResult, ArchiveError> 
         if value.get("event_kind").and_then(Value::as_str) == Some("batch_commit") {
             validate_batch(&pending, value, &mut ids, &mut last_sequence)?;
             for (_, value) in pending.drain(..) {
-                committed.push(
-                    serde_json::from_value(value)
-                        .map_err(|source| ArchiveError::Json { line: 0, source })?,
-                );
+                let event: Event = serde_json::from_value(value)
+                    .map_err(|source| ArchiveError::Json { line: 0, source })?;
+                validate_event_origin(paths, &event)?;
+                committed.push(event);
             }
             committed_line_count = index + 1;
         } else {
@@ -465,6 +570,81 @@ fn read_committed_unlocked(path: &Utf8Path) -> Result<ReadResult, ArchiveError> 
         last_sequence,
         committed_prefix,
     })
+}
+
+fn validate_event_origin(paths: &ArchivePaths, event: &Event) -> Result<(), ArchiveError> {
+    let Some(origin) = &event.origin_evidence else {
+        return Ok(());
+    };
+    validate_evidence_directory(&paths.origin_evidence)?;
+    if origin.adapter.name != crate::gaie::origin::DISCORD_HTTP_ADAPTER_NAME
+        || origin.adapter.version != crate::gaie::origin::DISCORD_HTTP_ADAPTER_VERSION
+        || origin.media_type != "application/json"
+        || origin.harness.is_some()
+        || !is_sha256(&origin.sha256)
+    {
+        return Err(ArchiveError::Integrity(
+            "origin-evidence reference has an unsupported or malformed contract".to_owned(),
+        ));
+    }
+    let canonical_location = format!("origin-evidence/{}", origin.sha256);
+    if origin.location != canonical_location {
+        return Err(ArchiveError::Integrity(
+            "origin-evidence location is not canonical for its digest".to_owned(),
+        ));
+    }
+    let destination = paths.origin_evidence.join(&origin.sha256);
+    let bytes = read_regular_file(&destination)?;
+    if hex_sha256(&bytes) != origin.sha256 {
+        return Err(ArchiveError::Integrity(
+            "origin-evidence object does not match its digest".to_owned(),
+        ));
+    }
+    let page: Value = serde_json::from_slice(&bytes)
+        .map_err(|source| ArchiveError::Json { line: 0, source })?;
+    crate::gaie::origin::validate_discord_projection(&page, &origin.selector, event)
+        .map_err(|message| ArchiveError::Integrity(format!("origin evidence: {message}")))?;
+    Ok(())
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn validate_evidence_directory(path: &Utf8Path) -> Result<(), ArchiveError> {
+    reject_symlink_ancestors(path)?;
+    reject_symlink(path)?;
+    let metadata = fs::metadata(path.as_std_path()).map_err(|source| io_error(path, source))?;
+    if !metadata.is_dir() {
+        return Err(ArchiveError::Integrity(format!(
+            "origin-evidence path `{path}` is not a directory"
+        )));
+    }
+    Ok(())
+}
+
+fn read_regular_file(path: &Utf8Path) -> Result<Vec<u8>, ArchiveError> {
+    reject_symlink(path)?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW);
+    let mut file = options
+        .open(path.as_std_path())
+        .map_err(|source| io_error(path, source))?;
+    let metadata = file.metadata().map_err(|source| io_error(path, source))?;
+    if !metadata.file_type().is_file() {
+        return Err(ArchiveError::Integrity(format!(
+            "origin-evidence object `{path}` is not a regular file"
+        )));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|source| io_error(path, source))?;
+    Ok(bytes)
 }
 
 fn validate_batch(
@@ -610,7 +790,8 @@ pub(crate) fn hex_sha256(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gaie::{EventKind, Ingest, Lineage, Payload, Relations, Source};
+    use crate::gaie::service::{MessageOriginEvidence, message_batch_with_origin};
+    use crate::gaie::{EventKind, Ingest, Lineage, MessageContext, Payload, Relations, Source};
     use proptest::prelude::*;
 
     fn fixture_event(sequence: u64) -> Event {
@@ -653,7 +834,48 @@ mod tests {
                 collector_version: "gaie-alpha-0.8.0".into(),
                 raw_payload_sha256: "00".into(),
             },
+            origin_evidence: None,
         }
+    }
+
+    fn fixture_event_with_evidence(
+        sequence: u64,
+        stored: &StoredOriginEvidence,
+        page: &Value,
+        selector: &str,
+    ) -> Event {
+        let message_index = selector.trim_start_matches('/').parse::<usize>().unwrap();
+        let message = page.get(message_index).unwrap();
+        let origin = MessageOriginEvidence {
+            page,
+            message_index,
+            stored,
+        };
+        let mut event = message_batch_with_origin(
+            message,
+            MessageContext {
+                corpus_id: "fixture",
+                guild_id: "1",
+                channel_id: "2",
+                thread_id: None,
+                thread_parent_channel_id: None,
+                observed_at: "2026-01-01T00:00:00Z",
+            },
+            sequence,
+            &std::collections::HashMap::new(),
+            Some(&origin),
+        )
+        .unwrap()
+        .remove(0);
+        event.archive_seq = sequence;
+        event
+    }
+
+    fn injected_sync_failure(path: &Utf8Path) -> Result<(), ArchiveError> {
+        Err(io_error(
+            path,
+            io::Error::other("injected directory sync failure"),
+        ))
     }
 
     #[test]
@@ -738,6 +960,402 @@ mod tests {
         archive.save_checkpoint(&checkpoint).unwrap();
         archive.save_checkpoint(&checkpoint).unwrap();
         assert_eq!(archive.load_checkpoint("1", "2").unwrap(), Some(checkpoint));
+    }
+
+    #[test]
+    fn test_origin_evidence_store_preserves_exact_bytes_and_reuses_verified_object() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let corpus = CorpusId::parse("fixture").unwrap();
+        let paths = ArchivePaths::new(root, &corpus).unwrap();
+        let archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+        let bytes = br#"[ { "z":null, "a": 1 } ]"#;
+
+        let first = archive.store_origin_evidence(bytes).unwrap();
+        let second = archive.store_origin_evidence(bytes).unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(first.location, format!("origin-evidence/{}", first.sha256));
+        assert_eq!(
+            fs::read(
+                archive
+                    .paths
+                    .data_dir
+                    .join(&first.location)
+                    .as_std_path()
+            )
+            .unwrap(),
+            bytes
+        );
+    }
+
+    #[test]
+    fn test_origin_evidence_sync_failure_blocks_fast_path_and_append_until_retry() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let corpus = CorpusId::parse("fixture").unwrap();
+        let paths = ArchivePaths::new(root, &corpus).unwrap();
+        let mut archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+        let bytes = br#"[{"id":"3","content":"hello"}]"#;
+        let page: Value = serde_json::from_slice(bytes).unwrap();
+        let stored = archive.store_origin_evidence(bytes).unwrap();
+        let event = fixture_event_with_evidence(1, &stored, &page, "/0");
+
+        archive.sync_directory = injected_sync_failure;
+        assert!(matches!(
+            archive.store_origin_evidence(bytes),
+            Err(ArchiveError::Io { .. })
+        ));
+        assert!(matches!(
+            archive.append_batch(std::slice::from_ref(&event), "3", "2026-01-01T00:00:00Z"),
+            Err(ArchiveError::Io { .. })
+        ));
+        assert!(archive.read_committed().unwrap().events.is_empty());
+
+        archive.sync_directory = sync_directory;
+        assert_eq!(archive.store_origin_evidence(bytes).unwrap(), stored);
+        archive
+            .append_batch(&[event], "3", "2026-01-01T00:00:00Z")
+            .unwrap();
+        assert_eq!(archive.read_committed().unwrap().events.len(), 1);
+    }
+
+    #[test]
+    fn test_append_rejects_fabricated_origin_reference() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let corpus = CorpusId::parse("fixture").unwrap();
+        let paths = ArchivePaths::new(root, &corpus).unwrap();
+        let mut archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+        let bytes = br#"[{"id":"3","content":"hello"}]"#;
+        let page: Value = serde_json::from_slice(bytes).unwrap();
+        let stored = archive.store_origin_evidence(bytes).unwrap();
+        let mut event = fixture_event_with_evidence(1, &stored, &page, "/0");
+        event.origin_evidence.as_mut().unwrap().location = "origin-evidence/fabricated".into();
+
+        assert!(matches!(
+            archive.append_batch(&[event], "3", "2026-01-01T00:00:00Z"),
+            Err(ArchiveError::Integrity(_))
+        ));
+        assert!(archive.read_committed().unwrap().events.is_empty());
+    }
+
+    #[test]
+    fn test_append_rejects_mutated_message_projection_fields() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let corpus = CorpusId::parse("fixture").unwrap();
+        let paths = ArchivePaths::new(root, &corpus).unwrap();
+        let mut archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+        let bytes = br#"[{"id":"3","content":"hello","author":{"id":"4"},"timestamp":"2026-01-01T00:00:00Z","edited_timestamp":null,"attachments":[{"id":"8","filename":"proof.txt","content_type":"text/plain","size":5,"url":"https://cdn.discordapp.com/proof.txt"}],"message_reference":{"message_id":"2"}}]"#;
+        let page: Value = serde_json::from_slice(bytes).unwrap();
+        let stored = archive.store_origin_evidence(bytes).unwrap();
+        let event = fixture_event_with_evidence(1, &stored, &page, "/0");
+        let mut content = event.clone();
+        content.payload.content = Some("changed".into());
+        let mut actor = event.clone();
+        actor.source.actor_id = Some("999".into());
+        let mut attachment = event;
+        attachment.payload.attachments[0].filename = "changed.txt".into();
+
+        for mutated in [content, actor, attachment] {
+            assert!(matches!(
+                archive.append_batch(&[mutated], "3", "2026-01-01T00:00:00Z"),
+                Err(ArchiveError::Integrity(_))
+            ));
+        }
+        assert!(archive.read_committed().unwrap().events.is_empty());
+    }
+
+    #[test]
+    fn test_append_rejects_mutated_reaction_key_and_count() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let corpus = CorpusId::parse("fixture").unwrap();
+        let paths = ArchivePaths::new(root, &corpus).unwrap();
+        let mut archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+        let bytes = br#"[{"id":"3","attachments":[],"reactions":[{"emoji":{"id":"7","name":"spark"},"count":4,"count_details":{"normal":3,"burst":1}}]}]"#;
+        let page: Value = serde_json::from_slice(bytes).unwrap();
+        let stored = archive.store_origin_evidence(bytes).unwrap();
+        let message = page.get(0).unwrap();
+        let origin = MessageOriginEvidence {
+            page: &page,
+            message_index: 0,
+            stored: &stored,
+        };
+        let reaction = message_batch_with_origin(
+            message,
+            MessageContext {
+                corpus_id: "fixture",
+                guild_id: "1",
+                channel_id: "2",
+                thread_id: None,
+                thread_parent_channel_id: None,
+                observed_at: "2026-01-01T00:00:00Z",
+            },
+            1,
+            &std::collections::HashMap::new(),
+            Some(&origin),
+        )
+        .unwrap()
+        .remove(1);
+        let mut key = reaction.clone();
+        key.payload.content_sha256 = Some("0".repeat(64));
+        let mut count = reaction;
+        count.payload.count = Some(99);
+
+        for mutated in [key, count] {
+            assert!(matches!(
+                archive.append_batch(&[mutated], "3", "2026-01-01T00:00:00Z"),
+                Err(ArchiveError::Integrity(_))
+            ));
+        }
+        assert!(archive.read_committed().unwrap().events.is_empty());
+    }
+
+    #[test]
+    fn test_append_authenticates_response_supplied_channel_and_guild_context() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let corpus = CorpusId::parse("fixture").unwrap();
+        let paths = ArchivePaths::new(root, &corpus).unwrap();
+        let mut archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+        let bytes = br#"[{"id":"3","channel_id":"2","guild_id":"1","attachments":[],"reactions":[{"emoji":{"id":"7","name":"spark"},"count":1}]}]"#;
+        let page: Value = serde_json::from_slice(bytes).unwrap();
+        let stored = archive.store_origin_evidence(bytes).unwrap();
+        let message = page.get(0).unwrap();
+        let origin = MessageOriginEvidence {
+            page: &page,
+            message_index: 0,
+            stored: &stored,
+        };
+        let batch = message_batch_with_origin(
+            message,
+            MessageContext {
+                corpus_id: "fixture",
+                guild_id: "1",
+                channel_id: "2",
+                thread_id: None,
+                thread_parent_channel_id: None,
+                observed_at: "2026-01-01T00:00:00Z",
+            },
+            1,
+            &std::collections::HashMap::new(),
+            Some(&origin),
+        )
+        .unwrap();
+        let mut message_with_wrong_channel = batch[0].clone();
+        message_with_wrong_channel.source.channel_id = "999".into();
+        let mut reaction_with_wrong_guild = batch[1].clone();
+        reaction_with_wrong_guild.source.guild_id = "999".into();
+
+        for mutated in [message_with_wrong_channel, reaction_with_wrong_guild] {
+            assert!(matches!(
+                archive.append_batch(&[mutated], "3", "2026-01-01T00:00:00Z"),
+                Err(ArchiveError::Integrity(_))
+            ));
+        }
+        assert!(archive.read_committed().unwrap().events.is_empty());
+    }
+
+    #[test]
+    fn test_read_rejects_origin_selector_not_matching_event_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let corpus = CorpusId::parse("fixture").unwrap();
+        let paths = ArchivePaths::new(root, &corpus).unwrap();
+        let archive = Archive::open(paths.clone(), corpus, "2026-01-01T00:00:00Z").unwrap();
+        let bytes = br#"[{"id":"3","content":"hello"},{"id":"4","content":"other"}]"#;
+        let page: Value = serde_json::from_slice(bytes).unwrap();
+        let stored = archive.store_origin_evidence(bytes).unwrap();
+        let mut event = fixture_event_with_evidence(1, &stored, &page, "/0");
+        event.origin_evidence.as_mut().unwrap().selector = "/1".into();
+        drop(archive);
+
+        let event_line = compact(&event).unwrap();
+        let commit = BatchCommit {
+            event_kind: "batch_commit",
+            message_id: "3",
+            event_count: 1,
+            batch_sha256: hex_sha256(format!("{event_line}\n").as_bytes()),
+            committed_at: "2026-01-01T00:00:00Z",
+        };
+        let header = FormatHeader {
+            event_kind: "format_header",
+            format_version: FORMAT_VERSION,
+            created_at: "2026-01-01T00:00:00Z",
+        };
+        fs::write(
+            paths.events.as_std_path(),
+            format!(
+                "{}\n{event_line}\n{}\n",
+                compact(&header).unwrap(),
+                compact(&commit).unwrap()
+            ),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            read_committed_unlocked(&paths),
+            Err(ArchiveError::Integrity(_))
+        ));
+    }
+
+    #[test]
+    fn test_read_rejects_forged_response_supplied_channel_projection() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let corpus = CorpusId::parse("fixture").unwrap();
+        let paths = ArchivePaths::new(root, &corpus).unwrap();
+        let archive = Archive::open(paths.clone(), corpus, "2026-01-01T00:00:00Z").unwrap();
+        let bytes = br#"[{"id":"3","channel_id":"2","guild_id":"1","content":"hello"}]"#;
+        let page: Value = serde_json::from_slice(bytes).unwrap();
+        let stored = archive.store_origin_evidence(bytes).unwrap();
+        let mut event = fixture_event_with_evidence(1, &stored, &page, "/0");
+        event.source.channel_id = "999".into();
+        drop(archive);
+
+        let event_line = compact(&event).unwrap();
+        let commit = BatchCommit {
+            event_kind: "batch_commit",
+            message_id: "3",
+            event_count: 1,
+            batch_sha256: hex_sha256(format!("{event_line}\n").as_bytes()),
+            committed_at: "2026-01-01T00:00:00Z",
+        };
+        let header = FormatHeader {
+            event_kind: "format_header",
+            format_version: FORMAT_VERSION,
+            created_at: "2026-01-01T00:00:00Z",
+        };
+        fs::write(
+            paths.events.as_std_path(),
+            format!(
+                "{}\n{event_line}\n{}\n",
+                compact(&header).unwrap(),
+                compact(&commit).unwrap()
+            ),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            read_committed_unlocked(&paths),
+            Err(ArchiveError::Integrity(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_append_and_read_reject_evidence_directory_or_ancestor_substitution() {
+        use std::os::unix::fs::symlink;
+
+        for during_read in [false, true] {
+            for substitute_ancestor in [false, true] {
+                let temp = tempfile::tempdir().unwrap();
+                let temp_root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+                let root = temp_root.join("archive");
+                let corpus = CorpusId::parse("fixture").unwrap();
+                let paths = ArchivePaths::new(root.clone(), &corpus).unwrap();
+                let mut archive =
+                    Archive::open(paths.clone(), corpus, "2026-01-01T00:00:00Z").unwrap();
+                let bytes = br#"[{"id":"3","content":"hello"}]"#;
+                let page: Value = serde_json::from_slice(bytes).unwrap();
+                let stored = archive.store_origin_evidence(bytes).unwrap();
+                let event = fixture_event_with_evidence(1, &stored, &page, "/0");
+                if during_read {
+                    archive
+                        .append_batch(&[event.clone()], "3", "2026-01-01T00:00:00Z")
+                        .unwrap();
+                }
+
+                let target = if substitute_ancestor {
+                    paths.data_dir.clone()
+                } else {
+                    paths.origin_evidence.clone()
+                };
+                let moved = temp_root.join(if substitute_ancestor {
+                    "real-archive"
+                } else {
+                    "real-origin-evidence"
+                });
+                fs::rename(target.as_std_path(), moved.as_std_path()).unwrap();
+                symlink(moved.as_std_path(), target.as_std_path()).unwrap();
+
+                if during_read {
+                    drop(archive);
+                    assert!(matches!(
+                        read_committed_unlocked(&paths),
+                        Err(ArchiveError::UnsafePath(_))
+                    ));
+                } else {
+                    assert!(matches!(
+                        archive.append_batch(&[event], "3", "2026-01-01T00:00:00Z"),
+                        Err(ArchiveError::UnsafePath(_))
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_origin_evidence_corruption_fails_before_event_append() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let corpus = CorpusId::parse("fixture").unwrap();
+        let paths = ArchivePaths::new(root, &corpus).unwrap();
+        let archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+        let bytes = br#"[{"id":"3"}]"#;
+        let digest = hex_sha256(bytes);
+        fs::write(
+            archive.paths.origin_evidence.join(digest).as_std_path(),
+            b"substituted",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            archive.store_origin_evidence(bytes),
+            Err(ArchiveError::Integrity(_))
+        ));
+        assert!(archive.read_committed().unwrap().events.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_origin_evidence_rejects_symlinked_directory_and_destination() {
+        use std::os::unix::fs::symlink;
+
+        for link_destination in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+            let corpus = CorpusId::parse("fixture").unwrap();
+            let paths = ArchivePaths::new(root, &corpus).unwrap();
+            let archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+            let bytes = br#"[{"id":"3"}]"#;
+            let outside = archive.paths.data_dir.join("outside");
+            fs::write(outside.as_std_path(), b"outside").unwrap();
+            if link_destination {
+                symlink(
+                    outside.as_std_path(),
+                    archive
+                        .paths
+                        .origin_evidence
+                        .join(hex_sha256(bytes))
+                        .as_std_path(),
+                )
+                .unwrap();
+            } else {
+                fs::remove_dir(archive.paths.origin_evidence.as_std_path()).unwrap();
+                symlink(
+                    outside.as_std_path(),
+                    archive.paths.origin_evidence.as_std_path(),
+                )
+                .unwrap();
+            }
+            assert!(matches!(
+                archive.store_origin_evidence(bytes),
+                Err(ArchiveError::UnsafePath(_))
+            ));
+        }
     }
 
     #[test]

@@ -1,9 +1,14 @@
 use crate::gaie::backfill::{
     DiscoveryPage, DiscoveryRoute, RootKind, ThreadCandidate, ThreadKind, discover_capture_targets,
 };
+use crate::gaie::archive::StoredOriginEvidence;
+use crate::gaie::origin::{
+    DISCORD_COLLECTOR_VERSION, DISCORD_HTTP_ADAPTER_NAME, DISCORD_HTTP_ADAPTER_VERSION,
+    project_discord_message, project_discord_reaction,
+};
 use crate::gaie::{
-    Attachment, CaptureRoot, CaptureTarget, Event, EventKind, Ingest, Lineage, Payload, Relations,
-    Source,
+    Attachment, CaptureRoot, CaptureTarget, Event, EventKind, Ingest, Lineage, OriginAdapter,
+    OriginEvidenceRef, Payload, Relations, Source,
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use serde_json::Value;
@@ -33,6 +38,76 @@ pub struct MessageContext<'a> {
     pub thread_id: Option<&'a str>,
     pub thread_parent_channel_id: Option<&'a str>,
     pub observed_at: &'a str,
+}
+
+#[derive(Debug)]
+pub(crate) struct ObservedMessagePage {
+    exact_bytes: Vec<u8>,
+    parsed: Value,
+}
+
+impl ObservedMessagePage {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.parsed
+            .as_array()
+            .is_none_or(std::vec::Vec::is_empty)
+    }
+
+    pub(crate) fn exact_bytes(&self) -> &[u8] {
+        &self.exact_bytes
+    }
+
+    pub(crate) fn into_parsed(self) -> Value {
+        self.parsed
+    }
+}
+
+/// Retained page evidence and the original array index of one message.
+pub(crate) struct MessageOriginEvidence<'a> {
+    pub(crate) page: &'a Value,
+    pub(crate) message_index: usize,
+    pub(crate) stored: &'a StoredOriginEvidence,
+}
+
+impl MessageOriginEvidence<'_> {
+    fn reference(
+        &self,
+        selector: String,
+        expected: &Value,
+    ) -> Result<OriginEvidenceRef, DiscordArchiveError> {
+        if self.page.pointer(&selector) != Some(expected) {
+            return Err(DiscordArchiveError::Selector);
+        }
+        Ok(OriginEvidenceRef {
+            adapter: OriginAdapter {
+                name: DISCORD_HTTP_ADAPTER_NAME.to_owned(),
+                version: DISCORD_HTTP_ADAPTER_VERSION.to_owned(),
+            },
+            sha256: self.stored.sha256.clone(),
+            location: self.stored.location.clone(),
+            media_type: "application/json".to_owned(),
+            selector,
+            harness: None,
+        })
+    }
+
+    fn message_reference(
+        &self,
+        message: &Value,
+    ) -> Result<OriginEvidenceRef, DiscordArchiveError> {
+        self.reference(format!("/{}", self.message_index), message)
+    }
+
+    fn reaction_reference(
+        &self,
+        reaction_index: usize,
+        reaction: &Value,
+    ) -> Result<OriginEvidenceRef, DiscordArchiveError> {
+        self.reference(
+            format!("/{}/reactions/{reaction_index}", self.message_index),
+            reaction,
+        )
+    }
 }
 
 /// A lossless Discord HTTP client used only by explicit archive commands.
@@ -67,6 +142,8 @@ pub enum DiscordArchiveError {
     Status,
     #[error("archive response did not have the expected shape")]
     Shape,
+    #[error("origin-evidence selector does not resolve to the normalized source object")]
+    Selector,
     #[error("injected archive API origin must be loopback HTTP")]
     UnsafeBaseUrl,
     #[error("attachment URL is not an allowed Discord CDN or test origin")]
@@ -113,6 +190,22 @@ impl DiscordArchiveClient {
         before: Option<&str>,
         after: Option<&str>,
     ) -> Result<Vec<Value>, DiscordArchiveError> {
+        let page = self
+            .observed_message_page(token, target, before, after)
+            .await?;
+        page.into_parsed()
+            .as_array()
+            .cloned()
+            .ok_or(DiscordArchiveError::Shape)
+    }
+
+    pub(crate) async fn observed_message_page(
+        &self,
+        token: &str,
+        target: &CaptureTarget,
+        before: Option<&str>,
+        after: Option<&str>,
+    ) -> Result<ObservedMessagePage, DiscordArchiveError> {
         if before.is_some() && after.is_some() {
             return Err(DiscordArchiveError::Shape);
         }
@@ -141,9 +234,15 @@ impl DiscordArchiveClient {
             .bytes()
             .await
             .map_err(DiscordArchiveError::Request)?;
-        let value: Value =
+        let parsed: Value =
             serde_json::from_slice(&bytes).map_err(|_| DiscordArchiveError::Shape)?;
-        value.as_array().cloned().ok_or(DiscordArchiveError::Shape)
+        if !parsed.is_array() {
+            return Err(DiscordArchiveError::Shape);
+        }
+        Ok(ObservedMessagePage {
+            exact_bytes: bytes.to_vec(),
+            parsed,
+        })
     }
 
     /// Validates the configured parent metadata and returns a typed capture root.
@@ -620,62 +719,52 @@ pub fn message_batch(
     first_sequence: u64,
     attachment_hashes: &std::collections::HashMap<String, String>,
 ) -> Result<Vec<Event>, DiscordArchiveError> {
-    let message_id = string_field(message, "id")?;
-    let edited_at = optional_string(message, "edited_timestamp");
-    let content = optional_string(message, "content");
-    let raw_hash = value_hash(message, false);
-    let embedded_thread_id = message.pointer("/thread/id").and_then(Value::as_str);
+    message_batch_with_origin(
+        message,
+        context,
+        first_sequence,
+        attachment_hashes,
+        None,
+    )
+}
+
+pub(crate) fn message_batch_with_origin(
+    message: &Value,
+    context: MessageContext<'_>,
+    first_sequence: u64,
+    attachment_hashes: &std::collections::HashMap<String, String>,
+    origin: Option<&MessageOriginEvidence<'_>>,
+) -> Result<Vec<Event>, DiscordArchiveError> {
+    let projected = project_discord_message(message).ok_or(DiscordArchiveError::Shape)?;
+    let message_id = projected.message_id.clone();
+    let message_origin = origin
+        .map(|evidence| evidence.message_reference(message))
+        .transpose()?;
+    let embedded_thread_id = projected.embedded_thread_id.as_deref();
     let source = Source {
         platform: "discord".to_owned(),
         guild_id: context.guild_id.to_owned(),
         channel_id: context.channel_id.to_owned(),
         thread_id: embedded_thread_id.or(context.thread_id).map(str::to_owned),
         message_id: message_id.clone(),
-        actor_id: message
-            .pointer("/author/id")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        created_at: optional_string(message, "timestamp"),
-        edited_at: edited_at.clone(),
+        actor_id: projected.actor_id.clone(),
+        created_at: projected.created_at.clone(),
+        edited_at: projected.edited_at.clone(),
     };
-    let attachments = message
-        .get("attachments")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
+    let attachments = projected
+        .attachments
+        .iter()
         .map(|attachment| Attachment {
-            id: attachment
-                .get("id")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-            filename: attachment
-                .get("filename")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown")
-                .to_owned(),
-            media_type: attachment
-                .get("content_type")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            size: attachment.get("size").and_then(Value::as_u64).unwrap_or(0),
-            sha256: attachment
-                .get("id")
-                .and_then(Value::as_str)
-                .and_then(|id| attachment_hashes.get(id))
-                .cloned(),
-            url: attachment
-                .get("url")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
+            id: attachment.id.clone(),
+            filename: attachment.filename.clone(),
+            media_type: attachment.media_type.clone(),
+            size: attachment.size,
+            sha256: attachment_hashes.get(&attachment.id).cloned(),
+            url: attachment.url.clone(),
         })
         .collect();
     let relations = Relations {
-        reply_to_message_id: message
-            .pointer("/message_reference/message_id")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        reply_to_message_id: projected.reply_to_message_id.clone(),
         thread_parent_channel_id: context
             .thread_parent_channel_id
             .or_else(|| embedded_thread_id.map(|_| context.channel_id))
@@ -684,12 +773,7 @@ pub fn message_batch(
     let lineage = Lineage {
         observed_version_ordinal: None,
         predecessor_event_id: None,
-        history_status: if edited_at.is_some() {
-            "unknown_prior"
-        } else {
-            "complete"
-        }
-        .to_owned(),
+        history_status: projected.history_status.clone(),
     };
     let mut events = vec![Event {
         schema_version: "1".to_owned(),
@@ -700,8 +784,8 @@ pub fn message_batch(
         observed_at: context.observed_at.to_owned(),
         source: source.clone(),
         payload: Payload {
-            content: content.clone(),
-            content_sha256: content.as_deref().map(hash),
+            content: projected.content.clone(),
+            content_sha256: projected.content_sha256.clone(),
             attachments,
             emoji_id: None,
             count: None,
@@ -711,9 +795,10 @@ pub fn message_batch(
         relations: relations.clone(),
         lineage,
         ingest: Ingest {
-            collector_version: "gaie-alpha-0.8.0".to_owned(),
-            raw_payload_sha256: raw_hash,
+            collector_version: DISCORD_COLLECTOR_VERSION.to_owned(),
+            raw_payload_sha256: projected.raw_payload_sha256,
         },
+        origin_evidence: message_origin,
     }];
     for (offset, reaction) in message
         .get("reactions")
@@ -722,18 +807,10 @@ pub fn message_batch(
         .flatten()
         .enumerate()
     {
-        let emoji_name = reaction
-            .pointer("/emoji/name")
-            .and_then(Value::as_str)
-            .unwrap_or("?");
-        let emoji_id = reaction
-            .pointer("/emoji/id")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        let key = emoji_id
-            .as_ref()
-            .map_or_else(|| emoji_name.to_owned(), |id| format!("{id}:{emoji_name}"));
-        let count = reaction.get("count").and_then(Value::as_u64).unwrap_or(0);
+        let projected = project_discord_reaction(reaction);
+        let reaction_origin = origin
+            .map(|evidence| evidence.reaction_reference(offset, reaction))
+            .transpose()?;
         events.push(Event {
             schema_version: "1".to_owned(),
             corpus_id: context.corpus_id.to_owned(),
@@ -748,23 +825,13 @@ pub fn message_batch(
                 ..source.clone()
             },
             payload: Payload {
-                content: Some(emoji_name.to_owned()),
-                content_sha256: Some(hash(&key)),
+                content: Some(projected.emoji_name),
+                content_sha256: Some(projected.key_sha256),
                 attachments: vec![],
-                emoji_id,
-                count: Some(count),
-                normal_count: Some(
-                    reaction
-                        .pointer("/count_details/normal")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(count),
-                ),
-                burst_count: Some(
-                    reaction
-                        .pointer("/count_details/burst")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0),
-                ),
+                emoji_id: projected.emoji_id,
+                count: Some(projected.count),
+                normal_count: Some(projected.normal_count),
+                burst_count: Some(projected.burst_count),
             },
             relations: Relations {
                 reply_to_message_id: None,
@@ -776,90 +843,13 @@ pub fn message_batch(
                 history_status: "complete".to_owned(),
             },
             ingest: Ingest {
-                collector_version: "gaie-alpha-0.8.0".to_owned(),
-                raw_payload_sha256: value_hash(reaction, true),
+                collector_version: DISCORD_COLLECTOR_VERSION.to_owned(),
+                raw_payload_sha256: projected.raw_payload_sha256,
             },
+            origin_evidence: reaction_origin,
         });
     }
     Ok(events)
-}
-
-fn string_field(value: &Value, field: &str) -> Result<String, DiscordArchiveError> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or(DiscordArchiveError::Shape)
-}
-fn optional_string(value: &Value, field: &str) -> Option<String> {
-    value.get(field).and_then(Value::as_str).map(str::to_owned)
-}
-fn hash(value: &str) -> String {
-    format!("{:x}", Sha256::digest(value.as_bytes()))
-}
-fn value_hash(value: &Value, ensure_ascii: bool) -> String {
-    hash(&python_json(value, ensure_ascii))
-}
-
-fn python_json(value: &Value, ensure_ascii: bool) -> String {
-    match value {
-        Value::Null => "null".to_owned(),
-        Value::Bool(value) => if *value { "true" } else { "false" }.to_owned(),
-        Value::Number(value) => value.to_string(),
-        Value::String(value) => json_string(value, ensure_ascii),
-        Value::Array(values) => format!(
-            "[{}]",
-            values
-                .iter()
-                .map(|value| python_json(value, ensure_ascii))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        Value::Object(values) => {
-            let mut entries: Vec<_> = values.iter().collect();
-            entries.sort_by_key(|(key, _)| *key);
-            format!(
-                "{{{}}}",
-                entries
-                    .into_iter()
-                    .map(|(key, value)| {
-                        format!(
-                            "{}: {}",
-                            json_string(key, ensure_ascii),
-                            python_json(value, ensure_ascii)
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        }
-    }
-}
-
-fn json_string(value: &str, ensure_ascii: bool) -> String {
-    let encoded = serde_json::to_string(value).unwrap_or_default();
-    if !ensure_ascii {
-        return encoded;
-    }
-    let mut ascii = String::new();
-    for character in encoded.chars() {
-        if character.is_ascii() {
-            ascii.push(character);
-        } else {
-            let code = character as u32;
-            if code <= 0xffff {
-                ascii.push_str(&format!("\\u{code:04x}"));
-            } else {
-                let adjusted = code - 0x1_0000;
-                ascii.push_str(&format!(
-                    "\\u{:04x}\\u{:04x}",
-                    0xd800 + (adjusted >> 10),
-                    0xdc00 + (adjusted & 0x3ff)
-                ));
-            }
-        }
-    }
-    ascii
 }
 
 fn hash_bytes(value: &[u8]) -> String {
@@ -1126,6 +1116,136 @@ mod tests {
             events[1].ingest.raw_payload_sha256,
             "c679d9678790d608e061230a5e644112585c457dcf611de83053445caac71a0c"
         );
+        assert!(events.iter().all(|event| event.origin_evidence.is_none()));
+        assert!(
+            serde_json::to_value(&events[0])
+                .unwrap()
+                .get("origin_evidence")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_message_and_reaction_origin_selectors_resolve_without_harness_identity() {
+        let message = serde_json::json!({
+            "id":"3", "content":"hello", "author":{"id":"4"}, "attachments":[],
+            "reactions":[{"emoji":{"id":null,"name":"💜"},"count":2}]
+        });
+        let page = serde_json::json!([{"id":"2"}, message.clone()]);
+        let stored = StoredOriginEvidence {
+            sha256: "a".repeat(64),
+            location: format!("origin-evidence/{}", "a".repeat(64)),
+        };
+        let origin = MessageOriginEvidence {
+            page: &page,
+            message_index: 1,
+            stored: &stored,
+        };
+
+        let events = message_batch_with_origin(
+            &message,
+            MessageContext {
+                corpus_id: "fixture",
+                guild_id: "1",
+                channel_id: "2",
+                thread_id: None,
+                thread_parent_channel_id: None,
+                observed_at: "2026-01-01T00:00:00Z",
+            },
+            1,
+            &std::collections::HashMap::new(),
+            Some(&origin),
+        )
+        .unwrap();
+
+        let message_ref = events[0].origin_evidence.as_ref().unwrap();
+        let reaction_ref = events[1].origin_evidence.as_ref().unwrap();
+        assert_eq!(message_ref.selector, "/1");
+        assert_eq!(reaction_ref.selector, "/1/reactions/0");
+        assert_eq!(page.pointer(&message_ref.selector), Some(&message));
+        assert_eq!(
+            page.pointer(&reaction_ref.selector),
+            message.pointer("/reactions/0")
+        );
+        assert_eq!(message_ref.adapter.name, DISCORD_HTTP_ADAPTER_NAME);
+        assert_eq!(message_ref.adapter.version, DISCORD_HTTP_ADAPTER_VERSION);
+        assert_eq!(message_ref.media_type, "application/json");
+        assert!(message_ref.harness.is_none());
+        assert!(
+            serde_json::to_value(message_ref)
+                .unwrap()
+                .get("harness")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_origin_selector_mismatch_fails_closed() {
+        let message = serde_json::json!({"id":"3","attachments":[]});
+        let wrong_page = serde_json::json!([{"id":"4","attachments":[]}]);
+        let stored = StoredOriginEvidence {
+            sha256: "a".repeat(64),
+            location: format!("origin-evidence/{}", "a".repeat(64)),
+        };
+        let origin = MessageOriginEvidence {
+            page: &wrong_page,
+            message_index: 0,
+            stored: &stored,
+        };
+
+        let error = message_batch_with_origin(
+            &message,
+            MessageContext {
+                corpus_id: "fixture",
+                guild_id: "1",
+                channel_id: "2",
+                thread_id: None,
+                thread_parent_channel_id: None,
+                observed_at: "2026-01-01T00:00:00Z",
+            },
+            1,
+            &std::collections::HashMap::new(),
+            Some(&origin),
+        )
+        .unwrap_err();
+        assert!(matches!(error, DiscordArchiveError::Selector));
+    }
+
+    #[tokio::test]
+    async fn test_message_page_retains_exact_successful_response_bytes() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let body = br#"[ { "z":null, "id":"3", "missing_is_absent": true } ]"#;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let response = http_json("200 OK", std::str::from_utf8(body).unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 1024];
+            let _ = stream.read(&mut request).await.unwrap();
+            stream.write_all(&response).await.unwrap();
+        });
+        let client = DiscordArchiveClient::with_base_url(
+            reqwest::Url::parse(&format!("http://{address}/")).unwrap(),
+        )
+        .unwrap();
+        let page = client
+            .observed_message_page(
+                "secret",
+                &CaptureTarget {
+                    channel_id: "1".to_owned(),
+                    thread_id: None,
+                    thread_parent_channel_id: None,
+                },
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        server.await.unwrap();
+
+        assert_eq!(page.exact_bytes(), body);
+        assert_eq!(page.parsed.as_array().unwrap().len(), 1);
     }
 
     #[test]
@@ -1446,6 +1566,7 @@ mod tests {
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let page_body = r#"[{"id":"150","channel_id":"100","content":"receipt","author":{"id":"9"},"attachments":[],"reactions":[]}]"#;
         let responses = vec![
             http_json(
                 "200 OK",
@@ -1455,10 +1576,7 @@ mod tests {
             http_json("200 OK", r#"{"threads":[],"has_more":false}"#),
             http_json("200 OK", r#"{"threads":[],"has_more":false}"#),
             http_json("200 OK", r#"{"threads":[]}"#),
-            http_json(
-                "200 OK",
-                r#"[{"id":"150","channel_id":"100","content":"receipt","author":{"id":"9"},"attachments":[],"reactions":[]}]"#,
-            ),
+            http_json("200 OK", page_body),
         ];
         let server = tokio::spawn(async move {
             for response in responses {
@@ -1482,7 +1600,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let directory = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
         let corpus = CorpusId::parse("fixture").unwrap();
-        let paths = ArchivePaths::new(directory, &corpus).unwrap();
+        let paths = ArchivePaths::new(directory.clone(), &corpus).unwrap();
 
         let added = run_backfill(
             &client,
@@ -1503,6 +1621,14 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_kind, EventKind::MessageCreate);
         assert_eq!(events[0].source.message_id, "150");
+        let origin = events[0].origin_evidence.as_ref().unwrap();
+        assert_eq!(origin.selector, "/0");
+        assert!(origin.harness.is_none());
+        assert_eq!(origin.sha256, hash_bytes(page_body.as_bytes()));
+        assert_eq!(
+            fs::read(directory.join(&origin.location).as_std_path()).unwrap(),
+            page_body.as_bytes()
+        );
         assert_eq!(
             checkpoint.streams["100"].after_message_id.as_deref(),
             Some("150")
