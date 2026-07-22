@@ -24,6 +24,8 @@ pub enum ConfigError {
     Parse(#[from] toml::de::Error),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("config validation error: {0}")]
+    Validation(String),
 }
 
 // ── Config types ─────────────────────────────────────────────────────────────
@@ -48,6 +50,8 @@ pub struct Config {
     pub pre_send: PreSendConfig,
     /// Inbound memory-bell shadow evaluation.
     pub bell_rings: BellRingsConfig,
+    /// Opt-in PronounDB identity enrichment.
+    pub pronouns: PronounConfig,
     /// Restart-only, one-shot GAIE archive configuration.
     pub archive: ArchiveConfig,
 }
@@ -379,6 +383,8 @@ pub struct AccessConfig {
     pub dm_policy: DmPolicy,
     pub allow_from: Vec<String>,
     pub admins: Vec<String>,
+    /// Globally allowed Discord user IDs whose PronounDB records may be queried.
+    pub include_pronouns: Vec<String>,
     #[serde(default)]
     pub admin_only_mutations: bool,
 }
@@ -389,9 +395,38 @@ impl Default for AccessConfig {
             dm_policy: DmPolicy::Queue,
             allow_from: Vec::new(),
             admins: Vec::new(),
+            include_pronouns: Vec::new(),
             admin_only_mutations: false,
         }
     }
+}
+
+/// External PronounDB lookup policy.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PronounConfig {
+    /// Hard deadline for one lookup. Inbound delivery fails open after it.
+    #[serde(deserialize_with = "deserialize_pronoun_timeout")]
+    pub timeout_ms: u64,
+}
+
+impl Default for PronounConfig {
+    fn default() -> Self {
+        Self { timeout_ms: 300 }
+    }
+}
+
+fn deserialize_pronoun_timeout<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let timeout_ms = u64::deserialize(deserializer)?;
+    if !(1..=2_000).contains(&timeout_ms) {
+        return Err(D::Error::custom(
+            "pronouns.timeout_ms must be between 1 and 2000",
+        ));
+    }
+    Ok(timeout_ms)
 }
 
 /// How to handle DMs from users not in `allow_from`.
@@ -594,6 +629,8 @@ pub struct LoadedConfig {
     pub allowed_ids: HashSet<u64>,
     /// Parsed admin IDs for O(1) membership test and iteration.
     pub admin_ids: HashSet<u64>,
+    /// Globally allowlisted users who explicitly opted into PronounDB lookup.
+    pronoun_lookup_ids: HashSet<u64>,
     /// Per-channel parsed policies. O(1) lookup by channel ID.
     pub channel_policies: HashMap<u64, ChannelPolicy>,
     /// Pre-compiled mention regex patterns.
@@ -631,6 +668,15 @@ impl LoadedConfig {
     pub fn from_raw(mut raw: Config) -> Self {
         let allowed_ids = parse_id_set(&raw.access.allow_from);
         let admin_ids = parse_id_set(&raw.access.admins);
+        let pronoun_lookup_ids = raw
+            .access
+            .include_pronouns
+            .iter()
+            .filter_map(|id| {
+                let id = id.parse::<u64>().ok()?;
+                allowed_ids.contains(&id).then_some(id)
+            })
+            .collect();
         let channel_policies = raw
             .channels
             .iter()
@@ -684,6 +730,7 @@ impl LoadedConfig {
             raw,
             allowed_ids,
             admin_ids,
+            pronoun_lookup_ids,
             channel_policies,
             mention_patterns,
             tz,
@@ -702,6 +749,11 @@ impl LoadedConfig {
     /// O(1) check if a user is an admin.
     pub fn is_admin(&self, user_id: u64) -> bool {
         self.admin_ids.contains(&user_id)
+    }
+
+    /// Whether an allowed user explicitly opted into PronounDB disclosure.
+    pub(crate) fn should_include_pronouns(&self, user_id: UserId) -> bool {
+        self.pronoun_lookup_ids.contains(&user_id.get())
     }
 
     /// O(1) channel policy lookup.
@@ -759,6 +811,31 @@ impl LoadedConfig {
 
 fn parse_id_set(ids: &[String]) -> HashSet<u64> {
     ids.iter().filter_map(|s| s.parse::<u64>().ok()).collect()
+}
+
+impl Config {
+    pub(crate) fn validate(&self) -> Result<(), ConfigError> {
+        let allowed_ids = parse_id_set(&self.access.allow_from);
+        for configured_id in &self.access.include_pronouns {
+            let user_id = configured_id.parse::<u64>().map_err(|_| {
+                ConfigError::Validation(
+                    "access.include_pronouns entries must be nonzero Discord user IDs".to_owned(),
+                )
+            })?;
+            if user_id == 0 {
+                return Err(ConfigError::Validation(
+                    "access.include_pronouns entries must be nonzero Discord user IDs".to_owned(),
+                ));
+            }
+            if !allowed_ids.contains(&user_id) {
+                return Err(ConfigError::Validation(
+                    "access.include_pronouns entries must also appear in access.allow_from"
+                        .to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 fn compile_mention_patterns(config: &Config) -> Option<RegexSet> {
@@ -866,6 +943,16 @@ pub fn reload_config(state_dir: &Utf8Path) -> (LoadedConfig, Option<String>) {
             );
             return (cached, Some(error_msg));
         }
+        Err(ConfigError::Validation(message)) => {
+            let error_msg = format!("config validation error: {message}");
+            let cached = (**LAST_VALID_CONFIG.load()).clone();
+            tracing::warn!(
+                path = %config_path,
+                error = %message,
+                "config validation error, continuing with last valid config"
+            );
+            return (cached, Some(error_msg));
+        }
         Err(ConfigError::Io(e)) => {
             let error_msg = format!("config IO error: {e}");
             tracing::warn!(path = %config_path, error = %e, "failed to read config, using defaults");
@@ -953,6 +1040,7 @@ fn try_load_config(config_path: &Utf8Path) -> Result<Config, ConfigError> {
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
     let config: Config = toml::from_str(&contents)?;
+    config.validate()?;
     Ok(config)
 }
 
@@ -1105,6 +1193,10 @@ token = "my-token"
 dm_policy = "drop"
 allow_from = ["111", "222"]
 admins = ["111"]
+include_pronouns = ["222"]
+
+[pronouns]
+timeout_ms = 250
 
 [[channels]]
 id = "999"
@@ -1132,6 +1224,9 @@ enabled = true
         assert_eq!(cfg.access.dm_policy, DmPolicy::Drop);
         assert_eq!(cfg.access.allow_from, ["111", "222"]);
         assert_eq!(cfg.access.admins, ["111"]);
+        assert_eq!(cfg.access.include_pronouns, ["222"]);
+        assert!(cfg.should_include_pronouns(UserId::new(222)));
+        assert_eq!(cfg.pronouns.timeout_ms, 250);
         assert_eq!(cfg.channels.len(), 1);
         assert_eq!(cfg.channels[0].id, "999");
         assert!(!cfg.channels[0].require_mention);
@@ -1173,6 +1268,39 @@ enabled = true
         assert!(cfg.access.allow_from.is_empty());
     }
 
+    #[test]
+    fn pronoun_opt_in_rejects_invalid_zero_and_non_allowed_ids() {
+        for (allow_from, include_pronouns, expected) in [
+            (vec!["42"], vec!["not-an-id"], "nonzero Discord user ID"),
+            (vec!["42"], vec!["0"], "nonzero Discord user ID"),
+            (vec!["42"], vec!["43"], "must also appear in access.allow_from"),
+        ] {
+            let mut config = Config::default();
+            config.access.allow_from = allow_from.into_iter().map(String::from).collect();
+            config.access.include_pronouns =
+                include_pronouns.into_iter().map(String::from).collect();
+            let error = config.validate().expect_err("invalid opt-in");
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn loaded_config_defensively_hides_non_allowed_pronoun_opt_in() {
+        let mut config = Config::default();
+        config.access.include_pronouns = vec!["42".to_owned()];
+        let loaded = LoadedConfig::from_raw(config);
+        assert!(!loaded.should_include_pronouns(UserId::new(42)));
+    }
+
+    #[test]
+    fn pronoun_timeout_rejects_zero_and_excessive_values() {
+        for timeout_ms in [0, 2_001] {
+            let source = format!("[pronouns]\ntimeout_ms = {timeout_ms}\n");
+            let error = toml::from_str::<Config>(&source).expect_err("invalid timeout");
+            assert!(error.to_string().contains("between 1 and 2000"));
+        }
+    }
+
     // ── LoadedConfig method tests ─────────────────────────────────────────────
 
     fn make_loaded() -> LoadedConfig {
@@ -1181,6 +1309,7 @@ enabled = true
                 dm_policy: DmPolicy::Queue,
                 allow_from: vec!["111".to_string(), "222".to_string()],
                 admins: vec!["111".to_string()],
+                include_pronouns: vec![],
                 admin_only_mutations: false,
             },
             channels: vec![ChannelConfig {
@@ -1271,6 +1400,7 @@ enabled = true
                     "999".to_string(),
                 ],
                 admins: vec!["bad-admin-id".to_string()],
+                include_pronouns: vec![],
                 admin_only_mutations: false,
             },
             channels: vec![ChannelConfig {
@@ -1547,6 +1677,7 @@ delivery_delay_ms = 750
                 dm_policy: DmPolicy::Queue,
                 allow_from: vec![],
                 admins: vec![],
+                include_pronouns: vec![],
                 admin_only_mutations: false,
             },
             ..Default::default()

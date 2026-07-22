@@ -5,6 +5,7 @@ use dione::{
     codex::{CodexDeliveryConfig, CodexEventQueue, TransportMode},
     discord::events::{Handler, NotificationEvent},
     mcp::server::DioneServer,
+    pronoundb::PronounDbProvider,
     state::SharedState,
     tracing_channel::{TraceLevelController, TracingChannelLayer},
 };
@@ -164,6 +165,10 @@ async fn main() -> Result<()> {
         tx: event_tx.clone(),
         state_dir: state_dir.clone(),
         bot_user_id: AtomicU64::new(0),
+        pronoun_provider: Arc::new(
+            PronounDbProvider::new(env!("CARGO_PKG_VERSION"))
+                .wrap_err("failed to configure PronounDB client")?,
+        ),
         discord_cmd_rx: tokio::sync::Mutex::new(Some(discord_cmd_rx)),
     };
 

@@ -13,6 +13,8 @@ pub mod gate;
 pub mod mcp;
 pub mod permissions;
 pub mod pre_send;
+pub mod pronoundb;
+pub mod pronouns;
 pub mod queue;
 pub mod rate_limiter;
 pub mod state;

@@ -60,6 +60,7 @@ impl ConfigStore {
         // (consistent state). toml_edit ↔ toml round-trip should always
         // succeed, but we verify eagerly rather than racing the rename.
         let raw: crate::config::Config = toml::from_str(&serialized)?;
+        raw.validate()?;
         let loaded = crate::config::LoadedConfig::from_raw(raw);
 
         tokio::fs::write(&self.tmp_path, &serialized).await?;
@@ -106,6 +107,7 @@ impl ConfigStore {
             },
             "allow_from": config.raw.access.allow_from,
             "admins": config.raw.access.admins,
+            "include_pronouns": config.raw.access.include_pronouns,
         })
     }
 
@@ -245,6 +247,12 @@ impl ConfigStore {
         if allow_from.len() == before {
             return Err(format!("user_id {user_id} not found in allow_from").into());
         }
+        if let Some(include_pronouns) = access
+            .get_mut("include_pronouns")
+            .and_then(Item::as_array_mut)
+        {
+            include_pronouns.retain(|value| value.as_str() != Some(user_id));
+        }
         Ok(())
     }
 }
@@ -271,5 +279,31 @@ mod tests {
         assert!(DiscordId::parse("not-a-number").is_err());
         assert!(DiscordId::parse("").is_err());
         assert!(DiscordId::parse("-1").is_err());
+    }
+
+    #[test]
+    fn removing_allowed_user_also_removes_pronoun_opt_in() {
+        let doc = r#"
+[access]
+allow_from = ["42", "43"]
+include_pronouns = ["42", "43"]
+"#
+        .parse()
+        .expect("config document");
+        let mut store = ConfigStore {
+            doc,
+            config_path: Utf8PathBuf::from("/tmp/config.toml"),
+            tmp_path: Utf8PathBuf::from("/tmp/config.toml.tmp"),
+        };
+
+        store.remove_from_allow_from("42").expect("remove user");
+
+        let access = store.doc["access"].as_table().expect("access table");
+        let allowed = access["allow_from"].as_array().expect("allow_from");
+        let included = access["include_pronouns"]
+            .as_array()
+            .expect("include_pronouns");
+        assert_eq!(allowed.iter().filter_map(|value| value.as_str()).collect::<Vec<_>>(), ["43"]);
+        assert_eq!(included.iter().filter_map(|value| value.as_str()).collect::<Vec<_>>(), ["43"]);
     }
 }

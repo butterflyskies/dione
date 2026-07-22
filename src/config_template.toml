@@ -34,6 +34,11 @@ deadline_ms = 300
 dm_policy = "queue"     # "queue", "drop", or "disabled"
 allow_from = []         # Discord user IDs that can DM the bot
 admins = []             # Discord user IDs that receive access requests
+include_pronouns = []   # Allowed user IDs opted into PronounDB identity metadata
+
+[pronouns]
+# Hard lookup deadline; timeout/error preserves the plain display name.
+timeout_ms = 300
 
 # [[channels]]
 # id = ""               # Discord channel ID

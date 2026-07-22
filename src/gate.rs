@@ -305,6 +305,7 @@ mod tests {
                 dm_policy: DmPolicy::Queue,
                 allow_from: vec!["100".to_string()],
                 admins: vec!["100".to_string()],
+                include_pronouns: vec![],
                 admin_only_mutations: false,
             },
             channels: vec![ChannelConfig {

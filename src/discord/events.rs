@@ -2,6 +2,7 @@ use crate::{
     bell_rings::BellStatus,
     gate::{GateDecision, InboundGate, MentionDetector, MentionKind},
     mcp::tools::bot_state::DiscordCommand,
+    pronouns::{PronounProvider, PronounProviderError},
     mcp::tools::messaging::create_dm_channel,
     queue::AccessRequest,
     timestamp::Timestamp,
@@ -129,6 +130,7 @@ pub struct Handler {
     pub tx: tokio::sync::mpsc::Sender<NotificationEvent>,
     pub state_dir: camino::Utf8PathBuf,
     pub bot_user_id: AtomicU64,
+    pub pronoun_provider: Arc<dyn PronounProvider>,
     /// Receiver for gateway-level commands from MCP tools (e.g. presence updates).
     /// Taken once during `ready()` to spawn the command processing task.
     pub discord_cmd_rx: tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<DiscordCommand>>>,
@@ -192,8 +194,14 @@ impl EventHandler for Handler {
                         state.record_dm_channel(sender_id, channel_id);
                     }
 
-                    let event =
-                        build_message_event(&msg, &config, None, MessageTargeting::DirectMessage);
+                    let event = build_message_event(
+                        &msg,
+                        &config,
+                        None,
+                        MessageTargeting::DirectMessage,
+                        self.pronoun_provider.as_ref(),
+                    )
+                    .await;
                     if let Err(e) = self.tx.send(event).await {
                         tracing::warn!(error = %e, "failed to send DM notification event");
                     }
@@ -267,8 +275,14 @@ impl EventHandler for Handler {
                 GateDecision::Deliver => {
                     let targeting = mention_kind
                         .map_or(MessageTargeting::Ambient, MessageTargeting::GuildDirected);
-                    let event =
-                        build_message_event(&msg, &config, resolved.thread_parent_id, targeting);
+                    let event = build_message_event(
+                        &msg,
+                        &config,
+                        resolved.thread_parent_id,
+                        targeting,
+                        self.pronoun_provider.as_ref(),
+                    )
+                    .await;
                     if let Err(e) = self.tx.send(event).await {
                         tracing::warn!(error = %e, "failed to send guild notification event");
                     }
@@ -791,6 +805,43 @@ fn resolve_user_identity(display_name: Option<&str>, username: Option<&str>) -> 
         .to_string()
 }
 
+async fn resolve_user_identity_with_pronouns(
+    display_name: Option<&str>,
+    username: Option<&str>,
+    user_id: UserId,
+    config: &crate::config::LoadedConfig,
+    provider: &dyn PronounProvider,
+) -> String {
+    let identity = resolve_user_identity(display_name, username);
+    if !config.should_include_pronouns(user_id) {
+        return identity;
+    }
+
+    let deadline = std::time::Duration::from_millis(config.pronouns.timeout_ms);
+    match tokio::time::timeout(deadline, provider.lookup(user_id)).await {
+        Ok(Ok(Some(selection))) => {
+            tracing::debug!(outcome = "enriched", "pronoun lookup completed");
+            format!("{identity} — {}", selection.display())
+        }
+        Ok(Ok(None)) => {
+            tracing::debug!(outcome = "absent", "pronoun lookup completed");
+            identity
+        }
+        Ok(Err(PronounProviderError::MalformedResponse)) => {
+            tracing::warn!(outcome = "malformed", "pronoun lookup degraded");
+            identity
+        }
+        Ok(Err(PronounProviderError::Transport)) => {
+            tracing::warn!(outcome = "provider_error", "pronoun lookup degraded");
+            identity
+        }
+        Err(_) => {
+            tracing::warn!(outcome = "timeout", "pronoun lookup degraded");
+            identity
+        }
+    }
+}
+
 /// Strip invisible/zero-width characters that proxy bots (e.g. PluralKit)
 /// pad onto short names to prevent Discord formatting issues.
 fn strip_invisible(s: &str) -> String {
@@ -824,11 +875,12 @@ fn reply_preview(content: &str) -> Option<String> {
     }
 }
 
-fn build_message_event(
+async fn build_message_event(
     msg: &Message,
     config: &crate::config::LoadedConfig,
     thread_parent_id: Option<u64>,
     targeting: MessageTargeting,
+    pronoun_provider: &dyn PronounProvider,
 ) -> NotificationEvent {
     let attachments = msg
         .attachments
@@ -848,10 +900,19 @@ fn build_message_event(
     let reply_to_message_id = msg.message_reference.as_ref().and_then(reply_to_id);
     let (reply_to_user_id, reply_to_user, reply_to_content_preview) = reply_context(msg);
 
+    let user = resolve_user_identity_with_pronouns(
+        Some(&display_name(msg)),
+        Some(&msg.author.name),
+        msg.author.id,
+        config,
+        pronoun_provider,
+    )
+    .await;
+
     NotificationEvent::Message(MessageEvent {
         chat_id: msg.channel_id,
         message_id: msg.id,
-        user: resolve_user_identity(Some(&display_name(msg)), Some(&msg.author.name)),
+        user,
         user_id: msg.author.id,
         content: msg.content.clone(),
         targeting,
@@ -1038,6 +1099,56 @@ async fn is_proxy_webhook(
 mod tests {
     use super::*;
     use crate::config::{AccessConfig, Config, DmPolicy, LoadedConfig};
+    use crate::pronouns::{PronounSelection, PronounProviderError};
+    use std::future;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+    enum FakePronounResponse {
+        Found,
+        Absent,
+        Error,
+        Pending,
+    }
+
+    struct FakePronounProvider {
+        response: FakePronounResponse,
+        calls: AtomicUsize,
+    }
+
+    impl FakePronounProvider {
+        fn new(response: FakePronounResponse) -> Self {
+            Self {
+                response,
+                calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl PronounProvider for FakePronounProvider {
+        fn lookup(
+            &self,
+            _user_id: UserId,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<Option<PronounSelection>, PronounProviderError>,
+                    > + Send
+                    + '_,
+            >,
+        > {
+            self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+            match self.response {
+                FakePronounResponse::Found => Box::pin(future::ready(Ok(Some(
+                    PronounSelection::from_codes(&["she".to_owned()]).expect("supported set"),
+                )))),
+                FakePronounResponse::Absent => Box::pin(future::ready(Ok(None))),
+                FakePronounResponse::Error => Box::pin(future::ready(Err(
+                    PronounProviderError::Transport,
+                ))),
+                FakePronounResponse::Pending => Box::pin(future::pending()),
+            }
+        }
+    }
 
     fn config_with_allow_from(ids: Vec<&str>) -> LoadedConfig {
         let raw = Config {
@@ -1045,6 +1156,7 @@ mod tests {
                 dm_policy: DmPolicy::Queue,
                 allow_from: ids.into_iter().map(String::from).collect(),
                 admins: vec![],
+                include_pronouns: vec![],
                 admin_only_mutations: false,
             },
             ..Default::default()
@@ -1322,9 +1434,10 @@ mod tests {
 
     // ── build_message_event tests ─────────────────────────────────────────────
 
-    #[test]
-    fn build_message_event_populates_reply_context_for_reply() {
+    #[tokio::test]
+    async fn build_message_event_populates_reply_context_for_reply() {
         let config = LoadedConfig::from_raw(Config::default());
+        let provider = FakePronounProvider::new(FakePronounResponse::Absent);
         let msg = wire_reply_message(
             "my reply",
             serde_json::json!({
@@ -1339,7 +1452,14 @@ mod tests {
             )),
         );
 
-        let event = build_message_event(&msg, &config, None, MessageTargeting::Ambient);
+        let event = build_message_event(
+            &msg,
+            &config,
+            None,
+            MessageTargeting::Ambient,
+            &provider,
+        )
+        .await;
         let NotificationEvent::Message(MessageEvent {
             reply_to_message_id,
             reply_to_user_id,
@@ -1362,6 +1482,76 @@ mod tests {
         );
         assert_eq!(content, "my reply");
         assert_eq!(user, "alice");
+    }
+
+    #[tokio::test]
+    async fn build_message_event_enriches_only_opted_in_allowed_user() {
+        let mut raw = Config::default();
+        raw.access.allow_from = vec!["1".to_owned()];
+        raw.access.include_pronouns = vec!["1".to_owned()];
+        let config = LoadedConfig::from_raw(raw);
+        let provider = FakePronounProvider::new(FakePronounResponse::Found);
+        let msg = message_from_wire(wire_message_body(1, wire_author(1, "alice"), "hi"));
+
+        let event = build_message_event(
+            &msg,
+            &config,
+            None,
+            MessageTargeting::Ambient,
+            &provider,
+        )
+        .await;
+        let NotificationEvent::Message(event) = event else {
+            panic!("expected message");
+        };
+        assert_eq!(event.user, "alice — she/her");
+        assert_eq!(event.user_id, UserId::new(1));
+        assert_eq!(provider.calls.load(AtomicOrdering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn opted_out_user_is_never_queried_or_enriched() {
+        let mut raw = Config::default();
+        raw.access.allow_from = vec!["1".to_owned()];
+        let config = LoadedConfig::from_raw(raw);
+        let provider = FakePronounProvider::new(FakePronounResponse::Found);
+
+        let identity = resolve_user_identity_with_pronouns(
+            Some("alice"),
+            Some("alice"),
+            UserId::new(1),
+            &config,
+            &provider,
+        )
+        .await;
+        assert_eq!(identity, "alice");
+        assert_eq!(provider.calls.load(AtomicOrdering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn absence_error_and_timeout_preserve_plain_identity() {
+        let mut raw = Config::default();
+        raw.access.allow_from = vec!["1".to_owned()];
+        raw.access.include_pronouns = vec!["1".to_owned()];
+        raw.pronouns.timeout_ms = 1;
+        let config = LoadedConfig::from_raw(raw);
+
+        for response in [
+            FakePronounResponse::Absent,
+            FakePronounResponse::Error,
+            FakePronounResponse::Pending,
+        ] {
+            let provider = FakePronounProvider::new(response);
+            let identity = resolve_user_identity_with_pronouns(
+                Some("alice"),
+                Some("alice"),
+                UserId::new(1),
+                &config,
+                &provider,
+            )
+            .await;
+            assert_eq!(identity, "alice");
+        }
     }
 
     // ── display_name tests ───────────────────────────────────────────────────
