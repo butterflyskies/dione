@@ -341,7 +341,10 @@ impl Archive {
         let mut content = String::new();
         let mut previous = self.sequence;
         let mut batch_ids = HashSet::new();
-        let mut has_origin_evidence = false;
+        let has_origin_evidence = events.iter().any(|event| event.origin_evidence.is_some());
+        if has_origin_evidence {
+            validate_evidence_directory(&self.paths.origin_evidence)?;
+        }
         let mut origin_cache = HashMap::new();
         for event in events {
             if event.corpus_id != self.corpus.as_str() {
@@ -360,7 +363,6 @@ impl Archive {
             }
             if event.origin_evidence.is_some() {
                 validate_event_origin(&self.paths, event, &mut origin_cache)?;
-                has_origin_evidence = true;
             }
             previous = event.archive_seq;
             content.push_str(&compact(event)?);
@@ -601,9 +603,19 @@ fn read_committed_structure_unlocked(paths: &ArchivePaths) -> Result<ReadResult,
 fn partition_origin_validation(paths: &ArchivePaths, mut read: ReadResult) -> ReadResult {
     let mut page_cache = HashMap::new();
     let mut verified = Vec::with_capacity(read.events.len());
+    let directory_error = validate_evidence_directory(&paths.origin_evidence)
+        .err()
+        .map(|error| error.to_string());
     for event in read.events.drain(..) {
         if event.origin_evidence.is_none() {
             verified.push(event);
+            continue;
+        }
+        if let Some(error) = &directory_error {
+            read.quarantined_events.push(QuarantinedEvent {
+                event,
+                origin_error: error.clone(),
+            });
             continue;
         }
         match validate_event_origin(paths, &event, &mut page_cache) {
@@ -626,7 +638,6 @@ fn validate_event_origin(
     let Some(origin) = &event.origin_evidence else {
         return Ok(());
     };
-    validate_evidence_directory(&paths.origin_evidence)?;
     if origin.adapter.name != crate::gaie::origin::DISCORD_HTTP_ADAPTER_NAME
         || origin.media_type != "application/json"
         || origin.harness.is_some()
@@ -1145,6 +1156,91 @@ mod tests {
     }
 
     #[test]
+    fn test_read_quarantines_unsupported_adapter_version() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let corpus = CorpusId::parse("fixture").unwrap();
+        let paths = ArchivePaths::new(root, &corpus).unwrap();
+        let archive = Archive::open(paths.clone(), corpus.clone(), "2026-01-01T00:00:00Z").unwrap();
+        let bytes = br#"[{"id":"3","content":"hello"}]"#;
+        let page: Value = serde_json::from_slice(bytes).unwrap();
+        let stored = archive.store_origin_evidence(bytes).unwrap();
+        let mut event = fixture_event_with_evidence(1, &stored, &page, "/0");
+        event.origin_evidence.as_mut().unwrap().adapter.version = "2".into();
+        drop(archive);
+
+        let event_line = compact(&event).unwrap();
+        let commit = BatchCommit {
+            event_kind: "batch_commit",
+            message_id: "3",
+            event_count: 1,
+            batch_sha256: hex_sha256(format!("{event_line}\n").as_bytes()),
+            committed_at: "2026-01-01T00:00:00Z",
+        };
+        let header = FormatHeader {
+            event_kind: "format_header",
+            format_version: FORMAT_VERSION,
+            created_at: "2026-01-01T00:00:00Z",
+        };
+        fs::write(
+            paths.events.as_std_path(),
+            format!(
+                "{}\n{event_line}\n{}\n",
+                compact(&header).unwrap(),
+                compact(&commit).unwrap()
+            ),
+        )
+        .unwrap();
+
+        let archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+        let read = archive.read_committed().unwrap();
+        assert!(read.events.is_empty());
+        assert_eq!(read.quarantined_events.len(), 1);
+        assert_eq!(
+            read.quarantined_events[0].origin_error,
+            "archive integrity failure: unsupported origin-evidence adapter version `2`"
+        );
+    }
+
+    #[test]
+    fn test_origin_validation_accepts_embedded_thread_on_thread_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let corpus = CorpusId::parse("fixture").unwrap();
+        let paths = ArchivePaths::new(root, &corpus).unwrap();
+        let mut archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+        let bytes = br#"[{"id":"3","channel_id":"2","guild_id":"1","content":"hello","thread":{"id":"2"}}]"#;
+        let page: Value = serde_json::from_slice(bytes).unwrap();
+        let stored = archive.store_origin_evidence(bytes).unwrap();
+        let origin = MessageOriginEvidence {
+            page: &page,
+            message_index: 0,
+            stored: &stored,
+        };
+        let event = message_batch_with_origin(
+            &page[0],
+            MessageContext {
+                corpus_id: "fixture",
+                guild_id: "1",
+                channel_id: "2",
+                thread_id: Some("2"),
+                thread_parent_channel_id: Some("1"),
+                observed_at: "2026-01-01T00:00:00Z",
+            },
+            1,
+            &std::collections::HashMap::new(),
+            Some(&origin),
+        )
+        .unwrap()
+        .remove(0);
+
+        archive
+            .append_batch(std::slice::from_ref(&event), "3", "2026-01-01T00:00:00Z")
+            .unwrap();
+        assert_eq!(archive.read_committed().unwrap().events.len(), 1);
+    }
+
+    #[test]
     fn test_append_rejects_mutated_message_projection_fields() {
         let temp = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
@@ -1376,7 +1472,7 @@ mod tests {
                 let event = fixture_event_with_evidence(1, &stored, &page, "/0");
                 if during_read {
                     archive
-                        .append_batch(&[event.clone()], "3", "2026-01-01T00:00:00Z")
+                        .append_batch(std::slice::from_ref(&event), "3", "2026-01-01T00:00:00Z")
                         .unwrap();
                 }
 

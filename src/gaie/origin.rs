@@ -187,12 +187,15 @@ fn validate_common(event: &Event, message: &DiscordMessageProjection) -> Result<
     {
         return Err("response-supplied capture context does not match the event");
     }
-    if let Some(thread_id) = &message.embedded_thread_id
-        && (event.source.thread_id.as_ref() != Some(thread_id)
-            || event.relations.thread_parent_channel_id.as_deref()
-                != Some(event.source.channel_id.as_str()))
-    {
-        return Err("embedded thread projection does not match the event");
+    if let Some(thread_id) = &message.embedded_thread_id {
+        let thread_parent = event.relations.thread_parent_channel_id.as_deref();
+        let captured_from_parent = event.source.channel_id != *thread_id;
+        if event.source.thread_id.as_ref() != Some(thread_id)
+            || thread_parent.is_none()
+            || (captured_from_parent && thread_parent != Some(event.source.channel_id.as_str()))
+        {
+            return Err("embedded thread projection does not match the event");
+        }
     }
     Ok(())
 }
