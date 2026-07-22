@@ -15,6 +15,11 @@ pub mod permissions;
 pub mod pre_send;
 pub mod queue;
 pub mod rate_limiter;
+#[expect(
+    dead_code,
+    reason = "standalone receipt-gate fixture is runtime-wired in a follow-up PR"
+)]
+pub(crate) mod receipt_gate;
 pub mod state;
 pub mod timestamp;
 pub mod tracing_channel;
