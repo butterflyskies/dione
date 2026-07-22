@@ -484,49 +484,20 @@ async fn wait_for_push(server: &DioneServer, args: &Value) -> Value {
         .unwrap_or(WAIT_FOR_PUSH_DEFAULT_TIMEOUT_MS)
         .min(WAIT_FOR_PUSH_MAX_TIMEOUT_MS);
 
-    let rx = match server.push_queue.as_ref() {
-        Some(rx) => rx,
+    let queue = match server.push_queue.as_ref() {
+        Some(queue) => queue,
         None => return json!({ "error": "push queue not initialized" }),
     };
-
-    let mut notifications = Vec::new();
-
-    // First, drain any already-queued notifications without blocking.
-    {
-        let mut rx_guard = rx.lock().await;
-        while let Ok(notif) = rx_guard.try_recv() {
-            notifications.push(notif);
-        }
-    }
-
-    // If we got some, return immediately (don't wait for more).
-    if !notifications.is_empty() {
-        return json!({ "notifications": notifications });
-    }
-
-    // Nothing pending — block until one arrives or timeout.
     let timeout = tokio::time::Duration::from_millis(timeout_ms);
-    {
-        let mut rx_guard = rx.lock().await;
-        match tokio::time::timeout(timeout, rx_guard.recv()).await {
-            Ok(Some(notif)) => {
-                notifications.push(notif);
-                // Drain any additional notifications that arrived while we were waiting.
-                while let Ok(notif) = rx_guard.try_recv() {
-                    notifications.push(notif);
-                }
-            }
-            Ok(None) => {
-                // Channel closed — server shutting down.
-                return json!({ "notifications": [], "closed": true });
-            }
-            Err(_) => {
-                // Timeout — no notifications arrived.
-            }
+    match queue.wait_and_drain(timeout).await {
+        super::transport::QueueDrain::Notifications(notifications) => {
+            json!({ "notifications": notifications })
+        }
+        super::transport::QueueDrain::TimedOut => json!({ "notifications": [] }),
+        super::transport::QueueDrain::Closed => {
+            json!({ "notifications": [], "closed": true })
         }
     }
-
-    json!({ "notifications": notifications })
 }
 
 #[cfg(test)]

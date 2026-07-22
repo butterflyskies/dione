@@ -28,7 +28,7 @@ use crate::{
             management::ManagementCtx,
             messaging::MessagingCtx,
         },
-        transport::{NotificationSink, TransportMode},
+        transport::{NotificationQueue, NotificationSink, TransportMode},
     },
     rate_limiter::{ChannelRef, ParticipantId, RateLimitDecision, RateLimiter},
 };
@@ -52,12 +52,11 @@ pub struct DioneServer {
     pub queue: Arc<Mutex<crate::queue::AccessQueue>>,
     pub http: Arc<serenity::http::Http>,
     pub state_dir: Utf8PathBuf,
-    pub notification_tx: mpsc::Sender<Value>,
     pub discord_cmd_tx: Option<mpsc::Sender<DiscordCommand>>,
     pub trace_controller: TraceLevelController,
     pub mode: TransportMode,
-    /// Receiver for queued notifications in codex mode. `wait_for_push` drains this.
-    pub push_queue: Option<Arc<Mutex<mpsc::Receiver<Value>>>>,
+    /// Bounded notification queue drained by `wait_for_push` in Codex mode.
+    pub push_queue: Option<NotificationQueue>,
 }
 
 // ── Context factory methods ───────────────────────────────────────────────────
@@ -124,16 +123,15 @@ pub async fn run(
     server: DioneServer,
     event_rx: mpsc::Receiver<NotificationEvent>,
     cancel: CancellationToken,
-    push_queue_tx: Option<mpsc::Sender<Value>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let stdin = BufReader::new(tokio::io::stdin());
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
 
     // Build the notification sink based on transport mode.
-    let notif_sink = match push_queue_tx {
-        Some(tx) => {
+    let notif_sink = match server.push_queue.clone() {
+        Some(queue) => {
             tracing::info!("codex transport: notifications queued for wait_for_push");
-            Arc::new(NotificationSink::Queue(tx))
+            Arc::new(NotificationSink::Queue(queue))
         }
         None => Arc::new(NotificationSink::Stdout(stdout.clone())),
     };
@@ -262,6 +260,7 @@ pub async fn run(
         // Channel closed — flush any remaining buffered events.
         let remaining = delivery_buffer.flush_all();
         deliver_flushed(&sink_notif, remaining, tz).await;
+        sink_notif.close();
     });
 
     // Main request loop.

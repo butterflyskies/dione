@@ -14,7 +14,7 @@ use tracing_subscriber::reload;
 
 use dione::discord::events::{Handler, NotificationEvent};
 use dione::mcp::server::DioneServer;
-use dione::mcp::transport::TransportMode;
+use dione::mcp::transport::{NotificationQueue, TransportMode};
 use dione::state::SharedState;
 use dione::tracing_channel::{TraceLevelController, TracingChannelLayer};
 
@@ -95,9 +95,6 @@ async fn main() -> Result<()> {
     // Config file watcher — reloads ArcSwap cache on config.toml changes.
     dione::config_watcher::spawn(state_dir.clone(), event_tx.clone(), cancel.clone());
 
-    // MCP notification channel (for server-initiated writes, currently unused beyond event_rx).
-    let (notif_tx, _notif_rx) = mpsc::channel::<serde_json::Value>(64);
-
     // Build Discord event handler.
     let handler = Handler {
         state: state.clone(),
@@ -115,14 +112,7 @@ async fn main() -> Result<()> {
 
     // Build MCP server.
     // In codex mode, create a push queue for wait_for_push delivery.
-    let push_queue = if cli.mode == TransportMode::Codex {
-        let (tx, rx) = mpsc::channel::<serde_json::Value>(256);
-        Some((tx, rx))
-    } else {
-        None
-    };
-    let push_queue_tx = push_queue.as_ref().map(|(tx, _)| tx.clone());
-    let push_queue_rx = push_queue.map(|(_, rx)| Arc::new(tokio::sync::Mutex::new(rx)));
+    let push_queue = (cli.mode == TransportMode::Codex).then(|| NotificationQueue::new(256));
 
     let trace_controller = TraceLevelController::new(stderr_reload_handle, channel_reload_handle);
     let server = DioneServer {
@@ -130,11 +120,10 @@ async fn main() -> Result<()> {
         queue: queue.clone(),
         http,
         state_dir: state_dir.clone(),
-        notification_tx: notif_tx,
         discord_cmd_tx: None,
         trace_controller,
         mode: cli.mode,
-        push_queue: push_queue_rx,
+        push_queue,
     };
 
     // Spawn the tracing-channel forwarder: converts tracing events into NotificationEvents.
@@ -177,7 +166,7 @@ async fn main() -> Result<()> {
     // Spawn MCP server (owns stdin/stdout).
     let cancel_mcp = cancel.clone();
     let mcp_handle = tokio::spawn(async move {
-        if let Err(e) = dione::mcp::server::run(server, event_rx, cancel_mcp, push_queue_tx).await {
+        if let Err(e) = dione::mcp::server::run(server, event_rx, cancel_mcp).await {
             tracing::error!(error = ?e, "MCP server exited with error");
         }
     });

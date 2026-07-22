@@ -8,6 +8,7 @@
 use dione::{
     discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
     mcp::server::{DioneServer, test_helpers},
+    mcp::transport::{NotificationQueue, TransportMode},
     queue::AccessQueue,
     state::new_state,
     timestamp::Timestamp,
@@ -17,7 +18,7 @@ use serde_json::json;
 use serenity::model::id::{ChannelId, MessageId, UserId};
 use std::sync::Arc;
 use tempfile::TempDir;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
 
 // ── Test fixture ──────────────────────────────────────────────────────────────
 
@@ -67,18 +68,46 @@ fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
     let http = Arc::new(serenity::http::Http::new("fake-token-for-tests"));
     let state = new_state();
     let queue = Arc::new(Mutex::new(AccessQueue::load(state_dir)));
-    let (tx, _rx) = mpsc::channel(4);
     DioneServer {
         state,
         queue,
         http,
         state_dir: state_dir.clone(),
-        notification_tx: tx,
         discord_cmd_tx: None,
         trace_controller: TraceLevelController::noop(),
         mode: dione::mcp::transport::TransportMode::ClaudeCode,
         push_queue: None,
     }
+}
+
+fn make_codex_server(
+    state_dir: &camino::Utf8PathBuf,
+    queue_capacity: usize,
+) -> (DioneServer, NotificationQueue) {
+    let mut server = make_server(state_dir);
+    let queue = NotificationQueue::new(queue_capacity);
+    server.mode = TransportMode::Codex;
+    server.push_queue = Some(queue.clone());
+    (server, queue)
+}
+
+async fn wait_for_push(server: &DioneServer, timeout_ms: u64) -> serde_json::Value {
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": 61,
+        "method": "tools/call",
+        "params": {
+            "name": "wait_for_push",
+            "arguments": { "timeout_ms": timeout_ms }
+        }
+    });
+    let response = test_helpers::dispatch_request(server, request)
+        .await
+        .expect("wait_for_push should return a response");
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .expect("wait_for_push result should contain text");
+    serde_json::from_str(text).expect("wait_for_push text should be JSON")
 }
 
 // ── Initialize handshake ──────────────────────────────────────────────────────
@@ -695,6 +724,98 @@ async fn test_wait_for_push_rejected_in_claude_code_mode() {
     assert!(
         msg.contains("codex mode"),
         "error should mention codex mode, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_wait_for_push_drains_queued_notifications_in_order() {
+    let (_dir, state_dir) = temp_state_dir();
+    let (server, queue) = make_codex_server(&state_dir, 4);
+    assert!(queue.push(json!({ "sequence": 1 })));
+    assert!(queue.push(json!({ "sequence": 2 })));
+
+    let result = wait_for_push(&server, 10).await;
+
+    assert_eq!(
+        result,
+        json!({
+            "notifications": [
+                { "sequence": 1 },
+                { "sequence": 2 }
+            ]
+        })
+    );
+}
+
+#[tokio::test]
+async fn test_wait_for_push_empty_queue_times_out_with_empty_array() {
+    let (_dir, state_dir) = temp_state_dir();
+    let (server, _queue) = make_codex_server(&state_dir, 4);
+
+    let result = wait_for_push(&server, 1).await;
+
+    assert_eq!(result, json!({ "notifications": [] }));
+}
+
+#[tokio::test]
+async fn test_wait_for_push_wakes_when_notification_arrives_after_wait_starts() {
+    let (_dir, state_dir) = temp_state_dir();
+    let (server, queue) = make_codex_server(&state_dir, 4);
+    let server = Arc::new(server);
+    let waiter_server = server.clone();
+    let waiter = tokio::spawn(async move { wait_for_push(&waiter_server, 1_000).await });
+    tokio::task::yield_now().await;
+
+    assert!(queue.push(json!({ "sequence": 1 })));
+    let result = tokio::time::timeout(std::time::Duration::from_millis(100), waiter)
+        .await
+        .expect("wait_for_push should wake promptly")
+        .expect("wait_for_push task should complete");
+
+    assert_eq!(result, json!({ "notifications": [{ "sequence": 1 }] }));
+}
+
+#[tokio::test]
+async fn test_wait_for_push_closed_queue_preserves_closed_response() {
+    let (_dir, state_dir) = temp_state_dir();
+    let (server, queue) = make_codex_server(&state_dir, 4);
+    let server = Arc::new(server);
+    let waiter_server = server.clone();
+    let waiter = tokio::spawn(async move { wait_for_push(&waiter_server, 1_000).await });
+    tokio::task::yield_now().await;
+
+    queue.close();
+    let result = tokio::time::timeout(std::time::Duration::from_millis(100), waiter)
+        .await
+        .expect("wait_for_push should wake when the queue closes")
+        .expect("wait_for_push task should complete");
+
+    assert_eq!(result, json!({ "notifications": [], "closed": true }));
+    assert!(!queue.push(json!({ "sequence": 1 })));
+}
+
+#[tokio::test]
+async fn test_wait_for_push_burst_drops_oldest_without_blocking_producer() {
+    let (_dir, state_dir) = temp_state_dir();
+    let (server, queue) = make_codex_server(&state_dir, 3);
+
+    // No consumer drains during this burst. All insertions must complete and
+    // the bounded queue must retain only the newest notifications.
+    for sequence in 0..10 {
+        assert!(queue.push(json!({ "sequence": sequence })));
+    }
+
+    let result = wait_for_push(&server, 10).await;
+
+    assert_eq!(
+        result,
+        json!({
+            "notifications": [
+                { "sequence": 7 },
+                { "sequence": 8 },
+                { "sequence": 9 }
+            ]
+        })
     );
 }
 
