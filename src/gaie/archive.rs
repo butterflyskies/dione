@@ -5,7 +5,7 @@ use fs2::FileExt as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read as _, Write as _};
 #[cfg(unix)]
@@ -89,17 +89,33 @@ pub struct Checkpoint {
 /// Committed archive contents and whether an incomplete tail was ignored.
 #[derive(Debug)]
 pub struct ReadResult {
+    /// Structurally committed events whose origin evidence is absent or verified.
     pub events: Vec<Event>,
+    /// Structurally committed events whose claimed origin evidence did not verify.
+    /// These are never mixed into `events`; callers must opt in to handling them.
+    pub quarantined_events: Vec<QuarantinedEvent>,
     pub torn_or_uncommitted_tail: bool,
     pub last_sequence: u64,
     committed_prefix: Vec<u8>,
+}
+
+/// A structurally committed event whose claimed origin evidence failed validation.
+#[derive(Debug)]
+pub struct QuarantinedEvent {
+    pub event: Event,
+    pub origin_error: String,
 }
 
 /// A stored byte-exact origin observation awaiting event-specific selectors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StoredOriginEvidence {
     pub(crate) sha256: String,
-    pub(crate) location: String,
+}
+
+impl StoredOriginEvidence {
+    pub(crate) fn location(&self) -> String {
+        format!("origin-evidence/{}", self.sha256)
+    }
 }
 
 /// Errors raised by archive validation or durable I/O.
@@ -169,7 +185,7 @@ impl Archive {
         harden_file(&lock, &paths.lock)?;
         lock.try_lock_exclusive()
             .map_err(|_| ArchiveError::Locked(paths.lock.clone()))?;
-        let read = read_committed_unlocked(&paths)?;
+        let read = read_committed_structure_unlocked(&paths)?;
         if read.torn_or_uncommitted_tail {
             recover_committed_prefix(&paths, &read.committed_prefix)?;
         }
@@ -238,11 +254,12 @@ impl Archive {
                     "origin-evidence object does not match its digest".to_owned(),
                 ));
             }
+            // Re-check immediately before fsync so a directory substitution between
+            // the initial lookup and durability barrier fails closed.
             validate_evidence_directory(&self.paths.origin_evidence)?;
             (self.sync_directory)(&self.paths.origin_evidence)?;
             return Ok(StoredOriginEvidence {
                 sha256: digest.clone(),
-                location: format!("origin-evidence/{digest}"),
             });
         }
 
@@ -296,11 +313,12 @@ impl Archive {
                 return Err(io_error(&destination, source));
             }
         }
+        // Re-check immediately before fsync so a directory substitution during
+        // publication cannot redirect the durability barrier.
         validate_evidence_directory(&self.paths.origin_evidence)?;
         (self.sync_directory)(&self.paths.origin_evidence)?;
         Ok(StoredOriginEvidence {
             sha256: digest.clone(),
-            location: format!("origin-evidence/{digest}"),
         })
     }
 
@@ -324,6 +342,7 @@ impl Archive {
         let mut previous = self.sequence;
         let mut batch_ids = HashSet::new();
         let mut has_origin_evidence = false;
+        let mut origin_cache = HashMap::new();
         for event in events {
             if event.corpus_id != self.corpus.as_str() {
                 return Err(ArchiveError::Integrity(
@@ -340,7 +359,7 @@ impl Archive {
                 return Err(ArchiveError::Integrity("duplicate event_id".to_owned()));
             }
             if event.origin_evidence.is_some() {
-                validate_event_origin(&self.paths, event)?;
+                validate_event_origin(&self.paths, event, &mut origin_cache)?;
                 has_origin_evidence = true;
             }
             previous = event.archive_seq;
@@ -460,6 +479,11 @@ fn is_nonzero_snowflake(value: &str) -> bool {
 }
 
 fn read_committed_unlocked(paths: &ArchivePaths) -> Result<ReadResult, ArchiveError> {
+    let read = read_committed_structure_unlocked(paths)?;
+    Ok(partition_origin_validation(paths, read))
+}
+
+fn read_committed_structure_unlocked(paths: &ArchivePaths) -> Result<ReadResult, ArchiveError> {
     let path = &paths.events;
     reject_symlink(path)?;
     let bytes = match fs::read(path.as_std_path()) {
@@ -467,6 +491,7 @@ fn read_committed_unlocked(paths: &ArchivePaths) -> Result<ReadResult, ArchiveEr
         Err(source) if source.kind() == io::ErrorKind::NotFound => {
             return Ok(ReadResult {
                 events: Vec::new(),
+                quarantined_events: Vec::new(),
                 torn_or_uncommitted_tail: false,
                 last_sequence: 0,
                 committed_prefix: Vec::new(),
@@ -519,6 +544,7 @@ fn read_committed_unlocked(paths: &ArchivePaths) -> Result<ReadResult, ArchiveEr
     if raw_lines.is_empty() {
         return Ok(ReadResult {
             events: Vec::new(),
+            quarantined_events: Vec::new(),
             torn_or_uncommitted_tail: torn_physical_tail,
             last_sequence: 0,
             committed_prefix: Vec::new(),
@@ -547,7 +573,6 @@ fn read_committed_unlocked(paths: &ArchivePaths) -> Result<ReadResult, ArchiveEr
             for (_, value) in pending.drain(..) {
                 let event: Event = serde_json::from_value(value)
                     .map_err(|source| ArchiveError::Json { line: 0, source })?;
-                validate_event_origin(paths, &event)?;
                 committed.push(event);
             }
             committed_line_count = index + 1;
@@ -564,6 +589,7 @@ fn read_committed_unlocked(paths: &ArchivePaths) -> Result<ReadResult, ArchiveEr
     committed_prefix.push(b'\n');
     Ok(ReadResult {
         events: committed,
+        quarantined_events: Vec::new(),
         torn_or_uncommitted_tail: final_line_lacks_newline
             || torn_physical_tail
             || !pending.is_empty(),
@@ -572,13 +598,36 @@ fn read_committed_unlocked(paths: &ArchivePaths) -> Result<ReadResult, ArchiveEr
     })
 }
 
-fn validate_event_origin(paths: &ArchivePaths, event: &Event) -> Result<(), ArchiveError> {
+fn partition_origin_validation(paths: &ArchivePaths, mut read: ReadResult) -> ReadResult {
+    let mut page_cache = HashMap::new();
+    let mut verified = Vec::with_capacity(read.events.len());
+    for event in read.events.drain(..) {
+        if event.origin_evidence.is_none() {
+            verified.push(event);
+            continue;
+        }
+        match validate_event_origin(paths, &event, &mut page_cache) {
+            Ok(()) => verified.push(event),
+            Err(error) => read.quarantined_events.push(QuarantinedEvent {
+                event,
+                origin_error: error.to_string(),
+            }),
+        }
+    }
+    read.events = verified;
+    read
+}
+
+fn validate_event_origin(
+    paths: &ArchivePaths,
+    event: &Event,
+    page_cache: &mut HashMap<String, Value>,
+) -> Result<(), ArchiveError> {
     let Some(origin) = &event.origin_evidence else {
         return Ok(());
     };
     validate_evidence_directory(&paths.origin_evidence)?;
     if origin.adapter.name != crate::gaie::origin::DISCORD_HTTP_ADAPTER_NAME
-        || origin.adapter.version != crate::gaie::origin::DISCORD_HTTP_ADAPTER_VERSION
         || origin.media_type != "application/json"
         || origin.harness.is_some()
         || !is_sha256(&origin.sha256)
@@ -587,22 +636,37 @@ fn validate_event_origin(paths: &ArchivePaths, event: &Event) -> Result<(), Arch
             "origin-evidence reference has an unsupported or malformed contract".to_owned(),
         ));
     }
+    let validate_projection: fn(&Value, &str, &Event) -> Result<(), &'static str> =
+        match origin.adapter.version.as_str() {
+            "1" => crate::gaie::origin::validate_discord_projection,
+            version => {
+                return Err(ArchiveError::Integrity(format!(
+                    "unsupported origin-evidence adapter version `{version}`"
+                )));
+            }
+        };
     let canonical_location = format!("origin-evidence/{}", origin.sha256);
     if origin.location != canonical_location {
         return Err(ArchiveError::Integrity(
             "origin-evidence location is not canonical for its digest".to_owned(),
         ));
     }
-    let destination = paths.origin_evidence.join(&origin.sha256);
-    let bytes = read_regular_file(&destination)?;
-    if hex_sha256(&bytes) != origin.sha256 {
-        return Err(ArchiveError::Integrity(
-            "origin-evidence object does not match its digest".to_owned(),
-        ));
+    if !page_cache.contains_key(&origin.sha256) {
+        let destination = paths.origin_evidence.join(&origin.sha256);
+        let bytes = read_regular_file(&destination)?;
+        if hex_sha256(&bytes) != origin.sha256 {
+            return Err(ArchiveError::Integrity(
+                "origin-evidence object does not match its digest".to_owned(),
+            ));
+        }
+        let page: Value = serde_json::from_slice(&bytes)
+            .map_err(|source| ArchiveError::Json { line: 0, source })?;
+        page_cache.insert(origin.sha256.clone(), page);
     }
-    let page: Value =
-        serde_json::from_slice(&bytes).map_err(|source| ArchiveError::Json { line: 0, source })?;
-    crate::gaie::origin::validate_discord_projection(&page, &origin.selector, event)
+    let page = page_cache
+        .get(&origin.sha256)
+        .expect("origin page was inserted above");
+    validate_projection(page, &origin.selector, event)
         .map_err(|message| ArchiveError::Integrity(format!("origin evidence: {message}")))?;
     Ok(())
 }
@@ -975,9 +1039,12 @@ mod tests {
         let second = archive.store_origin_evidence(bytes).unwrap();
 
         assert_eq!(first, second);
-        assert_eq!(first.location, format!("origin-evidence/{}", first.sha256));
         assert_eq!(
-            fs::read(archive.paths.data_dir.join(&first.location).as_std_path()).unwrap(),
+            first.location(),
+            format!("origin-evidence/{}", first.sha256)
+        );
+        assert_eq!(
+            fs::read(archive.paths.data_dir.join(first.location()).as_std_path()).unwrap(),
             bytes
         );
     }
@@ -1031,6 +1098,50 @@ mod tests {
             Err(ArchiveError::Integrity(_))
         ));
         assert!(archive.read_committed().unwrap().events.is_empty());
+    }
+
+    #[test]
+    fn test_origin_validation_does_not_pin_collector_version() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let corpus = CorpusId::parse("fixture").unwrap();
+        let paths = ArchivePaths::new(root, &corpus).unwrap();
+        let mut archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+        let bytes = br#"[{"id":"3","content":"hello"}]"#;
+        let page: Value = serde_json::from_slice(bytes).unwrap();
+        let stored = archive.store_origin_evidence(bytes).unwrap();
+        let mut event = fixture_event_with_evidence(1, &stored, &page, "/0");
+        event.ingest.collector_version = "future-collector-version".into();
+
+        archive
+            .append_batch(&[event], "3", "2026-01-01T00:00:00Z")
+            .unwrap();
+        assert_eq!(
+            archive.read_committed().unwrap().events[0]
+                .ingest
+                .collector_version,
+            "future-collector-version"
+        );
+    }
+
+    #[test]
+    fn test_origin_validation_dispatches_by_recorded_adapter_version() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let corpus = CorpusId::parse("fixture").unwrap();
+        let paths = ArchivePaths::new(root, &corpus).unwrap();
+        let mut archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+        let bytes = br#"[{"id":"3","content":"hello"}]"#;
+        let page: Value = serde_json::from_slice(bytes).unwrap();
+        let stored = archive.store_origin_evidence(bytes).unwrap();
+        let mut event = fixture_event_with_evidence(1, &stored, &page, "/0");
+        event.origin_evidence.as_mut().unwrap().adapter.version = "2".into();
+
+        assert!(matches!(
+            archive.append_batch(&[event], "3", "2026-01-01T00:00:00Z"),
+            Err(ArchiveError::Integrity(message))
+                if message == "unsupported origin-evidence adapter version `2`"
+        ));
     }
 
     #[test]
@@ -1152,7 +1263,7 @@ mod tests {
     }
 
     #[test]
-    fn test_read_rejects_origin_selector_not_matching_event_source() {
+    fn test_read_quarantines_origin_selector_not_matching_event_source() {
         let temp = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
         let corpus = CorpusId::parse("fixture").unwrap();
@@ -1188,14 +1299,18 @@ mod tests {
         )
         .unwrap();
 
-        assert!(matches!(
-            read_committed_unlocked(&paths),
-            Err(ArchiveError::Integrity(_))
-        ));
+        let read = read_committed_unlocked(&paths).unwrap();
+        assert!(read.events.is_empty());
+        assert_eq!(read.quarantined_events.len(), 1);
+        assert!(
+            read.quarantined_events[0]
+                .origin_error
+                .contains("selector does not identify the event message")
+        );
     }
 
     #[test]
-    fn test_read_rejects_forged_response_supplied_channel_projection() {
+    fn test_read_quarantines_forged_response_supplied_channel_projection() {
         let temp = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
         let corpus = CorpusId::parse("fixture").unwrap();
@@ -1231,15 +1346,19 @@ mod tests {
         )
         .unwrap();
 
-        assert!(matches!(
-            read_committed_unlocked(&paths),
-            Err(ArchiveError::Integrity(_))
-        ));
+        let read = read_committed_unlocked(&paths).unwrap();
+        assert!(read.events.is_empty());
+        assert_eq!(read.quarantined_events.len(), 1);
+        assert!(
+            read.quarantined_events[0]
+                .origin_error
+                .contains("capture context does not match")
+        );
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_append_and_read_reject_evidence_directory_or_ancestor_substitution() {
+    fn test_append_rejects_and_read_quarantines_evidence_path_substitution() {
         use std::os::unix::fs::symlink;
 
         for during_read in [false, true] {
@@ -1276,10 +1395,14 @@ mod tests {
 
                 if during_read {
                     drop(archive);
-                    assert!(matches!(
-                        read_committed_unlocked(&paths),
-                        Err(ArchiveError::UnsafePath(_))
-                    ));
+                    let read = read_committed_unlocked(&paths).unwrap();
+                    assert!(read.events.is_empty());
+                    assert_eq!(read.quarantined_events.len(), 1);
+                    assert!(
+                        read.quarantined_events[0]
+                            .origin_error
+                            .contains("unsafe archive path")
+                    );
                 } else {
                     assert!(matches!(
                         archive.append_batch(&[event], "3", "2026-01-01T00:00:00Z"),
@@ -1310,6 +1433,85 @@ mod tests {
             Err(ArchiveError::Integrity(_))
         ));
         assert!(archive.read_committed().unwrap().events.is_empty());
+    }
+
+    #[test]
+    fn test_structural_tail_recovers_before_committed_origin_validation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let corpus = CorpusId::parse("fixture").unwrap();
+        let paths = ArchivePaths::new(root, &corpus).unwrap();
+        let mut archive =
+            Archive::open(paths.clone(), corpus.clone(), "2026-01-01T00:00:00Z").unwrap();
+        let bytes = br#"[{"id":"3","content":"hello"}]"#;
+        let page: Value = serde_json::from_slice(bytes).unwrap();
+        let stored = archive.store_origin_evidence(bytes).unwrap();
+        let event = fixture_event_with_evidence(1, &stored, &page, "/0");
+        archive
+            .append_batch(&[event], "3", "2026-01-01T00:00:00Z")
+            .unwrap();
+        let committed = fs::read(paths.events.as_std_path()).unwrap();
+        drop(archive);
+
+        OpenOptions::new()
+            .append(true)
+            .open(paths.events.as_std_path())
+            .unwrap()
+            .write_all(br#"{"event_kind""#)
+            .unwrap();
+        fs::write(
+            paths.origin_evidence.join(&stored.sha256).as_std_path(),
+            b"corrupt",
+        )
+        .unwrap();
+
+        let archive = Archive::open(paths.clone(), corpus, "2026-01-01T00:00:00Z").unwrap();
+        let read = archive.read_committed().unwrap();
+        assert!(read.events.is_empty());
+        assert_eq!(read.quarantined_events.len(), 1);
+        assert_eq!(fs::read(paths.events.as_std_path()).unwrap(), committed);
+    }
+
+    #[test]
+    fn test_corrupt_origin_quarantines_only_the_affected_event() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let corpus = CorpusId::parse("fixture").unwrap();
+        let paths = ArchivePaths::new(root, &corpus).unwrap();
+        let mut archive =
+            Archive::open(paths.clone(), corpus.clone(), "2026-01-01T00:00:00Z").unwrap();
+        let good_bytes = br#"[{"id":"3","content":"good"}]"#;
+        let bad_bytes = br#"[{"id":"4","content":"damaged"}]"#;
+        let good_page: Value = serde_json::from_slice(good_bytes).unwrap();
+        let bad_page: Value = serde_json::from_slice(bad_bytes).unwrap();
+        let good_stored = archive.store_origin_evidence(good_bytes).unwrap();
+        let bad_stored = archive.store_origin_evidence(bad_bytes).unwrap();
+        let good = fixture_event_with_evidence(1, &good_stored, &good_page, "/0");
+        let bad = fixture_event_with_evidence(2, &bad_stored, &bad_page, "/0");
+        archive
+            .append_batch(&[good], "3", "2026-01-01T00:00:00Z")
+            .unwrap();
+        archive
+            .append_batch(&[bad], "4", "2026-01-01T00:00:00Z")
+            .unwrap();
+        drop(archive);
+        fs::write(
+            paths.origin_evidence.join(&bad_stored.sha256).as_std_path(),
+            b"cosmic-ray",
+        )
+        .unwrap();
+
+        let archive = Archive::open(paths, corpus, "2026-01-01T00:00:00Z").unwrap();
+        let read = archive.read_committed().unwrap();
+        assert_eq!(read.events.len(), 1);
+        assert_eq!(read.events[0].source.message_id, "3");
+        assert_eq!(read.quarantined_events.len(), 1);
+        assert_eq!(read.quarantined_events[0].event.source.message_id, "4");
+        assert!(
+            read.quarantined_events[0]
+                .origin_error
+                .contains("does not match its digest")
+        );
     }
 
     #[cfg(unix)]

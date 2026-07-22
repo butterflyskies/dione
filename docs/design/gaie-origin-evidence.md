@@ -21,9 +21,11 @@ receipt.
 
 ## Goal
 
-Retain the exact successful Discord HTTP message-page bytes before normalized
-events derived from that page are committed. Bind each new normalized event to
-the retained observation through a typed, content-addressed reference.
+Retain the exact successful Discord HTTP message-page bytes for every non-empty
+page before normalized events derived from that page are committed. Bind each
+new normalized event to the retained observation through a typed,
+content-addressed reference. Empty terminal pages yield no event or evidence
+reference and are not retained as orphan CAS objects.
 
 ## Non-goals
 
@@ -37,8 +39,9 @@ the retained observation through a typed, content-addressed reference.
 
 ## Requirements
 
-- **OE-R1 — exact bytes:** Store the exact successful message-page response
-  body, without parse/reserialize, below the configured GAIE data directory.
+- **OE-R1 — exact bytes:** Store the exact successful non-empty message-page
+  response body, without parse/reserialize, below the configured GAIE data
+  directory.
 - **OE-R2 — content addressing:** Name observations by SHA-256. Reusing an
   existing object must verify its bytes match its name.
 - **OE-R3 — durable-before-derived:** Persist and fsync the observation before
@@ -69,18 +72,22 @@ retained byte string.
 `Archive` owns a hardened `origin-evidence/` content-addressed store. Storing a
 page returns an internal stored-object handle; the Discord adapter combines that
 handle with a canonical selector to construct the serialized
-`OriginEvidenceRef`. The backfill persists every fetched page once, then sorts
-the derived message records by snowflake as before. Each message event
-references `/<page-index>`; reaction snapshots reference
+`OriginEvidenceRef`. The backfill persists every non-empty fetched page once,
+discards terminal empty pages before CAS storage, then sorts the derived message
+records by snowflake as before. Each message event references `/<page-index>`;
+reaction snapshots reference
 `/<page-index>/reactions/<reaction-index>`.
 
 The archive treats serialized evidence references as untrusted input. Before an
-event is appended, and again when committed events are read, it validates the
-exact adapter contract, lowercase digest grammar, digest-derived location,
-regular non-symlink object, byte digest, event-kind-specific selector, source
-message ID, and Python-v11 semantic hash of the selected JSON. Public schema
-types remain serializable for compatibility; validity is established only at
-the archive boundary.
+event is appended, and again when committed events are read, it dispatches by
+the adapter version recorded in the receipt and validates that version's exact
+contract, lowercase digest grammar, digest-derived location, regular
+non-symlink object, byte digest, event-kind-specific selector, source message
+ID, and Python-v11 semantic hash of the selected JSON. Collector version remains
+ingest metadata and is not part of the response-body adapter contract. Public
+schema types remain serializable for compatibility; validity is established
+only at the archive boundary. Within one append or read pass, a page is read,
+hashed, and parsed once per digest, then reused for each event selector.
 
 The existing canonicalized `raw_payload_sha256` remains in `Ingest`. The new
 optional evidence reference answers a different question:
@@ -107,6 +114,17 @@ reaction snapshots it authenticates the emoji name/ID/key, count details,
 
 ## Failure and recovery
 
+- Structural batch and torn-tail recovery runs before origin-evidence
+  validation. A damaged receipt cannot prevent the committed NDJSON prefix from
+  being recovered.
+- Append remains fail-closed: a new event whose receipt does not validate is
+  never committed.
+- Read is available-but-loud: a structurally committed event whose receipt no
+  longer validates is excluded from ordinary `ReadResult.events` and returned
+  only as a typed `QuarantinedEvent` carrying the validation error. CLI reads
+  emit a warning for every quarantined event. Callers must opt in to handling
+  quarantined data; it is never silently mixed with verified or legacy
+  unreceipted events.
 - A crash before evidence rename leaves only a hidden temporary file; opening
   or retrying does not treat it as evidence.
 - A crash after evidence rename but before event commit may leave an unreferenced
@@ -151,7 +169,12 @@ reaction snapshots it authenticates the emoji name/ID/key, count details,
 - Injected evidence-directory sync failure blocks both verified-object reuse
   and event append; a later successful retry commits exactly once.
 - Fabricated locations and selectors are rejected on append, and forged
-  committed archives are rejected on read.
+  committed events are quarantined on read without hiding unaffected events.
+- One corrupted evidence object quarantines only the events that reference it;
+  neighboring verified events remain available, and torn-tail recovery still
+  completes first.
+- Collector-version changes do not invalidate old adapter-v1 receipts;
+  unsupported adapter versions fail append or enter quarantine on read.
 - Existing Python-v11 oracle parity fixtures remain byte-for-byte unchanged.
 - A no-op rerun appends neither events nor duplicate evidence bytes.
 

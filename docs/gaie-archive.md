@@ -3,9 +3,10 @@
 GAIE archive support is disabled by default and runs only through the explicit
 `gaie_archive` one-shot binary. Normal Dione daemon startup never backfills.
 
-Every successful Discord message-page response is retained byte-for-byte in
-`origin-evidence/<sha256>` before any normalized event derived from that page
-is committed. New events carry an optional typed evidence reference: message
+Every successful non-empty Discord message-page response is retained
+byte-for-byte in `origin-evidence/<sha256>` before any normalized event derived
+from that page is committed. Empty terminal pages are not retained because they
+yield no event or evidence reference. New events carry an optional typed evidence reference: message
 creates select `/<page-index>`, and reaction snapshots select
 `/<page-index>/reactions/<reaction-index>`. Discord evidence names the
 `discord-http-message-page` adapter and deliberately omits harness identity.
@@ -13,9 +14,13 @@ Adapter version `1` versions this response-array-to-JSON-Pointer contract; it
 is independent of the collector version.
 The existing `raw_payload_sha256` remains the Python-v11-compatible semantic
 hash; it is not replaced by the exact-byte evidence digest.
-Archive append and read both revalidate the adapter contract, canonical
+Archive append and read both dispatch by the adapter version recorded in the
+receipt and revalidate that contract, canonical
 digest-derived location, regular non-symlink CAS object, exact-byte digest,
 event-kind selector shape, source message ID, and selected semantic hash.
+Collector version remains independent ingest metadata. Each read pass caches a
+validated parsed page by digest so multiple selectors do not repeatedly read
+and parse the same evidence object.
 Evidence-directory durability is synchronized again immediately before a
 referencing batch is appended.
 The shared adapter projection additionally binds all normalized fields derived
@@ -28,6 +33,13 @@ When Discord supplies `channel_id` or `guild_id`, the projection authenticates
 that value against the normalized source. Symlink and ancestor checks run
 again at validation and fsync boundaries; residual pathname check/use races
 remain until a future fd-relative storage redesign.
+
+Append fails closed on any invalid receipt. Reads first recover the structural
+committed prefix, then partition origin failures into typed quarantined events.
+Quarantined events are excluded from the ordinary event list and carry a loud
+validation error; unaffected verified and legacy unreceipted events remain
+available. The CLI reports every quarantine rather than silently treating it as
+verified data.
 
 Atom 1 archives the configured parent channel through Discord's raw HTTP
 message response, emits `message_create` plus aggregate `reaction_snapshot`

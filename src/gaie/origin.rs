@@ -173,10 +173,7 @@ pub(crate) fn validate_discord_projection(
 }
 
 fn validate_common(event: &Event, message: &DiscordMessageProjection) -> Result<(), &'static str> {
-    if event.schema_version != "1"
-        || event.source.platform != "discord"
-        || event.ingest.collector_version != DISCORD_COLLECTOR_VERSION
-    {
+    if event.schema_version != "1" || event.source.platform != "discord" {
         return Err("event constants do not match the adapter contract");
     }
     if message

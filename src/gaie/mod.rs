@@ -7,7 +7,9 @@ mod origin;
 mod replay;
 mod service;
 
-pub use archive::{Archive, ArchiveError, ArchivePaths, Checkpoint, ReadResult, StreamCheckpoint};
+pub use archive::{
+    Archive, ArchiveError, ArchivePaths, Checkpoint, QuarantinedEvent, ReadResult, StreamCheckpoint,
+};
 pub use backfill::{BackfillOptions, BackfillRunError, CaptureRoot, CaptureTarget, run_backfill};
 pub use model::{
     Attachment, CorpusId, Event, EventKind, Ingest, Lineage, OriginAdapter, OriginEvidenceRef,

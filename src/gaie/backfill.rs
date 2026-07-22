@@ -183,15 +183,23 @@ pub async fn run_backfill(
         updated_at: String::new(),
     });
     let committed = archive.read_committed()?;
-    let mut seen: HashSet<String> = committed
+    let committed_events: Vec<_> = committed
         .events
+        .iter()
+        .chain(
+            committed
+                .quarantined_events
+                .iter()
+                .map(|quarantined| &quarantined.event),
+        )
+        .collect();
+    let mut seen: HashSet<String> = committed_events
         .iter()
         .filter(|event| matches!(event.event_kind, crate::gaie::EventKind::MessageCreate))
         .map(|event| event.source.message_id.clone())
         .collect();
     let mut committed_stream_max = BTreeMap::<String, u64>::new();
-    for event in committed
-        .events
+    for event in committed_events
         .iter()
         .filter(|event| matches!(event.event_kind, crate::gaie::EventKind::MessageCreate))
     {
@@ -215,7 +223,7 @@ pub async fn run_backfill(
                 .await?;
         messages.sort_by_key(|message| {
             message
-                .value
+                .value()
                 .get("id")
                 .and_then(Value::as_str)
                 .and_then(|id| id.parse::<u64>().ok())
@@ -228,7 +236,7 @@ pub async fn run_backfill(
             stream_max = maximum_message_id(stream_max.as_deref(), Some(*committed_max))?;
         }
         for observed in messages {
-            let message = &observed.value;
+            let message = observed.value();
             let message_id = message
                 .get("id")
                 .and_then(Value::as_str)
@@ -303,10 +311,17 @@ pub async fn run_backfill(
 }
 
 struct FetchedMessage {
-    value: Value,
     page: Arc<Value>,
     message_index: usize,
     stored: StoredOriginEvidence,
+}
+
+impl FetchedMessage {
+    fn value(&self) -> &Value {
+        self.page
+            .get(self.message_index)
+            .expect("message index was derived from this retained page")
+    }
 }
 
 async fn fetch_target_messages(
@@ -333,10 +348,10 @@ async fn fetch_target_messages(
                 .observed_message_page(token, target, before.as_deref(), None)
                 .await?
         };
-        let stored = archive.store_origin_evidence(page.exact_bytes())?;
         if page.is_empty() {
             break;
         }
+        let stored = archive.store_origin_evidence(page.exact_bytes())?;
         let parsed = Arc::new(page.into_parsed());
         let page_messages = parsed.as_array().ok_or(BackfillRunError::InvalidMessage)?;
         let request_after = if before.is_none() {
@@ -361,8 +376,7 @@ async fn fetch_target_messages(
                         .and_then(|id| id.parse::<u64>().ok())
                         .is_some_and(|id| lower_bound.is_none_or(|bound| id > bound))
                 })
-                .map(|(message_index, message)| FetchedMessage {
-                    value: message.clone(),
+                .map(|(message_index, _)| FetchedMessage {
                     page: Arc::clone(&parsed),
                     message_index,
                     stored: stored.clone(),

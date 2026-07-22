@@ -82,7 +82,7 @@ impl MessageOriginEvidence<'_> {
                 version: DISCORD_HTTP_ADAPTER_VERSION.to_owned(),
             },
             sha256: self.stored.sha256.clone(),
-            location: self.stored.location.clone(),
+            location: self.stored.location(),
             media_type: "application/json".to_owned(),
             selector,
             harness: None,
@@ -1123,7 +1123,6 @@ mod tests {
         let page = serde_json::json!([{"id":"2"}, message.clone()]);
         let stored = StoredOriginEvidence {
             sha256: "a".repeat(64),
-            location: format!("origin-evidence/{}", "a".repeat(64)),
         };
         let origin = MessageOriginEvidence {
             page: &page,
@@ -1174,7 +1173,6 @@ mod tests {
         let wrong_page = serde_json::json!([{"id":"4","attachments":[]}]);
         let stored = StoredOriginEvidence {
             sha256: "a".repeat(64),
-            location: format!("origin-evidence/{}", "a".repeat(64)),
         };
         let origin = MessageOriginEvidence {
             page: &wrong_page,
@@ -2122,6 +2120,13 @@ mod tests {
 
         assert_eq!(added, 0);
         assert_eq!(archive.read_committed().unwrap().events.len(), 1);
+        assert!(
+            fs::read_dir(temp.path().join("origin-evidence"))
+                .unwrap()
+                .next()
+                .is_none(),
+            "terminal empty message pages must not create orphan evidence objects"
+        );
         assert_eq!(
             checkpoint.streams["100"].after_message_id.as_deref(),
             Some("160")
