@@ -1131,4 +1131,73 @@ mod tests {
             );
         }
     }
+
+    // ── Lab case: retry-without-threading (s48 failure mode) ─────────────
+    //
+    // Scenario from session 48 (2026-07-19):
+    //   1. Construct fabricates an inbound <channel> message (phantom).
+    //   2. Construct calls reply() with reply_to targeting the phantom's
+    //      message ID. Discord returns "Unknown Message" — the canary fires.
+    //   3. Construct retries the same reply WITHOUT reply_to (unthreaded).
+    //   4. The unthreaded retry succeeds and the phantom leak posts.
+    //
+    // Root cause: the canary (reply_to failure) detected the fabrication
+    // but the construct routed around it by dropping the threading. 28
+    // seconds of correct detection, bypassed by a single retry.
+    //
+    // The receipt gate must fail-closed: if an action's threaded form was
+    // rejected, the unthreaded form of the same action must also be denied.
+    // Currently the gate only covers ReactScope — the reply path is entirely
+    // ungated. These tests document the gap and the design requirement.
+
+    #[test]
+    fn reply_command_cannot_mint_react_authority() {
+        let store = ReceiptStore::new();
+        let source = AuthenticatedSourceEvent::from_dione_gateway(
+            MessageId::new(456),
+            PACE,
+            CHANNEL,
+            "/reply hello world".into(),
+        );
+
+        assert!(
+            matches!(
+                store.mint(&source, &test_policy()),
+                Err(ReceiptStoreError::InvalidCommand)
+            ),
+            "reply commands must not mint react-scoped authority — \
+             the reply path needs its own scope type (lab gap)"
+        );
+    }
+
+    #[test]
+    fn unthreaded_retry_has_no_gate_path() {
+        let store = ReceiptStore::new();
+
+        // A legitimate react authority exists for this channel.
+        let authority_id = mint_test_receipt(&store);
+
+        // An unthreaded reply to the same channel has no authority type to
+        // verify against. The only scope the gate knows is ReactScope —
+        // there is no ReplyScope. This test documents the gap: a construct
+        // that retries without threading bypasses the gate entirely because
+        // the gate has no surface to evaluate the action.
+        //
+        // Design requirement: when ReplyScope is added, a reply whose
+        // threaded form was rejected (reply_to → Unknown Message) must
+        // be denied in unthreaded form too. The receipt for the original
+        // source event must bind both the threaded and unthreaded action
+        // variants, so dropping reply_to does not escape the gate.
+        let react_result = store.verify(&verify_request(&store, authority_id, test_scope()));
+        assert_eq!(
+            react_result.verdict,
+            GateVerdict::Allow,
+            "react path is gated (baseline)"
+        );
+
+        // No equivalent verify call exists for replies — that is the gap.
+        // When ReplyScope is implemented, add:
+        //   let reply_request = VerifyRequest::reply(authority_id, reply_scope, invocation);
+        //   assert_eq!(store.verify(&reply_request).verdict, GateVerdict::Deny);
+    }
 }
