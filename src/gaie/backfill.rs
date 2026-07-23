@@ -1,5 +1,6 @@
 //! Verified capture targets and deterministic Atom 1b backfill planning.
 
+use crate::config::{DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES, DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES};
 use crate::gaie::archive::StoredOriginEvidence;
 use crate::gaie::service::{MessageOriginEvidence, message_batch_with_origin};
 use crate::gaie::{
@@ -121,6 +122,20 @@ pub enum BackfillRunError {
     InvalidMessage,
     #[error("parent-only mode is unavailable for forum/media roots")]
     ParentStreamUnavailable,
+    #[error("attachment byte limits must be nonzero and the run limit must cover one attachment")]
+    InvalidAttachmentLimits,
+    #[error(
+        "attachment `{attachment_id}` declares {size} bytes, exceeding the {maximum} byte per-attachment limit"
+    )]
+    AttachmentDeclaredTooLarge {
+        attachment_id: String,
+        size: u64,
+        maximum: u64,
+    },
+    #[error(
+        "attachment downloads encountered in this run require {total} bytes, exceeding the {maximum} byte cumulative download limit"
+    )]
+    AttachmentDownloadBudgetExceeded { total: u64, maximum: u64 },
 }
 
 #[non_exhaustive]
@@ -129,6 +144,8 @@ pub struct BackfillOptions<'a> {
     guild_id: &'a str,
     parent_channel_id: &'a str,
     allow_partial: bool,
+    max_attachment_bytes: u64,
+    max_run_download_bytes: u64,
 }
 
 impl<'a> BackfillOptions<'a> {
@@ -143,7 +160,88 @@ impl<'a> BackfillOptions<'a> {
             guild_id,
             parent_channel_id,
             allow_partial,
+            max_attachment_bytes: DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES,
+            max_run_download_bytes: DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES,
         }
+    }
+
+    /// Overrides the fail-closed per-attachment and cumulative run limits.
+    pub fn with_attachment_limits(
+        mut self,
+        max_attachment_bytes: u64,
+        max_run_download_bytes: u64,
+    ) -> Self {
+        self.max_attachment_bytes = max_attachment_bytes;
+        self.max_run_download_bytes = max_run_download_bytes;
+        self
+    }
+}
+
+#[derive(Debug)]
+struct AttachmentDownloadBudget {
+    maximum_attachment_bytes: u64,
+    maximum_run_download_bytes: u64,
+    reserved_download_bytes: u64,
+}
+
+impl AttachmentDownloadBudget {
+    fn new(
+        maximum_attachment_bytes: u64,
+        maximum_run_download_bytes: u64,
+    ) -> Result<Self, BackfillRunError> {
+        if maximum_attachment_bytes == 0
+            || maximum_run_download_bytes == 0
+            || maximum_run_download_bytes < maximum_attachment_bytes
+        {
+            return Err(BackfillRunError::InvalidAttachmentLimits);
+        }
+        Ok(Self {
+            maximum_attachment_bytes,
+            maximum_run_download_bytes,
+            reserved_download_bytes: 0,
+        })
+    }
+
+    fn reserve_declared(
+        &mut self,
+        attachment_id: &str,
+        declared_bytes: u64,
+    ) -> Result<(), BackfillRunError> {
+        if declared_bytes > self.maximum_attachment_bytes {
+            return Err(BackfillRunError::AttachmentDeclaredTooLarge {
+                attachment_id: attachment_id.to_owned(),
+                size: declared_bytes,
+                maximum: self.maximum_attachment_bytes,
+            });
+        }
+        self.increase_charge(declared_bytes)
+    }
+
+    fn maximum_download_bytes(&self, declared_bytes: u64) -> u64 {
+        self.maximum_attachment_bytes.min(
+            declared_bytes
+                .saturating_add(self.maximum_run_download_bytes - self.reserved_download_bytes),
+        )
+    }
+
+    fn record_actual(
+        &mut self,
+        declared_bytes: u64,
+        actual_bytes: u64,
+    ) -> Result<(), BackfillRunError> {
+        self.increase_charge(actual_bytes.saturating_sub(declared_bytes))
+    }
+
+    fn increase_charge(&mut self, bytes: u64) -> Result<(), BackfillRunError> {
+        let total = self.reserved_download_bytes.saturating_add(bytes);
+        if total > self.maximum_run_download_bytes {
+            return Err(BackfillRunError::AttachmentDownloadBudgetExceeded {
+                total,
+                maximum: self.maximum_run_download_bytes,
+            });
+        }
+        self.reserved_download_bytes = total;
+        Ok(())
     }
 }
 
@@ -155,6 +253,10 @@ pub async fn run_backfill(
     corpus: CorpusId,
     created_at: &str,
 ) -> Result<usize, BackfillRunError> {
+    let mut attachment_budget = AttachmentDownloadBudget::new(
+        options.max_attachment_bytes,
+        options.max_run_download_bytes,
+    )?;
     let root = client
         .capture_root(
             token,
@@ -247,6 +349,22 @@ pub async fn run_backfill(
             if seen.contains(&message_id) {
                 continue;
             }
+            for attachment in message
+                .get("attachments")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let attachment_id = attachment
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or(BackfillRunError::InvalidMessage)?;
+                let declared_bytes = attachment
+                    .get("size")
+                    .and_then(Value::as_u64)
+                    .ok_or(BackfillRunError::InvalidMessage)?;
+                attachment_budget.reserve_declared(attachment_id, declared_bytes)?;
+            }
             let observed_at = archive_timestamp();
             let mut attachment_hashes = std::collections::HashMap::new();
             for attachment in message
@@ -263,10 +381,21 @@ pub async fn run_backfill(
                     .get("url")
                     .and_then(Value::as_str)
                     .ok_or(BackfillRunError::InvalidMessage)?;
-                let digest = client
-                    .download_attachment(url, archive.attachments_dir())
+                let declared_bytes = attachment
+                    .get("size")
+                    .and_then(Value::as_u64)
+                    .ok_or(BackfillRunError::InvalidMessage)?;
+                let maximum_download_bytes =
+                    attachment_budget.maximum_download_bytes(declared_bytes);
+                let download = client
+                    .download_attachment_limited(
+                        url,
+                        archive.attachments_dir(),
+                        maximum_download_bytes,
+                    )
                     .await?;
-                attachment_hashes.insert(attachment_id.to_owned(), digest);
+                attachment_budget.record_actual(declared_bytes, download.size)?;
+                attachment_hashes.insert(attachment_id.to_owned(), download.sha256);
             }
             let origin = MessageOriginEvidence {
                 page: &observed.page,
@@ -628,6 +757,83 @@ mod tests {
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn attachment_download_budget_accepts_exact_per_file_and_run_boundaries() {
+        let mut budget = AttachmentDownloadBudget::new(4, 8).unwrap();
+
+        budget.reserve_declared("a", 4).unwrap();
+        budget.record_actual(4, 4).unwrap();
+        budget.reserve_declared("b", 4).unwrap();
+        budget.record_actual(4, 4).unwrap();
+
+        assert_eq!(budget.reserved_download_bytes, 8);
+    }
+
+    #[test]
+    fn attachment_download_budget_rejects_declared_file_over_boundary() {
+        let mut budget = AttachmentDownloadBudget::new(4, 8).unwrap();
+
+        let error = budget.reserve_declared("a", 5).unwrap_err();
+
+        assert!(matches!(
+            error,
+            BackfillRunError::AttachmentDeclaredTooLarge {
+                attachment_id,
+                size: 5,
+                maximum: 4,
+            } if attachment_id == "a"
+        ));
+        assert_eq!(budget.reserved_download_bytes, 0);
+    }
+
+    #[test]
+    fn attachment_download_budget_rejects_overflow_across_distinct_and_reused_blobs() {
+        let mut budget = AttachmentDownloadBudget::new(8, 10).unwrap();
+        budget.reserve_declared("first", 6).unwrap();
+        budget.record_actual(6, 6).unwrap();
+
+        let error = budget
+            .reserve_declared("same-content-second-use", 6)
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            BackfillRunError::AttachmentDownloadBudgetExceeded {
+                total: 12,
+                maximum: 10
+            }
+        ));
+        assert_eq!(budget.reserved_download_bytes, 6);
+    }
+
+    #[test]
+    fn attachment_download_budget_caps_dishonest_actual_size_at_remaining_run_budget() {
+        let mut budget = AttachmentDownloadBudget::new(10, 12).unwrap();
+        budget.reserve_declared("first", 8).unwrap();
+        budget.record_actual(8, 8).unwrap();
+        budget.reserve_declared("underreported", 1).unwrap();
+
+        assert_eq!(budget.maximum_download_bytes(1), 4);
+        budget.record_actual(1, 4).unwrap();
+        assert_eq!(budget.reserved_download_bytes, 12);
+    }
+
+    #[test]
+    fn attachment_download_budget_rejects_invalid_limits() {
+        assert!(matches!(
+            AttachmentDownloadBudget::new(0, 1).unwrap_err(),
+            BackfillRunError::InvalidAttachmentLimits
+        ));
+        assert!(matches!(
+            AttachmentDownloadBudget::new(1, 0).unwrap_err(),
+            BackfillRunError::InvalidAttachmentLimits
+        ));
+        assert!(matches!(
+            AttachmentDownloadBudget::new(2, 1).unwrap_err(),
+            BackfillRunError::InvalidAttachmentLimits
+        ));
+    }
 
     fn root() -> CaptureRoot {
         CaptureRoot {

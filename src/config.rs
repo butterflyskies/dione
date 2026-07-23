@@ -14,6 +14,11 @@ use crate::contradictionary::{Contradictionary, ContradictionaryConfig, load_sid
 use crate::pre_send::ConstructId;
 use crate::timestamp::Timestamp;
 
+/// Default maximum size of one GAIE attachment (25 MiB).
+pub const DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;
+/// Default cumulative GAIE attachment download budget for one backfill run (250 MiB).
+pub const DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES: u64 = 250 * 1024 * 1024;
+
 // ── Error type ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Error)]
@@ -68,6 +73,10 @@ pub struct ArchiveConfig {
     pub data_dir: Utf8PathBuf,
     /// Permits successful completion when Discord coverage is incomplete.
     pub allow_partial: bool,
+    /// Maximum admitted size of one attachment.
+    pub max_attachment_bytes: u64,
+    /// Maximum cumulative attachment download bytes admitted during one backfill run.
+    pub max_run_download_bytes: u64,
 }
 
 impl Default for ArchiveConfig {
@@ -79,6 +88,8 @@ impl Default for ArchiveConfig {
             corpus_id: String::new(),
             data_dir: Utf8PathBuf::new(),
             allow_partial: false,
+            max_attachment_bytes: DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES,
+            max_run_download_bytes: DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES,
         }
     }
 }
@@ -121,6 +132,18 @@ impl ArchiveConfig {
             return Err(format!(
                 "archive.channel_id must appear exactly once in [[channels]]; found {occurrences}"
             ));
+        }
+        if self.max_attachment_bytes == 0 {
+            return Err("archive.max_attachment_bytes must be nonzero".to_owned());
+        }
+        if self.max_run_download_bytes == 0 {
+            return Err("archive.max_run_download_bytes must be nonzero".to_owned());
+        }
+        if self.max_run_download_bytes < self.max_attachment_bytes {
+            return Err(
+                "archive.max_run_download_bytes must be at least archive.max_attachment_bytes"
+                    .to_owned(),
+            );
         }
         Ok(())
     }
@@ -984,6 +1007,7 @@ mod tests {
             corpus_id: "fixture-v1".to_owned(),
             data_dir: Utf8PathBuf::from("/tmp/gaie-fixture"),
             allow_partial: false,
+            ..ArchiveConfig::default()
         };
         assert!(archive.validate(&[]).is_err());
         assert!(
@@ -1019,6 +1043,7 @@ mod tests {
             corpus_id: "../escape".into(),
             data_dir: Utf8PathBuf::from("relative"),
             allow_partial: false,
+            ..ArchiveConfig::default()
         };
         let channels = [ChannelConfig {
             id: "42".into(),
@@ -1027,6 +1052,61 @@ mod tests {
         assert!(archive.validate(&channels).is_err());
         archive.corpus_id = "safe".into();
         assert!(archive.validate(&channels).is_err());
+    }
+
+    #[test]
+    fn test_archive_attachment_limits_have_safe_defaults() {
+        let archive = ArchiveConfig::default();
+        let deserialized: ArchiveConfig = toml::from_str("").unwrap();
+
+        assert_eq!(
+            archive.max_attachment_bytes,
+            DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES
+        );
+        assert_eq!(
+            archive.max_run_download_bytes,
+            DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES
+        );
+        assert!(archive.max_run_download_bytes >= archive.max_attachment_bytes);
+        assert_eq!(deserialized, archive);
+    }
+
+    #[test]
+    fn test_archive_attachment_limits_must_be_nonzero_and_ordered() {
+        let channels = [ChannelConfig {
+            id: "42".into(),
+            ..ChannelConfig::default()
+        }];
+        let mut archive = ArchiveConfig {
+            enabled: true,
+            channel_id: "42".into(),
+            guild_id: "7".into(),
+            corpus_id: "safe".into(),
+            data_dir: Utf8PathBuf::from("/tmp/gaie-fixture"),
+            ..ArchiveConfig::default()
+        };
+
+        archive.max_attachment_bytes = 0;
+        assert_eq!(
+            archive.validate(&channels).unwrap_err(),
+            "archive.max_attachment_bytes must be nonzero"
+        );
+
+        archive.max_attachment_bytes = 10;
+        archive.max_run_download_bytes = 0;
+        assert_eq!(
+            archive.validate(&channels).unwrap_err(),
+            "archive.max_run_download_bytes must be nonzero"
+        );
+
+        archive.max_run_download_bytes = 9;
+        assert_eq!(
+            archive.validate(&channels).unwrap_err(),
+            "archive.max_run_download_bytes must be at least archive.max_attachment_bytes"
+        );
+
+        archive.max_run_download_bytes = 10;
+        assert!(archive.validate(&channels).is_ok());
     }
 
     #[test]
