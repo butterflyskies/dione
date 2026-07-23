@@ -22,6 +22,12 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 use uuid::Uuid;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DownloadedAttachment {
+    pub(crate) sha256: String,
+    pub(crate) size: u64,
+}
+
 /// Summary returned by a one-shot backfill.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackfillReport {
@@ -143,6 +149,8 @@ pub enum DiscordArchiveError {
     UnsafeBaseUrl,
     #[error("attachment URL is not an allowed Discord CDN or test origin")]
     UnsafeAttachmentUrl,
+    #[error("attachment request failed")]
+    AttachmentRequest,
     #[error("attachment storage failed for `{path}`")]
     AttachmentIo {
         path: Utf8PathBuf,
@@ -151,6 +159,8 @@ pub enum DiscordArchiveError {
     },
     #[error("stored attachment hash does not match its content-addressed filename")]
     AttachmentIntegrity,
+    #[error("attachment is {size} bytes, exceeding the {maximum} byte archive limit")]
+    AttachmentTooLarge { size: u64, maximum: u64 },
     #[error("channel `{requested}` is outside the configured archive scope `{allowed}`")]
     OutsideScope { requested: String, allowed: String },
 }
@@ -480,6 +490,21 @@ impl DiscordArchiveClient {
         url: &str,
         directory: &Utf8Path,
     ) -> Result<String, DiscordArchiveError> {
+        self.download_attachment_limited(
+            url,
+            directory,
+            crate::config::DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES,
+        )
+        .await
+        .map(|download| download.sha256)
+    }
+
+    pub(crate) async fn download_attachment_limited(
+        &self,
+        url: &str,
+        directory: &Utf8Path,
+        maximum_bytes: u64,
+    ) -> Result<DownloadedAttachment, DiscordArchiveError> {
         let url = reqwest::Url::parse(url).map_err(|_| DiscordArchiveError::UnsafeAttachmentUrl)?;
         if !self.attachment_url_allowed(&url) {
             return Err(DiscordArchiveError::UnsafeAttachmentUrl);
@@ -495,14 +520,39 @@ impl DiscordArchiveClient {
             .client
             .get(url.clone())
             .header("User-Agent", "GAIE/gaie-alpha-0.8.0");
-        let response = self.send_with_retries(request).await?;
+        let mut response = self
+            .send_with_retries(request)
+            .await
+            .map_err(redact_attachment_request_error)?;
         if !response.status().is_success() {
             return Err(DiscordArchiveError::Status);
         }
-        let bytes = response
-            .bytes()
+        if let Some(size) = response.content_length()
+            && size > maximum_bytes
+        {
+            return Err(DiscordArchiveError::AttachmentTooLarge {
+                size,
+                maximum: maximum_bytes,
+            });
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
             .await
-            .map_err(DiscordArchiveError::Request)?;
+            .map_err(|_| DiscordArchiveError::AttachmentRequest)?
+        {
+            let size = u64::try_from(bytes.len())
+                .unwrap_or(u64::MAX)
+                .saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+            if size > maximum_bytes {
+                return Err(DiscordArchiveError::AttachmentTooLarge {
+                    size,
+                    maximum: maximum_bytes,
+                });
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         let digest = hash_bytes(&bytes);
         let extension = safe_extension(url.path());
         let destination = directory.join(format!("{digest}{extension}"));
@@ -513,7 +563,10 @@ impl DiscordArchiveClient {
             if hash_bytes(&stored) != digest {
                 return Err(DiscordArchiveError::AttachmentIntegrity);
             }
-            return Ok(digest);
+            return Ok(DownloadedAttachment {
+                sha256: digest,
+                size,
+            });
         }
         let temporary = directory.join(format!(".download-{}", Uuid::new_v4().simple()));
         let mut options = OpenOptions::new();
@@ -539,7 +592,10 @@ impl DiscordArchiveClient {
         File::open(directory.as_std_path())
             .and_then(|file| file.sync_all())
             .map_err(|source| attachment_io(directory, source))?;
-        Ok(digest)
+        Ok(DownloadedAttachment {
+            sha256: digest,
+            size,
+        })
     }
 
     fn attachment_url_allowed(&self, url: &reqwest::Url) -> bool {
@@ -892,6 +948,13 @@ fn attachment_io(path: &Utf8Path, source: std::io::Error) -> DiscordArchiveError
     }
 }
 
+fn redact_attachment_request_error(error: DiscordArchiveError) -> DiscordArchiveError {
+    match error {
+        DiscordArchiveError::Request(_) => DiscordArchiveError::AttachmentRequest,
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -944,6 +1007,45 @@ mod tests {
             reqwest::Url::parse(&format!("http://{address}/")).unwrap(),
         )
         .unwrap();
+        (client, calls, server)
+    }
+
+    async fn scripted_client_with_base(
+        build_responses: impl FnOnce(&reqwest::Url) -> Vec<Vec<u8>>,
+    ) -> (
+        DiscordArchiveClient,
+        Arc<Mutex<Vec<String>>>,
+        JoinHandle<()>,
+    ) {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let base = reqwest::Url::parse(&format!("http://{address}/")).unwrap();
+        let responses = build_responses(&base);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let server_calls = Arc::clone(&calls);
+        let server = tokio::spawn(async move {
+            for response in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let mut buffer = [0; 2048];
+                loop {
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    bytes.extend_from_slice(&buffer[..read]);
+                    if read == 0 || bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request = String::from_utf8(bytes).unwrap();
+                server_calls
+                    .lock()
+                    .unwrap()
+                    .push(request.lines().next().unwrap().to_owned());
+                stream.write_all(&response).await.unwrap();
+            }
+        });
+        let client = DiscordArchiveClient::with_base_url(base).unwrap();
         (client, calls, server)
     }
 
@@ -1277,19 +1379,104 @@ mod tests {
         let client = DiscordArchiveClient::with_base_url(base.clone()).unwrap();
         let temp = tempfile::tempdir().unwrap();
         let directory = Utf8PathBuf::from_path_buf(temp.path().join("attachments")).unwrap();
-        let digest = client
-            .download_attachment(base.join("files/test.txt").unwrap().as_str(), &directory)
+        let download = client
+            .download_attachment_limited(
+                base.join("files/test.txt").unwrap().as_str(),
+                &directory,
+                4,
+            )
             .await
             .unwrap();
         server.await.unwrap();
         assert_eq!(
-            digest,
+            download.sha256,
             "fa2c8cc4f28176bbeed4b736df569a34c79cd3723e9ec42f9674b4d46ac6b8b8"
         );
+        assert_eq!(download.size, 4);
         assert_eq!(
-            fs::read(directory.join(format!("{digest}.txt")).as_std_path()).unwrap(),
+            fs::read(
+                directory
+                    .join(format!("{}.txt", download.sha256))
+                    .as_std_path()
+            )
+            .unwrap(),
             b"blob"
         );
+    }
+
+    #[tokio::test]
+    async fn test_attachment_download_rejects_dishonest_body_over_limit_before_publication() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 1024];
+            let _ = stream.read(&mut request).await.unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n4\r\nblob\r\n0\r\n\r\n",
+                )
+                .await
+                .unwrap();
+        });
+        let base = reqwest::Url::parse(&format!("http://{address}/")).unwrap();
+        let client = DiscordArchiveClient::with_base_url(base.clone()).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let directory = Utf8PathBuf::from_path_buf(temp.path().join("attachments")).unwrap();
+
+        let error = client
+            .download_attachment_limited(
+                base.join("files/test.txt").unwrap().as_str(),
+                &directory,
+                3,
+            )
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+
+        assert!(matches!(
+            error,
+            DiscordArchiveError::AttachmentTooLarge {
+                size: 4,
+                maximum: 3
+            }
+        ));
+        assert_eq!(fs::read_dir(directory).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_attachment_request_error_redacts_signed_url_and_source() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 1024];
+            let _ = stream.read(&mut request).await.unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nshort",
+                )
+                .await
+                .unwrap();
+        });
+        let base = reqwest::Url::parse(&format!("http://{address}/")).unwrap();
+        let client = DiscordArchiveClient::with_base_url(base.clone()).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let directory = Utf8PathBuf::from_path_buf(temp.path().join("attachments")).unwrap();
+        let signed_url = base.join("files/test.txt?ex=abc&sig=do-not-leak").unwrap();
+
+        let error = client
+            .download_attachment_limited(signed_url.as_str(), &directory, 10)
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+
+        assert!(matches!(error, DiscordArchiveError::AttachmentRequest));
+        assert_eq!(error.to_string(), "attachment request failed");
+        assert!(std::error::Error::source(&error).is_none());
+        assert!(!format!("{error:?}").contains("do-not-leak"));
     }
 
     #[tokio::test]
@@ -2130,6 +2317,112 @@ mod tests {
         assert_eq!(
             checkpoint.streams["100"].after_message_id.as_deref(),
             Some("160")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_attachment_budget_retry_skips_committed_prefix_before_recharging() {
+        use crate::gaie::{
+            Archive, ArchivePaths, BackfillOptions, BackfillRunError, CorpusId, EventKind,
+            run_backfill,
+        };
+
+        let temp = tempfile::tempdir().unwrap();
+        let directory = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let corpus = CorpusId::parse("fixture").unwrap();
+        let paths = ArchivePaths::new(directory, &corpus).unwrap();
+        let responses = |base: &reqwest::Url| {
+            let first_url = base.join("attachments/first.txt").unwrap();
+            let second_url = base.join("attachments/second.txt").unwrap();
+            let page = serde_json::json!([
+                {
+                    "id":"102", "channel_id":"100", "content":"second",
+                    "author":{"id":"9"}, "reactions":[],
+                    "attachments":[{
+                        "id":"202", "filename":"second.txt", "content_type":"text/plain",
+                        "size":2, "url":second_url
+                    }]
+                },
+                {
+                    "id":"101", "channel_id":"100", "content":"first",
+                    "author":{"id":"9"}, "reactions":[],
+                    "attachments":[{
+                        "id":"201", "filename":"first.txt", "content_type":"text/plain",
+                        "size":2, "url":first_url
+                    }]
+                }
+            ]);
+            vec![
+                http_json(
+                    "200 OK",
+                    r#"{"id":"100","guild_id":"10","parent_id":null,"type":0}"#,
+                ),
+                http_json("200 OK", &page.to_string()),
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\naa".to_vec(),
+            ]
+        };
+
+        let (first_client, first_calls, first_server) = scripted_client_with_base(responses).await;
+        let first_error = run_backfill(
+            &first_client,
+            "secret",
+            BackfillOptions::new("fixture", "10", "100", true).with_attachment_limits(2, 2),
+            paths.clone(),
+            corpus.clone(),
+            "2026-07-21T00:00:00Z",
+        )
+        .await
+        .unwrap_err();
+        first_server.await.unwrap();
+        assert!(matches!(
+            first_error,
+            BackfillRunError::AttachmentDownloadBudgetExceeded {
+                total: 4,
+                maximum: 2
+            }
+        ));
+        assert_eq!(
+            first_calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|request| request.contains("/attachments/"))
+                .count(),
+            1
+        );
+
+        let (second_client, second_calls, second_server) =
+            scripted_client_with_base(responses).await;
+        let added = run_backfill(
+            &second_client,
+            "secret",
+            BackfillOptions::new("fixture", "10", "100", true).with_attachment_limits(2, 2),
+            paths.clone(),
+            corpus.clone(),
+            "2026-07-21T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        second_server.await.unwrap();
+
+        let archive = Archive::open(paths, corpus, "2026-07-21T00:00:00Z").unwrap();
+        let committed = archive.read_committed().unwrap();
+        let message_ids: Vec<_> = committed
+            .events
+            .iter()
+            .filter(|event| matches!(event.event_kind, EventKind::MessageCreate))
+            .map(|event| event.source.message_id.as_str())
+            .collect();
+        assert_eq!(added, 1);
+        assert_eq!(message_ids, ["101", "102"]);
+        assert_eq!(
+            second_calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|request| request.contains("/attachments/"))
+                .count(),
+            1
         );
     }
 }

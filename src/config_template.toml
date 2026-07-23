@@ -12,6 +12,10 @@ guild_id = ""
 corpus_id = ""
 data_dir = ""
 allow_partial = false
+# Fail closed before retaining any attachment larger than 25 MiB.
+max_attachment_bytes = 26214400
+# Cumulative attachment download budget for one backfill run (250 MiB).
+max_run_download_bytes = 262144000
 
 [pre_send]
 # Enabled installs the log-only Observe pipeline. False explicitly bypasses it.

@@ -92,6 +92,10 @@ async fn backfill_parent(
             &config.archive.guild_id,
             &config.archive.channel_id,
             config.archive.allow_partial,
+        )
+        .with_attachment_limits(
+            config.archive.max_attachment_bytes,
+            config.archive.max_run_download_bytes,
         ),
         paths,
         corpus,

@@ -49,6 +49,28 @@ been fsynced. A first run safely walks full history with `before`; a resumed run
 uses the durable message ID with `after`. Repeated or malformed cursors fail
 closed.
 
+Attachment capture has two typed, startup-validated byte limits:
+`archive.max_attachment_bytes` (25 MiB by default) and
+`archive.max_run_download_bytes` (250 MiB by default). Both must be nonzero,
+and the cumulative limit must be at least the per-attachment limit. Before any
+attachment from a message is downloaded, the collector reserves the declared
+Discord sizes of every attachment on that message. It rejects an oversized file
+or cumulative overflow before publishing any attachment from that message.
+Response bodies are then read incrementally and checked against both limits, so
+an understated Discord size or HTTP length cannot bypass the guard. The
+attachment that crosses the actual-byte limit is never renamed into the
+canonical content-addressed namespace.
+
+The cumulative download budget counts logical attachment occurrences actually
+downloaded during the run, not newly allocated CAS bytes. Two uncommitted
+attachments with identical content therefore each consume download budget, as
+does an uncommitted transfer whose blob already exists. Messages already
+committed to the archive are skipped before budget reservation, so a stale
+checkpoint can be repaired across bounded retries instead of turning the
+per-run limit into an absolute stream-size ceiling. Unique-CAS disk budgeting
+is a separate concern and is not claimed here. Attachment errors report sizes
+and limits but never the credential-bearing CDN URL.
+
 Atom 1b expands one allowlisted capture root to the parent plus every active or
 archived thread visible to the authenticated Discord principal. Completeness is
 therefore **principal-visible and non-atomic**, not global or historical: a
