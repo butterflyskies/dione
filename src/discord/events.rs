@@ -1022,7 +1022,7 @@ async fn should_filter_bot_message(
         None => true,
     };
     if filtered {
-        warn_dropped_bot_message(state, config, ctx).await;
+        warn_dropped_bot_message(http, state, config, ctx).await;
     }
     filtered
 }
@@ -1031,25 +1031,32 @@ async fn should_filter_bot_message(
 /// how to let it through.
 ///
 /// The warning is deliberately narrow. It fires only where adding the sender to
-/// `[access].allow_from` is genuinely the fix, because a warning that names the
-/// wrong remedy costs more diagnosis time than silence does — that misdirection
-/// is the whole of #228. Three classes of drop are therefore reported at
-/// `debug` instead:
+/// `[access].allow_from` genuinely moves the message forward, because a warning
+/// that names the wrong remedy costs more diagnosis time than silence does —
+/// that misdirection is the whole of #228. Three classes of drop are therefore
+/// reported at `debug` instead:
 ///
 /// - **Our own gateway echoes.** Every message this construct sends comes back
 ///   over `MESSAGE_CREATE` and is dropped by this same filter. Following the
-///   remediation would make the construct ingest its own output.
+///   remediation would make the construct ingest its own output. An unknown
+///   self-ID counts as possibly-us, so the startup window before `ready()` fails
+///   closed rather than accusing ourselves.
 /// - **Webhook-authored messages.** Discord reports the webhook's ID as the
-///   author, and webhook IDs are recreated freely, so allowlisting one is not a
-///   durable fix.
+///   author rather than a bot user's, so the advice would name an ID that is not
+///   stable across webhook recreation. Bridges that keep a stable webhook per
+///   channel are a real exception, tracked in #228.
 /// - **Channels this construct was never configured to read.** The guild gate
 ///   would drop those regardless of the allowlist, so `allow_from` is not what
 ///   is standing in the way.
+///
+/// Where the channel keeps gates of its own, the warning names them rather than
+/// claiming the global list is the whole story — see [`ChannelRemedy`].
 ///
 /// What survives is throttled per (bot user ID, channel ID) pair — see
 /// [`DROPPED_BOT_WARN_COOLDOWN`] — so a chatty peer bot in a busy channel
 /// cannot turn the warning into a flood.
 async fn warn_dropped_bot_message(
+    http: &serenity::http::Http,
     state: &crate::state::State,
     config: &crate::config::LoadedConfig,
     ctx: &BotMessageContext,
@@ -1066,13 +1073,13 @@ async fn warn_dropped_bot_message(
         "dropped bot message"
     );
 
-    if ctx.self_id == Some(ctx.user_id) || ctx.webhook_id.is_some() {
-        return;
-    }
-    if !is_watched_channel(state, config, channel_id, ctx.is_dm).await {
+    if ctx.self_id.is_none_or(|self_id| self_id == ctx.user_id) || ctx.webhook_id.is_some() {
         return;
     }
 
+    // Settle the throttle before resolving the channel: that resolution can
+    // cost an HTTP round trip on a thread we have not seen, and this runs on
+    // every dropped message.
     let now = Instant::now();
     {
         let state = state.read().await;
@@ -1081,45 +1088,101 @@ async fn warn_dropped_bot_message(
             return;
         }
     }
+
+    let Some(remedy) = channel_remedy(http, state, config, ctx).await else {
+        return;
+    };
+
     let claimed = {
         let mut state = state.write().await;
         state.claim_dropped_bot_warning(user_id, channel_id, now, DROPPED_BOT_WARN_COOLDOWN)
     };
-    if claimed {
+    if !claimed {
+        return;
+    }
+
+    // Two messages rather than an assembled string, so each remains a static
+    // literal that can be grepped for and that carries no interpolation.
+    if remedy.channel_allowlist_also_blocks {
         tracing::warn!(
             bot_user_id = user_id,
             channel_id,
-            "dropped message from bot not in the allowlist — to receive it, add \
-             this bot_user_id to the global [access].allow_from list in config.toml; \
-             a per-channel allow_from does not grant bots access"
+            require_mention = remedy.require_mention,
+            "dropped message from bot not in the allowlist — add this bot_user_id to \
+             BOTH the global [access].allow_from list and this channel's own allow_from \
+             in config.toml; each gates this sender independently"
+        );
+    } else {
+        tracing::warn!(
+            bot_user_id = user_id,
+            channel_id,
+            require_mention = remedy.require_mention,
+            "dropped message from bot not in the allowlist — add this bot_user_id to the \
+             global [access].allow_from list in config.toml; this channel keeps no \
+             allow_from of its own, so the global list is the only allowlist involved"
         );
     }
 }
 
-/// Returns whether inbound messages from this channel are eligible for delivery
-/// at all, ignoring per-sender rules.
+/// The channel-level gates that still apply to a sender once the global
+/// allowlist admits it.
 ///
-/// Mirrors the channel opt-in half of [`InboundGate`] without the sender
-/// checks, so the dropped-bot warning can tell "this bot is not allowlisted"
-/// apart from "this channel was never wired up", which need different fixes.
+/// The global `[access].allow_from` list is never the only thing between a bot
+/// and delivery, and #228 was made expensive by exactly that assumption. These
+/// fields let the warning say what else is in play instead of implying the
+/// global list is the whole story.
+struct ChannelRemedy {
+    /// The channel keeps a non-empty `allow_from` of its own that omits this
+    /// sender, so that list needs the ID too. Reported because the natural
+    /// reading of "not in the allowlist" is that there is only one allowlist.
+    channel_allowlist_also_blocks: bool,
+    /// The channel only delivers messages that mention this construct, so
+    /// allowlisting alone will not surface its ambient chatter. Carried as a
+    /// field rather than a message variant because it gates individual
+    /// messages, not the sender.
+    require_mention: bool,
+}
+
+/// Returns what still stands between this sender and delivery, or `None` when
+/// the global allowlist is not the blocker at all.
 ///
-/// Thread parents are read from cache only. An unseen thread reads as unwatched
-/// rather than issuing an HTTP lookup on the drop path — costing at most a
-/// missed warning on the first message in a new thread.
-async fn is_watched_channel(
+/// Mirrors the configuration half of [`InboundGate::check_guild`] — channel
+/// opt-in and the channel's own `allow_from` — so the warning fires only where
+/// the global list is genuinely part of the answer. `require_mention` is
+/// reported rather than suppressed: it turns on individual messages, so the
+/// allowlist is still the right first edit.
+///
+/// Thread parents resolve through [`resolve_thread_parent`], which caches
+/// negatives, so an unrecognised channel costs one HTTP lookup ever. The caller
+/// settles the throttle first, keeping that lookup off the per-message path.
+async fn channel_remedy(
+    http: &serenity::http::Http,
     state: &crate::state::State,
     config: &crate::config::LoadedConfig,
-    channel_id: u64,
-    is_dm: bool,
-) -> bool {
-    if is_dm {
-        return config.access.dm_policy != crate::config::DmPolicy::Disabled;
+    ctx: &BotMessageContext,
+) -> Option<ChannelRemedy> {
+    if ctx.is_dm {
+        return (config.access.dm_policy != crate::config::DmPolicy::Disabled).then_some(
+            ChannelRemedy {
+                channel_allowlist_also_blocks: false,
+                require_mention: false,
+            },
+        );
     }
-    if config.channel_policy(channel_id).is_some() {
-        return true;
-    }
-    let parent = state.read().await.thread_parents.get(&channel_id).copied();
-    matches!(parent, Some(Some(parent)) if config.channel_policy(parent).is_some())
+
+    let channel_id = ctx.channel_id.get();
+    let gate_channel_id = if config.channel_policy(channel_id).is_some() {
+        channel_id
+    } else {
+        resolve_thread_parent(http, state, channel_id).await?
+    };
+    let policy = config.channel_policy(gate_channel_id)?;
+
+    Some(ChannelRemedy {
+        channel_allowlist_also_blocks: !policy.allow_from.is_empty()
+            && !policy.allow_from.contains(&ctx.user_id.get()),
+        require_mention: policy.require_mention,
+    })
 }
 
 /// Bot user IDs of known proxy bots (e.g. PluralKit) whose webhook messages
@@ -1413,12 +1476,195 @@ mod tests {
             "warning must name the global [access] table, got: {}",
             warning.message
         );
-        // The wrong-config-layer confusion is the whole of #228; the sentence
-        // ruling it out must not silently disappear.
+        // The wrong-config-layer confusion is the whole of #228, so the
+        // warning must say which allowlists are in play — here, only the
+        // global one.
         assert!(
-            warning.message.contains("per-channel"),
-            "warning must rule out per-channel config as the fix, got: {}",
+            warning.message.contains("only allowlist"),
+            "warning must say the global list is the only allowlist here, got: {}",
             warning.message
+        );
+        // `require_mention` defaults to true, so the mention gate is the common
+        // case rather than an exotic one — allowlisting alone will not surface
+        // this bot's ambient chatter, and the warning has to say so.
+        assert_eq!(
+            warning.field("require_mention"),
+            Some("true"),
+            "warning must report whether the channel gates on mentions"
+        );
+    }
+
+    /// Where the channel keeps its own `allow_from` that omits the bot, the
+    /// global list alone will not deliver the message. Saying otherwise is the
+    /// wrong-config-layer misdirection that #228 is about.
+    #[tokio::test]
+    async fn test_channel_allowlist_blocker_is_named() {
+        let raw = Config {
+            access: AccessConfig {
+                dm_policy: DmPolicy::Queue,
+                allow_from: vec!["100".to_string()],
+                admins: vec![],
+                admin_only_mutations: false,
+            },
+            channels: vec![crate::config::ChannelConfig {
+                id: "12345".to_string(),
+                allow_from: vec!["4242".to_string()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let config = LoadedConfig::from_raw(raw);
+        let (filtered, warnings) = filter_and_capture(&config, &dropped_bot_ctx()).await;
+
+        assert!(filtered);
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].message.contains("BOTH"),
+            "warning must name the per-channel allow_from as a second required edit, got: {}",
+            warnings[0].message
+        );
+    }
+
+    /// A sender already present in the channel's own `allow_from` needs only
+    /// the global list, and must not be told to edit a list it is already in.
+    #[tokio::test]
+    async fn test_channel_allowlist_containing_bot_is_not_named() {
+        let raw = Config {
+            access: AccessConfig {
+                dm_policy: DmPolicy::Queue,
+                allow_from: vec!["100".to_string()],
+                admins: vec![],
+                admin_only_mutations: false,
+            },
+            channels: vec![crate::config::ChannelConfig {
+                id: "12345".to_string(),
+                allow_from: vec!["999".to_string()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let config = LoadedConfig::from_raw(raw);
+        let (_, warnings) = filter_and_capture(&config, &dropped_bot_ctx()).await;
+
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            !warnings[0].message.contains("BOTH"),
+            "must not demand an edit to a list the bot is already in, got: {}",
+            warnings[0].message
+        );
+    }
+
+    /// `require_mention` gates individual messages rather than the sender, so
+    /// it is surfaced as a field rather than suppressing the warning. The field
+    /// must track the channel's actual setting, not a constant.
+    #[tokio::test]
+    async fn test_require_mention_field_tracks_config() {
+        let raw = Config {
+            access: AccessConfig {
+                dm_policy: DmPolicy::Queue,
+                allow_from: vec!["100".to_string()],
+                admins: vec![],
+                admin_only_mutations: false,
+            },
+            channels: vec![crate::config::ChannelConfig {
+                id: "12345".to_string(),
+                require_mention: false,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let config = LoadedConfig::from_raw(raw);
+        let (_, warnings) = filter_and_capture(&config, &dropped_bot_ctx()).await;
+
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(
+            warnings[0].field("require_mention"),
+            Some("false"),
+            "the mention gate must be reported from config, not hardcoded"
+        );
+    }
+
+    /// A bot DM is droppable and allowlistable, so it warns.
+    #[tokio::test]
+    async fn test_bot_dm_warns() {
+        let ctx = BotMessageContext {
+            is_dm: true,
+            channel_id: ChannelId::new(4000),
+            ..dropped_bot_ctx()
+        };
+        let (filtered, warnings) = filter_and_capture(&watched_config(), &ctx).await;
+
+        assert!(filtered);
+        assert_eq!(warnings.len(), 1, "a bot DM must warn like a guild message");
+        assert_eq!(warnings[0].field("channel_id"), Some("4000"));
+    }
+
+    /// With DMs disabled the message goes nowhere regardless of the allowlist,
+    /// so the allowlist is not the fix.
+    #[tokio::test]
+    async fn test_bot_dm_with_dms_disabled_does_not_warn() {
+        let raw = Config {
+            access: AccessConfig {
+                dm_policy: DmPolicy::Disabled,
+                allow_from: vec!["100".to_string()],
+                admins: vec![],
+                admin_only_mutations: false,
+            },
+            ..Default::default()
+        };
+        let config = LoadedConfig::from_raw(raw);
+        let ctx = BotMessageContext {
+            is_dm: true,
+            ..dropped_bot_ctx()
+        };
+        let (filtered, warnings) = filter_and_capture(&config, &ctx).await;
+
+        assert!(filtered);
+        assert!(
+            warnings.is_empty(),
+            "must not advise allowlisting when DMs are disabled outright, got: {:?}",
+            warnings.iter().map(|w| &w.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// A thread whose cached parent is not configured must stay quiet, like any
+    /// other unwatched channel.
+    #[tokio::test]
+    async fn test_thread_of_unwatched_channel_does_not_warn() {
+        let state = crate::state::new_state();
+        state.write().await.record_thread_parent(777, Some(55555));
+        let ctx = BotMessageContext {
+            channel_id: ChannelId::new(777),
+            ..dropped_bot_ctx()
+        };
+        let (_, warnings) = filter_with_state(&state, &watched_config(), &ctx).await;
+
+        assert!(
+            warnings.is_empty(),
+            "a thread under an unconfigured parent must not warn, got: {:?}",
+            warnings.iter().map(|w| &w.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// Before `ready()` lands we cannot tell our own echo from a peer's
+    /// message, so we stay quiet rather than risk advising the operator to
+    /// allowlist this construct into its own input.
+    #[tokio::test]
+    async fn test_unknown_self_id_does_not_warn() {
+        let ctx = BotMessageContext {
+            self_id: None,
+            ..dropped_bot_ctx()
+        };
+        let (filtered, warnings) = filter_and_capture(&watched_config(), &ctx).await;
+
+        assert!(
+            filtered,
+            "the drop itself must not depend on knowing our ID"
+        );
+        assert!(
+            warnings.is_empty(),
+            "an unknown self-ID must fail closed, got: {:?}",
+            warnings.iter().map(|w| &w.message).collect::<Vec<_>>()
         );
     }
 
@@ -1479,13 +1725,19 @@ mod tests {
 
     /// In a channel that was never configured, the guild gate drops the message
     /// regardless of the allowlist, so naming `allow_from` would be wrong.
+    ///
+    /// The channel is seeded as a confirmed non-thread so the lookup resolves
+    /// from cache; without that, `resolve_thread_parent` would reach for the
+    /// Discord API.
     #[tokio::test]
     async fn test_unwatched_channel_does_not_warn() {
+        let state = crate::state::new_state();
+        state.write().await.record_thread_parent(55555, None);
         let ctx = BotMessageContext {
             channel_id: ChannelId::new(55555),
             ..dropped_bot_ctx()
         };
-        let (filtered, warnings) = filter_and_capture(&watched_config(), &ctx).await;
+        let (filtered, warnings) = filter_with_state(&state, &watched_config(), &ctx).await;
 
         assert!(filtered, "bot must still be dropped in unwatched channels");
         assert!(

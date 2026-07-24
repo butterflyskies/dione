@@ -12,14 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   silently discarded messages from any bot missing from the global
   `[access].allow_from` list, so a peer construct simply appeared to be ignoring
   its neighbours with nothing in the logs to explain it. Qualifying drops now
-  emit a `warn` naming the sending bot's user ID, the channel, and the config
-  key to edit — including that a *per-channel* `allow_from` is not the fix.
-  Throttled per (bot user ID, channel ID) pair on a one-hour cooldown so a
-  chatty bot cannot flood the log. Drops that `allow_from` would not fix — the
-  construct's own gateway echoes, webhook-authored messages, and channels the
-  construct was never configured to read — are logged at `debug` instead, since
-  naming the wrong remedy costs more diagnosis time than silence. Every drop is
-  recorded at `debug` regardless. Drop behavior itself is unchanged. (#228)
+  emit a `warn` naming the sending bot's user ID, the channel, and every
+  configuration gate still standing in the way: whether the channel keeps an
+  `allow_from` of its own that also needs the ID, and whether it gates on
+  `require_mention`. Throttled per (bot user ID, channel ID) pair on a one-hour
+  cooldown so a chatty bot cannot flood the log; at capacity the throttle goes
+  quiet rather than evicting, since evicting re-arms the evicted pair. Drops the
+  allowlist would not fix — the construct's own gateway echoes, webhook-authored
+  messages, and channels the construct was never configured to read — are logged
+  at `debug` instead, because naming a remedy that does not work costs more
+  diagnosis time than silence. Every drop is recorded at `debug` regardless.
+  Drop behavior itself is unchanged. (#228)
 
 ## [0.23.0] - 2026-07-21
 

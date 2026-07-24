@@ -141,12 +141,14 @@ impl SharedState {
         }
     }
 
-    /// Reports whether a "dropped bot message" warning for this (bot user ID,
-    /// channel ID) pair is still suppressed by its cooldown.
+    /// Reports whether [`Self::claim_dropped_bot_warning`] would refuse this
+    /// (bot user ID, channel ID) pair.
     ///
-    /// Read-only companion to [`Self::claim_dropped_bot_warning`], so the
-    /// common suppressed case can be settled under a read lock instead of
-    /// taking the exclusive lock that guards all shared state.
+    /// Read-only companion to that method, so the common quiet case can be
+    /// settled under a read lock instead of taking the exclusive lock that
+    /// guards all shared state. It covers refusal at capacity as well as
+    /// cooldown suppression: a pair the table cannot admit records nothing, so
+    /// without this it would take the write lock on every message forever.
     pub fn dropped_bot_warning_suppressed(
         &self,
         user_id: u64,
@@ -154,9 +156,22 @@ impl SharedState {
         now: Instant,
         cooldown: Duration,
     ) -> bool {
-        self.dropped_bot_warnings
-            .get(&(user_id, channel_id))
-            .is_some_and(|&last| now.saturating_duration_since(last) < cooldown)
+        match self.dropped_bot_warnings.get(&(user_id, channel_id)) {
+            Some(&last) => now.saturating_duration_since(last) < cooldown,
+            None => self.dropped_bot_warnings_saturated(now, cooldown),
+        }
+    }
+
+    /// Whether the throttle table is full of entries that are all still within
+    /// their cooldown, leaving no room for a new pair.
+    ///
+    /// `len` is checked first so the value scan only runs on a full table.
+    fn dropped_bot_warnings_saturated(&self, now: Instant, cooldown: Duration) -> bool {
+        self.dropped_bot_warnings.len() >= DROPPED_BOT_WARN_CAP
+            && self
+                .dropped_bot_warnings
+                .values()
+                .all(|&last| now.saturating_duration_since(last) < cooldown)
     }
 
     /// Claims the right to emit a "dropped bot message" warning for a (bot user
@@ -177,7 +192,13 @@ impl SharedState {
         cooldown: Duration,
     ) -> bool {
         let key = (user_id, channel_id);
-        if self.dropped_bot_warning_suppressed(user_id, channel_id, now, cooldown) {
+        // Only the cooldown is checked here. Capacity is enforced below, after
+        // `retain` has established how much room there actually is — deferring
+        // to `dropped_bot_warning_suppressed` for that would make the check
+        // below unreachable.
+        if let Some(&last) = self.dropped_bot_warnings.get(&key)
+            && now.saturating_duration_since(last) < cooldown
+        {
             return false;
         }
         // Entries past their cooldown would permit a warning anyway, so
@@ -185,16 +206,21 @@ impl SharedState {
         // under its cap.
         self.dropped_bot_warnings
             .retain(|_, &mut last| now.saturating_duration_since(last) < cooldown);
-        // If the table is still full, every remaining entry is actively
-        // suppressing a warning. Refuse the new pair rather than evicting one
-        // of them: eviction re-arms the evicted pair, and with more live pairs
-        // than slots that degenerates into a warning per message — the very
-        // flood the cooldown exists to prevent. Going quiet is the safer
-        // failure for a log throttle, at the cost of not reporting new pairs
-        // until the table drains.
-        if !self.dropped_bot_warnings.contains_key(&key)
-            && self.dropped_bot_warnings.len() >= DROPPED_BOT_WARN_CAP
-        {
+        // Every surviving entry is now actively suppressing a warning. Refuse
+        // the new pair rather than evicting one of them: eviction re-arms the
+        // evicted pair, and with more live pairs than slots that degenerates
+        // into a warning per message — the very flood the cooldown exists to
+        // prevent. Going quiet is the safer failure for a log throttle.
+        //
+        // A pair whose cooldown has just lapsed is treated as a newcomer here,
+        // since `retain` has already dropped it.
+        //
+        // Residual risk, accepted: saturating the table suppresses warnings
+        // about pairs it has no room for until it drains. Reaching that state
+        // needs 200 distinct bots posting inside one cooldown window in
+        // channels this construct is configured to read, and it costs only the
+        // diagnostic — message filtering itself is unaffected.
+        if self.dropped_bot_warnings.len() >= DROPPED_BOT_WARN_CAP {
             return false;
         }
         self.dropped_bot_warnings.insert(key, now);
@@ -519,6 +545,28 @@ mod tests {
         assert!(
             !state.dropped_bot_warning_suppressed(888, 12345, now, TEST_COOLDOWN),
             "suppression is per pair"
+        );
+    }
+
+    /// A saturated table admits nothing, so the read path must report new pairs
+    /// as suppressed. Without this the caller takes the write lock on every
+    /// message from a pair that can never be admitted.
+    #[test]
+    fn test_dropped_bot_warning_saturation_visible_to_read_path() {
+        let mut state = SharedState::new();
+        let now = Instant::now();
+        for i in 0..DROPPED_BOT_WARN_CAP as u64 {
+            state.claim_dropped_bot_warning(i, i, now, TEST_COOLDOWN);
+        }
+        assert!(
+            state.dropped_bot_warning_suppressed(9999, 9999, now, TEST_COOLDOWN),
+            "a full table must read as suppressed for an unseen pair"
+        );
+        // Once the incumbents lapse there is room again, so the read path must
+        // stop reporting suppression rather than latching.
+        assert!(
+            !state.dropped_bot_warning_suppressed(9999, 9999, now + TEST_COOLDOWN, TEST_COOLDOWN),
+            "saturation must lift when the entries holding the table expire"
         );
     }
 
