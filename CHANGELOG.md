@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Automatic Codex `SessionStart` binding through a filesystem-protected local
+  control socket and the `dione bind-codex-thread` hook client. Both the hook
+  and MCP tool share one durable, serialized binding transaction.
+
 ## [0.23.0] - 2026-07-21
 
 ### Changed

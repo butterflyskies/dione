@@ -79,7 +79,7 @@ fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
         trace_controller: TraceLevelController::noop(),
         mode: TransportMode::ClaudeCode,
         codex_queue: None,
-        codex_thread_binding: None,
+        codex_thread_binder: None,
     }
 }
 
@@ -691,8 +691,12 @@ async fn test_bind_codex_thread_updates_live_binding() {
     let mut server = make_server(&state_dir);
     let (binding_tx, binding_rx) = tokio::sync::watch::channel(None);
     server.mode = TransportMode::Codex;
-    server.codex_queue = Some(dione::codex::CodexEventQueue::load(&state_dir).unwrap());
-    server.codex_thread_binding = Some(binding_tx);
+    let codex_queue = dione::codex::CodexEventQueue::load(&state_dir).unwrap();
+    server.codex_queue = Some(codex_queue.clone());
+    server.codex_thread_binder = Some(dione::codex::CodexThreadBinder::new(
+        codex_queue,
+        binding_tx,
+    ));
     let thread_id = "019f4b14-ccc7-7db2-80c8-fe2b888c8844";
     let request = json!({
         "jsonrpc": "2.0",
@@ -716,6 +720,11 @@ async fn test_bind_codex_thread_updates_live_binding() {
             .map(dione::codex::CodexThreadId::as_str),
         Some(thread_id)
     );
+    let persisted: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(state_dir.join("codex-inbox.json")).expect("durable Codex inbox"),
+    )
+    .expect("valid durable Codex inbox");
+    assert_eq!(persisted["live_thread_id"], thread_id);
 }
 
 // ── Notification format tests ─────────────────────────────────────────────────

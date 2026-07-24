@@ -53,22 +53,16 @@ pub(crate) async fn call_tool(
     let result = match name {
         // Durable Codex receive loop
         "bind_codex_thread" => {
-            let binding = server
-                .codex_thread_binding
+            let binder = server
+                .codex_thread_binder
                 .as_ref()
                 .ok_or_else(|| "bind_codex_thread is only available in Codex mode".to_string())?;
             let thread_id = CodexThreadId::parse(parse_str(&args, "thread_id")?)
                 .map_err(|error| error.to_string())?;
-            server
-                .codex_queue
-                .as_ref()
-                .ok_or_else(|| "Codex queue is unavailable".to_string())?
-                .bind_live_thread(Some(thread_id.clone()))
+            binder
+                .bind(thread_id.clone())
                 .await
                 .map_err(|error| error.to_string())?;
-            binding
-                .send(Some(thread_id.clone()))
-                .map_err(|_| "Codex live delivery worker is unavailable".to_string())?;
             json!({ "bound": true, "thread_id": thread_id })
         }
         "next_event" => {

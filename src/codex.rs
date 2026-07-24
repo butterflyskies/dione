@@ -7,8 +7,13 @@
 //! lease. Expired leases become eligible for redelivery.
 
 mod app_server;
+mod bind_control;
 
 pub use app_server::{CodexDeliveryConfig, CodexDeliveryError, run_delivery_worker};
+pub use bind_control::{
+    BindControlError, CodexBindControlListener, CodexThreadBinder, CodexThreadBindingError,
+    run_session_start_bind_client,
+};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::{DateTime, TimeDelta, Utc};
@@ -897,7 +902,7 @@ impl CodexEventQueue {
         }
     }
 
-    pub async fn bind_live_thread(
+    pub(crate) async fn bind_live_thread(
         &self,
         thread_id: Option<CodexThreadId>,
     ) -> Result<(), CodexQueueError> {

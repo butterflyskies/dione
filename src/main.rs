@@ -1,5 +1,5 @@
 use camino::Utf8PathBuf;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use color_eyre::eyre::{Result, WrapErr};
 use dione::{
     codex::{CodexDeliveryConfig, CodexEventQueue, TransportMode},
@@ -10,6 +10,7 @@ use dione::{
 };
 use std::{
     env,
+    future::Future,
     sync::{Arc, atomic::AtomicU64},
     time::Duration,
 };
@@ -43,6 +44,28 @@ struct Cli {
     /// Exact Codex thread to receive Discord events (defaults to CODEX_THREAD_ID)
     #[arg(long)]
     codex_thread_id: Option<dione::codex::CodexThreadId>,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Bind a Codex SessionStart hook payload through the running daemon
+    BindCodexThread {
+        /// State directory of the running Codex-mode Dione daemon
+        #[arg(long)]
+        state_dir: Utf8PathBuf,
+    },
+}
+
+async fn cancel_root_when_complete<T>(
+    cancel: CancellationToken,
+    future: impl Future<Output = T>,
+) -> T {
+    let result = future.await;
+    cancel.cancel();
+    result
 }
 
 #[tokio::main]
@@ -50,6 +73,13 @@ async fn main() -> Result<()> {
     color_eyre::install()?;
 
     let cli = Cli::parse();
+
+    if let Some(Command::BindCodexThread { state_dir }) = cli.command {
+        dione::codex::run_session_start_bind_client(&state_dir, tokio::io::stdin())
+            .await
+            .wrap_err("failed to bind the Codex SessionStart session")?;
+        return Ok(());
+    }
 
     if let Some(config_path) = cli.config {
         dione::config::set_config_path(config_path);
@@ -116,42 +146,66 @@ async fn main() -> Result<()> {
 
     // Codex owns one durable pull queue. The lifetime file lock prevents two
     // stdio-spawned Dione processes from corrupting the same inbox.
-    let (codex_queue, codex_handle, codex_thread_binding) = if cli.mode == TransportMode::Codex {
-        let codex_queue =
-            CodexEventQueue::load(&state_dir).wrap_err("failed to open Codex event queue")?;
-        let delivery_config = CodexDeliveryConfig::resolve(cli.codex_app_server_socket)
-            .wrap_err("failed to configure Codex live delivery")?;
-        let initial_thread = match cli.codex_thread_id {
-            Some(thread_id) => Some(thread_id),
-            None => env::var("CODEX_THREAD_ID")
-                .ok()
-                .map(|value| value.parse())
-                .transpose()
-                .wrap_err("invalid CODEX_THREAD_ID")?,
-        };
-        codex_queue
-            .bind_live_thread(initial_thread.clone())
-            .await
-            .wrap_err("failed to persist initial Codex thread binding")?;
-        let (binding_tx, binding_rx) = watch::channel(initial_thread);
-        let delivery_queue = codex_queue.clone();
-        let delivery_cancel = cancel.clone();
-        let handle = tokio::spawn(async move {
-            if let Err(error) = dione::codex::run_delivery_worker(
-                delivery_queue,
-                delivery_config,
-                binding_rx,
-                delivery_cancel,
-            )
-            .await
-            {
-                tracing::error!(error = %error, "Codex live delivery worker exited");
+    let (codex_queue, codex_handle, codex_thread_binder, codex_control_handle) =
+        if cli.mode == TransportMode::Codex {
+            let codex_queue =
+                CodexEventQueue::load(&state_dir).wrap_err("failed to open Codex event queue")?;
+            let delivery_config = CodexDeliveryConfig::resolve(cli.codex_app_server_socket)
+                .wrap_err("failed to configure Codex live delivery")?;
+            let initial_thread = match cli.codex_thread_id {
+                Some(thread_id) => Some(thread_id),
+                None => env::var("CODEX_THREAD_ID")
+                    .ok()
+                    .map(|value| value.parse())
+                    .transpose()
+                    .wrap_err("invalid CODEX_THREAD_ID")?,
+            };
+            let (binding_tx, binding_rx) = watch::channel(None);
+            let binder = dione::codex::CodexThreadBinder::new(codex_queue.clone(), binding_tx);
+            match initial_thread {
+                Some(thread_id) => binder
+                    .bind(thread_id)
+                    .await
+                    .wrap_err("failed to set the initial Codex thread binding")?,
+                None => binder
+                    .clear()
+                    .await
+                    .wrap_err("failed to clear the stale Codex thread binding")?,
             }
-        });
-        (Some(codex_queue), Some(handle), Some(binding_tx))
-    } else {
-        (None, None, None)
-    };
+            let delivery_queue = codex_queue.clone();
+            let delivery_cancel = cancel.clone();
+            let handle = tokio::spawn(async move {
+                if let Err(error) = dione::codex::run_delivery_worker(
+                    delivery_queue,
+                    delivery_config,
+                    binding_rx,
+                    delivery_cancel,
+                )
+                .await
+                {
+                    tracing::error!(error = %error, "Codex live delivery worker exited");
+                }
+            });
+            let control_listener =
+                dione::codex::CodexBindControlListener::bind(&state_dir, binder.clone())
+                    .await
+                    .wrap_err("failed to start the Codex bind control listener")?;
+            let control_cancel = cancel.clone();
+            let control_handle = tokio::spawn(async move {
+                if let Err(error) = control_listener.run(control_cancel.clone()).await {
+                    tracing::error!(error = %error, "Codex bind control listener exited");
+                    control_cancel.cancel();
+                }
+            });
+            (
+                Some(codex_queue),
+                Some(handle),
+                Some(binder),
+                Some(control_handle),
+            )
+        } else {
+            (None, None, None, None)
+        };
 
     // MCP → Discord gateway command channel (for presence updates, etc.).
     let (discord_cmd_tx, discord_cmd_rx) =
@@ -185,8 +239,9 @@ async fn main() -> Result<()> {
         trace_controller,
         mode: cli.mode,
         codex_queue,
-        codex_thread_binding,
+        codex_thread_binder,
     };
+    let codex_shutdown_binder = server.codex_thread_binder.clone();
 
     // Spawn the tracing-channel forwarder: converts tracing events into NotificationEvents.
     let trace_event_tx = event_tx.clone();
@@ -228,7 +283,13 @@ async fn main() -> Result<()> {
     // Spawn MCP server (owns stdin/stdout).
     let cancel_mcp = cancel.clone();
     let mcp_handle = tokio::spawn(async move {
-        if let Err(e) = dione::mcp::server::run(server, event_rx, cancel_mcp).await {
+        let mcp_cancel = cancel_mcp.clone();
+        let result = cancel_root_when_complete(
+            cancel_mcp,
+            dione::mcp::server::run(server, event_rx, mcp_cancel),
+        )
+        .await;
+        if let Err(e) = result {
             tracing::error!(error = ?e, "MCP server exited with error");
         }
     });
@@ -245,6 +306,12 @@ async fn main() -> Result<()> {
 
     cancel.cancel();
 
+    if let Some(binder) = codex_shutdown_binder
+        && let Err(error) = binder.clear().await
+    {
+        tracing::error!(%error, "failed to clear Codex live binding during shutdown");
+    }
+
     // Allow up to 2 seconds for tasks to wind down.
     let _ = tokio::time::timeout(Duration::from_secs(2), async {
         discord_handle.abort();
@@ -252,9 +319,57 @@ async fn main() -> Result<()> {
         if let Some(codex_handle) = codex_handle {
             let _ = codex_handle.await;
         }
+        if let Some(codex_control_handle) = codex_control_handle {
+            let _ = codex_control_handle.await;
+        }
     })
     .await;
 
     tracing::info!("dione stopped");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bind_codex_thread_requires_explicit_state_directory() {
+        let error = match Cli::try_parse_from(["dione", "bind-codex-thread"]) {
+            Ok(_) => panic!("state directory must be required"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
+
+    #[test]
+    fn bind_codex_thread_parses_explicit_state_directory() {
+        let cli = Cli::try_parse_from([
+            "dione",
+            "bind-codex-thread",
+            "--state-dir",
+            "/srv/dione-state",
+        ])
+        .expect("valid bind client CLI");
+
+        assert!(matches!(
+            cli.command,
+            Some(Command::BindCodexThread { state_dir })
+                if state_dir == "/srv/dione-state"
+        ));
+    }
+
+    #[tokio::test]
+    async fn clean_task_completion_cancels_root_lifecycle() {
+        let cancel = CancellationToken::new();
+
+        let result = cancel_root_when_complete(cancel.clone(), async { "clean EOF" }).await;
+
+        assert_eq!(result, "clean EOF");
+        assert!(cancel.is_cancelled());
+    }
 }

@@ -42,7 +42,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    sync::{Mutex, mpsc, watch},
+    sync::{Mutex, mpsc},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -59,7 +59,7 @@ pub struct DioneServer {
     pub trace_controller: TraceLevelController,
     pub mode: TransportMode,
     pub codex_queue: Option<CodexEventQueue>,
-    pub codex_thread_binding: Option<watch::Sender<Option<crate::codex::CodexThreadId>>>,
+    pub codex_thread_binder: Option<crate::codex::CodexThreadBinder>,
 }
 
 // ── Context factory methods ───────────────────────────────────────────────────
@@ -626,7 +626,7 @@ mod tests {
             trace_controller: TraceLevelController::noop(),
             mode: TransportMode::ClaudeCode,
             codex_queue: None,
-            codex_thread_binding: None,
+            codex_thread_binder: None,
         };
 
         let context = server.messaging_ctx(Arc::new(LoadedConfig::from_raw(Config::default())));

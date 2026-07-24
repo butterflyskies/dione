@@ -46,9 +46,23 @@ codex mcp add dione \
   -- dione --mode codex
 ```
 
-After MCP startup, read the current session's `CODEX_THREAD_ID` and call
-`bind_codex_thread`. Repeat that binding for every new, resumed, forked, or
-switched conversation. The optional `--codex-thread-id` or inherited
+For automatic binding, configure Codex's `SessionStart` hook to pipe its JSON
+payload to the matching Dione state directory:
+
+```bash
+dione bind-codex-thread --state-dir /path/to/dione-state
+```
+
+The `--state-dir` argument is required because an MCP server's environment is
+not inherited by separately launched hook commands. The hook accepts the
+`startup`, `resume`, `clear`, and `compact` sources and exits nonzero unless the
+running Dione daemon confirms the exact session ID. The session ID travels over
+stdin and the filesystem-protected `<state-dir>/codex-control.sock`, never in
+process arguments.
+
+The MCP `bind_codex_thread` tool remains available for explicit binding. Bind
+every new, resumed, forked, cleared, compacted, or switched conversation. The
+optional `--codex-thread-id` or inherited
 `CODEX_THREAD_ID` provides an initial binding for standalone deployments, but
 MCP startup does not require one. Dione never guesses among loaded threads. The default
 app-server socket is `$CODEX_HOME/app-server-control/app-server-control.sock`

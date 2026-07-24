@@ -1740,13 +1740,14 @@ mod tests {
         .await
         .unwrap();
         run_two_server.await.unwrap();
-        let calls = run_two_calls.lock().unwrap();
-        assert_eq!(second_added, 1);
-        assert!(calls[5].contains("/channels/100/messages?limit=100&after=200"));
-        assert!(calls[6].contains("/channels/200/messages?limit=100&after=201"));
-        assert!(calls[7].contains("/channels/300/messages?limit=100&after=300"));
-        assert_eq!(calls[8], "GET /channels/400/messages?limit=100 HTTP/1.1");
-        drop(calls);
+        {
+            let calls = run_two_calls.lock().unwrap();
+            assert_eq!(second_added, 1);
+            assert!(calls[5].contains("/channels/100/messages?limit=100&after=200"));
+            assert!(calls[6].contains("/channels/200/messages?limit=100&after=201"));
+            assert!(calls[7].contains("/channels/300/messages?limit=100&after=300"));
+            assert_eq!(calls[8], "GET /channels/400/messages?limit=100 HTTP/1.1");
+        }
 
         let archive = Archive::open(paths.clone(), corpus.clone(), "2026-07-21T00:00:00Z").unwrap();
         let checkpoint = archive.load_checkpoint("10", "100").unwrap().unwrap();

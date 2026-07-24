@@ -794,6 +794,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "rmcp",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "serenity",
