@@ -270,6 +270,7 @@ pub struct QueueStatus {
     pub leased: usize,
     pub next_event_id: EventId,
     pub primary_consumer: Option<ConsumerId>,
+    pub live_thread_id: Option<CodexThreadId>,
     pub consumers: Vec<ConsumerStatus>,
     pub unassigned: usize,
 }
@@ -541,6 +542,7 @@ impl DurableInbox {
                 .count(),
             next_event_id: EventId::new(self.state.next_id),
             primary_consumer: primary_consumer.clone(),
+            live_thread_id: self.state.live_thread_id.clone(),
             consumers: active_consumers
                 .into_iter()
                 .map(|consumer| ConsumerStatus {
@@ -909,6 +911,10 @@ impl CodexEventQueue {
         self.inbox.lock().await.bind_live_thread(thread_id)?;
         self.changed.notify_waiters();
         Ok(())
+    }
+
+    pub(crate) async fn live_thread_id(&self) -> Option<CodexThreadId> {
+        self.inbox.lock().await.state.live_thread_id.clone()
     }
 
     pub async fn acknowledge(

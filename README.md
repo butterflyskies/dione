@@ -42,15 +42,33 @@ Configure Dione as a Codex MCP server with `--mode codex`:
 
 ```bash
 codex mcp add dione \
-  --env DIONE_STATE_DIR="$PWD/dione" \
+  --env DIONE_STATE_DIR="$HOME/.local/state/dione" \
   -- dione --mode codex
 ```
 
 For automatic binding, configure Codex's `SessionStart` hook to pipe its JSON
-payload to the matching Dione state directory:
+payload to that same Dione state directory. Save this as
+`~/.codex/hooks.json`:
 
-```bash
-dione bind-codex-thread --state-dir /path/to/dione-state
+```json
+{
+  "description": "Bind each Codex session to Dione live delivery.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "dione bind-codex-thread --state-dir \"$HOME/.local/state/dione\"",
+            "timeout": 15,
+            "statusMessage": "Binding Dione to this Codex session"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 The `--state-dir` argument is required because an MCP server's environment is
@@ -58,7 +76,9 @@ not inherited by separately launched hook commands. The hook accepts the
 `startup`, `resume`, `clear`, and `compact` sources and exits nonzero unless the
 running Dione daemon confirms the exact session ID. The session ID travels over
 stdin and the filesystem-protected `<state-dir>/codex-control.sock`, never in
-process arguments.
+process arguments. If you use another state directory, change it in both the
+MCP registration and hook command. Open `/hooks` in Codex to review and trust
+the new hook before relying on automatic binding.
 
 The MCP `bind_codex_thread` tool remains available for explicit binding. Bind
 every new, resumed, forked, cleared, compacted, or switched conversation. The

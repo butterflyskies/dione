@@ -68,6 +68,17 @@ async fn cancel_root_when_complete<T>(
     result
 }
 
+async fn cancel_root_on_error<T, E>(
+    cancel: CancellationToken,
+    future: impl Future<Output = Result<T, E>>,
+) -> Result<T, E> {
+    let result = future.await;
+    if result.is_err() {
+        cancel.cancel();
+    }
+    result
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
@@ -175,14 +186,18 @@ async fn main() -> Result<()> {
             let delivery_queue = codex_queue.clone();
             let delivery_cancel = cancel.clone();
             let handle = tokio::spawn(async move {
-                if let Err(error) = dione::codex::run_delivery_worker(
-                    delivery_queue,
-                    delivery_config,
-                    binding_rx,
+                let worker_cancel = delivery_cancel.clone();
+                let result = cancel_root_when_complete(
                     delivery_cancel,
+                    dione::codex::run_delivery_worker(
+                        delivery_queue,
+                        delivery_config,
+                        binding_rx,
+                        worker_cancel,
+                    ),
                 )
-                .await
-                {
+                .await;
+                if let Err(error) = result {
                     tracing::error!(error = %error, "Codex live delivery worker exited");
                 }
             });
@@ -190,11 +205,14 @@ async fn main() -> Result<()> {
                 dione::codex::CodexBindControlListener::bind(&state_dir, binder.clone())
                     .await
                     .wrap_err("failed to start the Codex bind control listener")?;
-            let control_cancel = cancel.clone();
+            let control_cancel = cancel.child_token();
+            let control_root_cancel = cancel.clone();
             let control_handle = tokio::spawn(async move {
-                if let Err(error) = control_listener.run(control_cancel.clone()).await {
+                if let Err(error) =
+                    cancel_root_on_error(control_root_cancel, control_listener.run(control_cancel))
+                        .await
+                {
                     tracing::error!(error = %error, "Codex bind control listener exited");
-                    control_cancel.cancel();
                 }
             });
             (
@@ -306,6 +324,12 @@ async fn main() -> Result<()> {
 
     cancel.cancel();
 
+    // Stop accepting and drain bounded in-flight control requests before the
+    // canonical clear, so a late request cannot rebind after shutdown.
+    if let Some(codex_control_handle) = codex_control_handle {
+        let _ = codex_control_handle.await;
+    }
+
     if let Some(binder) = codex_shutdown_binder
         && let Err(error) = binder.clear().await
     {
@@ -318,9 +342,6 @@ async fn main() -> Result<()> {
         let _ = mcp_handle.await;
         if let Some(codex_handle) = codex_handle {
             let _ = codex_handle.await;
-        }
-        if let Some(codex_control_handle) = codex_control_handle {
-            let _ = codex_control_handle.await;
         }
     })
     .await;
@@ -371,5 +392,26 @@ mod tests {
 
         assert_eq!(result, "clean EOF");
         assert!(cancel.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn terminal_task_error_cancels_root_lifecycle() {
+        let cancel = CancellationToken::new();
+
+        let result =
+            cancel_root_on_error(cancel.clone(), async { Err::<(), _>("terminal listener") }).await;
+
+        assert_eq!(result, Err("terminal listener"));
+        assert!(cancel.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn clean_child_task_exit_does_not_cancel_root_lifecycle() {
+        let cancel = CancellationToken::new();
+
+        let result = cancel_root_on_error(cancel.clone(), async { Ok::<_, &str>(()) }).await;
+
+        assert_eq!(result, Ok(()));
+        assert!(!cancel.is_cancelled());
     }
 }
