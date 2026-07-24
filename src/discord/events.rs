@@ -137,6 +137,16 @@ pub struct Handler {
     pub discord_cmd_rx: tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<DiscordCommand>>>,
 }
 
+impl Handler {
+    /// This construct's own user ID, or `None` before `ready()` has populated it.
+    fn self_user_id(&self) -> Option<UserId> {
+        match self.bot_user_id.load(Ordering::Relaxed) {
+            0 => None,
+            id => Some(UserId::new(id)),
+        }
+    }
+}
+
 // ── EventHandler impl ─────────────────────────────────────────────────────────
 
 #[async_trait]
@@ -160,17 +170,15 @@ impl EventHandler for Handler {
     async fn message(&self, ctx: Context, msg: Message) {
         let config = crate::config::load_config(&self.state_dir);
 
-        if should_filter_bot_message(
-            &ctx.http,
-            &self.state,
-            &config,
-            msg.author.bot,
-            msg.author.id.get(),
-            msg.channel_id.get(),
-            msg.webhook_id.map(|w| w.get()),
-        )
-        .await
-        {
+        let bot_ctx = BotMessageContext {
+            is_bot: msg.author.bot,
+            user_id: msg.author.id,
+            channel_id: msg.channel_id,
+            is_dm: msg.guild_id.is_none(),
+            webhook_id: msg.webhook_id.map(|w| w.get()),
+            self_id: self.self_user_id(),
+        };
+        if should_filter_bot_message(&ctx.http, &self.state, &config, &bot_ctx).await {
             return;
         }
         let bot_user_id = self.bot_user_id.load(Ordering::Relaxed);
@@ -404,18 +412,15 @@ impl EventHandler for Handler {
 
         let config = crate::config::load_config(&self.state_dir);
 
-        let webhook_id = event.webhook_id.flatten().map(|w| w.get());
-        if should_filter_bot_message(
-            &ctx.http,
-            &self.state,
-            &config,
-            author.bot,
-            author.id.get(),
-            event.channel_id.get(),
-            webhook_id,
-        )
-        .await
-        {
+        let bot_ctx = BotMessageContext {
+            is_bot: author.bot,
+            user_id: author.id,
+            channel_id: event.channel_id,
+            is_dm: event.guild_id.is_none(),
+            webhook_id: event.webhook_id.flatten().map(|w| w.get()),
+            self_id: self.self_user_id(),
+        };
+        if should_filter_bot_message(&ctx.http, &self.state, &config, &bot_ctx).await {
             return;
         }
 
@@ -977,30 +982,47 @@ fn should_drop_bot_message(
 /// (bot user ID, channel ID) pair.
 const DROPPED_BOT_WARN_COOLDOWN: Duration = Duration::from_secs(3600);
 
+/// The inbound message facts the bot filter needs, gathered at the gateway.
+///
+/// These arrive as a struct rather than a run of positional arguments because
+/// several are same-typed IDs: a transposed `user_id` and `channel_id` would
+/// compile cleanly and produce a warning naming the channel as the sender.
+pub(crate) struct BotMessageContext {
+    /// Whether Discord marked the author as a bot.
+    pub is_bot: bool,
+    /// The author's ID. For webhook-authored messages this is the webhook's ID.
+    pub user_id: UserId,
+    /// The channel the message arrived in.
+    pub channel_id: ChannelId,
+    /// Whether the message arrived in a DM rather than a guild channel.
+    pub is_dm: bool,
+    /// The webhook that authored the message, if any.
+    pub webhook_id: Option<u64>,
+    /// This construct's own user ID, or `None` before `ready()` has fired.
+    pub self_id: Option<UserId>,
+}
+
 /// Returns `true` if this bot message should be filtered (dropped).
 /// Proxy bot webhooks (e.g. PluralKit) are allowed through.
 ///
-/// Dropping is silent to Discord but not to the operator: each drop that
-/// survives the proxy-webhook check is reported through
-/// [`warn_dropped_bot_message`].
+/// Dropping is silent to Discord but not to the operator: drops are reported
+/// through [`warn_dropped_bot_message`], which decides which of them are worth
+/// a warning.
 async fn should_filter_bot_message(
     http: &serenity::http::Http,
     state: &crate::state::State,
     config: &crate::config::LoadedConfig,
-    is_bot: bool,
-    user_id: u64,
-    channel_id: u64,
-    webhook_id: Option<u64>,
+    ctx: &BotMessageContext,
 ) -> bool {
-    if !should_drop_bot_message(is_bot, user_id, config) {
+    if !should_drop_bot_message(ctx.is_bot, ctx.user_id.get(), config) {
         return false;
     }
-    let filtered = match webhook_id {
+    let filtered = match ctx.webhook_id {
         Some(wh_id) => !is_proxy_webhook(http, state, wh_id).await,
         None => true,
     };
     if filtered {
-        warn_dropped_bot_message(state, user_id, channel_id).await;
+        warn_dropped_bot_message(state, config, ctx).await;
     }
     filtered
 }
@@ -1008,28 +1030,96 @@ async fn should_filter_bot_message(
 /// Logs that a bot's message was dropped for not being in the allowlist, and
 /// how to let it through.
 ///
-/// Throttled per (bot user ID, channel ID) pair — see
+/// The warning is deliberately narrow. It fires only where adding the sender to
+/// `[access].allow_from` is genuinely the fix, because a warning that names the
+/// wrong remedy costs more diagnosis time than silence does — that misdirection
+/// is the whole of #228. Three classes of drop are therefore reported at
+/// `debug` instead:
+///
+/// - **Our own gateway echoes.** Every message this construct sends comes back
+///   over `MESSAGE_CREATE` and is dropped by this same filter. Following the
+///   remediation would make the construct ingest its own output.
+/// - **Webhook-authored messages.** Discord reports the webhook's ID as the
+///   author, and webhook IDs are recreated freely, so allowlisting one is not a
+///   durable fix.
+/// - **Channels this construct was never configured to read.** The guild gate
+///   would drop those regardless of the allowlist, so `allow_from` is not what
+///   is standing in the way.
+///
+/// What survives is throttled per (bot user ID, channel ID) pair — see
 /// [`DROPPED_BOT_WARN_COOLDOWN`] — so a chatty peer bot in a busy channel
 /// cannot turn the warning into a flood.
-async fn warn_dropped_bot_message(state: &crate::state::State, user_id: u64, channel_id: u64) {
-    let should_warn = {
+async fn warn_dropped_bot_message(
+    state: &crate::state::State,
+    config: &crate::config::LoadedConfig,
+    ctx: &BotMessageContext,
+) {
+    let user_id = ctx.user_id.get();
+    let channel_id = ctx.channel_id.get();
+
+    // Unthrottled, so raising the log level always reconstructs the full drop
+    // history even where the warning stays quiet.
+    tracing::debug!(
+        author_id = user_id,
+        channel_id,
+        webhook = ctx.webhook_id.is_some(),
+        "dropped bot message"
+    );
+
+    if ctx.self_id == Some(ctx.user_id) || ctx.webhook_id.is_some() {
+        return;
+    }
+    if !is_watched_channel(state, config, channel_id, ctx.is_dm).await {
+        return;
+    }
+
+    let now = Instant::now();
+    {
+        let state = state.read().await;
+        if state.dropped_bot_warning_suppressed(user_id, channel_id, now, DROPPED_BOT_WARN_COOLDOWN)
+        {
+            return;
+        }
+    }
+    let claimed = {
         let mut state = state.write().await;
-        state.should_warn_dropped_bot(
-            user_id,
-            channel_id,
-            Instant::now(),
-            DROPPED_BOT_WARN_COOLDOWN,
-        )
+        state.claim_dropped_bot_warning(user_id, channel_id, now, DROPPED_BOT_WARN_COOLDOWN)
     };
-    if should_warn {
+    if claimed {
         tracing::warn!(
             bot_user_id = user_id,
             channel_id,
             "dropped message from bot not in the allowlist — to receive it, add \
              this bot_user_id to the global [access].allow_from list in config.toml; \
-             per-channel config does not grant bots access"
+             a per-channel allow_from does not grant bots access"
         );
     }
+}
+
+/// Returns whether inbound messages from this channel are eligible for delivery
+/// at all, ignoring per-sender rules.
+///
+/// Mirrors the channel opt-in half of [`InboundGate`] without the sender
+/// checks, so the dropped-bot warning can tell "this bot is not allowlisted"
+/// apart from "this channel was never wired up", which need different fixes.
+///
+/// Thread parents are read from cache only. An unseen thread reads as unwatched
+/// rather than issuing an HTTP lookup on the drop path — costing at most a
+/// missed warning on the first message in a new thread.
+async fn is_watched_channel(
+    state: &crate::state::State,
+    config: &crate::config::LoadedConfig,
+    channel_id: u64,
+    is_dm: bool,
+) -> bool {
+    if is_dm {
+        return config.access.dm_policy != crate::config::DmPolicy::Disabled;
+    }
+    if config.channel_policy(channel_id).is_some() {
+        return true;
+    }
+    let parent = state.read().await.thread_parents.get(&channel_id).copied();
+    matches!(parent, Some(Some(parent)) if config.channel_policy(parent).is_some())
 }
 
 /// Bot user IDs of known proxy bots (e.g. PluralKit) whose webhook messages
@@ -1147,8 +1237,13 @@ mod tests {
 
     // ── dropped bot warning tests ──────────────────────────────────────────────
 
+    /// Target used by the harness canary. Distinct from any production target,
+    /// so a canary can never be mistaken for a real warning.
+    const CANARY_TARGET: &str = "dione_test_canary";
+
     /// A `warn`-level event captured from the tracing pipeline.
     struct CapturedWarning {
+        target: String,
         message: String,
         fields: Vec<(String, String)>,
     }
@@ -1161,13 +1256,25 @@ mod tests {
                 .find(|(key, _)| key == name)
                 .map(|(_, value)| value.as_str())
         }
+
+        /// The `(bot_user_id, channel_id)` pair the warning names.
+        fn pair(&self) -> (Option<&str>, Option<&str>) {
+            (self.field("bot_user_id"), self.field("channel_id"))
+        }
     }
 
-    /// Installs a thread-local tracing subscriber, runs `f`, and returns every
-    /// `warn`-level event it emitted.
+    /// Installs a thread-local tracing subscriber, runs `f`, and returns the
+    /// `warn`-level events it emitted — excluding the canary described below.
     ///
-    /// `#[tokio::test]` uses the current-thread runtime, so the future in `f`
-    /// is polled on the thread that holds the subscriber guard.
+    /// `DefaultGuard` is `!Send`, which makes this future `!Send` and therefore
+    /// unspawnable; `block_on` drives it on the thread holding the guard under
+    /// either runtime flavor, so capture cannot silently detach.
+    ///
+    /// A canary `warn` is emitted at the end of every capture and asserted on.
+    /// Without it, a harness that captured nothing would make every
+    /// "does not warn" test pass for the wrong reason — the tests would still
+    /// be green with the feature deleted, which is exactly the failure this
+    /// suite is meant to rule out.
     async fn capture_warnings<F, Fut>(f: F) -> Vec<CapturedWarning>
     where
         F: FnOnce() -> Fut,
@@ -1180,42 +1287,93 @@ mod tests {
             let _guard =
                 tracing::subscriber::set_default(tracing_subscriber::registry().with(layer));
             f().await;
+            tracing::warn!(target: "dione_test_canary", "canary");
         }
 
         let mut warnings = Vec::new();
         while let Ok(event) = rx.try_recv() {
             if let NotificationEvent::Trace {
                 level,
+                target,
                 message,
                 fields,
-                ..
             } = event
                 && level == "WARN"
             {
-                warnings.push(CapturedWarning { message, fields });
+                warnings.push(CapturedWarning {
+                    target,
+                    message,
+                    fields,
+                });
             }
         }
+
+        let canaries = warnings
+            .iter()
+            .filter(|w| w.target == CANARY_TARGET)
+            .count();
+        assert_eq!(
+            canaries, 1,
+            "capture harness is broken: expected exactly 1 canary warning, saw {canaries}"
+        );
+        warnings.retain(|w| w.target != CANARY_TARGET);
         warnings
     }
 
-    /// Runs the bot filter against a fresh state and reports the warnings it
-    /// emitted alongside its filtering decision.
-    ///
-    /// The HTTP client is never exercised: `webhook_id` is `None`, so the
-    /// proxy-webhook lookup is skipped.
+    /// A watched guild channel, and a bot in `allow_from`, unless overridden.
+    fn watched_config() -> LoadedConfig {
+        let raw = Config {
+            access: AccessConfig {
+                dm_policy: DmPolicy::Queue,
+                allow_from: vec!["100".to_string()],
+                admins: vec![],
+                admin_only_mutations: false,
+            },
+            channels: vec![crate::config::ChannelConfig {
+                id: "12345".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        LoadedConfig::from_raw(raw)
+    }
+
+    /// A bot-authored message in the watched channel from a non-allowlisted
+    /// sender — the case the warning exists for.
+    fn dropped_bot_ctx() -> BotMessageContext {
+        BotMessageContext {
+            is_bot: true,
+            user_id: UserId::new(999),
+            channel_id: ChannelId::new(12345),
+            is_dm: false,
+            webhook_id: None,
+            self_id: Some(UserId::new(7)),
+        }
+    }
+
+    /// Runs the bot filter against a fresh state, reporting its decision and
+    /// the warnings it emitted.
     async fn filter_and_capture(
         config: &LoadedConfig,
-        is_bot: bool,
-        user_id: u64,
-        channel_id: u64,
+        ctx: &BotMessageContext,
+    ) -> (bool, Vec<CapturedWarning>) {
+        filter_with_state(&crate::state::new_state(), config, ctx).await
+    }
+
+    /// As [`filter_and_capture`], against a caller-supplied state so the
+    /// proxy-webhook cache can be pre-seeded.
+    ///
+    /// The HTTP client is only reachable on a `webhook_id` cache miss; every
+    /// caller here either passes `None` or seeds the cache first.
+    async fn filter_with_state(
+        state: &crate::state::State,
+        config: &LoadedConfig,
+        ctx: &BotMessageContext,
     ) -> (bool, Vec<CapturedWarning>) {
         let http = serenity::http::Http::new("fake");
-        let state = crate::state::new_state();
         let mut filtered = false;
         let warnings = capture_warnings(|| async {
-            filtered =
-                should_filter_bot_message(&http, &state, config, is_bot, user_id, channel_id, None)
-                    .await;
+            filtered = should_filter_bot_message(&http, state, config, ctx).await;
         })
         .await;
         (filtered, warnings)
@@ -1225,8 +1383,7 @@ mod tests {
     /// channel, and the config key that would let it through.
     #[tokio::test]
     async fn test_dropped_bot_message_warns_with_remediation() {
-        let config = config_with_allow_from(vec!["100"]);
-        let (filtered, warnings) = filter_and_capture(&config, true, 999, 12345).await;
+        let (filtered, warnings) = filter_and_capture(&watched_config(), &dropped_bot_ctx()).await;
 
         assert!(filtered, "non-allowlisted bot must still be dropped");
         assert_eq!(
@@ -1256,14 +1413,24 @@ mod tests {
             "warning must name the global [access] table, got: {}",
             warning.message
         );
+        // The wrong-config-layer confusion is the whole of #228; the sentence
+        // ruling it out must not silently disappear.
+        assert!(
+            warning.message.contains("per-channel"),
+            "warning must rule out per-channel config as the fix, got: {}",
+            warning.message
+        );
     }
 
     /// Human messages are not dropped and must not warn, even when the human
     /// is absent from `allow_from`.
     #[tokio::test]
     async fn test_human_message_does_not_warn() {
-        let config = config_with_allow_from(vec!["100"]);
-        let (filtered, warnings) = filter_and_capture(&config, false, 999, 12345).await;
+        let ctx = BotMessageContext {
+            is_bot: false,
+            ..dropped_bot_ctx()
+        };
+        let (filtered, warnings) = filter_and_capture(&watched_config(), &ctx).await;
 
         assert!(!filtered, "human message must not be filtered");
         assert!(
@@ -1276,8 +1443,11 @@ mod tests {
     /// An allowlisted bot passes through silently.
     #[tokio::test]
     async fn test_allowlisted_bot_does_not_warn() {
-        let config = config_with_allow_from(vec!["100", "200"]);
-        let (filtered, warnings) = filter_and_capture(&config, true, 200, 12345).await;
+        let ctx = BotMessageContext {
+            user_id: UserId::new(100),
+            ..dropped_bot_ctx()
+        };
+        let (filtered, warnings) = filter_and_capture(&watched_config(), &ctx).await;
 
         assert!(!filtered, "allowlisted bot must not be filtered");
         assert!(
@@ -1287,34 +1457,159 @@ mod tests {
         );
     }
 
-    /// A chatty bot warns once per channel, not once per message — but a new
-    /// channel is a new diagnosis and warns again.
+    /// The construct's own gateway echoes are dropped by this filter too.
+    /// Warning about them would name our own ID and advise allowlisting
+    /// ourselves, which would make the construct ingest its own output.
     #[tokio::test]
-    async fn test_repeat_drops_are_throttled_per_channel() {
-        let config = config_with_allow_from(vec!["100"]);
-        let http = serenity::http::Http::new("fake");
-        let state = crate::state::new_state();
+    async fn test_own_message_is_dropped_without_warning() {
+        let ctx = BotMessageContext {
+            user_id: UserId::new(7),
+            self_id: Some(UserId::new(7)),
+            ..dropped_bot_ctx()
+        };
+        let (filtered, warnings) = filter_and_capture(&watched_config(), &ctx).await;
 
-        let warnings = capture_warnings(|| async {
-            for _ in 0..5 {
-                should_filter_bot_message(&http, &state, &config, true, 999, 12345, None).await;
-            }
-            should_filter_bot_message(&http, &state, &config, true, 999, 67890, None).await;
-            should_filter_bot_message(&http, &state, &config, true, 888, 12345, None).await;
-        })
-        .await;
-
-        assert_eq!(
-            warnings.len(),
-            3,
-            "expected one warning per (bot, channel) pair, got: {:?}",
-            warnings
-                .iter()
-                .map(|w| (w.field("bot_user_id"), w.field("channel_id")))
-                .collect::<Vec<_>>()
+        assert!(filtered, "own echo must still be dropped");
+        assert!(
+            warnings.is_empty(),
+            "must not warn about our own messages, got: {:?}",
+            warnings.iter().map(|w| &w.message).collect::<Vec<_>>()
         );
     }
 
+    /// In a channel that was never configured, the guild gate drops the message
+    /// regardless of the allowlist, so naming `allow_from` would be wrong.
+    #[tokio::test]
+    async fn test_unwatched_channel_does_not_warn() {
+        let ctx = BotMessageContext {
+            channel_id: ChannelId::new(55555),
+            ..dropped_bot_ctx()
+        };
+        let (filtered, warnings) = filter_and_capture(&watched_config(), &ctx).await;
+
+        assert!(filtered, "bot must still be dropped in unwatched channels");
+        assert!(
+            warnings.is_empty(),
+            "must not warn for channels we never opted into, got: {:?}",
+            warnings.iter().map(|w| &w.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// A thread whose cached parent is watched still warns.
+    #[tokio::test]
+    async fn test_thread_of_watched_channel_warns() {
+        let state = crate::state::new_state();
+        state.write().await.record_thread_parent(777, Some(12345));
+        let ctx = BotMessageContext {
+            channel_id: ChannelId::new(777),
+            ..dropped_bot_ctx()
+        };
+        let (filtered, warnings) = filter_with_state(&state, &watched_config(), &ctx).await;
+
+        assert!(filtered);
+        assert_eq!(
+            warnings.len(),
+            1,
+            "a thread of a watched channel must warn like its parent"
+        );
+        assert_eq!(warnings[0].field("channel_id"), Some("777"));
+    }
+
+    /// A proxy-webhook message (PluralKit) is human-authored: it is neither
+    /// dropped nor warned about. Pins the warning below the proxy check — a
+    /// warning here would be doubly wrong, since the message is delivered.
+    #[tokio::test]
+    async fn test_proxy_webhook_message_is_delivered_without_warning() {
+        let state = crate::state::new_state();
+        state.write().await.record_proxy_webhook(4242, true);
+        let ctx = BotMessageContext {
+            webhook_id: Some(4242),
+            ..dropped_bot_ctx()
+        };
+        let (filtered, warnings) = filter_with_state(&state, &watched_config(), &ctx).await;
+
+        assert!(!filtered, "proxy webhook messages must pass through");
+        assert!(
+            warnings.is_empty(),
+            "must not warn about a message that was delivered, got: {:?}",
+            warnings.iter().map(|w| &w.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// A non-proxy webhook is dropped, but `allow_from` is not the remedy —
+    /// the ID Discord reports is the webhook's, and webhook IDs are recreated
+    /// freely. It is dropped quietly.
+    #[tokio::test]
+    async fn test_non_proxy_webhook_is_dropped_without_warning() {
+        let state = crate::state::new_state();
+        state.write().await.record_proxy_webhook(4242, false);
+        let ctx = BotMessageContext {
+            webhook_id: Some(4242),
+            ..dropped_bot_ctx()
+        };
+        let (filtered, warnings) = filter_with_state(&state, &watched_config(), &ctx).await;
+
+        assert!(filtered, "non-proxy webhook messages must still be dropped");
+        assert!(
+            warnings.is_empty(),
+            "webhook IDs are not allowlistable; must not advise it, got: {:?}",
+            warnings.iter().map(|w| &w.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// A chatty bot warns once per channel, not once per message — but a new
+    /// channel or a new bot is a new diagnosis and warns again.
+    #[tokio::test]
+    async fn test_repeat_drops_are_throttled_per_channel() {
+        let mut config_raw = Config {
+            access: AccessConfig {
+                dm_policy: DmPolicy::Queue,
+                allow_from: vec!["100".to_string()],
+                admins: vec![],
+                admin_only_mutations: false,
+            },
+            ..Default::default()
+        };
+        for id in ["12345", "67890"] {
+            config_raw.channels.push(crate::config::ChannelConfig {
+                id: id.to_string(),
+                ..Default::default()
+            });
+        }
+        let config = LoadedConfig::from_raw(config_raw);
+
+        let http = serenity::http::Http::new("fake");
+        let state = crate::state::new_state();
+        let base = dropped_bot_ctx();
+
+        let warnings = capture_warnings(|| async {
+            for _ in 0..5 {
+                should_filter_bot_message(&http, &state, &config, &base).await;
+            }
+            let other_channel = BotMessageContext {
+                channel_id: ChannelId::new(67890),
+                ..dropped_bot_ctx()
+            };
+            should_filter_bot_message(&http, &state, &config, &other_channel).await;
+            let other_bot = BotMessageContext {
+                user_id: UserId::new(888),
+                ..dropped_bot_ctx()
+            };
+            should_filter_bot_message(&http, &state, &config, &other_bot).await;
+        })
+        .await;
+
+        let pairs: Vec<_> = warnings.iter().map(CapturedWarning::pair).collect();
+        assert_eq!(
+            pairs,
+            vec![
+                (Some("999"), Some("12345")),
+                (Some("999"), Some("67890")),
+                (Some("888"), Some("12345")),
+            ],
+            "expected exactly one warning per (bot, channel) pair, in order"
+        );
+    }
     // ── proxy bot constant tests ───────────────────────────────────────────────
 
     /// PluralKit's bot ID is in the proxy bot list.

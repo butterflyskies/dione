@@ -141,13 +141,35 @@ impl SharedState {
         }
     }
 
-    /// Reports whether a "dropped bot message" warning should be emitted for a
-    /// (bot user ID, channel ID) pair, recording the decision.
+    /// Reports whether a "dropped bot message" warning for this (bot user ID,
+    /// channel ID) pair is still suppressed by its cooldown.
+    ///
+    /// Read-only companion to [`Self::claim_dropped_bot_warning`], so the
+    /// common suppressed case can be settled under a read lock instead of
+    /// taking the exclusive lock that guards all shared state.
+    pub fn dropped_bot_warning_suppressed(
+        &self,
+        user_id: u64,
+        channel_id: u64,
+        now: Instant,
+        cooldown: Duration,
+    ) -> bool {
+        self.dropped_bot_warnings
+            .get(&(user_id, channel_id))
+            .is_some_and(|&last| now.saturating_duration_since(last) < cooldown)
+    }
+
+    /// Claims the right to emit a "dropped bot message" warning for a (bot user
+    /// ID, channel ID) pair, recording the claim when it succeeds.
     ///
     /// Returns `true` on the first drop seen for the pair, and again once
-    /// `cooldown` has elapsed since the last warning for it. Returning `true`
-    /// marks the pair as warned at `now`.
-    pub fn should_warn_dropped_bot(
+    /// `cooldown` has elapsed since the last warning for it.
+    ///
+    /// This deliberately tests and sets together, rather than following the
+    /// `AccessQueue::should_notify_admin` / `mark_notified` split used
+    /// elsewhere: doing both under a single lock acquisition is what stops two
+    /// concurrent handlers from both deciding to warn.
+    pub fn claim_dropped_bot_warning(
         &mut self,
         user_id: u64,
         channel_id: u64,
@@ -155,38 +177,28 @@ impl SharedState {
         cooldown: Duration,
     ) -> bool {
         let key = (user_id, channel_id);
-        if let Some(&last) = self.dropped_bot_warnings.get(&key)
-            && now.saturating_duration_since(last) < cooldown
+        if self.dropped_bot_warning_suppressed(user_id, channel_id, now, cooldown) {
+            return false;
+        }
+        // Entries past their cooldown would permit a warning anyway, so
+        // dropping them costs nothing. This is what normally keeps the table
+        // under its cap.
+        self.dropped_bot_warnings
+            .retain(|_, &mut last| now.saturating_duration_since(last) < cooldown);
+        // If the table is still full, every remaining entry is actively
+        // suppressing a warning. Refuse the new pair rather than evicting one
+        // of them: eviction re-arms the evicted pair, and with more live pairs
+        // than slots that degenerates into a warning per message — the very
+        // flood the cooldown exists to prevent. Going quiet is the safer
+        // failure for a log throttle, at the cost of not reporting new pairs
+        // until the table drains.
+        if !self.dropped_bot_warnings.contains_key(&key)
+            && self.dropped_bot_warnings.len() >= DROPPED_BOT_WARN_CAP
         {
             return false;
         }
         self.dropped_bot_warnings.insert(key, now);
-        self.prune_dropped_bot_warnings(now, cooldown);
         true
-    }
-
-    /// Drops throttle entries that can no longer suppress a warning, then
-    /// enforces a hard cap.
-    ///
-    /// Entries past their cooldown would permit a warning anyway, so evicting
-    /// them changes nothing observable. The cap only bites when more than
-    /// `DROPPED_BOT_WARN_CAP` distinct pairs are seen inside one cooldown
-    /// window; the least recently warned pair is evicted first, so it is the
-    /// one that would have expired soonest.
-    fn prune_dropped_bot_warnings(&mut self, now: Instant, cooldown: Duration) {
-        self.dropped_bot_warnings
-            .retain(|_, &mut last| now.saturating_duration_since(last) < cooldown);
-        while self.dropped_bot_warnings.len() > DROPPED_BOT_WARN_CAP {
-            let Some(oldest) = self
-                .dropped_bot_warnings
-                .iter()
-                .min_by_key(|&(_, &last)| last)
-                .map(|(&key, _)| key)
-            else {
-                break;
-            };
-            self.dropped_bot_warnings.remove(&oldest);
-        }
     }
 
     /// Removes all pending permission entries matching a `request_id` and
@@ -446,19 +458,19 @@ mod tests {
         let now = Instant::now();
 
         assert!(
-            state.should_warn_dropped_bot(999, 12345, now, TEST_COOLDOWN),
+            state.claim_dropped_bot_warning(999, 12345, now, TEST_COOLDOWN),
             "first drop for a pair must warn"
         );
         assert!(
-            !state.should_warn_dropped_bot(999, 12345, now, TEST_COOLDOWN),
+            !state.claim_dropped_bot_warning(999, 12345, now, TEST_COOLDOWN),
             "repeat drop inside the cooldown must stay quiet"
         );
         assert!(
-            state.should_warn_dropped_bot(999, 67890, now, TEST_COOLDOWN),
+            state.claim_dropped_bot_warning(999, 67890, now, TEST_COOLDOWN),
             "a different channel is a different diagnosis and must warn"
         );
         assert!(
-            state.should_warn_dropped_bot(888, 12345, now, TEST_COOLDOWN),
+            state.claim_dropped_bot_warning(888, 12345, now, TEST_COOLDOWN),
             "a different bot in the same channel must warn"
         );
     }
@@ -468,9 +480,9 @@ mod tests {
         let mut state = SharedState::new();
         let now = Instant::now();
 
-        assert!(state.should_warn_dropped_bot(999, 12345, now, TEST_COOLDOWN));
+        assert!(state.claim_dropped_bot_warning(999, 12345, now, TEST_COOLDOWN));
         assert!(
-            !state.should_warn_dropped_bot(
+            !state.claim_dropped_bot_warning(
                 999,
                 12345,
                 now + TEST_COOLDOWN - Duration::from_secs(1),
@@ -479,22 +491,90 @@ mod tests {
             "must stay quiet right up to the cooldown boundary"
         );
         assert!(
-            state.should_warn_dropped_bot(999, 12345, now + TEST_COOLDOWN, TEST_COOLDOWN),
+            state.claim_dropped_bot_warning(999, 12345, now + TEST_COOLDOWN, TEST_COOLDOWN),
             "must warn again once the cooldown has elapsed"
         );
     }
 
+    /// The read-only fast path must agree with the claim it guards, or the
+    /// suppressed case would take the write lock it exists to avoid.
     #[test]
-    fn test_dropped_bot_warning_cache_prunes() {
+    fn test_dropped_bot_warning_suppressed_matches_claim() {
         let mut state = SharedState::new();
         let now = Instant::now();
-        for i in 0u64..300 {
-            state.should_warn_dropped_bot(i, i, now, TEST_COOLDOWN);
-        }
+
         assert!(
-            state.dropped_bot_warnings.len() <= 200,
-            "dropped_bot_warnings exceeded cap: {}",
-            state.dropped_bot_warnings.len()
+            !state.dropped_bot_warning_suppressed(999, 12345, now, TEST_COOLDOWN),
+            "an unseen pair is not suppressed"
+        );
+        assert!(state.claim_dropped_bot_warning(999, 12345, now, TEST_COOLDOWN));
+        assert!(
+            state.dropped_bot_warning_suppressed(999, 12345, now, TEST_COOLDOWN),
+            "a just-warned pair is suppressed"
+        );
+        assert!(
+            !state.dropped_bot_warning_suppressed(999, 12345, now + TEST_COOLDOWN, TEST_COOLDOWN),
+            "suppression lifts with the cooldown"
+        );
+        assert!(
+            !state.dropped_bot_warning_suppressed(888, 12345, now, TEST_COOLDOWN),
+            "suppression is per pair"
+        );
+    }
+
+    /// At capacity every entry is still actively suppressing, so a new pair is
+    /// refused rather than evicting one. Evicting would re-arm the evicted pair
+    /// and turn the throttle into a warning per message.
+    #[test]
+    fn test_dropped_bot_warning_cap_refuses_rather_than_evicting() {
+        let mut state = SharedState::new();
+        let now = Instant::now();
+        for i in 0..DROPPED_BOT_WARN_CAP as u64 {
+            assert!(
+                state.claim_dropped_bot_warning(i, i, now, TEST_COOLDOWN),
+                "pair {i} is within capacity and must warn"
+            );
+        }
+        assert_eq!(state.dropped_bot_warnings.len(), DROPPED_BOT_WARN_CAP);
+
+        assert!(
+            !state.claim_dropped_bot_warning(9999, 9999, now, TEST_COOLDOWN),
+            "a new pair past the cap must be refused, not admitted by eviction"
+        );
+        assert_eq!(
+            state.dropped_bot_warnings.len(),
+            DROPPED_BOT_WARN_CAP,
+            "the table must not grow past the cap"
+        );
+        // The incumbents keep their suppression — nothing was evicted.
+        for i in 0..DROPPED_BOT_WARN_CAP as u64 {
+            assert!(
+                !state.claim_dropped_bot_warning(i, i, now, TEST_COOLDOWN),
+                "pair {i} was evicted and re-armed; the cap must not thrash"
+            );
+        }
+    }
+
+    /// Once the cooldown lapses the table drains and newcomers are admitted
+    /// again, so saturation is temporary rather than a permanent deaf spot.
+    #[test]
+    fn test_dropped_bot_warning_cap_recovers_after_cooldown() {
+        let mut state = SharedState::new();
+        let now = Instant::now();
+        for i in 0..DROPPED_BOT_WARN_CAP as u64 {
+            state.claim_dropped_bot_warning(i, i, now, TEST_COOLDOWN);
+        }
+        assert!(!state.claim_dropped_bot_warning(9999, 9999, now, TEST_COOLDOWN));
+
+        let later = now + TEST_COOLDOWN;
+        assert!(
+            state.claim_dropped_bot_warning(9999, 9999, later, TEST_COOLDOWN),
+            "a new pair must be admitted once the incumbents have expired"
+        );
+        assert_eq!(
+            state.dropped_bot_warnings.len(),
+            1,
+            "expired entries must be dropped, not merely bypassed"
         );
     }
 
@@ -503,12 +583,12 @@ mod tests {
         let mut state = SharedState::new();
         let now = Instant::now();
         for i in 0u64..10 {
-            state.should_warn_dropped_bot(i, i, now, TEST_COOLDOWN);
+            state.claim_dropped_bot_warning(i, i, now, TEST_COOLDOWN);
         }
         assert_eq!(state.dropped_bot_warnings.len(), 10);
 
         // A later drop prunes entries whose cooldown has already elapsed.
-        state.should_warn_dropped_bot(99, 99, now + TEST_COOLDOWN, TEST_COOLDOWN);
+        state.claim_dropped_bot_warning(99, 99, now + TEST_COOLDOWN, TEST_COOLDOWN);
         assert_eq!(
             state.dropped_bot_warnings.len(),
             1,
