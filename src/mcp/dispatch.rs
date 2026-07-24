@@ -370,6 +370,7 @@ pub(crate) async fn call_tool(
         // Config management — read-only (no ConfigStore mutation needed)
         "list_config_channels" => ConfigStore::list_channels(&server.state_dir),
         "get_access_config" => ConfigStore::get_access(&server.state_dir),
+        "get_config_guide" => config_guide(),
 
         // Config management — mutations (ConfigStore, admin-gated)
         "add_channel" => {
@@ -685,6 +686,84 @@ fn parse_hook_overrides(args: &Value) -> Result<Vec<HookName>, String> {
                 .and_then(std::convert::identity)
         })
         .collect()
+}
+
+// ── config_guide ─────────────────────────────────────────────────────────────
+
+fn config_guide() -> Value {
+    json!({
+        "guide": {
+            "⚠️ READ THIS FIRST": {
+                "critical_trap": "allow_from: [] does NOT mean 'no filter'. It means 'drop ALL bot messages'. This is the #1 configuration mistake.",
+                "evaluation_order": "Global [access].allow_from is checked FIRST, before any per-channel logic runs. A bot not in the global list is dropped before per-channel settings are even consulted.",
+                "humans_are_exempt": "Human messages (is_bot=false) are NEVER dropped by allow_from at any level. The is_bot guard short-circuits before the lookup."
+            },
+            "sections": {
+                "[access]": {
+                    "description": "Global access control. Evaluated BEFORE per-channel settings.",
+                    "fields": {
+                        "allow_from": {
+                            "type": "array of Discord user ID strings",
+                            "default": "[]",
+                            "behavior": "Controls which BOT accounts can deliver messages through this dione instance. Human messages always pass regardless of this setting.",
+                            "⚠️ TRAP": "Empty array [] means NO bots are allowed — all bot messages are silently dropped. To allow a bot, you MUST add its user ID here.",
+                            "fix_for_missing_bots": "Add the bot's Discord user ID to this list. Use get_access_config to see the current list, then add_allow_from to add IDs."
+                        },
+                        "admins": {
+                            "type": "array of Discord user ID strings",
+                            "behavior": "User IDs with admin privileges (can use admin-only mutation tools like add_channel, reload_config, etc.)"
+                        },
+                        "dm_policy": {
+                            "type": "string enum: queue | drop | disabled",
+                            "default": "queue",
+                            "queue": "DMs from non-allowed users are queued for admin review (list_access_requests, approve_access, deny_access)",
+                            "drop": "DMs from non-allowed users are silently dropped",
+                            "disabled": "All DMs are dropped, including from allowed users"
+                        }
+                    }
+                },
+                "[[channels]]": {
+                    "description": "Per-channel delivery and response settings. Each entry subscribes dione to one Discord channel.",
+                    "fields": {
+                        "id": {
+                            "type": "Discord channel ID string",
+                            "required": true,
+                            "behavior": "The channel must be listed here for dione to receive ANY messages from it, including @mentions."
+                        },
+                        "require_mention": {
+                            "type": "boolean",
+                            "default": "true",
+                            "true": "Only messages that @mention the bot are delivered",
+                            "false": "ALL messages in the channel are delivered (continuous presence)"
+                        },
+                        "allow_from": {
+                            "type": "array of Discord user ID strings",
+                            "default": "[]",
+                            "behavior": "Per-channel sender filter, SEPARATE from global [access].allow_from. This is evaluated AFTER the global bot filter.",
+                            "empty_array": "No per-channel filter — all messages that passed the global filter are delivered",
+                            "non_empty": "Only messages from these specific user IDs are delivered in this channel",
+                            "⚠️ NOTE": "This filters ALL senders (humans AND bots) unlike the global allow_from which only filters bots. Adding bot IDs here without including humans will silence humans in this channel."
+                        }
+                    }
+                },
+                "[contradictionary]": {
+                    "description": "Send-layer content filter. Checks outgoing messages against a pattern list before sending.",
+                    "fields": {
+                        "enabled": { "type": "boolean", "default": "true" },
+                        "sidecar_path": { "type": "string", "behavior": "Path to additional TOML entries, relative to config dir" }
+                    }
+                }
+            },
+            "common_tasks": {
+                "make_a_bot_visible": "1. get_access_config → check if bot ID is in allow_from. 2. If not, add_allow_from with the bot's user ID. 3. Config hot-reloads. 4. Have the bot send a NEW message as the receipt (old filtered messages don't replay).",
+                "add_continuous_presence_in_a_channel": "1. add_channel with the channel ID. 2. update_channel to set require_mention=false. 3. Config hot-reloads automatically.",
+                "debug_missing_messages": "Check in this order: (1) Is dione connected and running? (2) get_access_config — is the sender's bot ID in global allow_from? (3) list_config_channels — is the channel listed at all? (4) Is require_mention=true and the message didn't @mention? (5) Is per-channel allow_from filtering the sender?",
+                "check_current_config": "list_config_channels for channel settings, get_access_config for global access. Both read live config, not stale cache."
+            },
+            "hot_reload": "Config changes take effect immediately without restart. After any config mutation, the change is live. Verify with list_config_channels or get_access_config rather than assuming.",
+            "config_file_location": "config.toml in the dione state directory (--state-dir flag or default). Sidecar contradictionary entries in contradictionary.toml alongside it."
+        }
+    })
 }
 
 #[cfg(test)]

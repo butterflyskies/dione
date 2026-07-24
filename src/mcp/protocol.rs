@@ -333,7 +333,7 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                 "properties": {
                     "id": { "type": "string", "description": "Discord channel ID" },
                     "require_mention": { "type": "boolean", "description": "Whether the bot must be mentioned to respond (default: true)" },
-                    "allow_from": { "type": "array", "items": { "type": "string" }, "description": "User IDs allowed in this channel (empty = everyone)" }
+                    "allow_from": { "type": "array", "items": { "type": "string" }, "description": "Discord user IDs for per-channel sender filter. Empty array = no per-channel filter (inherits global). Non-empty = only these user IDs pass this channel's filter. NOTE: this is separate from global [access].allow_from which gates bot messages before per-channel logic runs." }
                 }
             })),
             tool("remove_channel", "Admin only. Remove a channel from dione's config. Only execute when requested by a user in the admins list.", json!({
@@ -349,7 +349,7 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                 "properties": {
                     "id": { "type": "string", "description": "Discord channel ID" },
                     "require_mention": { "type": "boolean", "description": "Whether the bot must be mentioned to respond" },
-                    "allow_from": { "type": "array", "items": { "type": "string" }, "description": "User IDs allowed in this channel (empty = everyone)" }
+                    "allow_from": { "type": "array", "items": { "type": "string" }, "description": "Discord user IDs for per-channel sender filter. Empty array = no per-channel filter (inherits global). Non-empty = only these user IDs pass this channel's filter. NOTE: this is separate from global [access].allow_from which gates bot messages before per-channel logic runs." }
                 }
             })),
             tool("update_dm_policy", "Admin only. Update the DM policy in dione's config. Only execute when requested by a user in the admins list.", json!({
@@ -358,6 +358,10 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                 "properties": {
                     "policy": { "type": "string", "enum": ["queue", "drop", "disabled"], "description": "DM handling policy" }
                 }
+            })),
+            tool("get_config_guide", "Configuration reference manual. Call this BEFORE configuring channels, access, or debugging delivery issues. Returns structured documentation covering all config sections, their interactions, and common traps.", json!({
+                "type": "object",
+                "properties": {}
             })),
             tool("add_allow_from", "Admin only. Add a user ID to the global allow_from list. Only execute when requested by a user in the admins list.", json!({
                 "type": "object",
