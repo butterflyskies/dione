@@ -95,15 +95,24 @@ impl ConfigStore {
         json!({ "channels": channels })
     }
 
+    /// The wire name for a [`DmPolicy`](crate::config::DmPolicy), matching the
+    /// `dm_policy` values accepted in `config.toml`.
+    ///
+    /// Single source for both `get_access` and the `get_config_guide` manual,
+    /// so a rename cannot leave the two reporting different strings.
+    pub fn dm_policy_str(policy: crate::config::DmPolicy) -> &'static str {
+        match policy {
+            crate::config::DmPolicy::Queue => "queue",
+            crate::config::DmPolicy::Drop => "drop",
+            crate::config::DmPolicy::Disabled => "disabled",
+        }
+    }
+
     /// Return a JSON object with the current access config (reads from ArcSwap cache).
     pub fn get_access(state_dir: &Utf8Path) -> Value {
         let config = crate::config::load_config(state_dir);
         json!({
-            "dm_policy": match config.raw.access.dm_policy {
-                crate::config::DmPolicy::Queue => "queue",
-                crate::config::DmPolicy::Drop => "drop",
-                crate::config::DmPolicy::Disabled => "disabled",
-            },
+            "dm_policy": Self::dm_policy_str(config.raw.access.dm_policy),
             "allow_from": config.raw.access.allow_from,
             "admins": config.raw.access.admins,
         })

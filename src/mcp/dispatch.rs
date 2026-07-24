@@ -690,13 +690,47 @@ fn parse_hook_overrides(args: &Value) -> Result<Vec<HookName>, String> {
 
 // ── config_guide ─────────────────────────────────────────────────────────────
 
+/// Key prefix for the section that must be read first.
+///
+/// `serde_json` is built without `preserve_order`, so object keys land in a
+/// `BTreeMap` and serialize in byte order. An emoji prefix (`⚠️` = `E2 9A A0
+/// …`) sorts *after* every ASCII sibling, which buried this section at the
+/// bottom of the payload — the character chosen for emphasis was the reason
+/// the emphasis sank. `!` is `0x21`, below every alphanumeric byte, so this
+/// section sorts first. Asserted by `read_this_first_sorts_before_all_other_keys`.
+const READ_FIRST_KEY: &str = "!! READ THIS FIRST";
+
+/// Configuration reference manual, served by the `get_config_guide` tool.
+///
+/// Every stated default is interpolated from the type's real `Default` impl
+/// rather than hand-typed: a hand-typed doc records intention, a derived doc
+/// records structure and has nowhere to drift from. The prose that remains is
+/// for behavior with no mechanical source — evaluation order, the DM/guild
+/// asymmetry, and what `admins` actually does.
 fn config_guide() -> Value {
+    use crate::{
+        config::{AccessConfig, ChannelConfig},
+        contradictionary::ContradictionaryConfig,
+    };
+
+    let access = AccessConfig::default();
+    let channel = ChannelConfig::default();
+    let contradictionary = ContradictionaryConfig::default();
+
+    let access_allow_from_default = json!(access.allow_from);
+    let dm_policy_default = crate::config_store::ConfigStore::dm_policy_str(access.dm_policy);
+    let admin_only_mutations_default = json!(access.admin_only_mutations);
+    let require_mention_default = json!(channel.require_mention);
+    let channel_allow_from_default = json!(channel.allow_from);
+    let contradictionary_enabled_default = json!(contradictionary.enabled);
+
     json!({
         "guide": {
-            "⚠️ READ THIS FIRST": {
-                "critical_trap": "allow_from: [] does NOT mean 'no filter'. It means 'drop ALL bot messages'. This is the #1 configuration mistake.",
+            READ_FIRST_KEY: {
+                "critical_trap": "allow_from: [] does NOT mean 'no filter'. On the guild path it means 'drop ALL bot messages'; on the DM path it means 'no sender is on the allowlist'. This is the #1 configuration mistake.",
                 "evaluation_order": "Global [access].allow_from is checked FIRST, before any per-channel logic runs. A bot not in the global list is dropped before per-channel settings are even consulted.",
-                "humans_are_exempt": "Human messages (is_bot=false) are NEVER dropped by allow_from at any level. The is_bot guard short-circuits before the lookup."
+                "humans_are_exempt_on_the_GUILD_path_only": "Guild messages: should_drop_bot_message is `is_bot && !is_allowed(user_id)`, so humans are never dropped by global allow_from. DM messages: check_dm calls is_allowed(sender_id) with NO is_bot guard, so global allow_from gates humans too. The same list behaves differently on the two paths.",
+                "three_collisions_on_one_name": "`allow_from` names two different fields with inverted empty-set semantics: per-channel `allow_from: []` SKIPS the filter (check_guild), while global `allow_from: []` makes is_allowed false for every ID (check_dm). Global filters bots only on the guild path but all senders on the DM path."
             },
             "sections": {
                 "[access]": {
@@ -704,18 +738,25 @@ fn config_guide() -> Value {
                     "fields": {
                         "allow_from": {
                             "type": "array of Discord user ID strings",
-                            "default": "[]",
-                            "behavior": "Controls which BOT accounts can deliver messages through this dione instance. Human messages always pass regardless of this setting.",
-                            "⚠️ TRAP": "Empty array [] means NO bots are allowed — all bot messages are silently dropped. To allow a bot, you MUST add its user ID here.",
+                            "default": access_allow_from_default,
+                            "behavior": "Guild path: gates BOT accounts only — human messages pass regardless. DM path: gates EVERY sender including humans, because check_dm has no is_bot guard.",
+                            "trap": "Empty array means no bots are allowed on the guild path, and no senders are pre-approved on the DM path. Unknown DM senders then fall through to dm_policy.",
                             "fix_for_missing_bots": "Add the bot's Discord user ID to this list. Use get_access_config to see the current list, then add_allow_from to add IDs."
                         },
                         "admins": {
                             "type": "array of Discord user ID strings",
-                            "behavior": "User IDs with admin privileges (can use admin-only mutation tools like add_channel, reload_config, etc.)"
+                            "behavior": "Recorded in config and reported by get_access_config, but it does NOT gate the mutation tools. check_admin_gate reads admin_only_mutations and never consults this list or the caller's identity.",
+                            "trap": "The 'Admin only.' text in tool descriptions is guidance addressed to the model, not a code-level gate. Adding a user here grants nothing by itself; removing one revokes nothing."
+                        },
+                        "admin_only_mutations": {
+                            "type": "boolean",
+                            "default": admin_only_mutations_default,
+                            "behavior": "The actual gate on config mutation tools, and it is a global kill-switch rather than a per-user check. When true, check_admin_gate rejects every mutation call from everyone — including users listed in admins.",
+                            "note": "Not reported by get_access_config, so a mutation refusal cannot be diagnosed from that tool's output alone."
                         },
                         "dm_policy": {
                             "type": "string enum: queue | drop | disabled",
-                            "default": "queue",
+                            "default": dm_policy_default,
                             "queue": "DMs from non-allowed users are queued for admin review (list_access_requests, approve_access, deny_access)",
                             "drop": "DMs from non-allowed users are silently dropped",
                             "disabled": "All DMs are dropped, including from allowed users"
@@ -732,38 +773,396 @@ fn config_guide() -> Value {
                         },
                         "require_mention": {
                             "type": "boolean",
-                            "default": "true",
+                            "default": require_mention_default,
                             "true": "Only messages that @mention the bot are delivered",
                             "false": "ALL messages in the channel are delivered (continuous presence)"
                         },
                         "allow_from": {
                             "type": "array of Discord user ID strings",
-                            "default": "[]",
-                            "behavior": "Per-channel sender filter, SEPARATE from global [access].allow_from. This is evaluated AFTER the global bot filter.",
-                            "empty_array": "No per-channel filter — all messages that passed the global filter are delivered",
+                            "default": channel_allow_from_default,
+                            "behavior": "Per-channel sender filter, SEPARATE from global [access].allow_from. Evaluated AFTER the global bot filter.",
+                            "empty_array": "No per-channel filter — every message that passed the global filter is delivered. This is the OPPOSITE of what an empty global allow_from does.",
                             "non_empty": "Only messages from these specific user IDs are delivered in this channel",
-                            "⚠️ NOTE": "This filters ALL senders (humans AND bots) unlike the global allow_from which only filters bots. Adding bot IDs here without including humans will silence humans in this channel."
+                            "note": "This filters ALL senders (humans AND bots), unlike the global allow_from, which filters only bots on the guild path. Adding bot IDs here without including humans will silence humans in this channel."
                         }
                     }
                 },
                 "[contradictionary]": {
                     "description": "Send-layer content filter. Checks outgoing messages against a pattern list before sending.",
                     "fields": {
-                        "enabled": { "type": "boolean", "default": "true" },
-                        "sidecar_path": { "type": "string", "behavior": "Path to additional TOML entries, relative to config dir" }
+                        "enabled": {
+                            "type": "boolean",
+                            "default": contradictionary_enabled_default,
+                            "note": "Off unless explicitly set. The filter is also skipped when the entry list is empty, so enabling it without entries is a no-op."
+                        },
+                        "sidecar_path": {
+                            "type": "string",
+                            "behavior": "Path to additional TOML entries, relative to the directory containing config.toml. When empty, contradictionary.toml alongside the config file is used."
+                        }
                     }
                 }
             },
             "common_tasks": {
                 "make_a_bot_visible": "1. get_access_config → check if bot ID is in allow_from. 2. If not, add_allow_from with the bot's user ID. 3. Config hot-reloads. 4. Have the bot send a NEW message as the receipt (old filtered messages don't replay).",
                 "add_continuous_presence_in_a_channel": "1. add_channel with the channel ID. 2. update_channel to set require_mention=false. 3. Config hot-reloads automatically.",
-                "debug_missing_messages": "Check in this order: (1) Is dione connected and running? (2) get_access_config — is the sender's bot ID in global allow_from? (3) list_config_channels — is the channel listed at all? (4) Is require_mention=true and the message didn't @mention? (5) Is per-channel allow_from filtering the sender?",
-                "check_current_config": "list_config_channels for channel settings, get_access_config for global access. Both read live config, not stale cache."
+                "debug_missing_messages": "Check in this order: (1) Is dione connected and running? (2) Is it a DM? If so, global allow_from gates humans too, then dm_policy decides queue vs drop. (3) get_access_config — is the sender's bot ID in global allow_from? (4) list_config_channels — is the channel listed at all? (5) Is require_mention=true and the message didn't @mention? (6) Is per-channel allow_from filtering the sender?",
+                "check_current_config": "list_config_channels for channel settings, get_access_config for global access. Both call load_config, which returns the in-memory ArcSwap cache and ignores the state directory — they report the last config that parsed successfully, NOT the current file on disk.",
+                "verify_against_disk": "Because both read the cache, neither can observe a cache/disk divergence. If config.toml fails to parse, dione keeps serving the last valid config and these tools keep reporting it. Read the file directly, or trigger a reload, when the question is whether disk and runtime agree."
             },
-            "hot_reload": "Config changes take effect immediately without restart. After any config mutation, the change is live. Verify with list_config_channels or get_access_config rather than assuming.",
+            "hot_reload": "Config changes take effect without restart: the file watcher reloads on change and ConfigStore::save refreshes the cache after writes. A file edited in a way the watcher does not observe, or one that fails to parse, leaves the cache serving the previous config.",
             "config_file_location": "config.toml in the dione state directory (--state-dir flag or default). Sidecar contradictionary entries in contradictionary.toml alongside it."
         }
     })
+}
+
+#[cfg(test)]
+mod config_guide_tests {
+    use super::*;
+    use crate::{
+        codex::TransportMode,
+        config::{AccessConfig, ChannelConfig, Config, DmPolicy, LoadedConfig},
+        gate::{GateDecision, InboundGate},
+    };
+
+    /// Walks a `/`-separated path through the guide, failing loudly on a miss
+    /// so a restructured guide surfaces as a named path rather than a panic.
+    fn at(path: &str) -> Value {
+        let guide = config_guide();
+        let mut cur = &guide;
+        for seg in path.split('/') {
+            cur = cur
+                .get(seg)
+                .unwrap_or_else(|| panic!("guide path {path:?} missing at segment {seg:?}"));
+        }
+        cur.clone()
+    }
+
+    fn text(path: &str) -> String {
+        at(path)
+            .as_str()
+            .unwrap_or_else(|| panic!("guide path {path:?} is not a string"))
+            .to_string()
+    }
+
+    // ── Registration ─────────────────────────────────────────────────────────
+
+    /// Red when the `tool("get_config_guide", …)` entry is dropped from
+    /// `tools_list`: a guide nothing can call is not a feature.
+    #[test]
+    fn get_config_guide_is_advertised_in_tools_list() {
+        for mode in [TransportMode::ClaudeCode, TransportMode::Codex] {
+            let listed = crate::mcp::protocol::tools_list(mode);
+            let names: Vec<String> = listed["tools"]
+                .as_array()
+                .expect("tools_list must expose a tools array")
+                .iter()
+                .filter_map(|t| t["name"].as_str().map(str::to_string))
+                .collect();
+            assert!(
+                names.iter().any(|n| n == "get_config_guide"),
+                "get_config_guide missing from tools_list in {mode:?} mode; advertised: {names:?}"
+            );
+        }
+    }
+
+    // ── Ordering ─────────────────────────────────────────────────────────────
+
+    /// `serde_json` without `preserve_order` serializes object keys in byte
+    /// order, so an emoji-prefixed key sorts *below* every ASCII sibling. This
+    /// is red if the read-first section is renamed back to a `⚠️` prefix —
+    /// the exact regression that buried the warning in the first release.
+    #[test]
+    fn read_this_first_sorts_before_all_other_keys() {
+        let guide = config_guide();
+        let keys: Vec<&String> = guide["guide"]
+            .as_object()
+            .expect("guide must be an object")
+            .keys()
+            .collect();
+        assert_eq!(
+            keys.first().map(|k| k.as_str()),
+            Some(READ_FIRST_KEY),
+            "read-first section must serialize first; key order was {keys:?}"
+        );
+    }
+
+    // ── Derived defaults ─────────────────────────────────────────────────────
+
+    /// The guide's stated defaults are compared against a *serde parse of an
+    /// empty config*, not against the same `Default` impl they interpolate
+    /// from. Two independent paths to the same value, so this stays red if
+    /// either the `Default` impl or serde's field defaults drift.
+    #[test]
+    fn stated_defaults_match_a_parsed_empty_config() {
+        let parsed: Config = toml::from_str("").expect("empty config must parse");
+
+        assert_eq!(
+            at("guide/sections/[access]/fields/allow_from/default"),
+            json!(parsed.access.allow_from),
+            "global allow_from default drifted from parsed config"
+        );
+        assert_eq!(
+            at("guide/sections/[access]/fields/admin_only_mutations/default"),
+            json!(parsed.access.admin_only_mutations),
+            "admin_only_mutations default drifted from parsed config"
+        );
+        assert_eq!(
+            text("guide/sections/[access]/fields/dm_policy/default"),
+            crate::config_store::ConfigStore::dm_policy_str(parsed.access.dm_policy),
+            "dm_policy default drifted from parsed config"
+        );
+        assert_eq!(
+            at("guide/sections/[contradictionary]/fields/enabled/default"),
+            json!(parsed.contradictionary.enabled),
+            "contradictionary.enabled default drifted from parsed config"
+        );
+
+        let parsed_channel: Config =
+            toml::from_str("[[channels]]\nid = \"1\"\n").expect("channel config must parse");
+        let ch = &parsed_channel.channels[0];
+        assert_eq!(
+            at("guide/sections/[[channels]]/fields/require_mention/default"),
+            json!(ch.require_mention),
+            "require_mention default drifted from parsed config"
+        );
+        assert_eq!(
+            at("guide/sections/[[channels]]/fields/allow_from/default"),
+            json!(ch.allow_from),
+            "per-channel allow_from default drifted from parsed config"
+        );
+    }
+
+    /// The oracle above shares a source with the guide: both land on the same
+    /// `Default` impl, so changing that impl moves them together and cannot be
+    /// caught there. `config_template.toml` is hand-maintained and moves
+    /// independently, so it *can* catch it. Red when a `Default` impl is
+    /// changed without the shipped template following.
+    #[test]
+    fn stated_defaults_match_the_shipped_config_template() {
+        const TEMPLATE: &str = include_str!("../config_template.toml");
+        let template: Config = toml::from_str(TEMPLATE).expect("shipped template must parse");
+
+        assert_eq!(
+            text("guide/sections/[access]/fields/dm_policy/default"),
+            crate::config_store::ConfigStore::dm_policy_str(template.access.dm_policy),
+            "guide's dm_policy default disagrees with config_template.toml"
+        );
+        assert_eq!(
+            at("guide/sections/[access]/fields/allow_from/default"),
+            json!(template.access.allow_from),
+            "guide's allow_from default disagrees with config_template.toml"
+        );
+
+        // The [[channels]] and [contradictionary] blocks ship commented out,
+        // so they cannot be parsed — assert on the comment text instead, which
+        // is what a human actually reads when editing the file.
+        assert!(
+            TEMPLATE.contains("# require_mention = true"),
+            "template must show require_mention = true to match ChannelConfig::default()"
+        );
+        assert!(
+            TEMPLATE.contains("the default when unset is false"),
+            "template must not let `# enabled = true` read as the contradictionary default"
+        );
+    }
+
+    /// `contradictionary.enabled` is `#[serde(default)] bool`. The first
+    /// release of this guide claimed the default was `true`; it is `false`.
+    #[test]
+    fn contradictionary_is_disabled_by_default() {
+        let parsed: Config = toml::from_str("[contradictionary]\n").expect("must parse");
+        assert!(
+            !parsed.contradictionary.enabled,
+            "contradictionary.enabled must default to false"
+        );
+        assert_eq!(
+            at("guide/sections/[contradictionary]/fields/enabled/default"),
+            json!(false),
+            "guide must state the real default"
+        );
+    }
+
+    // ── Documented behavior vs actual behavior ───────────────────────────────
+
+    fn config_with(allow_from: Vec<&str>, dm_policy: DmPolicy) -> LoadedConfig {
+        LoadedConfig::from_raw(Config {
+            access: AccessConfig {
+                dm_policy,
+                allow_from: allow_from.into_iter().map(str::to_string).collect(),
+                admins: vec![],
+                admin_only_mutations: false,
+            },
+            channels: vec![ChannelConfig {
+                id: "500".to_string(),
+                require_mention: false,
+                allow_from: vec![],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+    }
+
+    /// The claim this guide originally got wrong: it said humans are "NEVER
+    /// dropped by allow_from at any level." `check_dm` has no `is_bot` guard,
+    /// so an empty global `allow_from` withholds human DMs too. Red if the
+    /// gate is changed to exempt humans on the DM path without the guide
+    /// being updated to match.
+    #[test]
+    fn dm_path_gates_humans_unlike_the_guild_path() {
+        const HUMAN: u64 = 437_002_871_280_631_808;
+
+        // Empty global allow_from: the DM path does NOT deliver.
+        let queueing = config_with(vec![], DmPolicy::Queue);
+        assert_eq!(
+            InboundGate::check_dm(&queueing, HUMAN),
+            GateDecision::Queue,
+            "human DM must not be delivered when absent from global allow_from"
+        );
+
+        let dropping = config_with(vec![], DmPolicy::Drop);
+        assert_eq!(
+            InboundGate::check_dm(&dropping, HUMAN),
+            GateDecision::Drop,
+            "dm_policy=drop must silently drop an unlisted human"
+        );
+
+        // Same config, guild path: the same human IS delivered.
+        assert_eq!(
+            InboundGate::check_guild(&queueing, 500, HUMAN, false),
+            GateDecision::Deliver,
+            "guild path must not gate humans on global allow_from"
+        );
+
+        // Listing the human flips the DM path to Deliver — proving the global
+        // list, not something else, is what withheld it.
+        let allowed = config_with(vec!["437002871280631808"], DmPolicy::Queue);
+        assert_eq!(
+            InboundGate::check_dm(&allowed, HUMAN),
+            GateDecision::Deliver,
+            "listing the human in global allow_from must deliver the DM"
+        );
+
+        let documented = text(&format!(
+            "guide/{READ_FIRST_KEY}/humans_are_exempt_on_the_GUILD_path_only"
+        ));
+        assert!(
+            documented.contains("no is_bot guard") || documented.contains("NO is_bot guard"),
+            "guide must name the missing is_bot guard on the DM path; got: {documented}"
+        );
+    }
+
+    /// Per-channel `allow_from: []` skips the filter; global `allow_from: []`
+    /// denies everyone. Same name, inverted empty-set semantics — red if
+    /// either side is normalized without the guide following.
+    #[test]
+    fn empty_allow_from_means_opposite_things_per_channel_and_globally() {
+        const STRANGER: u64 = 999;
+
+        // Global empty => is_allowed false for everyone => DM withheld.
+        let cfg = config_with(vec![], DmPolicy::Queue);
+        assert!(
+            !cfg.is_allowed(STRANGER),
+            "empty global allow_from must not allow an arbitrary id"
+        );
+        assert_ne!(InboundGate::check_dm(&cfg, STRANGER), GateDecision::Deliver);
+
+        // Per-channel empty => filter skipped => guild message delivered.
+        assert_eq!(
+            InboundGate::check_guild(&cfg, 500, STRANGER, false),
+            GateDecision::Deliver,
+            "empty per-channel allow_from must skip the filter"
+        );
+
+        // Non-empty per-channel list excludes anyone not named.
+        let restricted = LoadedConfig::from_raw(Config {
+            channels: vec![ChannelConfig {
+                id: "500".to_string(),
+                require_mention: false,
+                allow_from: vec!["1".to_string()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        assert_eq!(
+            InboundGate::check_guild(&restricted, 500, STRANGER, false),
+            GateDecision::Drop,
+            "non-empty per-channel allow_from must exclude unlisted senders"
+        );
+
+        let documented = text("guide/sections/[[channels]]/fields/allow_from/empty_array");
+        assert!(
+            documented.contains("OPPOSITE"),
+            "guide must flag the inverted empty-set semantics; got: {documented}"
+        );
+    }
+
+    /// `check_admin_gate` reads `admin_only_mutations` and never looks at
+    /// `admins` or at any caller identity. The first release of this guide
+    /// said `admins` grants access to admin-only tools; it grants nothing.
+    #[test]
+    fn admin_gate_ignores_the_admins_list() {
+        // A user in `admins`, with the kill-switch on, is still refused —
+        // check_admin_gate takes no user id at all.
+        let locked = LoadedConfig::from_raw(Config {
+            access: AccessConfig {
+                admins: vec!["100".to_string()],
+                admin_only_mutations: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert!(
+            check_admin_gate(&locked).is_err(),
+            "admin_only_mutations=true must refuse even a listed admin"
+        );
+
+        // Nobody in `admins`, kill-switch off, and the gate opens.
+        let open = LoadedConfig::from_raw(Config {
+            access: AccessConfig {
+                admins: vec![],
+                admin_only_mutations: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert!(
+            check_admin_gate(&open).is_ok(),
+            "admin_only_mutations=false must allow mutations with an empty admins list"
+        );
+
+        let documented = text("guide/sections/[access]/fields/admins/behavior");
+        assert!(
+            documented.contains("does NOT gate"),
+            "guide must state that admins does not gate mutation tools; got: {documented}"
+        );
+    }
+
+    /// `load_config` ignores its `state_dir` argument and returns the ArcSwap
+    /// cache, so `get_access_config` cannot witness a cache/disk divergence.
+    /// The first release recommended it as the verification step for exactly
+    /// that divergence.
+    #[test]
+    fn guide_does_not_claim_config_reads_hit_disk() {
+        let documented = text("guide/common_tasks/check_current_config");
+        assert!(
+            documented.contains("cache"),
+            "guide must disclose the cached read; got: {documented}"
+        );
+        assert!(
+            !documented.contains("not stale cache"),
+            "guide must not claim these tools bypass the cache; got: {documented}"
+        );
+
+        // The claim is checkable: two different state dirs, same cached value.
+        let a = camino::Utf8PathBuf::from("/nonexistent/dione-a");
+        let b = camino::Utf8PathBuf::from("/nonexistent/dione-b");
+        let from_a = crate::config::load_config(&a);
+        let from_b = crate::config::load_config(&b);
+        assert!(
+            std::sync::Arc::ptr_eq(&from_a, &from_b),
+            "load_config must ignore state_dir and return the shared cache"
+        );
+    }
 }
 
 #[cfg(test)]
