@@ -920,10 +920,18 @@ pub fn reload_config(state_dir: &Utf8Path) -> (LoadedConfig, Option<String>) {
             }
             Ok(_) => {} // file missing or empty — no-op
             Err(e) => {
-                tracing::warn!(error = %e, "failed to load contradictionary sidecar");
-                if config_error.is_none() {
-                    config_error = Some(e);
-                }
+                // Fail closed. `load_sidecar_entries` parses the sidecar as one
+                // unit, so a single malformed entry yields zero entries — and
+                // installing that would silently disable the whole gate. Keep
+                // the last valid config instead, matching the fallback used for
+                // a corrupt `config.toml` above.
+                let cached = (**LAST_VALID_CONFIG.load()).clone();
+                tracing::warn!(
+                    path = %sidecar,
+                    error = %e,
+                    "contradictionary sidecar parse error, continuing with last valid config"
+                );
+                return (cached, Some(config_error.unwrap_or(e)));
             }
         }
     }
@@ -991,6 +999,19 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         (dir, path)
+    }
+
+    /// Serialises tests that call [`reload_config`].
+    ///
+    /// `LAST_VALID_CONFIG` is a process-global `ArcSwap`. Under a thread-parallel
+    /// runner (`cargo test`) any test calling `reload_config` clobbers it for
+    /// every other test, so assertions that span two reloads — priming the cache
+    /// then observing the fallback — are otherwise racy.
+    static CONFIG_CACHE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Takes the config-cache lock, ignoring poisoning from an unrelated panic.
+    fn config_cache_guard() -> std::sync::MutexGuard<'static, ()> {
+        CONFIG_CACHE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     #[test]
@@ -1111,6 +1132,7 @@ mod tests {
 
     #[test]
     fn test_missing_config_generates_and_returns_defaults() {
+        let _cache = config_cache_guard();
         let (_dir, state_dir) = temp_state_dir();
         let config_path = state_dir.join("config.toml");
 
@@ -1130,6 +1152,7 @@ mod tests {
 
     #[test]
     fn test_corrupt_config_keeps_file_and_falls_back() {
+        let _cache = config_cache_guard();
         let (_dir, state_dir) = temp_state_dir();
         let config_path = state_dir.join("config.toml");
 
@@ -1176,6 +1199,7 @@ mod tests {
 
     #[test]
     fn test_valid_config_parses() {
+        let _cache = config_cache_guard();
         let (_dir, state_dir) = temp_state_dir();
         let config_path = state_dir.join("config.toml");
         let toml = r#"
@@ -1246,6 +1270,7 @@ enabled = true
 
     #[test]
     fn test_empty_allow_from_is_valid() {
+        let _cache = config_cache_guard();
         let (_dir, state_dir) = temp_state_dir();
         let config_path = state_dir.join("config.toml");
         fs::write(config_path.as_std_path(), b"[access]\nallow_from = []\n").unwrap();
@@ -1506,6 +1531,7 @@ enabled = true
 
     #[test]
     fn test_global_delivery_delay_ms_toml_parses() {
+        let _cache = config_cache_guard();
         let (_dir, state_dir) = temp_state_dir();
         let config_path = state_dir.join("config.toml");
         let toml = r#"
@@ -1546,6 +1572,7 @@ delivery_delay_ms = 300
 
     #[test]
     fn test_rate_limit_toml_parses() {
+        let _cache = config_cache_guard();
         let (_dir, state_dir) = temp_state_dir();
         let config_path = state_dir.join("config.toml");
         let toml = r#"
@@ -1605,6 +1632,7 @@ overflow = "buffer"
 
     #[test]
     fn test_delivery_delay_ms_toml_parses() {
+        let _cache = config_cache_guard();
         let (_dir, state_dir) = temp_state_dir();
         let config_path = state_dir.join("config.toml");
         let toml = r#"
@@ -1648,6 +1676,7 @@ delivery_delay_ms = 750
 
     #[test]
     fn test_contradictionary_sidecar_loads_toml() {
+        let _cache = config_cache_guard();
         let (_dir, state_dir) = temp_state_dir();
         let config_path = state_dir.join("config.toml");
         let sidecar_path = state_dir.join("contradictionary.toml");
@@ -1685,6 +1714,7 @@ action = "block"
 
     #[test]
     fn test_contradictionary_sidecar_missing_is_ok() {
+        let _cache = config_cache_guard();
         let (_dir, state_dir) = temp_state_dir();
         let config_path = state_dir.join("config.toml");
 
@@ -1703,7 +1733,96 @@ enabled = true
     }
 
     #[test]
+    fn test_contradictionary_empty_sidecar_is_ok() {
+        let _cache = config_cache_guard();
+        let (_dir, state_dir) = temp_state_dir();
+        let config_path = state_dir.join("config.toml");
+        let sidecar_path = state_dir.join("contradictionary.toml");
+
+        let toml = r#"
+[contradictionary]
+enabled = true
+"#;
+        fs::write(config_path.as_std_path(), toml.as_bytes()).unwrap();
+        // Present but empty — distinct from missing, and still a clean no-op.
+        fs::write(sidecar_path.as_std_path(), b"").unwrap();
+
+        let (cfg, error) = reload_config(&state_dir);
+        assert!(error.is_none(), "empty sidecar must not produce an error");
+        assert!(
+            cfg.contradictionary.is_none(),
+            "no entries means no concordance"
+        );
+    }
+
+    #[test]
+    fn test_corrupt_sidecar_preserves_previously_loaded_entries() {
+        let _cache = config_cache_guard();
+        let (_dir, state_dir) = temp_state_dir();
+        let config_path = state_dir.join("config.toml");
+        let sidecar_path = state_dir.join("contradictionary.toml");
+
+        let toml = r#"
+[contradictionary]
+enabled = true
+"#;
+        fs::write(config_path.as_std_path(), toml.as_bytes()).unwrap();
+
+        // Prime the cache with a working gate.
+        fs::write(
+            sidecar_path.as_std_path(),
+            br#"
+[[entry]]
+pattern = "canary-phrase"
+action = "block"
+"#,
+        )
+        .unwrap();
+        let primed = reload_config(&state_dir).0;
+        let gate = primed
+            .contradictionary
+            .as_ref()
+            .expect("primed contradictionary must be built");
+        assert_eq!(gate.check("canary-phrase").len(), 1);
+
+        // Corrupt the sidecar. One bad entry fails the whole file's parse.
+        fs::write(
+            sidecar_path.as_std_path(),
+            b"[[entry]]\npattern = \"unclosed",
+        )
+        .unwrap();
+        let (after, error) = reload_config(&state_dir);
+
+        assert!(
+            error.is_some(),
+            "corrupt sidecar must report an error to the caller"
+        );
+
+        // The gate must NOT silently disappear. Failing to parse the wordlist
+        // is not a licence to run with no wordlist at all.
+        let gate = after.contradictionary.as_ref().expect(
+            "corrupt sidecar must not leave the contradictionary absent — \
+             a gate whose job is failing closed must not fail open",
+        );
+        assert_eq!(
+            gate.check("canary-phrase").len(),
+            1,
+            "previously loaded entries must survive a corrupt reload"
+        );
+
+        // And the cache itself must still hold the working gate, so readers
+        // that never see the error still get a live gate.
+        let cached = load_config(&state_dir);
+        let cached_gate = cached
+            .contradictionary
+            .as_ref()
+            .expect("cache must retain the last valid contradictionary");
+        assert_eq!(cached_gate.check("canary-phrase").len(), 1);
+    }
+
+    #[test]
     fn test_contradictionary_inline_and_sidecar_merged() {
+        let _cache = config_cache_guard();
         let (_dir, state_dir) = temp_state_dir();
         let config_path = state_dir.join("config.toml");
         let sidecar_path = state_dir.join("contradictionary.toml");
@@ -1741,6 +1860,7 @@ action = "warn"
 
     #[test]
     fn test_contradictionary_custom_sidecar_path() {
+        let _cache = config_cache_guard();
         let (_dir, state_dir) = temp_state_dir();
         let config_path = state_dir.join("config.toml");
         let custom_dir = state_dir.join("custom");
