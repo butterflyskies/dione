@@ -689,14 +689,11 @@ async fn test_tools_call_list_access_requests_empty() {
 async fn test_bind_codex_thread_updates_live_binding() {
     let (_dir, state_dir) = temp_state_dir();
     let mut server = make_server(&state_dir);
-    let (binding_tx, binding_rx) = tokio::sync::watch::channel(None);
     server.mode = TransportMode::Codex;
     let codex_queue = dione::codex::CodexEventQueue::load(&state_dir).unwrap();
+    let binding_rx = codex_queue.subscribe_live_binding();
     server.codex_queue = Some(codex_queue.clone());
-    server.codex_thread_binder = Some(dione::codex::CodexThreadBinder::new(
-        codex_queue,
-        binding_tx,
-    ));
+    server.codex_thread_binder = Some(dione::codex::CodexThreadBinder::new(codex_queue));
     let thread_id = "019f4b14-ccc7-7db2-80c8-fe2b888c8844";
     let request = json!({
         "jsonrpc": "2.0",
@@ -720,11 +717,32 @@ async fn test_bind_codex_thread_updates_live_binding() {
             .map(dione::codex::CodexThreadId::as_str),
         Some(thread_id)
     );
-    let persisted: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(state_dir.join("codex-inbox.json")).expect("durable Codex inbox"),
+    assert!(
+        !state_dir.join("codex-inbox.json").exists(),
+        "binding alone must not persist queue state"
+    );
+
+    server
+        .codex_thread_binder
+        .as_ref()
+        .unwrap()
+        .begin_shutdown();
+    let response = test_helpers::dispatch_request(
+        &server,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 72,
+            "method": "tools/call",
+            "params": {
+                "name": "bind_codex_thread",
+                "arguments": { "thread_id": "thread-after-shutdown" }
+            }
+        }),
     )
-    .expect("valid durable Codex inbox");
-    assert_eq!(persisted["live_thread_id"], thread_id);
+    .await
+    .unwrap();
+    assert!(response.get("error").is_some());
+    assert!(binding_rx.borrow().is_none());
 }
 
 // ── Notification format tests ─────────────────────────────────────────────────

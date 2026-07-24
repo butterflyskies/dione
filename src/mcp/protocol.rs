@@ -379,7 +379,7 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
         && let Some(tools) = response["tools"].as_array_mut()
     {
         tools.extend([
-            tool("bind_codex_thread", "Bind live inbound Discord delivery to this exact Codex thread. Call once at startup and after resuming, forking, or switching conversations. Future events move to the new binding; old backlog is not replayed.", json!({
+            tool("bind_codex_thread", "Bind live inbound Discord delivery to this exact Codex thread for this Dione process. Call once at startup and after resuming, forking, or switching conversations. Each future event durably captures the current binding; old backlog is not retagged.", json!({
                 "type": "object",
                 "required": ["thread_id"],
                 "properties": {

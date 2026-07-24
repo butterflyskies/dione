@@ -26,11 +26,11 @@ use std::{
     collections::{HashSet, VecDeque},
     fs::{File, OpenOptions},
     io::{self, Write},
-    sync::Arc,
+    sync::{Arc, Mutex as StdMutex},
     time::Duration,
 };
 use thiserror::Error;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, Notify, watch};
 
 const INBOX_FILE_NAME: &str = "codex-inbox.json";
 const LOCK_FILE_NAME: &str = "codex-inbox.lock";
@@ -228,8 +228,6 @@ struct InboxState {
     #[serde(default)]
     primary_consumer: Option<ConsumerId>,
     #[serde(default)]
-    live_thread_id: Option<CodexThreadId>,
-    #[serde(default)]
     consumers: Vec<ConsumerRegistration>,
     #[serde(default)]
     processed_message_ids: VecDeque<DiscordMessageId>,
@@ -250,6 +248,91 @@ struct DurableInbox {
 pub struct CodexEventQueue {
     inbox: Arc<Mutex<DurableInbox>>,
     changed: Arc<Notify>,
+    live_binding: LiveBinding,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveBindingPhase {
+    Running,
+    Stopping,
+}
+
+#[derive(Debug)]
+struct LiveBindingState {
+    phase: LiveBindingPhase,
+    epoch: u64,
+    thread_id: Option<CodexThreadId>,
+    sender: watch::Sender<Option<CodexThreadId>>,
+}
+
+/// Process-local routing state shared by ingress, status, control, and shutdown.
+#[derive(Debug, Clone)]
+pub(crate) struct LiveBinding {
+    state: Arc<StdMutex<LiveBindingState>>,
+}
+
+impl LiveBinding {
+    fn new() -> Self {
+        let (sender, _receiver) = watch::channel(None);
+        Self {
+            state: Arc::new(StdMutex::new(LiveBindingState {
+                phase: LiveBindingPhase::Running,
+                epoch: 0,
+                thread_id: None,
+                sender,
+            })),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, LiveBindingState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub(crate) fn subscribe(&self) -> watch::Receiver<Option<CodexThreadId>> {
+        self.lock().sender.subscribe()
+    }
+
+    pub(crate) fn bind(&self, thread_id: CodexThreadId) -> Result<bool, CodexThreadBindingError> {
+        let mut state = self.lock();
+        if state.phase == LiveBindingPhase::Stopping {
+            return Err(CodexThreadBindingError::Stopping);
+        }
+        if state.thread_id.as_ref() == Some(&thread_id) {
+            return Ok(false);
+        }
+        state.epoch = state.epoch.saturating_add(1);
+        state.thread_id = Some(thread_id.clone());
+        state.sender.send_replace(Some(thread_id));
+        Ok(true)
+    }
+
+    pub(crate) fn clear(&self) -> bool {
+        let mut state = self.lock();
+        if state.thread_id.is_none() {
+            return false;
+        }
+        state.epoch = state.epoch.saturating_add(1);
+        state.thread_id = None;
+        state.sender.send_replace(None);
+        true
+    }
+
+    pub(crate) fn begin_shutdown(&self) {
+        let mut state = self.lock();
+        if state.phase == LiveBindingPhase::Stopping {
+            return;
+        }
+        state.phase = LiveBindingPhase::Stopping;
+        state.epoch = state.epoch.saturating_add(1);
+        state.thread_id = None;
+        state.sender.send_replace(None);
+    }
+
+    fn thread_id(&self) -> Option<CodexThreadId> {
+        self.lock().thread_id.clone()
+    }
 }
 
 /// Event returned to a Codex consumer under a time-bounded lease.
@@ -395,7 +478,11 @@ impl DurableInbox {
         })
     }
 
-    fn enqueue(&mut self, payload: Value) -> Result<bool, CodexQueueError> {
+    fn enqueue(
+        &mut self,
+        payload: Value,
+        live_thread_id: Option<CodexThreadId>,
+    ) -> Result<bool, CodexQueueError> {
         let now = Utc::now();
         self.expire_consumers(now);
         let discord_message_id = discord_message_id(&payload);
@@ -416,7 +503,7 @@ impl DurableInbox {
                 payload,
                 discord_message_id,
                 consumer_id: inbox.state.primary_consumer.clone(),
-                live_thread_id: inbox.live_event_thread_id(),
+                live_thread_id,
                 lease: None,
             });
             Ok(true)
@@ -471,25 +558,6 @@ impl DurableInbox {
         })
     }
 
-    fn bind_live_thread(
-        &mut self,
-        thread_id: Option<CodexThreadId>,
-    ) -> Result<(), CodexQueueError> {
-        self.transaction(move |inbox| {
-            inbox.state.live_thread_id = thread_id;
-            Ok(())
-        })
-    }
-
-    fn live_event_thread_id(&self) -> Option<CodexThreadId> {
-        let primary = self.state.primary_consumer.as_ref()?;
-        self.state
-            .consumers
-            .iter()
-            .find(|consumer| consumer.id == *primary && consumer.label == LIVE_CONSUMER_LABEL)?;
-        self.state.live_thread_id.clone()
-    }
-
     fn acknowledge(
         &mut self,
         consumer_id: &ConsumerId,
@@ -515,7 +583,7 @@ impl DurableInbox {
         })
     }
 
-    fn status(&mut self, now: DateTime<Utc>) -> QueueStatus {
+    fn status(&mut self, now: DateTime<Utc>, live_thread_id: Option<CodexThreadId>) -> QueueStatus {
         let active_consumers: Vec<_> = self
             .state
             .consumers
@@ -542,7 +610,7 @@ impl DurableInbox {
                 .count(),
             next_event_id: EventId::new(self.state.next_id),
             primary_consumer: primary_consumer.clone(),
-            live_thread_id: self.state.live_thread_id.clone(),
+            live_thread_id,
             consumers: active_consumers
                 .into_iter()
                 .map(|consumer| ConsumerStatus {
@@ -830,6 +898,7 @@ impl CodexEventQueue {
         Ok(Self {
             inbox: Arc::new(Mutex::new(DurableInbox::load(state_dir)?)),
             changed: Arc::new(Notify::new()),
+            live_binding: LiveBinding::new(),
         })
     }
 
@@ -837,7 +906,10 @@ impl CodexEventQueue {
     ///
     /// Returns `false` when the Discord message id is already queued.
     pub async fn enqueue(&self, payload: Value) -> Result<bool, CodexQueueError> {
-        let inserted = self.inbox.lock().await.enqueue(payload)?;
+        let mut inbox = self.inbox.lock().await;
+        let live_thread_id = self.live_binding.thread_id();
+        let inserted = inbox.enqueue(payload, live_thread_id)?;
+        drop(inbox);
         if inserted {
             self.changed.notify_waiters();
         }
@@ -904,17 +976,26 @@ impl CodexEventQueue {
         }
     }
 
+    pub(crate) fn live_binding(&self) -> LiveBinding {
+        self.live_binding.clone()
+    }
+
+    pub fn subscribe_live_binding(&self) -> watch::Receiver<Option<CodexThreadId>> {
+        self.live_binding.subscribe()
+    }
+
+    #[cfg(test)]
     pub(crate) async fn bind_live_thread(
         &self,
         thread_id: Option<CodexThreadId>,
-    ) -> Result<(), CodexQueueError> {
-        self.inbox.lock().await.bind_live_thread(thread_id)?;
-        self.changed.notify_waiters();
-        Ok(())
-    }
-
-    pub(crate) async fn live_thread_id(&self) -> Option<CodexThreadId> {
-        self.inbox.lock().await.state.live_thread_id.clone()
+    ) -> Result<(), CodexThreadBindingError> {
+        match thread_id {
+            Some(thread_id) => self.live_binding.bind(thread_id).map(|_| ()),
+            None => {
+                self.live_binding.clear();
+                Ok(())
+            }
+        }
     }
 
     pub async fn acknowledge(
@@ -928,7 +1009,9 @@ impl CodexEventQueue {
     }
 
     pub async fn status(&self) -> QueueStatus {
-        self.inbox.lock().await.status(Utc::now())
+        let mut inbox = self.inbox.lock().await;
+        let live_thread_id = self.live_binding.thread_id();
+        inbox.status(Utc::now(), live_thread_id)
     }
 
     pub async fn register_consumer(
@@ -1113,30 +1196,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn existing_v1_inbox_is_backward_compatible() {
+    async fn legacy_top_level_binding_is_ignored_and_omitted_on_next_write() {
         let dir = TempDir::new().unwrap();
         let path = temp_path(&dir);
         std::fs::write(
             path.join(INBOX_FILE_NAME),
             serde_json::to_vec(&json!({
                 "next_id": 2,
+                "live_thread_id": "legacy-thread",
                 "entries": [{ "id": 1, "payload": message("1", "legacy") }]
             }))
             .unwrap(),
         )
         .unwrap();
         let queue = CodexEventQueue::load(&path).unwrap();
-        queue
-            .bind_live_thread(Some(CodexThreadId::parse("legacy-thread").unwrap()))
-            .await
-            .unwrap();
+        assert!(queue.status().await.live_thread_id.is_none());
+        queue.enqueue(message("2", "new")).await.unwrap();
         drop(queue);
 
         let persisted: Value =
             serde_json::from_slice(&std::fs::read(path.join(INBOX_FILE_NAME)).unwrap()).unwrap();
         assert_eq!(persisted["entries"][0]["id"], 1);
         assert_eq!(persisted["entries"][0]["discord_message_id"], "1");
-        assert_eq!(persisted["live_thread_id"], "legacy-thread");
+        assert!(persisted.get("live_thread_id").is_none());
 
         let reloaded = CodexEventQueue::load(&path).unwrap();
         let inbox = reloaded.inbox.lock().await;
@@ -1145,14 +1227,7 @@ mod tests {
             inbox.state.entries[0].discord_message_id,
             Some(DiscordMessageId(MessageId::new(1)))
         );
-        assert_eq!(
-            inbox
-                .state
-                .live_thread_id
-                .as_ref()
-                .map(CodexThreadId::as_str),
-            Some("legacy-thread")
-        );
+        assert!(reloaded.live_binding.thread_id().is_none());
     }
 
     #[tokio::test]
@@ -1336,6 +1411,102 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn enqueue_persists_only_the_captured_event_binding() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        queue
+            .bind_live_thread(Some(CodexThreadId::parse("thread-a").unwrap()))
+            .await
+            .unwrap();
+
+        queue.enqueue(message("1", "tagged")).await.unwrap();
+
+        let persisted: Value =
+            serde_json::from_slice(&std::fs::read(path.join(INBOX_FILE_NAME)).unwrap()).unwrap();
+        assert!(persisted.get("live_thread_id").is_none());
+        assert_eq!(persisted["entries"][0]["live_thread_id"], "thread-a");
+    }
+
+    #[tokio::test]
+    async fn bind_enqueue_race_captures_the_old_or_new_complete_binding() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        queue
+            .bind_live_thread(Some(CodexThreadId::parse("thread-a").unwrap()))
+            .await
+            .unwrap();
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let enqueue = tokio::spawn({
+            let queue = queue.clone();
+            let barrier = barrier.clone();
+            async move {
+                barrier.wait().await;
+                queue.enqueue(message("1", "racing")).await
+            }
+        });
+        let bind = tokio::spawn({
+            let queue = queue.clone();
+            let barrier = barrier.clone();
+            async move {
+                barrier.wait().await;
+                queue
+                    .bind_live_thread(Some(CodexThreadId::parse("thread-b").unwrap()))
+                    .await
+            }
+        });
+
+        barrier.wait().await;
+        enqueue.await.unwrap().unwrap();
+        bind.await.unwrap().unwrap();
+
+        let inbox = queue.inbox.lock().await;
+        let tag = inbox.state.entries[0]
+            .live_thread_id
+            .as_ref()
+            .map(CodexThreadId::as_str);
+        assert!(matches!(tag, Some("thread-a" | "thread-b")));
+    }
+
+    #[tokio::test]
+    async fn clear_enqueue_race_captures_the_old_binding_or_none() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        queue
+            .bind_live_thread(Some(CodexThreadId::parse("thread-a").unwrap()))
+            .await
+            .unwrap();
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let enqueue = tokio::spawn({
+            let queue = queue.clone();
+            let barrier = barrier.clone();
+            async move {
+                barrier.wait().await;
+                queue.enqueue(message("1", "racing")).await
+            }
+        });
+        let clear = tokio::spawn({
+            let binding = queue.live_binding();
+            let barrier = barrier.clone();
+            async move {
+                barrier.wait().await;
+                binding.clear();
+            }
+        });
+
+        barrier.wait().await;
+        enqueue.await.unwrap().unwrap();
+        clear.await.unwrap();
+
+        let inbox = queue.inbox.lock().await;
+        let tag = inbox.state.entries[0]
+            .live_thread_id
+            .as_ref()
+            .map(CodexThreadId::as_str);
+        assert!(matches!(tag, None | Some("thread-a")));
     }
 
     #[tokio::test]

@@ -61,7 +61,6 @@ pub(crate) async fn call_tool(
                 .map_err(|error| error.to_string())?;
             binder
                 .bind(thread_id.clone())
-                .await
                 .map_err(|error| error.to_string())?;
             json!({ "bound": true, "thread_id": thread_id })
         }

@@ -72,20 +72,28 @@ payload to that same Dione state directory. Save this as
 ```
 
 The `--state-dir` argument is required because an MCP server's environment is
-not inherited by separately launched hook commands. The hook accepts the
-`startup`, `resume`, `clear`, and `compact` sources and exits nonzero unless the
-running Dione daemon confirms the exact session ID. The session ID travels over
-stdin and the filesystem-protected `<state-dir>/codex-control.sock`, never in
-process arguments. If you use another state directory, change it in both the
-MCP registration and hook command. Open `/hooks` in Codex to review and trust
-the new hook before relying on automatic binding.
+not inherited by separately launched hook commands. Codex currently documents
+`startup`, `resume`, `clear`, and `compact` as the `SessionStart` matcher
+values. Dione keys binding on `session_id`; its hook parser intentionally
+ignores an optional `source` field so a future source value does not strand the
+previous binding. The hook exits nonzero unless the running Dione daemon
+confirms the exact session ID. The session ID travels over stdin and the
+filesystem-protected `<state-dir>/codex-control.sock`, never in process
+arguments. If you use another state directory, change it in both the MCP
+registration and hook command. Open `/hooks` in Codex to review and trust the
+new hook before relying on automatic binding.
 
 The MCP `bind_codex_thread` tool remains available for explicit binding. Bind
 every new, resumed, forked, cleared, compacted, or switched conversation. The
 optional `--codex-thread-id` or inherited
 `CODEX_THREAD_ID` provides an initial binding for standalone deployments, but
-MCP startup does not require one. Dione never guesses among loaded threads. The default
-app-server socket is `$CODEX_HOME/app-server-control/app-server-control.sock`
+MCP startup does not require one. The current binding is process-local: Dione
+does not restore a stale binding from `codex-inbox.json` after restart. At
+ingress, the current binding is copied onto that event's durable queue entry,
+so later rebinds affect future events without retagging backlog. Shutdown
+clears and fences the process-local binding before control and MCP teardown.
+Dione never guesses among loaded threads. The default app-server socket is
+`$CODEX_HOME/app-server-control/app-server-control.sock`
 or `$HOME/.codex/app-server-control/app-server-control.sock`; override it with
 `--codex-app-server-socket` or `CODEX_APP_SERVER_SOCKET`.
 

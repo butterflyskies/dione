@@ -15,7 +15,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    sync::{RwLock, mpsc, watch},
+    sync::{RwLock, mpsc},
     time::interval,
 };
 use tokio_util::sync::CancellationToken;
@@ -59,21 +59,28 @@ enum Command {
     },
 }
 
+struct CancelOnDrop(CancellationToken);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
 async fn cancel_root_when_complete<T>(
     cancel: CancellationToken,
     future: impl Future<Output = T>,
 ) -> T {
-    let result = future.await;
-    cancel.cancel();
-    result
+    let _cancel_on_drop = CancelOnDrop(cancel);
+    future.await
 }
 
-async fn cancel_root_on_error<T, E>(
+async fn cancel_root_on_task_failure<T, E>(
     cancel: CancellationToken,
-    future: impl Future<Output = Result<T, E>>,
-) -> Result<T, E> {
-    let result = future.await;
-    if result.is_err() {
+    task: tokio::task::JoinHandle<Result<T, E>>,
+) -> Result<Result<T, E>, tokio::task::JoinError> {
+    let result = task.await;
+    if !matches!(result, Ok(Ok(_))) {
         cancel.cancel();
     }
     result
@@ -171,17 +178,13 @@ async fn main() -> Result<()> {
                     .transpose()
                     .wrap_err("invalid CODEX_THREAD_ID")?,
             };
-            let (binding_tx, binding_rx) = watch::channel(None);
-            let binder = dione::codex::CodexThreadBinder::new(codex_queue.clone(), binding_tx);
+            let binding_rx = codex_queue.subscribe_live_binding();
+            let binder = dione::codex::CodexThreadBinder::new(codex_queue.clone());
             match initial_thread {
                 Some(thread_id) => binder
                     .bind(thread_id)
-                    .await
                     .wrap_err("failed to set the initial Codex thread binding")?,
-                None => binder
-                    .clear()
-                    .await
-                    .wrap_err("failed to clear the stale Codex thread binding")?,
+                None => binder.clear(),
             }
             let delivery_queue = codex_queue.clone();
             let delivery_cancel = cancel.clone();
@@ -208,11 +211,15 @@ async fn main() -> Result<()> {
             let control_cancel = cancel.child_token();
             let control_root_cancel = cancel.clone();
             let control_handle = tokio::spawn(async move {
-                if let Err(error) =
-                    cancel_root_on_error(control_root_cancel, control_listener.run(control_cancel))
-                        .await
-                {
-                    tracing::error!(error = %error, "Codex bind control listener exited");
+                let listener_task = tokio::spawn(control_listener.run(control_cancel));
+                match cancel_root_on_task_failure(control_root_cancel, listener_task).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        tracing::error!(error = %error, "Codex bind control listener exited");
+                    }
+                    Err(error) => {
+                        tracing::error!(error = %error, "Codex bind control listener panicked");
+                    }
                 }
             });
             (
@@ -322,18 +329,15 @@ async fn main() -> Result<()> {
         }
     }
 
+    if let Some(binder) = codex_shutdown_binder.as_ref() {
+        binder.begin_shutdown();
+    }
     cancel.cancel();
 
-    // Stop accepting and drain bounded in-flight control requests before the
-    // canonical clear, so a late request cannot rebind after shutdown.
+    // Stop accepting and drain bounded in-flight control requests after the
+    // fence, so every late request observes the stopping phase.
     if let Some(codex_control_handle) = codex_control_handle {
         let _ = codex_control_handle.await;
-    }
-
-    if let Some(binder) = codex_shutdown_binder
-        && let Err(error) = binder.clear().await
-    {
-        tracing::error!(%error, "failed to clear Codex live binding during shutdown");
     }
 
     // Allow up to 2 seconds for tasks to wind down.
@@ -395,23 +399,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn directly_awaited_task_panic_cancels_root_lifecycle() {
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(cancel_root_when_complete(cancel.clone(), async {
+            panic!("directly awaited worker panic")
+        }));
+
+        assert!(task.await.expect_err("worker must panic").is_panic());
+        assert!(cancel.is_cancelled());
+    }
+
+    #[tokio::test]
     async fn terminal_task_error_cancels_root_lifecycle() {
         let cancel = CancellationToken::new();
+        let task = tokio::spawn(async { Err::<(), _>("terminal listener") });
 
-        let result =
-            cancel_root_on_error(cancel.clone(), async { Err::<(), _>("terminal listener") }).await;
+        let result = cancel_root_on_task_failure(cancel.clone(), task).await;
 
-        assert_eq!(result, Err("terminal listener"));
+        assert_eq!(result.expect("task joined"), Err("terminal listener"));
         assert!(cancel.is_cancelled());
     }
 
     #[tokio::test]
     async fn clean_child_task_exit_does_not_cancel_root_lifecycle() {
         let cancel = CancellationToken::new();
+        let task = tokio::spawn(async { Ok::<_, &str>(()) });
 
-        let result = cancel_root_on_error(cancel.clone(), async { Ok::<_, &str>(()) }).await;
+        let result = cancel_root_on_task_failure(cancel.clone(), task).await;
 
-        assert_eq!(result, Ok(()));
+        assert_eq!(result.expect("task joined"), Ok(()));
         assert!(!cancel.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn child_task_panic_cancels_root_lifecycle() {
+        let cancel = CancellationToken::new();
+        let task: tokio::task::JoinHandle<Result<(), &str>> =
+            tokio::spawn(async { panic!("listener panic") });
+
+        let result = cancel_root_on_task_failure(cancel.clone(), task).await;
+
+        assert!(result.expect_err("panic must fail the join").is_panic());
+        assert!(cancel.is_cancelled());
     }
 }

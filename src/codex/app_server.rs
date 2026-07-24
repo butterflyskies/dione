@@ -350,15 +350,39 @@ async fn run_delivery_worker_with_lease(
                 client = None;
                 continue;
             },
-            event = queue.next_live_event(&consumer_id, &thread_id, EVENT_WAIT, event_lease) => event?,
+            event = lease_live_event_with_retry(
+                &queue,
+                &consumer_id,
+                &thread_id,
+                EVENT_WAIT,
+                event_lease,
+                &cancel,
+            ) => event?,
         };
         let Some(mut event) = event else { continue };
 
         loop {
             if event.lease_expires_at <= chrono::Utc::now() {
-                let replacement = queue
-                    .next_live_event(&consumer_id, &thread_id, Duration::ZERO, event_lease)
-                    .await?;
+                let replacement = tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => return Ok(()),
+                    changed = thread_binding.changed() => {
+                        if changed.is_err() {
+                            return Ok(());
+                        }
+                        client = None;
+                        retry_delay = INITIAL_RETRY_DELAY;
+                        break;
+                    },
+                    replacement = lease_live_event_with_retry(
+                        &queue,
+                        &consumer_id,
+                        &thread_id,
+                        Duration::ZERO,
+                        event_lease,
+                        &cancel,
+                    ) => replacement?,
+                };
                 let Some(replacement) = replacement else {
                     // The event may have been acknowledged or rerouted while
                     // its lease expired. Return to the durable queue instead
@@ -446,6 +470,39 @@ async fn run_delivery_worker_with_lease(
                         RetryWait::Stopped => return Ok(()),
                     }
                 }
+            }
+        }
+    }
+}
+
+async fn lease_live_event_with_retry(
+    queue: &CodexEventQueue,
+    consumer_id: &super::ConsumerId,
+    thread_id: &CodexThreadId,
+    wait: Duration,
+    lease: Duration,
+    cancel: &CancellationToken,
+) -> Result<Option<LeasedEvent>, CodexDeliveryError> {
+    let mut delay = INITIAL_RETRY_DELAY;
+    loop {
+        match queue
+            .next_live_event(consumer_id, thread_id, wait, lease)
+            .await
+        {
+            Ok(event) => return Ok(event),
+            Err(error) if !matches!(error, CodexQueueError::InboxIo { .. }) => {
+                return Err(error.into());
+            }
+            Err(error) => {
+                tracing::error!(
+                    error = %error,
+                    "failed to persist a Codex live-delivery lease; retrying"
+                );
+                wait_to_retry(cancel, delay).await;
+                if cancel.is_cancelled() {
+                    return Ok(None);
+                }
+                delay = (delay * 2).min(MAX_RETRY_DELAY);
             }
         }
     }
@@ -975,6 +1032,87 @@ mod tests {
         cancel.cancel();
         worker.await.unwrap().unwrap();
         server.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn live_lease_inbox_io_failure_retries_until_persistence_recovers() {
+        let dir = TempDir::new().unwrap();
+        let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
+        let queue = CodexEventQueue::load(&state_path).unwrap();
+        let thread_id = CodexThreadId::parse("thread-lease-retry").unwrap();
+        queue
+            .bind_live_thread(Some(thread_id.clone()))
+            .await
+            .unwrap();
+        let consumer_id = queue.register_live_consumer().await.unwrap();
+        queue
+            .enqueue(json!({ "params": { "meta": { "message_id": "retry" } } }))
+            .await
+            .unwrap();
+        let valid_temporary_path = {
+            let mut inbox = queue.inbox.lock().await;
+            let valid = inbox.temporary_path.clone();
+            inbox.temporary_path = state_path.join("missing").join("inbox.tmp");
+            valid
+        };
+        let cancel = CancellationToken::new();
+        let lease_task = tokio::spawn({
+            let queue = queue.clone();
+            let consumer_id = consumer_id.clone();
+            let thread_id = thread_id.clone();
+            let cancel = cancel.clone();
+            async move {
+                lease_live_event_with_retry(
+                    &queue,
+                    &consumer_id,
+                    &thread_id,
+                    Duration::ZERO,
+                    Duration::from_secs(60),
+                    &cancel,
+                )
+                .await
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !lease_task.is_finished(),
+            "InboxIo must enter retry instead of terminating live delivery"
+        );
+
+        queue.inbox.lock().await.temporary_path = valid_temporary_path;
+        tokio::time::advance(INITIAL_RETRY_DELAY).await;
+        let event = lease_task
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("event after persistence recovery");
+
+        assert_eq!(event.event_id, crate::codex::EventId::new(0));
+    }
+
+    #[tokio::test]
+    async fn live_lease_terminal_queue_error_is_not_retried() {
+        let dir = TempDir::new().unwrap();
+        let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
+        let queue = CodexEventQueue::load(&state_path).unwrap();
+        let thread_id = CodexThreadId::parse("thread-terminal-lease").unwrap();
+        let unknown_consumer = ConsumerId::parse("unknown-consumer").unwrap();
+
+        let error = lease_live_event_with_retry(
+            &queue,
+            &unknown_consumer,
+            &thread_id,
+            Duration::ZERO,
+            Duration::from_secs(60),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect_err("terminal queue error must escape");
+
+        assert!(matches!(
+            error,
+            CodexDeliveryError::Queue(CodexQueueError::UnknownConsumer)
+        ));
     }
 
     #[tokio::test]

@@ -1,18 +1,20 @@
 //! Local control path for binding a Codex session to live delivery.
 
-use crate::codex::{CodexEventQueue, CodexQueueError, CodexThreadId};
+use crate::codex::{CodexEventQueue, CodexThreadId, LiveBinding};
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
 use std::{
     io,
-    os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
+    os::unix::{
+        ffi::OsStrExt,
+        fs::{FileTypeExt, MetadataExt, PermissionsExt},
+    },
     time::Duration,
 };
 use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     net::{UnixListener, UnixStream},
-    sync::{Mutex, watch},
     task::JoinSet,
     time::{sleep, timeout},
 };
@@ -30,87 +32,55 @@ const MAX_CONCURRENT_CONNECTIONS: usize = 16;
 const STAGING_DIRECTORY_PREFIX: &str = ".c-";
 const STAGING_DIRECTORY_RANDOM_BYTES: usize = 6;
 const STAGED_SOCKET_FILE_NAME: &str = "s";
+const STAGING_RELATIVE_PATH_BYTES: usize = STAGING_DIRECTORY_PREFIX.len()
+    + STAGING_DIRECTORY_RANDOM_BYTES
+    + 1
+    + STAGED_SOCKET_FILE_NAME.len();
+const _: () = assert!(STAGING_RELATIVE_PATH_BYTES <= CONTROL_SOCKET_FILE_NAME.len());
 type ConnectionResult = Result<Result<(), BindControlError>, tokio::time::error::Elapsed>;
 type ConnectionCompletion = Result<ConnectionResult, tokio::task::JoinError>;
 
-/// Serializes durable and live Codex thread binding updates.
+/// Synchronous façade over the process-local Codex thread binding.
 #[derive(Clone)]
 pub struct CodexThreadBinder {
-    state: std::sync::Arc<Mutex<BinderState>>,
-}
-
-struct BinderState {
-    queue: CodexEventQueue,
-    live_binding: watch::Sender<Option<CodexThreadId>>,
+    live_binding: LiveBinding,
 }
 
 impl CodexThreadBinder {
-    /// Creates a binder over one durable queue and live delivery worker.
-    pub fn new(queue: CodexEventQueue, live_binding: watch::Sender<Option<CodexThreadId>>) -> Self {
+    /// Creates a binder over the queue's process-local routing state.
+    pub fn new(queue: CodexEventQueue) -> Self {
         Self {
-            state: std::sync::Arc::new(Mutex::new(BinderState {
-                queue,
-                live_binding,
-            })),
+            live_binding: queue.live_binding(),
         }
     }
 
-    /// Persists a binding before publishing it to the live delivery worker.
-    pub async fn bind(&self, thread_id: CodexThreadId) -> Result<(), CodexThreadBindingError> {
-        self.set(Some(thread_id)).await
-    }
-
-    /// Clears both the durable and live Codex thread binding.
-    pub async fn clear(&self) -> Result<(), CodexThreadBindingError> {
-        self.set(None).await
-    }
-
-    async fn set(&self, thread_id: Option<CodexThreadId>) -> Result<(), CodexThreadBindingError> {
-        let state = self.state.lock().await;
-        let previous = state.live_binding.borrow().clone();
-        let durable = state.queue.live_thread_id().await;
-        if previous == thread_id && durable == thread_id {
+    /// Publishes a binding unless shutdown has fenced future updates.
+    pub fn bind(&self, thread_id: CodexThreadId) -> Result<(), CodexThreadBindingError> {
+        let changed = self.live_binding.bind(thread_id.clone())?;
+        if changed {
+            tracing::info!(
+                thread_id = thread_id.as_str(),
+                "Codex thread binding changed"
+            );
+        } else {
             tracing::debug!(
-                thread_id = thread_id.as_ref().map(CodexThreadId::as_str),
+                thread_id = thread_id.as_str(),
                 "Codex thread binding is already current"
             );
-            return Ok(());
         }
-        let clearing = thread_id.is_none();
-        if let Err(source) = state.queue.bind_live_thread(thread_id.clone()).await {
-            if !clearing {
-                // The durable update failed, so stop live delivery from using
-                // a stale previous binding. A best-effort durable clear makes
-                // the same fail-closed state survive restart when storage is
-                // still writable.
-                let _ = state.live_binding.send(None);
-                if let Err(clear_error) = state.queue.bind_live_thread(None).await {
-                    tracing::error!(
-                        error = %clear_error,
-                        "failed to clear the durable Codex binding after a bind failure"
-                    );
-                }
-            }
-            return Err(CodexThreadBindingError::Persist(source));
-        }
-
-        if state.live_binding.send(thread_id.clone()).is_err() {
-            if clearing {
-                return Ok(());
-            }
-            return match state.queue.bind_live_thread(None).await {
-                Ok(()) => Err(CodexThreadBindingError::LiveWorkerUnavailable),
-                Err(source) => Err(CodexThreadBindingError::Rollback {
-                    source: Box::new(source),
-                }),
-            };
-        }
-        tracing::info!(
-            previous_thread_id = previous.as_ref().map(CodexThreadId::as_str),
-            thread_id = thread_id.as_ref().map(CodexThreadId::as_str),
-            "Codex thread binding changed"
-        );
         Ok(())
+    }
+
+    /// Clears the process-local Codex thread binding.
+    pub fn clear(&self) {
+        if self.live_binding.clear() {
+            tracing::info!("Codex thread binding cleared");
+        }
+    }
+
+    /// Fences all future binds and clears the live worker before teardown.
+    pub fn begin_shutdown(&self) {
+        self.live_binding.begin_shutdown();
     }
 }
 
@@ -118,23 +88,16 @@ impl CodexThreadBinder {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum CodexThreadBindingError {
-    #[error("failed to persist the Codex thread binding")]
-    Persist(#[source] CodexQueueError),
-    #[error("Codex live delivery worker is unavailable")]
-    LiveWorkerUnavailable,
-    #[error("Codex live delivery worker is unavailable and clearing the durable binding failed")]
-    Rollback {
-        #[source]
-        source: Box<CodexQueueError>,
-    },
+    #[error("Codex live binding is stopping")]
+    Stopping,
 }
 
 #[derive(Debug, Deserialize)]
 struct SessionStartInput {
     session_id: CodexThreadId,
     hook_event_name: String,
-    #[serde(rename = "source")]
-    _source: String,
+    #[serde(default, rename = "source")]
+    _source: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -385,7 +348,7 @@ async fn handle_connection(
     let request_bytes = read_frame(&mut *stream).await?;
     let response = match serde_json::from_slice::<BindRequest>(&request_bytes) {
         Ok(request) if request.version == PROTOCOL_VERSION => match request.operation {
-            BindOperation::BindCodexThread => match binder.bind(request.thread_id.clone()).await {
+            BindOperation::BindCodexThread => match binder.bind(request.thread_id.clone()) {
                 Ok(()) => BindResponse::Bound {
                     version: PROTOCOL_VERSION,
                     thread_id: request.thread_id,
@@ -444,7 +407,7 @@ fn is_retryable_accept_error(error: &io::Error) -> bool {
     matches!(error.kind(), io::ErrorKind::ConnectionAborted)
         || matches!(
             error.raw_os_error(),
-            Some(libc::EMFILE) | Some(libc::ENFILE)
+            Some(libc::EMFILE) | Some(libc::ENFILE) | Some(libc::ENOMEM) | Some(libc::ENOBUFS)
         )
 }
 
@@ -487,9 +450,12 @@ async fn read_frame(input: impl AsyncRead + Unpin) -> Result<Vec<u8>, BindContro
 }
 
 async fn bind_listener(socket_path: &Utf8Path) -> Result<UnixListener, BindControlError> {
+    validate_public_socket_path(socket_path)?;
     match bind_private_listener(socket_path) {
         Ok(listener) => Ok(listener),
-        Err(source) if source.kind() == io::ErrorKind::AddrInUse => {
+        Err(BindControlError::PublishSocket { source, .. })
+            if source.kind() == io::ErrorKind::AlreadyExists =>
+        {
             match UnixStream::connect(socket_path.as_std_path()).await {
                 Ok(_) => return Err(BindControlError::ActiveSocket(socket_path.to_owned())),
                 Err(error)
@@ -525,41 +491,91 @@ async fn bind_listener(socket_path: &Utf8Path) -> Result<UnixListener, BindContr
                     source,
                 }
             })?;
-            bind_private_listener(socket_path).map_err(|source| BindControlError::Io {
-                action: "bind the Codex control socket after stale cleanup",
-                path: socket_path.to_owned(),
-                source,
-            })
+            bind_private_listener(socket_path)
         }
-        Err(source) => Err(BindControlError::Io {
-            action: "bind the Codex control socket",
-            path: socket_path.to_owned(),
-            source,
-        }),
+        Err(error) => Err(error),
     }
 }
 
-fn bind_private_listener(socket_path: &Utf8Path) -> io::Result<UnixListener> {
-    let parent = socket_path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "socket path has no parent"))?;
+fn validate_public_socket_path(socket_path: &Utf8Path) -> Result<(), BindControlError> {
+    let length = socket_path.as_std_path().as_os_str().as_bytes().len();
+    let max = max_unix_socket_path_bytes();
+    if length > max {
+        return Err(BindControlError::SocketPathTooLong {
+            path: socket_path.to_owned(),
+            length,
+            max,
+        });
+    }
+    Ok(())
+}
+
+const fn max_unix_socket_path_bytes() -> usize {
+    std::mem::size_of::<libc::sockaddr_un>() - std::mem::offset_of!(libc::sockaddr_un, sun_path) - 1
+}
+
+fn create_private_staging_directory(
+    parent: &Utf8Path,
+) -> Result<tempfile::TempDir, BindControlError> {
     let staging = tempfile::Builder::new()
         .prefix(STAGING_DIRECTORY_PREFIX)
         .rand_bytes(STAGING_DIRECTORY_RANDOM_BYTES)
-        .tempdir_in(parent.as_std_path())?;
-    std::fs::set_permissions(staging.path(), std::fs::Permissions::from_mode(0o700))?;
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in(parent.as_std_path())
+        .map_err(|source| BindControlError::StagingDirectory {
+            parent: parent.to_owned(),
+            source,
+        })?;
+    let metadata =
+        std::fs::symlink_metadata(staging.path()).map_err(|source| BindControlError::Io {
+            action: "inspect the private Codex control staging directory",
+            path: Utf8PathBuf::from_path_buf(staging.path().to_owned())
+                .unwrap_or_else(|_| parent.to_owned()),
+            source,
+        })?;
+    if !metadata.file_type().is_dir()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o777 != 0o700
+    {
+        return Err(BindControlError::UnsafeStagingDirectory(
+            Utf8PathBuf::from_path_buf(staging.path().to_owned())
+                .unwrap_or_else(|_| parent.to_owned()),
+        ));
+    }
+    // On POSIX ACL filesystems, the group mode bits are the ACL mask. Exact
+    // 0700 verification therefore also rejects inherited ACL access outside
+    // the owner class.
+    Ok(staging)
+}
+
+fn bind_private_listener(socket_path: &Utf8Path) -> Result<UnixListener, BindControlError> {
+    validate_public_socket_path(socket_path)?;
+    let parent = socket_path
+        .parent()
+        .ok_or_else(|| BindControlError::InvalidSocketPath(socket_path.to_owned()))?;
+    let staging = create_private_staging_directory(parent)?;
     let staged_socket = staging.path().join(STAGED_SOCKET_FILE_NAME);
-    let listener = UnixListener::bind(&staged_socket)?;
-    std::fs::set_permissions(&staged_socket, std::fs::Permissions::from_mode(0o600))?;
+    let staged_path = Utf8PathBuf::from_path_buf(staged_socket.clone())
+        .map_err(|_| BindControlError::InvalidSocketPath(socket_path.to_owned()))?;
+    let listener =
+        UnixListener::bind(&staged_socket).map_err(|source| BindControlError::StagedBind {
+            path: staged_path.clone(),
+            source,
+        })?;
+    std::fs::set_permissions(&staged_socket, std::fs::Permissions::from_mode(0o600)).map_err(
+        |source| BindControlError::ProtectStagedSocket {
+            path: staged_path,
+            source,
+        },
+    )?;
 
     // Publish the already-protected socket inode with an atomic, no-replace
     // hard link. The public pathname therefore never exists with ambient
     // permissions, and a concurrent owner cannot be overwritten.
     std::fs::hard_link(&staged_socket, socket_path.as_std_path()).map_err(|source| {
-        if source.kind() == io::ErrorKind::AlreadyExists {
-            io::Error::new(io::ErrorKind::AddrInUse, source)
-        } else {
-            source
+        BindControlError::PublishSocket {
+            path: socket_path.to_owned(),
+            source,
         }
     })?;
     Ok(listener)
@@ -626,6 +642,40 @@ pub enum BindControlError {
     Timeout,
     #[error("an active Codex bind control listener already owns `{0}`")]
     ActiveSocket(Utf8PathBuf),
+    #[error("Codex bind control socket path `{path}` is {length} bytes; maximum is {max}")]
+    SocketPathTooLong {
+        path: Utf8PathBuf,
+        length: usize,
+        max: usize,
+    },
+    #[error("invalid Codex bind control socket path `{0}`")]
+    InvalidSocketPath(Utf8PathBuf),
+    #[error("failed to create a private Codex control staging directory under `{parent}`")]
+    StagingDirectory {
+        parent: Utf8PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("unsafe private Codex control staging directory `{0}`")]
+    UnsafeStagingDirectory(Utf8PathBuf),
+    #[error("failed to bind staged Codex control socket `{path}`")]
+    StagedBind {
+        path: Utf8PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to protect staged Codex control socket `{path}`")]
+    ProtectStagedSocket {
+        path: Utf8PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to publish Codex control socket `{path}`")]
+    PublishSocket {
+        path: Utf8PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("refusing to replace non-socket path `{0}`")]
     UnsafeStalePath(Utf8PathBuf),
     #[error("unsafe Codex state directory `{path}`: {reason}")]
@@ -654,6 +704,7 @@ mod tests {
     use serde_json::json;
     use std::{
         os::unix::fs::{MetadataExt, PermissionsExt, symlink},
+        process::Command,
         sync::Arc,
     };
     use tempfile::TempDir;
@@ -672,106 +723,127 @@ mod tests {
         .expect("hook JSON")
     }
 
-    #[tokio::test]
-    async fn bind_rolls_back_durable_state_when_live_worker_is_gone() {
-        let dir = TempDir::new().expect("temp dir");
-        let path = temp_path(&dir);
-        let queue = CodexEventQueue::load(&path).expect("queue");
-        let (binding_tx, binding_rx) = watch::channel(None);
-        drop(binding_rx);
-        let binder = CodexThreadBinder::new(queue, binding_tx);
+    #[test]
+    fn bind_request_exact_wire_fixture() {
+        let request = BindRequest {
+            version: 1,
+            operation: BindOperation::BindCodexThread,
+            thread_id: CodexThreadId::parse("thread-a").expect("thread id"),
+        };
 
-        let error = binder
-            .bind(CodexThreadId::parse("thread-a").expect("thread id"))
-            .await
-            .expect_err("binding must fail");
+        assert_eq!(
+            serde_json::to_string(&request).expect("request JSON"),
+            r#"{"version":1,"operation":"bind_codex_thread","thread_id":"thread-a"}"#
+        );
+        let decoded: BindRequest = serde_json::from_str(
+            r#"{"version":1,"operation":"bind_codex_thread","thread_id":"thread-a"}"#,
+        )
+        .expect("literal request fixture");
+        assert_eq!(decoded.version, 1);
+        assert!(matches!(decoded.operation, BindOperation::BindCodexThread));
+        assert_eq!(decoded.thread_id.as_str(), "thread-a");
+    }
 
+    #[test]
+    fn bind_response_exact_wire_fixtures() {
+        let bound = BindResponse::Bound {
+            version: 1,
+            thread_id: CodexThreadId::parse("thread-a").expect("thread id"),
+        };
+        let error = BindResponse::Error {
+            version: 1,
+            message: "binding stopped".to_owned(),
+        };
+
+        assert_eq!(
+            serde_json::to_string(&bound).expect("bound JSON"),
+            r#"{"status":"bound","version":1,"thread_id":"thread-a"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&error).expect("error JSON"),
+            r#"{"status":"error","version":1,"message":"binding stopped"}"#
+        );
         assert!(matches!(
-            error,
-            CodexThreadBindingError::LiveWorkerUnavailable
+            serde_json::from_str::<BindResponse>(
+                r#"{"status":"bound","version":1,"thread_id":"thread-a"}"#
+            )
+            .expect("literal bound fixture"),
+            BindResponse::Bound { version: 1, thread_id }
+                if thread_id.as_str() == "thread-a"
         ));
-        let persisted: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(path.join("codex-inbox.json")).expect("inbox"))
-                .expect("JSON inbox");
-        assert_eq!(persisted["live_thread_id"], serde_json::Value::Null);
+        assert!(matches!(
+            serde_json::from_str::<BindResponse>(
+                r#"{"status":"error","version":1,"message":"binding stopped"}"#
+            )
+            .expect("literal error fixture"),
+            BindResponse::Error { version: 1, message }
+                if message == "binding stopped"
+        ));
     }
 
     #[tokio::test]
-    async fn clear_succeeds_after_live_worker_receiver_is_dropped() {
+    async fn bind_and_clear_are_ephemeral_even_when_persistence_is_broken() {
         let dir = TempDir::new().expect("temp dir");
         let path = temp_path(&dir);
         let queue = CodexEventQueue::load(&path).expect("queue");
-        let (binding_tx, binding_rx) = watch::channel(None);
-        let binder = CodexThreadBinder::new(queue, binding_tx);
-        binder
-            .bind(CodexThreadId::parse("thread-a").expect("thread id"))
-            .await
-            .expect("initial bind");
-        drop(binding_rx);
-
-        binder
-            .clear()
-            .await
-            .expect("durable clear is sufficient after worker exit");
-
-        let persisted: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(path.join("codex-inbox.json")).expect("inbox"))
-                .expect("JSON inbox");
-        assert_eq!(persisted["live_thread_id"], serde_json::Value::Null);
-    }
-
-    #[tokio::test]
-    async fn initial_clear_removes_stale_durable_binding_when_live_state_is_none() {
-        let dir = TempDir::new().expect("temp dir");
-        let path = temp_path(&dir);
-        let queue = CodexEventQueue::load(&path).expect("queue");
-        queue
-            .bind_live_thread(Some(
-                CodexThreadId::parse("stale-thread").expect("thread id"),
-            ))
-            .await
-            .expect("stale durable bind");
-        let (binding_tx, _binding_rx) = watch::channel(None);
-        let binder = CodexThreadBinder::new(queue.clone(), binding_tx);
-
-        binder.clear().await.expect("initial clear");
-
-        assert!(queue.live_thread_id().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn identical_bind_does_not_notify_or_rewrite_durable_state() {
-        let dir = TempDir::new().expect("temp dir");
-        let path = temp_path(&dir);
-        let queue = CodexEventQueue::load(&path).expect("queue");
-        let (binding_tx, mut binding_rx) = watch::channel(None);
-        let binder = CodexThreadBinder::new(queue.clone(), binding_tx);
+        let mut binding_rx = queue.subscribe_live_binding();
+        let binder = CodexThreadBinder::new(queue.clone());
         let thread_id = CodexThreadId::parse("thread-a").expect("thread id");
-        binder.bind(thread_id.clone()).await.expect("initial bind");
-        binding_rx.borrow_and_update();
         let inbox_path = path.join("codex-inbox.json");
-        let inode = std::fs::metadata(&inbox_path)
-            .expect("inbox metadata")
-            .ino();
+        queue
+            .enqueue(json!({"seed": "durable inode"}))
+            .await
+            .expect("seed inbox");
+        let before = std::fs::metadata(&inbox_path).expect("inbox metadata");
+        queue.inbox.lock().await.temporary_path = path.join("missing").join("inbox.tmp");
 
-        binder.bind(thread_id).await.expect("identical bind");
+        binder.bind(thread_id.clone()).expect("bind is in-memory");
+        binding_rx.borrow_and_update();
+        binder.bind(thread_id).expect("identical bind");
 
         assert!(!binding_rx.has_changed().expect("binding sender"));
+        binder.clear();
+        assert!(binding_rx.has_changed().expect("binding sender"));
+        let after = std::fs::metadata(&inbox_path).expect("inbox metadata");
+        assert_eq!(after.ino(), before.ino());
+        assert_eq!(after.modified().unwrap(), before.modified().unwrap());
         assert_eq!(
-            std::fs::metadata(&inbox_path)
-                .expect("inbox metadata")
-                .ino(),
-            inode
+            queue.status().await.live_thread_id,
+            None,
+            "status reports process-local state"
         );
-        assert_eq!(
-            queue
-                .status()
-                .await
-                .live_thread_id
-                .as_ref()
-                .map(CodexThreadId::as_str),
-            Some("thread-a")
-        );
+    }
+
+    #[tokio::test]
+    async fn begin_shutdown_clears_and_fences_future_binds() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).expect("queue");
+        let binding_rx = queue.subscribe_live_binding();
+        let binder = CodexThreadBinder::new(queue.clone());
+        binder
+            .bind(CodexThreadId::parse("thread-a").expect("thread id"))
+            .expect("initial bind");
+
+        binder.begin_shutdown();
+
+        assert!(binding_rx.borrow().is_none());
+        assert!(matches!(
+            binder.bind(CodexThreadId::parse("thread-b").expect("thread id")),
+            Err(CodexThreadBindingError::Stopping)
+        ));
+        let cancel = CancellationToken::new();
+        let listener = CodexBindControlListener::bind(&path, binder.clone())
+            .await
+            .expect("listener");
+        let task = tokio::spawn(listener.run(cancel.clone()));
+        let error = run_session_start_bind_client(&path, hook_input("resume").as_slice())
+            .await
+            .expect_err("control bind must observe shutdown fence");
+        assert!(matches!(error, BindControlError::Daemon(_)));
+        cancel.cancel();
+        task.await.unwrap().unwrap();
+        assert!(queue.status().await.live_thread_id.is_none());
     }
 
     #[tokio::test]
@@ -787,8 +859,8 @@ mod tests {
             let dir = TempDir::new().expect("temp dir");
             let path = temp_path(&dir);
             let queue = CodexEventQueue::load(&path).expect("queue");
-            let (binding_tx, binding_rx) = watch::channel(None);
-            let binder = CodexThreadBinder::new(queue, binding_tx);
+            let binding_rx = queue.subscribe_live_binding();
+            let binder = CodexThreadBinder::new(queue);
             let cancel = CancellationToken::new();
             let listener = CodexBindControlListener::bind(&path, binder)
                 .await
@@ -804,6 +876,38 @@ mod tests {
                 binding_rx.borrow().as_ref().map(CodexThreadId::as_str),
                 Some("thread-a")
             );
+            cancel.cancel();
+            task.await.expect("listener task").expect("listener");
+        }
+    }
+
+    #[tokio::test]
+    async fn session_start_client_ignores_missing_or_nonstring_source() {
+        for source in [None, Some(json!({ "future": true }))] {
+            let dir = TempDir::new().expect("temp dir");
+            let path = temp_path(&dir);
+            let queue = CodexEventQueue::load(&path).expect("queue");
+            let binder = CodexThreadBinder::new(queue);
+            let cancel = CancellationToken::new();
+            let listener = CodexBindControlListener::bind(&path, binder)
+                .await
+                .expect("listener");
+            let task = tokio::spawn(listener.run(cancel.clone()));
+            let mut input = json!({
+                "session_id": "thread-a",
+                "hook_event_name": "SessionStart"
+            });
+            if let Some(source) = source {
+                input["source"] = source;
+            }
+
+            run_session_start_bind_client(
+                &path,
+                serde_json::to_vec(&input).expect("hook JSON").as_slice(),
+            )
+            .await
+            .expect("source is optional and ignored");
+
             cancel.cancel();
             task.await.expect("listener task").expect("listener");
         }
@@ -894,15 +998,11 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o770))
             .expect("unsafe test mode");
         let queue = CodexEventQueue::load(&path).expect("queue");
-        let (binding_tx, _binding_rx) = watch::channel(None);
-
-        let error =
-            match CodexBindControlListener::bind(&path, CodexThreadBinder::new(queue, binding_tx))
-                .await
-            {
-                Ok(_) => panic!("unsafe state directory must fail"),
-                Err(error) => error,
-            };
+        let error = match CodexBindControlListener::bind(&path, CodexThreadBinder::new(queue)).await
+        {
+            Ok(_) => panic!("unsafe state directory must fail"),
+            Err(error) => error,
+        };
 
         assert!(matches!(
             error,
@@ -954,12 +1054,9 @@ mod tests {
         let socket_path = path.join(CONTROL_SOCKET_FILE_NAME);
         drop(UnixListener::bind(&socket_path).expect("stale listener"));
         let queue = CodexEventQueue::load(&path).expect("queue");
-        let (binding_tx, _binding_rx) = watch::channel(None);
-
-        let listener =
-            CodexBindControlListener::bind(&path, CodexThreadBinder::new(queue, binding_tx))
-                .await
-                .expect("replace stale socket");
+        let listener = CodexBindControlListener::bind(&path, CodexThreadBinder::new(queue))
+            .await
+            .expect("replace stale socket");
 
         let mode = std::fs::symlink_metadata(&socket_path)
             .expect("socket metadata")
@@ -978,9 +1075,7 @@ mod tests {
     async fn private_staging_preserves_the_longest_supported_public_socket_path() {
         let dir = TempDir::new().expect("temp dir");
         let base = temp_path(&dir);
-        let public_path_limit = std::mem::size_of::<libc::sockaddr_un>()
-            - std::mem::offset_of!(libc::sockaddr_un, sun_path)
-            - 1;
+        let public_path_limit = max_unix_socket_path_bytes();
         let fixed_length = base.as_str().len() + 2 + CONTROL_SOCKET_FILE_NAME.len();
         let component_length = public_path_limit
             .checked_sub(fixed_length)
@@ -998,6 +1093,83 @@ mod tests {
             .expect("boundary socket is connectable after publication");
 
         drop(listener);
+    }
+
+    #[test]
+    fn staging_path_budget_never_exceeds_public_socket_name() {
+        assert_eq!(STAGING_RELATIVE_PATH_BYTES, 11);
+        assert!(STAGING_RELATIVE_PATH_BYTES <= CONTROL_SOCKET_FILE_NAME.len());
+        assert!(max_unix_socket_path_bytes() > CONTROL_SOCKET_FILE_NAME.len());
+    }
+
+    #[test]
+    fn staging_directory_is_private_at_creation_under_permissive_umask() {
+        const CHILD_ENV: &str = "DIONE_STAGING_UMASK_CHILD";
+        const TEST_NAME: &str = "codex::bind_control::tests::staging_directory_is_private_at_creation_under_permissive_umask";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            // SAFETY: this runs in a dedicated child process, so the
+            // process-global umask cannot affect another test or Dione task.
+            unsafe {
+                libc::umask(0);
+            }
+            let dir = TempDir::new().expect("temp dir");
+            let staging = create_private_staging_directory(&temp_path(&dir))
+                .expect("private staging directory");
+            let metadata = std::fs::symlink_metadata(staging.path()).expect("staging metadata");
+            assert_eq!(metadata.mode() & 0o777, 0o700);
+            return;
+        }
+
+        let status = Command::new(std::env::current_exe().expect("test executable"))
+            .args(["--exact", TEST_NAME, "--nocapture"])
+            .env(CHILD_ENV, "1")
+            .status()
+            .expect("spawn isolated umask test");
+
+        assert!(status.success());
+    }
+
+    #[tokio::test]
+    async fn overlong_public_socket_path_is_rejected_before_staging() {
+        let dir = TempDir::new().expect("temp dir");
+        let base = temp_path(&dir);
+        let name_length = max_unix_socket_path_bytes() + 1 - base.as_str().len() - 1;
+        let socket_path = base.join("x".repeat(name_length));
+
+        let error =
+            bind_private_listener(&socket_path).expect_err("overlong public socket path must fail");
+
+        assert!(matches!(
+            error,
+            BindControlError::SocketPathTooLong {
+                path,
+                length,
+                max
+            } if path == socket_path
+                && length == max_unix_socket_path_bytes() + 1
+                && max == max_unix_socket_path_bytes()
+        ));
+        assert_eq!(
+            std::fs::read_dir(&base).expect("state directory").count(),
+            0,
+            "validation must run before creating a staging directory"
+        );
+    }
+
+    #[tokio::test]
+    async fn public_publish_collision_has_distinct_error() {
+        let dir = TempDir::new().expect("temp dir");
+        let socket_path = temp_path(&dir).join(CONTROL_SOCKET_FILE_NAME);
+        let first = bind_private_listener(&socket_path).expect("first listener");
+
+        let error = bind_private_listener(&socket_path).expect_err("publish collision");
+
+        assert!(matches!(
+            error,
+            BindControlError::PublishSocket { path, source }
+                if path == socket_path && source.kind() == io::ErrorKind::AlreadyExists
+        ));
+        drop(first);
     }
 
     #[tokio::test]
@@ -1071,13 +1243,15 @@ mod tests {
         let listener = bind_private_listener(&socket_path).expect("fake listener");
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.expect("client");
-            let _request = read_frame(&mut stream).await.expect("request");
-            let response = BindResponse::Error {
-                version: PROTOCOL_VERSION,
-                message: "durable store unavailable".to_owned(),
-            };
+            let request = read_frame(&mut stream).await.expect("request");
+            assert_eq!(
+                request,
+                br#"{"version":1,"operation":"bind_codex_thread","thread_id":"thread-a"}"#
+            );
             stream
-                .write_all(&serde_json::to_vec(&response).expect("response JSON"))
+                .write_all(
+                    br#"{"status":"error","version":1,"message":"process-local binding unavailable"}"#,
+                )
                 .await
                 .expect("response");
             stream.shutdown().await.expect("shutdown");
@@ -1088,7 +1262,7 @@ mod tests {
             .expect_err("daemon rejection must propagate");
 
         assert!(
-            matches!(error, BindControlError::Daemon(message) if message == "durable store unavailable")
+            matches!(error, BindControlError::Daemon(message) if message == "process-local binding unavailable")
         );
         server.await.expect("fake server");
     }
@@ -1126,8 +1300,8 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let path = temp_path(&dir);
         let queue = CodexEventQueue::load(&path).expect("queue");
-        let (binding_tx, binding_rx) = watch::channel(None);
-        let binder = CodexThreadBinder::new(queue, binding_tx);
+        let binding_rx = queue.subscribe_live_binding();
+        let binder = CodexThreadBinder::new(queue.clone());
         let cancel = CancellationToken::new();
         let listener = CodexBindControlListener::bind(&path, binder)
             .await
@@ -1166,8 +1340,8 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let path = temp_path(&dir);
         let queue = CodexEventQueue::load(&path).expect("queue");
-        let (binding_tx, binding_rx) = watch::channel(None);
-        let binder = CodexThreadBinder::new(queue, binding_tx);
+        let binding_rx = queue.subscribe_live_binding();
+        let binder = CodexThreadBinder::new(queue);
         let cancel = CancellationToken::new();
         let listener = CodexBindControlListener::bind(&path, binder)
             .await
@@ -1246,6 +1420,12 @@ mod tests {
         assert!(is_retryable_accept_error(&io::Error::from_raw_os_error(
             libc::ENFILE
         )));
+        assert!(is_retryable_accept_error(&io::Error::from_raw_os_error(
+            libc::ENOMEM
+        )));
+        assert!(is_retryable_accept_error(&io::Error::from_raw_os_error(
+            libc::ENOBUFS
+        )));
         assert!(is_retryable_accept_error(&io::Error::from(
             io::ErrorKind::ConnectionAborted
         )));
@@ -1255,21 +1435,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concurrent_binds_keep_durable_and_live_state_consistent() {
+    async fn concurrent_binds_leave_one_complete_live_state() {
         let dir = TempDir::new().expect("temp dir");
         let path = temp_path(&dir);
         let queue = CodexEventQueue::load(&path).expect("queue");
-        let (binding_tx, binding_rx) = watch::channel(None);
-        let binder = CodexThreadBinder::new(queue, binding_tx);
+        let binding_rx = queue.subscribe_live_binding();
+        let binder = CodexThreadBinder::new(queue.clone());
         let barrier = Arc::new(Barrier::new(3));
         let first = tokio::spawn({
             let binder = binder.clone();
             let barrier = barrier.clone();
             async move {
                 barrier.wait().await;
-                binder
-                    .bind(CodexThreadId::parse("thread-a").expect("thread id"))
-                    .await
+                binder.bind(CodexThreadId::parse("thread-a").expect("thread id"))
             }
         });
         let second = tokio::spawn({
@@ -1277,9 +1455,7 @@ mod tests {
             let barrier = barrier.clone();
             async move {
                 barrier.wait().await;
-                binder
-                    .bind(CodexThreadId::parse("thread-b").expect("thread id"))
-                    .await
+                binder.bind(CodexThreadId::parse("thread-b").expect("thread id"))
             }
         });
         barrier.wait().await;
@@ -1292,11 +1468,11 @@ mod tests {
             .expect("live binding")
             .as_str()
             .to_owned();
-        let persisted: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(path.join("codex-inbox.json")).expect("inbox"))
-                .expect("JSON inbox");
         assert!(matches!(live.as_str(), "thread-a" | "thread-b"));
-        assert_eq!(persisted["live_thread_id"], live);
+        assert_eq!(
+            queue.status().await.live_thread_id.unwrap().as_str(),
+            live.as_str()
+        );
     }
 
     #[tokio::test]
@@ -1304,11 +1480,10 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let path = temp_path(&dir);
         let queue = CodexEventQueue::load(&path).expect("queue");
-        let (binding_tx, binding_rx) = watch::channel(None);
-        let binder = CodexThreadBinder::new(queue.clone(), binding_tx);
+        let binding_rx = queue.subscribe_live_binding();
+        let binder = CodexThreadBinder::new(queue.clone());
         binder
             .bind(CodexThreadId::parse("thread-a").expect("thread id"))
-            .await
             .expect("initial bind");
         let cancel = CancellationToken::new();
         let listener = CodexBindControlListener::bind(&path, binder.clone())
@@ -1317,18 +1492,13 @@ mod tests {
         let socket_path = path.join(CONTROL_SOCKET_FILE_NAME);
         let task = tokio::spawn(listener.run(cancel.clone()));
 
-        binder.clear().await.expect("shutdown clear");
+        binder.begin_shutdown();
         cancel.cancel();
         task.await
             .expect("listener task")
             .expect("listener shutdown");
         assert!(binding_rx.borrow().is_none());
         assert!(!socket_path.exists());
-        let persisted: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(path.join("codex-inbox.json")).expect("inbox"))
-                .expect("JSON inbox");
-        assert_eq!(persisted["live_thread_id"], serde_json::Value::Null);
-
         drop(binding_rx);
         drop(binder);
         drop(queue);
