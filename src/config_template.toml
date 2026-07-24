@@ -38,6 +38,9 @@ deadline_ms = 300
 dm_policy = "queue"     # "queue", "drop", or "disabled"
 allow_from = []         # Discord user IDs that can DM the bot
 admins = []             # Discord user IDs that receive access requests
+# Global kill-switch on the config mutation tools. When true, every caller is
+# refused — including the IDs in `admins`, which this gate does not consult.
+admin_only_mutations = false
 
 # [[channels]]
 # id = ""               # Discord channel ID

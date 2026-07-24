@@ -886,57 +886,87 @@ mod config_guide_tests {
         );
     }
 
-    // ── Derived defaults ─────────────────────────────────────────────────────
+    // ── Stated defaults ──────────────────────────────────────────────────────
 
-    /// The guide's stated defaults are compared against a *serde parse of an
-    /// empty config*, not against the same `Default` impl they interpolate
-    /// from. Two independent paths to the same value, so this stays red if
-    /// either the `Default` impl or serde's field defaults drift.
+    /// The shipped defaults, written out by hand. Every default the guide
+    /// states is checked against these, and the commented examples in
+    /// `config_template.toml` are checked against them too, so the `Default`
+    /// impls, the guide and the template can only move together, and only when
+    /// a human moves them.
+    const EXPECTED_DM_POLICY: &str = "queue";
+    const EXPECTED_ADMIN_ONLY_MUTATIONS: bool = false;
+    const EXPECTED_REQUIRE_MENTION: bool = true;
+    const EXPECTED_CONTRADICTIONARY_ENABLED: bool = false;
+
+    /// Pins every default the guide states to a literal typed here by hand.
+    ///
+    /// The first version of this test parsed an empty TOML document and called
+    /// that an independent oracle. It is not one. `Config`, `AccessConfig` and
+    /// `ChannelConfig` (config.rs) and `ContradictionaryConfig`
+    /// (contradictionary.rs) all carry *container-level* `#[serde(default)]`,
+    /// which constructs `Default::default()` and then overwrites only the
+    /// fields the document actually contains. An empty document contains none,
+    /// so `toml::from_str::<Config>("")` **is** `Config::default()` — the same
+    /// source `config_guide` interpolates from, reached by a longer road. The
+    /// field-level `#[serde(default)]` on `admin_only_mutations` does not
+    /// rescue it: with `[access]` absent from the document the field attribute
+    /// never runs, and `Config`'s container default supplies the whole
+    /// `AccessConfig`. Verified by mutation, not assumed — flipping
+    /// `ChannelConfig::default().require_mention`, `admin_only_mutations` or
+    /// the per-channel `allow_from` default each left the old test green while
+    /// the guide told every caller the wrong value.
+    ///
+    /// A hand-typed literal cannot move unless a human edits this file. That is
+    /// the point rather than a shortcut: changing a default that agents are
+    /// told about should cost a deliberate line in a test that says what the
+    /// default is.
     #[test]
-    fn stated_defaults_match_a_parsed_empty_config() {
-        let parsed: Config = toml::from_str("").expect("empty config must parse");
-
+    fn stated_defaults_match_hand_written_literals() {
+        assert_eq!(
+            text("guide/sections/[access]/fields/dm_policy/default"),
+            EXPECTED_DM_POLICY,
+            "guide's dm_policy default drifted from the pinned literal"
+        );
         assert_eq!(
             at("guide/sections/[access]/fields/allow_from/default"),
-            json!(parsed.access.allow_from),
-            "global allow_from default drifted from parsed config"
+            json!([]),
+            "guide's global allow_from default drifted from the pinned literal"
         );
         assert_eq!(
             at("guide/sections/[access]/fields/admin_only_mutations/default"),
-            json!(parsed.access.admin_only_mutations),
-            "admin_only_mutations default drifted from parsed config"
+            json!(EXPECTED_ADMIN_ONLY_MUTATIONS),
+            "guide's admin_only_mutations default drifted from the pinned literal"
         );
-        assert_eq!(
-            text("guide/sections/[access]/fields/dm_policy/default"),
-            crate::config_store::ConfigStore::dm_policy_str(parsed.access.dm_policy),
-            "dm_policy default drifted from parsed config"
-        );
-        assert_eq!(
-            at("guide/sections/[contradictionary]/fields/enabled/default"),
-            json!(parsed.contradictionary.enabled),
-            "contradictionary.enabled default drifted from parsed config"
-        );
-
-        let parsed_channel: Config =
-            toml::from_str("[[channels]]\nid = \"1\"\n").expect("channel config must parse");
-        let ch = &parsed_channel.channels[0];
         assert_eq!(
             at("guide/sections/[[channels]]/fields/require_mention/default"),
-            json!(ch.require_mention),
-            "require_mention default drifted from parsed config"
+            json!(EXPECTED_REQUIRE_MENTION),
+            "guide's require_mention default drifted from the pinned literal"
         );
         assert_eq!(
             at("guide/sections/[[channels]]/fields/allow_from/default"),
-            json!(ch.allow_from),
-            "per-channel allow_from default drifted from parsed config"
+            json!([]),
+            "guide's per-channel allow_from default drifted from the pinned literal"
+        );
+        assert_eq!(
+            at("guide/sections/[contradictionary]/fields/enabled/default"),
+            json!(EXPECTED_CONTRADICTIONARY_ENABLED),
+            "guide's contradictionary.enabled default drifted from the pinned literal"
         );
     }
 
-    /// The oracle above shares a source with the guide: both land on the same
-    /// `Default` impl, so changing that impl moves them together and cannot be
-    /// caught there. `config_template.toml` is hand-maintained and moves
-    /// independently, so it *can* catch it. Red when a `Default` impl is
-    /// changed without the shipped template following.
+    /// A second oracle, for the values the shipped template actually parses.
+    ///
+    /// `config_template.toml` is the file written into a fresh state directory,
+    /// and its `[access]` block ships uncommented, so these values come from
+    /// literal hand-maintained file text and not from any `Default` impl — a
+    /// reference that cannot move when the subject moves. Red when an
+    /// `[access]` default is changed without the shipped template following.
+    ///
+    /// `[[channels]]` and `[contradictionary]` ship commented out and so never
+    /// reach the parser; there is no template-derived oracle to be had for
+    /// them. Those defaults are pinned by
+    /// `stated_defaults_match_hand_written_literals`, and their comment text by
+    /// `shipped_template_comments_agree_with_pinned_defaults`.
     #[test]
     fn stated_defaults_match_the_shipped_config_template() {
         const TEMPLATE: &str = include_str!("../config_template.toml");
@@ -952,17 +982,38 @@ mod config_guide_tests {
             json!(template.access.allow_from),
             "guide's allow_from default disagrees with config_template.toml"
         );
+        assert_eq!(
+            at("guide/sections/[access]/fields/admin_only_mutations/default"),
+            json!(template.access.admin_only_mutations),
+            "guide's admin_only_mutations default disagrees with config_template.toml"
+        );
+    }
 
-        // The [[channels]] and [contradictionary] blocks ship commented out,
-        // so they cannot be parsed — assert on the comment text instead, which
-        // is what a human actually reads when editing the file.
+    /// The subject here is the template's prose, and the guide is deliberately
+    /// on neither side — an assertion that never mentions the guide cannot test
+    /// the guide, so this does not pretend to. `[[channels]]` and
+    /// `[contradictionary]` ship commented out, so a human reads those lines as
+    /// documentation while no parser ever checks them. Tying them to the same
+    /// pinned literals means a deliberate change to a default has to land in
+    /// the template too.
+    #[test]
+    fn shipped_template_comments_agree_with_pinned_defaults() {
+        const TEMPLATE: &str = include_str!("../config_template.toml");
+
+        let require_mention = format!("# require_mention = {EXPECTED_REQUIRE_MENTION}");
         assert!(
-            TEMPLATE.contains("# require_mention = true"),
-            "template must show require_mention = true to match ChannelConfig::default()"
+            TEMPLATE.contains(&require_mention),
+            "template's commented example must read {require_mention:?} to match the pinned default"
         );
         assert!(
-            TEMPLATE.contains("the default when unset is false"),
-            "template must not let `# enabled = true` read as the contradictionary default"
+            TEMPLATE.contains("# allow_from = []"),
+            "template's commented example must show an empty per-channel allow_from"
+        );
+        let contradictionary =
+            format!("the default when unset is {EXPECTED_CONTRADICTIONARY_ENABLED}");
+        assert!(
+            TEMPLATE.contains(&contradictionary),
+            "template must say {contradictionary:?} so `# enabled = true` cannot read as the default"
         );
     }
 
