@@ -1683,6 +1683,58 @@ action = "block"
         assert!(c.has_block(&hits));
     }
 
+    /// The migration guarantee, at the layer where breaking it actually hurts.
+    ///
+    /// A sidecar parse failure is not contained to the bad entry: the `extend`
+    /// is skipped for the whole file and `store_loaded_config` still installs
+    /// the entry-less config as live. So a seat carrying one retired `warn`
+    /// entry would lose its entire contradictionary, announced only by a
+    /// `tracing::warn!` line no construct reads.
+    #[test]
+    fn test_contradictionary_retired_warn_action_keeps_whole_sidecar() {
+        let (_dir, state_dir) = temp_state_dir();
+        let config_path = state_dir.join("config.toml");
+        let sidecar_path = state_dir.join("contradictionary.toml");
+
+        fs::write(
+            config_path.as_std_path(),
+            b"[contradictionary]\nenabled = true\n",
+        )
+        .unwrap();
+        fs::write(
+            sidecar_path.as_std_path(),
+            r#"
+[[entry]]
+pattern = "retired-tier"
+action = "warn"
+
+[[entry]]
+pattern = "still-here"
+action = "block"
+"#,
+        )
+        .unwrap();
+
+        let (cfg, error) = reload_config(&state_dir);
+        assert!(
+            error.is_none(),
+            "a retired action must not error the config load: {error:?}"
+        );
+        let c = cfg
+            .contradictionary
+            .as_ref()
+            .expect("the sidecar must still build a contradictionary");
+        assert_eq!(
+            c.check("retired-tier still-here").len(),
+            2,
+            "both entries must survive — a retired action may not take the file down"
+        );
+        assert!(
+            c.has_block(&c.check("retired-tier")),
+            "the retired warn tier must resolve to block, not vanish"
+        );
+    }
+
     #[test]
     fn test_contradictionary_sidecar_missing_is_ok() {
         let (_dir, state_dir) = temp_state_dir();
