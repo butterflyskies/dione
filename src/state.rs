@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use serenity::model::id::{ChannelId, MessageId};
@@ -38,6 +39,11 @@ pub struct SharedState {
     /// messages should be treated as human-authored. PK reuses webhooks
     /// per-channel, so this cache is very effective.
     pub proxy_webhooks: BTreeMap<u64, bool>,
+    /// When a "dropped bot message" warning was last emitted for a given
+    /// (bot user ID, channel ID) pair. Throttles the warning so a chatty peer
+    /// bot produces one log line per cooldown window rather than one per
+    /// message.
+    pub dropped_bot_warnings: BTreeMap<(u64, u64), Instant>,
 }
 
 /// Thread-safe shared state handle.
@@ -48,6 +54,7 @@ const SENT_IDS_CAP: usize = 200;
 
 const THREAD_CACHE_CAP: usize = 200;
 const WEBHOOK_CACHE_CAP: usize = 200;
+const DROPPED_BOT_WARN_CAP: usize = 200;
 
 // ── Implementation ────────────────────────────────────────────────────────────
 
@@ -63,6 +70,7 @@ impl SharedState {
             user_names: BTreeMap::new(),
             thread_parents: BTreeMap::new(),
             proxy_webhooks: BTreeMap::new(),
+            dropped_bot_warnings: BTreeMap::new(),
         }
     }
 
@@ -130,6 +138,54 @@ impl SharedState {
             } else {
                 break;
             }
+        }
+    }
+
+    /// Reports whether a "dropped bot message" warning should be emitted for a
+    /// (bot user ID, channel ID) pair, recording the decision.
+    ///
+    /// Returns `true` on the first drop seen for the pair, and again once
+    /// `cooldown` has elapsed since the last warning for it. Returning `true`
+    /// marks the pair as warned at `now`.
+    pub fn should_warn_dropped_bot(
+        &mut self,
+        user_id: u64,
+        channel_id: u64,
+        now: Instant,
+        cooldown: Duration,
+    ) -> bool {
+        let key = (user_id, channel_id);
+        if let Some(&last) = self.dropped_bot_warnings.get(&key)
+            && now.saturating_duration_since(last) < cooldown
+        {
+            return false;
+        }
+        self.dropped_bot_warnings.insert(key, now);
+        self.prune_dropped_bot_warnings(now, cooldown);
+        true
+    }
+
+    /// Drops throttle entries that can no longer suppress a warning, then
+    /// enforces a hard cap.
+    ///
+    /// Entries past their cooldown would permit a warning anyway, so evicting
+    /// them changes nothing observable. The cap only bites when more than
+    /// `DROPPED_BOT_WARN_CAP` distinct pairs are seen inside one cooldown
+    /// window; the least recently warned pair is evicted first, so it is the
+    /// one that would have expired soonest.
+    fn prune_dropped_bot_warnings(&mut self, now: Instant, cooldown: Duration) {
+        self.dropped_bot_warnings
+            .retain(|_, &mut last| now.saturating_duration_since(last) < cooldown);
+        while self.dropped_bot_warnings.len() > DROPPED_BOT_WARN_CAP {
+            let Some(oldest) = self
+                .dropped_bot_warnings
+                .iter()
+                .min_by_key(|&(_, &last)| last)
+                .map(|(&key, _)| key)
+            else {
+                break;
+            };
+            self.dropped_bot_warnings.remove(&oldest);
         }
     }
 
@@ -379,6 +435,84 @@ mod tests {
             state.proxy_webhooks.len() <= 200,
             "proxy_webhooks exceeded cap: {}",
             state.proxy_webhooks.len()
+        );
+    }
+
+    const TEST_COOLDOWN: Duration = Duration::from_secs(3600);
+
+    #[test]
+    fn test_dropped_bot_warning_fires_once_per_pair() {
+        let mut state = SharedState::new();
+        let now = Instant::now();
+
+        assert!(
+            state.should_warn_dropped_bot(999, 12345, now, TEST_COOLDOWN),
+            "first drop for a pair must warn"
+        );
+        assert!(
+            !state.should_warn_dropped_bot(999, 12345, now, TEST_COOLDOWN),
+            "repeat drop inside the cooldown must stay quiet"
+        );
+        assert!(
+            state.should_warn_dropped_bot(999, 67890, now, TEST_COOLDOWN),
+            "a different channel is a different diagnosis and must warn"
+        );
+        assert!(
+            state.should_warn_dropped_bot(888, 12345, now, TEST_COOLDOWN),
+            "a different bot in the same channel must warn"
+        );
+    }
+
+    #[test]
+    fn test_dropped_bot_warning_refires_after_cooldown() {
+        let mut state = SharedState::new();
+        let now = Instant::now();
+
+        assert!(state.should_warn_dropped_bot(999, 12345, now, TEST_COOLDOWN));
+        assert!(
+            !state.should_warn_dropped_bot(
+                999,
+                12345,
+                now + TEST_COOLDOWN - Duration::from_secs(1),
+                TEST_COOLDOWN
+            ),
+            "must stay quiet right up to the cooldown boundary"
+        );
+        assert!(
+            state.should_warn_dropped_bot(999, 12345, now + TEST_COOLDOWN, TEST_COOLDOWN),
+            "must warn again once the cooldown has elapsed"
+        );
+    }
+
+    #[test]
+    fn test_dropped_bot_warning_cache_prunes() {
+        let mut state = SharedState::new();
+        let now = Instant::now();
+        for i in 0u64..300 {
+            state.should_warn_dropped_bot(i, i, now, TEST_COOLDOWN);
+        }
+        assert!(
+            state.dropped_bot_warnings.len() <= 200,
+            "dropped_bot_warnings exceeded cap: {}",
+            state.dropped_bot_warnings.len()
+        );
+    }
+
+    #[test]
+    fn test_dropped_bot_warning_cache_drops_expired_entries() {
+        let mut state = SharedState::new();
+        let now = Instant::now();
+        for i in 0u64..10 {
+            state.should_warn_dropped_bot(i, i, now, TEST_COOLDOWN);
+        }
+        assert_eq!(state.dropped_bot_warnings.len(), 10);
+
+        // A later drop prunes entries whose cooldown has already elapsed.
+        state.should_warn_dropped_bot(99, 99, now + TEST_COOLDOWN, TEST_COOLDOWN);
+        assert_eq!(
+            state.dropped_bot_warnings.len(),
+            1,
+            "expired throttle entries must not accumulate"
         );
     }
 }

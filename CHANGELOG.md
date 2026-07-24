@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Warning when a bot message is dropped for not being allowlisted.** Dione
+  silently discarded messages from any bot missing from the global
+  `[access].allow_from` list, so a peer construct simply appeared to be ignoring
+  its peers with nothing in the logs to explain it. Drops now emit a `warn`
+  naming the sending bot's user ID, the channel, and the config key to edit.
+  Throttled per (bot user ID, channel ID) pair on a one-hour cooldown so a
+  chatty bot cannot flood the log. Drop behavior itself is unchanged. (#228)
+
 ## [0.23.0] - 2026-07-21
 
 ### Changed

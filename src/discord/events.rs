@@ -12,9 +12,12 @@ use serenity::{
     model::{event::MessageUpdateEvent, prelude::*},
     prelude::*,
 };
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 // ── Event types ───────────────────────────────────────────────────────────────
@@ -163,6 +166,7 @@ impl EventHandler for Handler {
             &config,
             msg.author.bot,
             msg.author.id.get(),
+            msg.channel_id.get(),
             msg.webhook_id.map(|w| w.get()),
         )
         .await
@@ -407,6 +411,7 @@ impl EventHandler for Handler {
             &config,
             author.bot,
             author.id.get(),
+            event.channel_id.get(),
             webhook_id,
         )
         .await
@@ -968,22 +973,62 @@ fn should_drop_bot_message(
     is_bot && !config.is_allowed(user_id)
 }
 
+/// How long to suppress repeat "dropped bot message" warnings for the same
+/// (bot user ID, channel ID) pair.
+const DROPPED_BOT_WARN_COOLDOWN: Duration = Duration::from_secs(3600);
+
 /// Returns `true` if this bot message should be filtered (dropped).
 /// Proxy bot webhooks (e.g. PluralKit) are allowed through.
+///
+/// Dropping is silent to Discord but not to the operator: each drop that
+/// survives the proxy-webhook check is reported through
+/// [`warn_dropped_bot_message`].
 async fn should_filter_bot_message(
     http: &serenity::http::Http,
     state: &crate::state::State,
     config: &crate::config::LoadedConfig,
     is_bot: bool,
     user_id: u64,
+    channel_id: u64,
     webhook_id: Option<u64>,
 ) -> bool {
     if !should_drop_bot_message(is_bot, user_id, config) {
         return false;
     }
-    match webhook_id {
+    let filtered = match webhook_id {
         Some(wh_id) => !is_proxy_webhook(http, state, wh_id).await,
         None => true,
+    };
+    if filtered {
+        warn_dropped_bot_message(state, user_id, channel_id).await;
+    }
+    filtered
+}
+
+/// Logs that a bot's message was dropped for not being in the allowlist, and
+/// how to let it through.
+///
+/// Throttled per (bot user ID, channel ID) pair — see
+/// [`DROPPED_BOT_WARN_COOLDOWN`] — so a chatty peer bot in a busy channel
+/// cannot turn the warning into a flood.
+async fn warn_dropped_bot_message(state: &crate::state::State, user_id: u64, channel_id: u64) {
+    let should_warn = {
+        let mut state = state.write().await;
+        state.should_warn_dropped_bot(
+            user_id,
+            channel_id,
+            Instant::now(),
+            DROPPED_BOT_WARN_COOLDOWN,
+        )
+    };
+    if should_warn {
+        tracing::warn!(
+            bot_user_id = user_id,
+            channel_id,
+            "dropped message from bot not in the allowlist — to receive it, add \
+             this bot_user_id to the global [access].allow_from list in config.toml; \
+             per-channel config does not grant bots access"
+        );
     }
 }
 
@@ -1097,6 +1142,176 @@ mod tests {
         assert!(
             should_drop_bot_message(true, 42, &config),
             "bot must be dropped when allow_from is empty"
+        );
+    }
+
+    // ── dropped bot warning tests ──────────────────────────────────────────────
+
+    /// A `warn`-level event captured from the tracing pipeline.
+    struct CapturedWarning {
+        message: String,
+        fields: Vec<(String, String)>,
+    }
+
+    impl CapturedWarning {
+        /// Returns the value of a structured field, if the event carried it.
+        fn field(&self, name: &str) -> Option<&str> {
+            self.fields
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.as_str())
+        }
+    }
+
+    /// Installs a thread-local tracing subscriber, runs `f`, and returns every
+    /// `warn`-level event it emitted.
+    ///
+    /// `#[tokio::test]` uses the current-thread runtime, so the future in `f`
+    /// is polled on the thread that holds the subscriber guard.
+    async fn capture_warnings<F, Fut>(f: F) -> Vec<CapturedWarning>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        use tracing_subscriber::prelude::*;
+
+        let (layer, mut rx) = crate::tracing_channel::TracingChannelLayer::new();
+        {
+            let _guard =
+                tracing::subscriber::set_default(tracing_subscriber::registry().with(layer));
+            f().await;
+        }
+
+        let mut warnings = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let NotificationEvent::Trace {
+                level,
+                message,
+                fields,
+                ..
+            } = event
+                && level == "WARN"
+            {
+                warnings.push(CapturedWarning { message, fields });
+            }
+        }
+        warnings
+    }
+
+    /// Runs the bot filter against a fresh state and reports the warnings it
+    /// emitted alongside its filtering decision.
+    ///
+    /// The HTTP client is never exercised: `webhook_id` is `None`, so the
+    /// proxy-webhook lookup is skipped.
+    async fn filter_and_capture(
+        config: &LoadedConfig,
+        is_bot: bool,
+        user_id: u64,
+        channel_id: u64,
+    ) -> (bool, Vec<CapturedWarning>) {
+        let http = serenity::http::Http::new("fake");
+        let state = crate::state::new_state();
+        let mut filtered = false;
+        let warnings = capture_warnings(|| async {
+            filtered =
+                should_filter_bot_message(&http, &state, config, is_bot, user_id, channel_id, None)
+                    .await;
+        })
+        .await;
+        (filtered, warnings)
+    }
+
+    /// Dropping a non-allowlisted bot emits a warning naming the bot, the
+    /// channel, and the config key that would let it through.
+    #[tokio::test]
+    async fn test_dropped_bot_message_warns_with_remediation() {
+        let config = config_with_allow_from(vec!["100"]);
+        let (filtered, warnings) = filter_and_capture(&config, true, 999, 12345).await;
+
+        assert!(filtered, "non-allowlisted bot must still be dropped");
+        assert_eq!(
+            warnings.len(),
+            1,
+            "exactly one warning expected, got: {:?}",
+            warnings.iter().map(|w| &w.message).collect::<Vec<_>>()
+        );
+        let warning = &warnings[0];
+        assert_eq!(
+            warning.field("bot_user_id"),
+            Some("999"),
+            "warning must name the sending bot's user ID"
+        );
+        assert_eq!(
+            warning.field("channel_id"),
+            Some("12345"),
+            "warning must name the channel the message was dropped in"
+        );
+        assert!(
+            warning.message.contains("allow_from"),
+            "warning must point at allow_from, got: {}",
+            warning.message
+        );
+        assert!(
+            warning.message.contains("[access]"),
+            "warning must name the global [access] table, got: {}",
+            warning.message
+        );
+    }
+
+    /// Human messages are not dropped and must not warn, even when the human
+    /// is absent from `allow_from`.
+    #[tokio::test]
+    async fn test_human_message_does_not_warn() {
+        let config = config_with_allow_from(vec!["100"]);
+        let (filtered, warnings) = filter_and_capture(&config, false, 999, 12345).await;
+
+        assert!(!filtered, "human message must not be filtered");
+        assert!(
+            warnings.is_empty(),
+            "human message must not warn, got: {:?}",
+            warnings.iter().map(|w| &w.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// An allowlisted bot passes through silently.
+    #[tokio::test]
+    async fn test_allowlisted_bot_does_not_warn() {
+        let config = config_with_allow_from(vec!["100", "200"]);
+        let (filtered, warnings) = filter_and_capture(&config, true, 200, 12345).await;
+
+        assert!(!filtered, "allowlisted bot must not be filtered");
+        assert!(
+            warnings.is_empty(),
+            "allowlisted bot must not warn, got: {:?}",
+            warnings.iter().map(|w| &w.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// A chatty bot warns once per channel, not once per message — but a new
+    /// channel is a new diagnosis and warns again.
+    #[tokio::test]
+    async fn test_repeat_drops_are_throttled_per_channel() {
+        let config = config_with_allow_from(vec!["100"]);
+        let http = serenity::http::Http::new("fake");
+        let state = crate::state::new_state();
+
+        let warnings = capture_warnings(|| async {
+            for _ in 0..5 {
+                should_filter_bot_message(&http, &state, &config, true, 999, 12345, None).await;
+            }
+            should_filter_bot_message(&http, &state, &config, true, 999, 67890, None).await;
+            should_filter_bot_message(&http, &state, &config, true, 888, 12345, None).await;
+        })
+        .await;
+
+        assert_eq!(
+            warnings.len(),
+            3,
+            "expected one warning per (bot, channel) pair, got: {:?}",
+            warnings
+                .iter()
+                .map(|w| (w.field("bot_user_id"), w.field("channel_id")))
+                .collect::<Vec<_>>()
         );
     }
 
