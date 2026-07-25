@@ -1,4 +1,7 @@
-use super::{CodexEventQueue, CodexQueueError, CodexThreadId, LeasedEvent};
+use super::{
+    CodexEventQueue, CodexQueueError, CodexThreadId, LeasedEvent, LiveQueueErrorPolicy,
+    LiveQueueOperation, classify_live_queue_error,
+};
 use camino::Utf8PathBuf;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -323,7 +326,68 @@ async fn run_delivery_worker_with_lease(
     cancel: CancellationToken,
     event_lease: Duration,
 ) -> Result<(), CodexDeliveryError> {
-    let consumer_id = queue.register_live_consumer().await?;
+    let mut preferred_consumer_id = None;
+    loop {
+        if !wait_for_live_binding(&mut thread_binding, &cancel).await {
+            return Ok(());
+        }
+        let Some(consumer_id) =
+            register_live_consumer_with_retry(&queue, preferred_consumer_id.as_ref(), &cancel)
+                .await?
+        else {
+            return Ok(());
+        };
+        match run_registered_delivery_worker(
+            &queue,
+            &config,
+            &mut thread_binding,
+            &cancel,
+            event_lease,
+            &consumer_id,
+        )
+        .await
+        {
+            Err(CodexDeliveryError::Queue(error))
+                if classify_live_queue_error(LiveQueueOperation::Lease, &error)
+                    == LiveQueueErrorPolicy::ReRegister =>
+            {
+                tracing::warn!(
+                    consumer_id = ?consumer_id,
+                    "Codex live consumer expired; registering a replacement"
+                );
+                preferred_consumer_id = Some(consumer_id);
+            }
+            result => return result,
+        }
+    }
+}
+
+async fn wait_for_live_binding(
+    thread_binding: &mut tokio::sync::watch::Receiver<Option<CodexThreadId>>,
+    cancel: &CancellationToken,
+) -> bool {
+    while thread_binding.borrow_and_update().is_none() {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return false,
+            changed = thread_binding.changed() => {
+                if changed.is_err() {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+async fn run_registered_delivery_worker(
+    queue: &CodexEventQueue,
+    config: &CodexDeliveryConfig,
+    thread_binding: &mut tokio::sync::watch::Receiver<Option<CodexThreadId>>,
+    cancel: &CancellationToken,
+    event_lease: Duration,
+    consumer_id: &super::ConsumerId,
+) -> Result<(), CodexDeliveryError> {
     let mut client = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
 
@@ -351,12 +415,12 @@ async fn run_delivery_worker_with_lease(
                 continue;
             },
             event = lease_live_event_with_retry(
-                &queue,
-                &consumer_id,
+                queue,
+                consumer_id,
                 &thread_id,
                 EVENT_WAIT,
                 event_lease,
-                &cancel,
+                cancel,
             ) => event?,
         };
         let Some(mut event) = event else { continue };
@@ -375,12 +439,12 @@ async fn run_delivery_worker_with_lease(
                         break;
                     },
                     replacement = lease_live_event_with_retry(
-                        &queue,
-                        &consumer_id,
+                        queue,
+                        consumer_id,
                         &thread_id,
                         Duration::ZERO,
                         event_lease,
-                        &cancel,
+                        cancel,
                     ) => replacement?,
                 };
                 let Some(replacement) = replacement else {
@@ -417,9 +481,7 @@ async fn run_delivery_worker_with_lease(
                     }
                     Err(error) => {
                         tracing::warn!(event_id = %event.event_id, error = %error, "failed to connect Codex live delivery");
-                        match wait_to_retry_or_rebind(&cancel, &mut thread_binding, retry_delay)
-                            .await
-                        {
+                        match wait_to_retry_or_rebind(cancel, thread_binding, retry_delay).await {
                             RetryWait::Elapsed => {
                                 retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
                             }
@@ -452,14 +514,14 @@ async fn run_delivery_worker_with_lease(
             };
             match delivery {
                 Ok(()) => {
-                    acknowledge_with_retry(&queue, &consumer_id, &event, &cancel).await?;
+                    acknowledge_with_retry(queue, consumer_id, &event, cancel).await?;
                     retry_delay = INITIAL_RETRY_DELAY;
                     break;
                 }
                 Err(error) => {
                     tracing::warn!(event_id = %event.event_id, error = %error, "failed to deliver live Codex event; retrying before later events");
                     client = None;
-                    match wait_to_retry_or_rebind(&cancel, &mut thread_binding, retry_delay).await {
+                    match wait_to_retry_or_rebind(cancel, thread_binding, retry_delay).await {
                         RetryWait::Elapsed => {
                             retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
                         }
@@ -472,6 +534,45 @@ async fn run_delivery_worker_with_lease(
                 }
             }
         }
+    }
+}
+
+async fn register_live_consumer_with_retry(
+    queue: &CodexEventQueue,
+    preferred_consumer_id: Option<&super::ConsumerId>,
+    cancel: &CancellationToken,
+) -> Result<Option<super::ConsumerId>, CodexDeliveryError> {
+    let mut delay = INITIAL_RETRY_DELAY;
+    loop {
+        match queue
+            .register_live_consumer_with_id(preferred_consumer_id)
+            .await
+        {
+            Ok(consumer_id) => return Ok(Some(consumer_id)),
+            Err(error)
+                if classify_live_queue_error(LiveQueueOperation::Register, &error)
+                    == LiveQueueErrorPolicy::Retry =>
+            {
+                tracing::error!(
+                    error = %error,
+                    "failed to persist the Codex live consumer; retrying"
+                );
+            }
+            Err(error)
+                if classify_live_queue_error(LiveQueueOperation::Register, &error)
+                    == LiveQueueErrorPolicy::Standby =>
+            {
+                tracing::info!(
+                    "Codex live delivery is parked while another primary consumer is active"
+                );
+            }
+            Err(error) => return Err(error.into()),
+        }
+        wait_to_retry(cancel, delay).await;
+        if cancel.is_cancelled() {
+            return Ok(None);
+        }
+        delay = (delay * 2).min(MAX_RETRY_DELAY);
     }
 }
 
@@ -490,10 +591,10 @@ async fn lease_live_event_with_retry(
             .await
         {
             Ok(event) => return Ok(event),
-            Err(error) if !matches!(error, CodexQueueError::InboxIo { .. }) => {
-                return Err(error.into());
-            }
-            Err(error) => {
+            Err(error)
+                if classify_live_queue_error(LiveQueueOperation::Lease, &error)
+                    == LiveQueueErrorPolicy::Retry =>
+            {
                 tracing::error!(
                     error = %error,
                     "failed to persist a Codex live-delivery lease; retrying"
@@ -504,6 +605,7 @@ async fn lease_live_event_with_retry(
                 }
                 delay = (delay * 2).min(MAX_RETRY_DELAY);
             }
+            Err(error) => return Err(error.into()),
         }
     }
 }
@@ -518,7 +620,10 @@ async fn acknowledge_with_retry(
     loop {
         match queue.acknowledge(consumer_id, &event.delivery_token).await {
             Ok(()) => return Ok(()),
-            Err(CodexQueueError::UnknownDeliveryToken) => {
+            Err(error)
+                if classify_live_queue_error(LiveQueueOperation::Acknowledge, &error)
+                    == LiveQueueErrorPolicy::StaleAcknowledgement =>
+            {
                 // The durable event may already have been acknowledged, or a
                 // newer lease may own it. In either case this token can never
                 // succeed. Return to the queue; a still-pending event will be
@@ -529,10 +634,10 @@ async fn acknowledge_with_retry(
                 );
                 return Ok(());
             }
-            Err(error) if !matches!(error, CodexQueueError::InboxIo { .. }) => {
-                return Err(error.into());
-            }
-            Err(error) => {
+            Err(error)
+                if classify_live_queue_error(LiveQueueOperation::Acknowledge, &error)
+                    == LiveQueueErrorPolicy::Retry =>
+            {
                 tracing::error!(event_id = %event.event_id, error = %error, "failed to persist live Codex acknowledgement; retrying");
                 wait_to_retry(cancel, delay).await;
                 if cancel.is_cancelled() {
@@ -540,6 +645,7 @@ async fn acknowledge_with_retry(
                 }
                 delay = (delay * 2).min(MAX_RETRY_DELAY);
             }
+            Err(error) => return Err(error.into()),
         }
     }
 }
@@ -1088,6 +1194,124 @@ mod tests {
             .expect("event after persistence recovery");
 
         assert_eq!(event.event_id, crate::codex::EventId::new(0));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn live_consumer_registration_waits_for_pull_primary_to_release() {
+        let dir = TempDir::new().unwrap();
+        let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
+        let queue = CodexEventQueue::load(&state_path).unwrap();
+        let pull_consumer = queue
+            .register_consumer("pull owner".to_owned(), Duration::from_secs(60), true, true)
+            .await
+            .unwrap()
+            .consumer_id;
+        let cancel = CancellationToken::new();
+        let registration = tokio::spawn({
+            let queue = queue.clone();
+            let cancel = cancel.clone();
+            async move { register_live_consumer_with_retry(&queue, None, &cancel).await }
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !registration.is_finished(),
+            "an intentional pull handoff parks rather than kills live delivery"
+        );
+
+        {
+            let mut inbox = queue.inbox.lock().await;
+            inbox
+                .state
+                .consumers
+                .iter_mut()
+                .find(|consumer| consumer.id == pull_consumer)
+                .unwrap()
+                .expires_at = chrono::Utc::now() - chrono::TimeDelta::seconds(1);
+        }
+        tokio::time::advance(INITIAL_RETRY_DELAY).await;
+        let live_consumer = registration
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("live consumer after pull primary expires");
+        assert_ne!(live_consumer, pull_consumer);
+    }
+
+    #[tokio::test]
+    async fn expired_live_consumer_is_reregistered_without_stopping_worker() {
+        let dir = TempDir::new().unwrap();
+        let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
+        let queue = CodexEventQueue::load(&state_path).unwrap();
+        queue
+            .bind_live_thread(Some(CodexThreadId::parse("thread-recover").unwrap()))
+            .await
+            .unwrap();
+        let binding_rx = queue.subscribe_live_binding();
+        let root = CancellationToken::new();
+        let cancel = CancellationToken::new();
+        let worker = tokio::spawn(crate::lifecycle::cancel_root_when_complete(
+            root.clone(),
+            run_delivery_worker_with_lease(
+                queue.clone(),
+                CodexDeliveryConfig {
+                    socket_path: state_path.join("unused.sock"),
+                    request_timeout: Duration::from_millis(10),
+                },
+                binding_rx,
+                cancel.clone(),
+                Duration::from_secs(60),
+            ),
+        ));
+        let original = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(consumer) = queue.status().await.primary_consumer {
+                    break consumer;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("initial live consumer");
+        {
+            let mut inbox = queue.inbox.lock().await;
+            inbox
+                .state
+                .consumers
+                .iter_mut()
+                .find(|consumer| consumer.id == original)
+                .unwrap()
+                .expires_at = chrono::Utc::now() - chrono::TimeDelta::seconds(1);
+        }
+        queue
+            .enqueue(json!({ "params": { "meta": { "message_id": "recover" } } }))
+            .await
+            .unwrap();
+
+        let resumed = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(consumer) = queue.status().await.primary_consumer {
+                    break consumer;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("resumed live consumer");
+        assert_eq!(
+            resumed, original,
+            "the durable live identity is resumed so its routed backlog remains deliverable"
+        );
+        assert!(
+            !worker.is_finished(),
+            "consumer expiry must not terminate the delivery worker"
+        );
+        assert!(
+            !root.is_cancelled(),
+            "consumer expiry must not cancel the root lifecycle"
+        );
+
+        cancel.cancel();
+        worker.await.unwrap().unwrap();
     }
 
     #[tokio::test]

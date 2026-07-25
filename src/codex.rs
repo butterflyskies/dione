@@ -260,8 +260,8 @@ enum LiveBindingPhase {
 #[derive(Debug)]
 struct LiveBindingState {
     phase: LiveBindingPhase,
-    epoch: u64,
     thread_id: Option<CodexThreadId>,
+    ingress_thread_id: Option<CodexThreadId>,
     sender: watch::Sender<Option<CodexThreadId>>,
 }
 
@@ -277,8 +277,8 @@ impl LiveBinding {
         Self {
             state: Arc::new(StdMutex::new(LiveBindingState {
                 phase: LiveBindingPhase::Running,
-                epoch: 0,
                 thread_id: None,
+                ingress_thread_id: None,
                 sender,
             })),
         }
@@ -302,19 +302,22 @@ impl LiveBinding {
         if state.thread_id.as_ref() == Some(&thread_id) {
             return Ok(false);
         }
-        state.epoch = state.epoch.saturating_add(1);
         state.thread_id = Some(thread_id.clone());
+        state.ingress_thread_id = Some(thread_id.clone());
         state.sender.send_replace(Some(thread_id));
         Ok(true)
     }
 
     pub(crate) fn clear(&self) -> bool {
         let mut state = self.lock();
+        if state.phase == LiveBindingPhase::Stopping {
+            return false;
+        }
         if state.thread_id.is_none() {
             return false;
         }
-        state.epoch = state.epoch.saturating_add(1);
         state.thread_id = None;
+        state.ingress_thread_id = None;
         state.sender.send_replace(None);
         true
     }
@@ -325,13 +328,20 @@ impl LiveBinding {
             return;
         }
         state.phase = LiveBindingPhase::Stopping;
-        state.epoch = state.epoch.saturating_add(1);
         state.thread_id = None;
         state.sender.send_replace(None);
     }
 
     fn thread_id(&self) -> Option<CodexThreadId> {
         self.lock().thread_id.clone()
+    }
+
+    fn ingress_thread_id(&self) -> Result<Option<CodexThreadId>, CodexQueueError> {
+        let state = self.lock();
+        if state.phase == LiveBindingPhase::Stopping && state.ingress_thread_id.is_none() {
+            return Err(CodexQueueError::LiveIngressUnavailableDuringShutdown);
+        }
+        Ok(state.ingress_thread_id.clone())
     }
 }
 
@@ -412,6 +422,55 @@ pub enum CodexQueueError {
     PrimaryConsumerExists,
     #[error("delivery token is unknown or its lease expired")]
     UnknownDeliveryToken,
+    #[error("live ingress has no routing tag during shutdown")]
+    LiveIngressUnavailableDuringShutdown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LiveQueueOperation {
+    Register,
+    Lease,
+    Acknowledge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LiveQueueErrorPolicy {
+    Retry,
+    Standby,
+    ReRegister,
+    StaleAcknowledgement,
+    Fatal,
+}
+
+pub(crate) fn classify_live_queue_error(
+    operation: LiveQueueOperation,
+    error: &CodexQueueError,
+) -> LiveQueueErrorPolicy {
+    use LiveQueueErrorPolicy::{Fatal, ReRegister, Retry, StaleAcknowledgement, Standby};
+    use LiveQueueOperation::{Acknowledge, Lease, Register};
+
+    match error {
+        CodexQueueError::InboxIo { .. } => Retry,
+        CodexQueueError::PrimaryConsumerExists => match operation {
+            Register => Standby,
+            Lease | Acknowledge => Fatal,
+        },
+        CodexQueueError::UnknownConsumer => match operation {
+            Register => Fatal,
+            Lease | Acknowledge => ReRegister,
+        },
+        CodexQueueError::UnknownDeliveryToken => match operation {
+            Acknowledge => StaleAcknowledgement,
+            Register | Lease => Fatal,
+        },
+        CodexQueueError::InboxDecode { .. }
+        | CodexQueueError::InboxLocked { .. }
+        | CodexQueueError::InvalidDeliveryToken
+        | CodexQueueError::InvalidConsumerId
+        | CodexQueueError::InvalidThreadId
+        | CodexQueueError::NotPrimaryConsumer
+        | CodexQueueError::LiveIngressUnavailableDuringShutdown => Fatal,
+    }
 }
 
 impl DurableInbox {
@@ -672,6 +731,7 @@ impl DurableInbox {
     fn register_live_consumer(
         &mut self,
         now: DateTime<Utc>,
+        preferred_id: Option<&ConsumerId>,
     ) -> Result<ConsumerId, CodexQueueError> {
         self.transaction(|inbox| {
             if let Some(primary) = inbox.state.primary_consumer.clone()
@@ -692,6 +752,27 @@ impl DurableInbox {
             inbox.expire_consumers(now);
             if inbox.state.primary_consumer.is_some() {
                 return Err(CodexQueueError::PrimaryConsumerExists);
+            }
+            if let Some(preferred_id) = preferred_id {
+                inbox.state.consumers.retain(|consumer| {
+                    consumer.id != *preferred_id || consumer.label == LIVE_CONSUMER_LABEL
+                });
+                if let Some(consumer) = inbox
+                    .state
+                    .consumers
+                    .iter_mut()
+                    .find(|consumer| consumer.id == *preferred_id)
+                {
+                    consumer.expires_at = now + duration_delta(MAX_CONSUMER_TTL);
+                } else {
+                    inbox.state.consumers.push(ConsumerRegistration {
+                        id: preferred_id.clone(),
+                        label: LIVE_CONSUMER_LABEL.to_owned(),
+                        expires_at: now + duration_delta(MAX_CONSUMER_TTL),
+                    });
+                }
+                inbox.state.primary_consumer = Some(preferred_id.clone());
+                return Ok(preferred_id.clone());
             }
             let generation = inbox.state.next_consumer_generation;
             inbox.state.next_consumer_generation = generation.saturating_add(1);
@@ -907,7 +988,7 @@ impl CodexEventQueue {
     /// Returns `false` when the Discord message id is already queued.
     pub async fn enqueue(&self, payload: Value) -> Result<bool, CodexQueueError> {
         let mut inbox = self.inbox.lock().await;
-        let live_thread_id = self.live_binding.thread_id();
+        let live_thread_id = self.live_binding.ingress_thread_id()?;
         let inserted = inbox.enqueue(payload, live_thread_id)?;
         drop(inbox);
         if inserted {
@@ -1032,8 +1113,20 @@ impl CodexEventQueue {
         Ok(result)
     }
 
+    #[cfg(test)]
     pub(crate) async fn register_live_consumer(&self) -> Result<ConsumerId, CodexQueueError> {
-        let consumer_id = self.inbox.lock().await.register_live_consumer(Utc::now())?;
+        self.register_live_consumer_with_id(None).await
+    }
+
+    pub(crate) async fn register_live_consumer_with_id(
+        &self,
+        preferred_id: Option<&ConsumerId>,
+    ) -> Result<ConsumerId, CodexQueueError> {
+        let consumer_id = self
+            .inbox
+            .lock()
+            .await
+            .register_live_consumer(Utc::now(), preferred_id)?;
         self.changed.notify_waiters();
         Ok(consumer_id)
     }
@@ -1429,6 +1522,114 @@ mod tests {
             serde_json::from_slice(&std::fs::read(path.join(INBOX_FILE_NAME)).unwrap()).unwrap();
         assert!(persisted.get("live_thread_id").is_none());
         assert_eq!(persisted["entries"][0]["live_thread_id"], "thread-a");
+    }
+
+    #[tokio::test]
+    async fn shutdown_fence_preserves_binding_for_final_ingress_drain() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let thread_id = CodexThreadId::parse("thread-a").unwrap();
+        queue
+            .bind_live_thread(Some(thread_id.clone()))
+            .await
+            .unwrap();
+        let consumer = queue.register_live_consumer().await.unwrap();
+
+        queue.live_binding().begin_shutdown();
+        queue.enqueue(message("1", "final drain")).await.unwrap();
+
+        let event = queue
+            .next_live_event(&consumer, &thread_id, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .expect("the final drained event remains routable");
+        assert_eq!(event.event["params"]["content"], "final drain");
+    }
+
+    #[tokio::test]
+    async fn shutdown_without_a_binding_rejects_unroutable_ingress() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        queue.live_binding().begin_shutdown();
+
+        let error = queue
+            .enqueue(message("1", "cannot route"))
+            .await
+            .expect_err("shutdown ingress without a retained tag must fail closed");
+        assert!(matches!(
+            error,
+            CodexQueueError::LiveIngressUnavailableDuringShutdown
+        ));
+        assert_eq!(queue.status().await.queued, 0);
+        assert!(
+            !path.join(INBOX_FILE_NAME).exists(),
+            "the rejected message id must not enter durable deduplication state"
+        );
+    }
+
+    #[test]
+    fn live_queue_error_policy_is_operation_specific() {
+        use LiveQueueErrorPolicy::{Fatal, ReRegister, StaleAcknowledgement, Standby};
+        use LiveQueueOperation::{Acknowledge, Lease, Register};
+
+        assert_eq!(
+            classify_live_queue_error(Register, &CodexQueueError::PrimaryConsumerExists),
+            Standby
+        );
+        assert_eq!(
+            classify_live_queue_error(Lease, &CodexQueueError::PrimaryConsumerExists),
+            Fatal
+        );
+        assert_eq!(
+            classify_live_queue_error(Lease, &CodexQueueError::UnknownConsumer),
+            ReRegister
+        );
+        assert_eq!(
+            classify_live_queue_error(Acknowledge, &CodexQueueError::UnknownConsumer),
+            ReRegister
+        );
+        assert_eq!(
+            classify_live_queue_error(Acknowledge, &CodexQueueError::UnknownDeliveryToken),
+            StaleAcknowledgement
+        );
+        assert_eq!(
+            classify_live_queue_error(Lease, &CodexQueueError::UnknownDeliveryToken),
+            Fatal
+        );
+    }
+
+    #[tokio::test]
+    async fn live_event_binding_survives_queue_reload() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let thread_id = CodexThreadId::parse("thread-a").unwrap();
+        let queue = CodexEventQueue::load(&path).unwrap();
+        queue
+            .bind_live_thread(Some(thread_id.clone()))
+            .await
+            .unwrap();
+        let consumer = queue.register_live_consumer().await.unwrap();
+        queue
+            .enqueue(message("1", "survives restart"))
+            .await
+            .unwrap();
+        drop(queue);
+
+        let reloaded = CodexEventQueue::load(&path).unwrap();
+        reloaded
+            .bind_live_thread(Some(thread_id.clone()))
+            .await
+            .unwrap();
+        let resumed = reloaded.register_live_consumer().await.unwrap();
+        assert_eq!(resumed, consumer);
+        let event = reloaded
+            .next_live_event(&resumed, &thread_id, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .expect("persisted event is leasable after reload");
+        assert_eq!(event.event["params"]["content"], "survives restart");
     }
 
     #[tokio::test]

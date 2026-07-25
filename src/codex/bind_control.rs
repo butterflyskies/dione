@@ -78,7 +78,10 @@ impl CodexThreadBinder {
         }
     }
 
-    /// Fences all future binds and clears the live worker before teardown.
+    /// Fences future binding changes while preserving the final ingress tag.
+    ///
+    /// The notification task flushes its delivery buffer after cancellation,
+    /// so the current tag must remain available until that drain completes.
     pub fn begin_shutdown(&self) {
         self.live_binding.begin_shutdown();
     }
@@ -815,7 +818,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn begin_shutdown_clears_and_fences_future_binds() {
+    async fn begin_shutdown_preserves_ingress_tag_and_fences_future_binds() {
         let dir = TempDir::new().expect("temp dir");
         let path = temp_path(&dir);
         let queue = CodexEventQueue::load(&path).expect("queue");
@@ -832,6 +835,8 @@ mod tests {
             binder.bind(CodexThreadId::parse("thread-b").expect("thread id")),
             Err(CodexThreadBindingError::Stopping)
         ));
+        binder.clear();
+        assert!(binding_rx.borrow().is_none());
         let cancel = CancellationToken::new();
         let listener = CodexBindControlListener::bind(&path, binder.clone())
             .await
@@ -1369,6 +1374,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shutdown_drain_times_out_a_held_open_connection() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).expect("queue");
+        let binder = CodexThreadBinder::new(queue);
+        let cancel = CancellationToken::new();
+        let listener = CodexBindControlListener::bind(&path, binder)
+            .await
+            .expect("listener");
+        let task = tokio::spawn(listener.run(cancel.clone()));
+        let stalled = UnixStream::connect(path.join(CONTROL_SOCKET_FILE_NAME))
+            .await
+            .expect("stalled connection");
+
+        // A successful second request proves the listener accepted and
+        // spawned the earlier FIFO connection before shutdown begins.
+        run_session_start_bind_client(&path, hook_input("startup").as_slice())
+            .await
+            .expect("second connection binds");
+
+        cancel.cancel();
+        let completed_with_bound = timeout(CONTROL_TIMEOUT + Duration::from_secs(1), task).await;
+        drop(stalled);
+        completed_with_bound
+            .expect("the per-connection timeout must bound listener shutdown")
+            .expect("listener task")
+            .expect("listener");
+    }
+
+    #[tokio::test]
     async fn client_retries_until_listener_appears() {
         let dir = TempDir::new().expect("temp dir");
         let path = temp_path(&dir);
@@ -1502,6 +1537,22 @@ mod tests {
         drop(binding_rx);
         drop(binder);
         drop(queue);
-        CodexEventQueue::load(&path).expect("queue lock released");
+        let mut reloaded = None;
+        for _ in 0..100 {
+            match CodexEventQueue::load(&path) {
+                Ok(queue) => {
+                    reloaded = Some(queue);
+                    break;
+                }
+                Err(crate::codex::CodexQueueError::InboxLocked { .. }) => {
+                    sleep(Duration::from_millis(1)).await;
+                }
+                Err(error) => panic!("unexpected queue reload failure: {error}"),
+            }
+        }
+        assert!(
+            reloaded.is_some(),
+            "queue lock must be released within the bounded teardown grace period"
+        );
     }
 }

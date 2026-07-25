@@ -4,13 +4,13 @@ use color_eyre::eyre::{Result, WrapErr};
 use dione::{
     codex::{CodexDeliveryConfig, CodexEventQueue, TransportMode},
     discord::events::{Handler, NotificationEvent},
+    lifecycle::cancel_root_when_complete,
     mcp::server::DioneServer,
     state::SharedState,
     tracing_channel::{TraceLevelController, TracingChannelLayer},
 };
 use std::{
     env,
-    future::Future,
     sync::{Arc, atomic::AtomicU64},
     time::Duration,
 };
@@ -57,22 +57,6 @@ enum Command {
         #[arg(long)]
         state_dir: Utf8PathBuf,
     },
-}
-
-struct CancelOnDrop(CancellationToken);
-
-impl Drop for CancelOnDrop {
-    fn drop(&mut self) {
-        self.0.cancel();
-    }
-}
-
-async fn cancel_root_when_complete<T>(
-    cancel: CancellationToken,
-    future: impl Future<Output = T>,
-) -> T {
-    let _cancel_on_drop = CancelOnDrop(cancel);
-    future.await
 }
 
 async fn cancel_root_on_task_failure<T, E>(
@@ -357,6 +341,14 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    fn delivery_config(state_dir: &camino::Utf8Path) -> CodexDeliveryConfig {
+        CodexDeliveryConfig {
+            socket_path: state_dir.join("unused-app-server.sock"),
+            request_timeout: Duration::from_millis(10),
+        }
+    }
 
     #[test]
     fn bind_codex_thread_requires_explicit_state_directory() {
@@ -407,6 +399,72 @@ mod tests {
 
         assert!(task.await.expect_err("worker must panic").is_panic());
         assert!(cancel.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn recoverable_registration_io_does_not_cancel_root_lifecycle() {
+        let dir = TempDir::new().unwrap();
+        let state_dir = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
+        let queue = CodexEventQueue::load(&state_dir).unwrap();
+        dione::codex::CodexThreadBinder::new(queue.clone())
+            .bind(dione::codex::CodexThreadId::parse("thread-io-retry").unwrap())
+            .unwrap();
+        let moved = state_dir.with_extension("moved");
+        std::fs::rename(&state_dir, &moved).unwrap();
+        std::fs::write(&state_dir, b"not a directory").unwrap();
+        let root = CancellationToken::new();
+        let worker_cancel = CancellationToken::new();
+        let task = tokio::spawn(cancel_root_when_complete(
+            root.clone(),
+            dione::codex::run_delivery_worker(
+                queue.clone(),
+                delivery_config(&state_dir),
+                queue.subscribe_live_binding(),
+                worker_cancel.clone(),
+            ),
+        ));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!root.is_cancelled());
+        assert!(!task.is_finished());
+        worker_cancel.cancel();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn intentional_pull_handoff_does_not_cancel_root_lifecycle() {
+        let dir = TempDir::new().unwrap();
+        let state_dir = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
+        let queue = CodexEventQueue::load(&state_dir).unwrap();
+        queue
+            .register_consumer(
+                "pull primary".to_owned(),
+                Duration::from_secs(60),
+                true,
+                true,
+            )
+            .await
+            .unwrap();
+        dione::codex::CodexThreadBinder::new(queue.clone())
+            .bind(dione::codex::CodexThreadId::parse("thread-standby").unwrap())
+            .unwrap();
+        let root = CancellationToken::new();
+        let worker_cancel = CancellationToken::new();
+        let task = tokio::spawn(cancel_root_when_complete(
+            root.clone(),
+            dione::codex::run_delivery_worker(
+                queue.clone(),
+                delivery_config(&state_dir),
+                queue.subscribe_live_binding(),
+                worker_cancel.clone(),
+            ),
+        ));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!root.is_cancelled());
+        assert!(!task.is_finished());
+        worker_cancel.cancel();
+        task.await.unwrap().unwrap();
     }
 
     #[tokio::test]

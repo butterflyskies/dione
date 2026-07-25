@@ -62,6 +62,163 @@ pub struct DioneServer {
     pub codex_thread_binder: Option<crate::codex::CodexThreadBinder>,
 }
 
+struct NotificationForwarder {
+    event_rx: mpsc::Receiver<NotificationEvent>,
+    cancel: CancellationToken,
+    sink: NotificationSink,
+    state_dir: Utf8PathBuf,
+    rate_limiter: RateLimiter,
+    delivery_buffer: DeliveryBuffer,
+    bell_evaluator: Arc<BellEvaluator>,
+    tz: Option<chrono_tz::Tz>,
+}
+
+impl NotificationForwarder {
+    async fn run(mut self) {
+        let mut events_since_prune: u64 = 0;
+        const PRUNE_INTERVAL: u64 = 100;
+
+        loop {
+            let flush_deadline = self.delivery_buffer.next_flush_deadline();
+
+            tokio::select! {
+                biased;
+
+                // Cancellation takes priority — break to drain path.
+                _ = self.cancel.cancelled() => {
+                    tracing::debug!("notif_task: cancellation received, draining buffer");
+                    break;
+                }
+
+                // Flush deadline fires — drain and coalesce buffered events.
+                _ = async {
+                    match flush_deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    let now = tokio::time::Instant::now();
+                    let flushed = self.delivery_buffer.flush_ready(now);
+                    if let Err(error) = deliver_flushed(&self.sink, flushed, self.tz).await {
+                        tracing::error!(error = %error, "inbound delivery failed; shutting down");
+                        self.cancel.cancel();
+                        break;
+                    }
+                }
+
+                // New event arrives from Discord.
+                event = self.event_rx.recv() => {
+                    let Some(mut event) = event else { break };
+
+                    // Reload config from ArcSwap (cheap Arc pointer load).
+                    let cfg = crate::config::load_config(&self.state_dir);
+
+                    // Keep tz in sync with config changes so flushes use
+                    // the current value without a separate config load.
+                    self.tz = cfg.tz;
+
+                    // Live-reload rate limiter config before the check so
+                    // changes apply to the current event, not the next one.
+                    let new_rl_config = cfg.rate_limit_runtime();
+                    if new_rl_config != self.rate_limiter.config_ref() {
+                        tracing::info!("rate limiter config changed, applying");
+                        self.rate_limiter.update_config(new_rl_config.clone());
+                    }
+
+                    // Rate-limit check for message events.
+                    if let NotificationEvent::Message(MessageEvent { ref user_id, ref chat_id, .. }) = event {
+                        let user_id_str = user_id.get().to_string();
+                        let chat_id_str = chat_id.get().to_string();
+                        let sender = ParticipantId::new(&user_id_str);
+                        let channel = ChannelRef::new(&chat_id_str);
+                        let now = Instant::now();
+                        match self.rate_limiter.check_message(&sender, &channel, &[], now) {
+                            RateLimitDecision::Allowed { remaining, .. } => {
+                                tracing::trace!(
+                                    user_id = user_id.get(),
+                                    chat_id = chat_id.get(),
+                                    remaining,
+                                    "rate limiter: message allowed"
+                                );
+                            }
+                            RateLimitDecision::Denied { retry_after, overflow: _ } => {
+                                // All denied messages are dropped for now.
+                                // OverflowPolicy::Buffer is accepted by config but not
+                                // yet implemented — see #79 for sender class wiring.
+                                tracing::info!(
+                                    user_id = user_id.get(),
+                                    chat_id = chat_id.get(),
+                                    retry_after_ms = retry_after.as_millis() as u64,
+                                    "rate limiter: message denied, dropping"
+                                );
+                                continue;
+                            }
+                        }
+                    }
+
+                    // Bell evaluation: in shadow mode, fire-and-forget off the
+                    // critical path. In live mode, await inline and inject
+                    // bells into the event before delivery.
+                    match cfg.bell_rings.mode {
+                        BellMode::Shadow => {
+                            let evaluator = Arc::clone(&self.bell_evaluator);
+                            let shadow_event = event.clone();
+                            let shadow_config = cfg.bell_rings.clone();
+                            tokio::spawn(async move {
+                                let _ = evaluator.evaluate(shadow_event, &shadow_config).await;
+                            });
+                        }
+                        BellMode::Live => {
+                            let (returned_event, bells, status) =
+                                self.bell_evaluator.evaluate(event, &cfg.bell_rings).await;
+                            event = returned_event;
+                            if let NotificationEvent::Message(ref mut msg) = event {
+                                if let Some(status) = status {
+                                    msg.bells_status = Some(status);
+                                }
+                                if !bells.is_empty() {
+                                    msg.bells = Some(render_bells(&bells));
+                                }
+                            }
+                        }
+                    }
+
+                    // Delivery buffer: coalesce channel events per channel.
+                    let delay_ms = extract_delay_ms(&event, &cfg);
+
+                    match self.delivery_buffer.buffer_event(event, delay_ms) {
+                        BufferResult::Immediate(event) => {
+                            let notification = (*event).into_notification();
+                            if let Err(error) = self.sink.deliver(&notification).await {
+                                tracing::error!(error = %error, "inbound delivery failed; shutting down");
+                                self.cancel.cancel();
+                                break;
+                            }
+                        }
+                        BufferResult::Buffered => {
+                            // Will be flushed when the deadline fires.
+                        }
+                    }
+
+                    // Periodically prune idle rate limiter buckets to bound memory.
+                    events_since_prune += 1;
+                    if events_since_prune >= PRUNE_INTERVAL {
+                        events_since_prune = 0;
+                        self.rate_limiter.prune_idle(Instant::now());
+                    }
+                }
+            }
+        }
+
+        // Channel closed or cancellation — flush any remaining buffered events.
+        let remaining = self.delivery_buffer.flush_all();
+        if let Err(error) = deliver_flushed(&self.sink, remaining, self.tz).await {
+            tracing::error!(error = %error, "failed to persist final inbound events");
+            self.cancel.cancel();
+        }
+    }
+}
+
 // ── Context factory methods ───────────────────────────────────────────────────
 
 impl DioneServer {
@@ -134,8 +291,8 @@ pub async fn run(
     // via the ArcSwap config cache. Rate limiter config is refreshed per
     // event; existing bucket state is preserved across config changes.
     let config = crate::config::load_config(&server.state_dir);
-    let mut rate_limiter = RateLimiter::new(config.rate_limit_runtime().clone());
-    let mut delivery_buffer = DeliveryBuffer::new();
+    let rate_limiter = RateLimiter::new(config.rate_limit_runtime().clone());
+    let delivery_buffer = DeliveryBuffer::new();
     let bell_evaluator = Arc::new(BellEvaluator::new());
 
     // Resolve timezone once at startup so `deliver_flushed` doesn't need to
@@ -151,150 +308,19 @@ pub async fn run(
         NotificationSink::new(server.mode, stdout.clone(), server.codex_queue.clone())
             .map_err(std::io::Error::other)?;
     let cancel_notif = cancel.clone();
-    let notif_task = tokio::spawn(async move {
-        let mut rx = event_rx;
-        let mut events_since_prune: u64 = 0;
-        let mut tz = initial_tz;
-        const PRUNE_INTERVAL: u64 = 100;
-
-        loop {
-            let flush_deadline = delivery_buffer.next_flush_deadline();
-
-            tokio::select! {
-                biased;
-
-                // Cancellation takes priority — break to drain path.
-                _ = cancel_notif.cancelled() => {
-                    tracing::debug!("notif_task: cancellation received, draining buffer");
-                    break;
-                }
-
-                // Flush deadline fires — drain and coalesce buffered events.
-                _ = async {
-                    match flush_deadline {
-                        Some(deadline) => tokio::time::sleep_until(deadline).await,
-                        None => std::future::pending::<()>().await,
-                    }
-                } => {
-                    let now = tokio::time::Instant::now();
-                    let flushed = delivery_buffer.flush_ready(now);
-                    if let Err(error) = deliver_flushed(&notification_sink, flushed, tz).await {
-                        tracing::error!(error = %error, "inbound delivery failed; shutting down");
-                        cancel_notif.cancel();
-                        break;
-                    }
-                }
-
-                // New event arrives from Discord.
-                event = rx.recv() => {
-                    let Some(mut event) = event else { break };
-
-                    // Reload config from ArcSwap (cheap Arc pointer load).
-                    let cfg = crate::config::load_config(&state_dir_notif);
-
-                    // Keep tz in sync with config changes so flushes use
-                    // the current value without a separate config load.
-                    tz = cfg.tz;
-
-                    // Live-reload rate limiter config before the check so
-                    // changes apply to the current event, not the next one.
-                    let new_rl_config = cfg.rate_limit_runtime();
-                    if new_rl_config != rate_limiter.config_ref() {
-                        tracing::info!("rate limiter config changed, applying");
-                        rate_limiter.update_config(new_rl_config.clone());
-                    }
-
-                    // Rate-limit check for message events.
-                    if let NotificationEvent::Message(MessageEvent { ref user_id, ref chat_id, .. }) = event {
-                        let user_id_str = user_id.get().to_string();
-                        let chat_id_str = chat_id.get().to_string();
-                        let sender = ParticipantId::new(&user_id_str);
-                        let channel = ChannelRef::new(&chat_id_str);
-                        let now = Instant::now();
-                        match rate_limiter.check_message(&sender, &channel, &[], now) {
-                            RateLimitDecision::Allowed { remaining, .. } => {
-                                tracing::trace!(
-                                    user_id = user_id.get(),
-                                    chat_id = chat_id.get(),
-                                    remaining,
-                                    "rate limiter: message allowed"
-                                );
-                            }
-                            RateLimitDecision::Denied { retry_after, overflow: _ } => {
-                                // All denied messages are dropped for now.
-                                // OverflowPolicy::Buffer is accepted by config but not
-                                // yet implemented — see #79 for sender class wiring.
-                                tracing::info!(
-                                    user_id = user_id.get(),
-                                    chat_id = chat_id.get(),
-                                    retry_after_ms = retry_after.as_millis() as u64,
-                                    "rate limiter: message denied, dropping"
-                                );
-                                continue;
-                            }
-                        }
-                    }
-
-                    // Bell evaluation: in shadow mode, fire-and-forget off the
-                    // critical path. In live mode, await inline and inject
-                    // bells into the event before delivery.
-                    match cfg.bell_rings.mode {
-                        BellMode::Shadow => {
-                            let evaluator = Arc::clone(&bell_evaluator);
-                            let shadow_event = event.clone();
-                            let shadow_config = cfg.bell_rings.clone();
-                            tokio::spawn(async move {
-                                let _ = evaluator.evaluate(shadow_event, &shadow_config).await;
-                            });
-                        }
-                        BellMode::Live => {
-                            let (returned_event, bells, status) = bell_evaluator.evaluate(event, &cfg.bell_rings).await;
-                            event = returned_event;
-                            if let NotificationEvent::Message(ref mut msg) = event {
-                                if let Some(status) = status {
-                                    msg.bells_status = Some(status);
-                                }
-                                if !bells.is_empty() {
-                                    msg.bells = Some(render_bells(&bells));
-                                }
-                            }
-                        }
-                    }
-
-                    // Delivery buffer: coalesce channel events per channel.
-                    let delay_ms = extract_delay_ms(&event, &cfg);
-
-                    match delivery_buffer.buffer_event(event, delay_ms) {
-                        BufferResult::Immediate(event) => {
-                            let notification = (*event).into_notification();
-                            if let Err(error) = notification_sink.deliver(&notification).await {
-                                tracing::error!(error = %error, "inbound delivery failed; shutting down");
-                                cancel_notif.cancel();
-                                break;
-                            }
-                        }
-                        BufferResult::Buffered => {
-                            // Will be flushed when the deadline fires.
-                        }
-                    }
-
-                    // Periodically prune idle rate limiter buckets to bound memory.
-                    events_since_prune += 1;
-                    if events_since_prune >= PRUNE_INTERVAL {
-                        events_since_prune = 0;
-                        rate_limiter.prune_idle(Instant::now());
-                    }
-                }
-            }
+    let mut notif_task = tokio::spawn(
+        NotificationForwarder {
+            event_rx,
+            cancel: cancel_notif,
+            sink: notification_sink,
+            state_dir: state_dir_notif,
+            rate_limiter,
+            delivery_buffer,
+            bell_evaluator,
+            tz: initial_tz,
         }
-
-        // Channel closed — flush any remaining buffered events.
-        let remaining = delivery_buffer.flush_all();
-        if let Err(error) = deliver_flushed(&notification_sink, remaining, tz).await {
-            tracing::error!(error = %error, "failed to persist final inbound events");
-            cancel_notif.cancel();
-        }
-    });
+        .run(),
+    );
 
     // Main request loop.
     let mut lines = stdin.lines();
@@ -346,10 +372,18 @@ pub async fn run(
         }
     }
 
-    // Cancellation signal already sent — notif_task will break out of its
-    // loop and flush_all() any buffered events. Give it a short window.
+    // Cancellation asks notif_task to flush buffered events. The timeout is a
+    // best-effort task-lifetime bound: it cannot preempt synchronous
+    // persistence that is already blocking an executor thread.
     drop(server);
-    let _ = tokio::time::timeout(Duration::from_millis(500), notif_task).await;
+    if tokio::time::timeout(Duration::from_millis(500), &mut notif_task)
+        .await
+        .is_err()
+    {
+        tracing::warn!("notification drain exceeded shutdown grace period; aborting task");
+        notif_task.abort();
+        let _ = notif_task.await;
+    }
 
     Ok(())
 }
@@ -705,6 +739,74 @@ mod tests {
             bells: None,
             bells_status: None,
         })
+    }
+
+    #[tokio::test]
+    async fn shutdown_forwarder_flushes_buffer_with_retained_live_binding() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let state_dir = camino::Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
+        let queue = crate::codex::CodexEventQueue::load(&state_dir).unwrap();
+        let binder = crate::codex::CodexThreadBinder::new(queue.clone());
+        let thread_a = crate::codex::CodexThreadId::parse("thread-a").unwrap();
+        let thread_b = crate::codex::CodexThreadId::parse("thread-b").unwrap();
+        binder.bind(thread_a.clone()).unwrap();
+        let consumer = queue.register_live_consumer().await.unwrap();
+
+        let mut delivery_buffer = DeliveryBuffer::new();
+        assert!(matches!(
+            delivery_buffer.buffer_event(message_event(42), 60_000),
+            BufferResult::Buffered
+        ));
+        let (_event_tx, event_rx) = mpsc::channel(1);
+        let cancel = CancellationToken::new();
+        let sink = NotificationSink::new(
+            TransportMode::Codex,
+            Arc::new(Mutex::new(tokio::io::stdout())),
+            Some(queue.clone()),
+        )
+        .unwrap();
+        let config = LoadedConfig::from_raw(Config::default());
+
+        // Match main's production ordering: fence live delivery first, then
+        // cancel the notification forwarder so it takes its final drain path.
+        binder.begin_shutdown();
+        cancel.cancel();
+        NotificationForwarder {
+            event_rx,
+            cancel,
+            sink,
+            state_dir: state_dir.clone(),
+            rate_limiter: RateLimiter::new(config.rate_limit_runtime().clone()),
+            delivery_buffer,
+            bell_evaluator: Arc::new(BellEvaluator::new()),
+            tz: config.tz,
+        }
+        .run()
+        .await;
+
+        drop(binder);
+        drop(queue);
+        let reloaded = crate::codex::CodexEventQueue::load(&state_dir).unwrap();
+        let rebound = crate::codex::CodexThreadBinder::new(reloaded.clone());
+        rebound.bind(thread_b.clone()).unwrap();
+        let resumed = reloaded.register_live_consumer().await.unwrap();
+        assert_eq!(resumed, consumer);
+        assert!(
+            reloaded
+                .next_live_event(&resumed, &thread_b, Duration::ZERO, Duration::from_secs(60),)
+                .await
+                .unwrap()
+                .is_none(),
+            "a different thread must not lease the shutdown-drained event"
+        );
+        rebound.clear();
+        rebound.bind(thread_a.clone()).unwrap();
+        let leased = reloaded
+            .next_live_event(&resumed, &thread_a, Duration::ZERO, Duration::from_secs(60))
+            .await
+            .unwrap()
+            .expect("the original thread leases the persisted shutdown drain");
+        assert_eq!(leased.event_id, crate::codex::EventId::new(0));
     }
 
     #[test]
