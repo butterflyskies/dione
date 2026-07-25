@@ -396,10 +396,10 @@ where
     D: Deserializer<'de>,
 {
     let value = u64::deserialize(deserializer)?;
-    (1..=300)
+    (1..=2000)
         .contains(&value)
         .then_some(value)
-        .ok_or_else(|| D::Error::custom("deadline_ms must be between 1 and 300"))
+        .ok_or_else(|| D::Error::custom("deadline_ms must be between 1 and 2000"))
 }
 
 /// Pre-send hook lifecycle configuration.

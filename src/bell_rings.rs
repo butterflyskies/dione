@@ -146,6 +146,16 @@ impl MemoryMcpProvider {
         }
     }
 
+    async fn warm(&self) {
+        let mut client = self.client.lock().await;
+        if client.as_ref().is_none_or(RunningService::is_closed) {
+            let transport = StreamableHttpClientTransport::from_uri(self.endpoint.clone());
+            if let Ok(connected) = ClientInfo::default().serve(transport).await {
+                *client = Some(connected);
+            }
+        }
+    }
+
     async fn recall_inner(&self, request: RecallRequest) -> Result<Value, BellProviderError> {
         let mut client = self.client.lock().await;
         if client.as_ref().is_none_or(RunningService::is_closed) {
@@ -171,7 +181,12 @@ impl MemoryMcpProvider {
             .await
         {
             Ok(result) if result.is_error != Some(true) => result,
-            _ => {
+            Ok(_) => {
+                // Tool-call error — session is fine, tool returned an error.
+                return Err(BellProviderError::MalformedResponse);
+            }
+            Err(_) => {
+                // Transport/session error — tear down so next call reconnects.
                 *client = None;
                 return Err(BellProviderError::Transport);
             }
@@ -264,6 +279,12 @@ impl BellEvaluator {
         }
         record_outcome(&BellOutcome::Skipped);
         (event, vec![], None)
+    }
+
+    pub async fn warm_providers(&self, config: &BellRingsConfig) {
+        let providers = self.providers_for(config).await;
+        let futs: Vec<_> = providers.iter().map(|(_, p)| p.warm()).collect();
+        join_all(futs).await;
     }
 
     async fn providers_for(
@@ -768,7 +789,7 @@ mod tests {
             "[bell_rings]\nmax_bells=0",
             "[bell_rings]\nmax_bells=101",
             "[bell_rings]\ndeadline_ms=0",
-            "[bell_rings]\ndeadline_ms=301",
+            "[bell_rings]\ndeadline_ms=2001",
             "[bell_rings]\nenabled=true",
             "[bell_rings.provider]\nurl='file:///tmp/memory'\nscope='syne'",
             "[bell_rings.provider]\nurl='https://user:pass@memory/mcp'\nscope='syne'",
