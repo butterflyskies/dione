@@ -18,8 +18,6 @@ use crate::pre_send::{
 };
 use crate::state::State;
 
-/// Self-react emoji for contradictionary warn hits (🙊 — see-no-evil monkey).
-const CONTRADICTIONARY_WARN_REACT: &str = "\u{1f64a}";
 /// Self-react emoji for contradictionary celebrate hits (✨ — sparkles).
 const CONTRADICTIONARY_CELEBRATE_REACT: &str = "\u{2728}";
 
@@ -539,24 +537,13 @@ async fn deliver_prepared_reply(
         }
     }
 
-    // ── Contradictionary post-send: self-react on warn/celebrate hits ───
+    // ── Contradictionary post-send: self-react on celebrate hits ───
     if !contradictionary_hits.is_empty()
         && let Some(&first_id) = sent_ids.first()
     {
-        let has_warns = contradictionary_hits
-            .iter()
-            .any(|h| h.action == Action::Warn);
         let has_celebrates = contradictionary_hits
             .iter()
             .any(|h| h.action == Action::Celebrate);
-        if has_warns {
-            let reaction =
-                serenity::model::channel::ReactionType::Unicode(CONTRADICTIONARY_WARN_REACT.into());
-            let _ = ctx
-                .http
-                .create_reaction(ch, MessageId::new(first_id), &reaction)
-                .await;
-        }
         if has_celebrates {
             let reaction = serenity::model::channel::ReactionType::Unicode(
                 CONTRADICTIONARY_CELEBRATE_REACT.into(),
@@ -1043,8 +1030,7 @@ pub async fn send_dm_with_hook_overrides(
 /// Returns an error for custom emoji with a zero ID: snowflakes are nonzero,
 /// and serenity's `EmojiId::new` (NonZeroU64-backed) panics on 0.
 fn parse_reaction_type(emoji: &str) -> Result<serenity::model::channel::ReactionType, String> {
-    use serenity::model::channel::ReactionType;
-    use serenity::model::id::EmojiId;
+    use serenity::model::{channel::ReactionType, id::EmojiId};
 
     // Custom emoji: <:name:id> or <a:name:id>
     let trimmed = emoji.trim();
@@ -1151,15 +1137,16 @@ fn serenity_ts_to_rfc3339(ts: &Timestamp) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
     use super::*;
-    use crate::config::{ChannelConfig, Config};
-    use crate::pre_send::{
-        Assessment, AuditTrail, ConstructFeedback, HookContext, HookDecision, HookOutput,
-        PipelineMode, PreSendHook, PreSendPipeline,
+    use crate::{
+        config::{ChannelConfig, Config},
+        pre_send::{
+            Assessment, AuditTrail, ConstructFeedback, HookContext, HookDecision, HookOutput,
+            PipelineMode, PreSendHook, PreSendPipeline,
+        },
+        state::new_state,
     };
-    use crate::state::new_state;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn outbound_surface_strings_are_canonical() {
@@ -1879,9 +1866,8 @@ mod tests {
     }
 
     mod proptests {
-        use proptest::prelude::*;
-
         use super::*;
+        use proptest::prelude::*;
 
         /// Unique nonzero snowflakes in arbitrary (shuffled) order, mimicking
         /// any ordering Discord could put on the wire.

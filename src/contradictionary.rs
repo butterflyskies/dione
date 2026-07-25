@@ -8,18 +8,34 @@ use crate::timestamp::Timestamp;
 use crate::util::truncate_chars;
 
 /// Action to take when a pattern matches outbound text.
+///
+/// The `warn` tier (send the message, self-react 🙊) was retired by
+/// `contradictionary-action-tiers-v2` (2026-07-05) on the grounds that it was
+/// room-facing and invisible to the construct: "decoration, not instrument."
+/// See [`Action::Block`] for the accepted-but-deprecated `"warn"` spelling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Action {
-    /// Send the message, self-react 🙊, log to ops.
-    Warn,
-    /// Block the message — return an error to the construct.
+    /// Block the message — return an error to the construct. This is the
+    /// default: the substrate defaults to send, so the prosthetic defaults to
+    /// stop.
+    ///
+    /// Accepts `"warn"` as a deprecated alias. This is a migration shim, not a
+    /// supported value — [`load_sidecar_entries`] returns `Err` for the whole
+    /// file on an unknown action, so removing the spelling outright would make
+    /// a single stale entry silently erase every rule on that seat.
+    #[serde(alias = "warn")]
     Block,
     /// Send the message, log the hit silently.
     Log,
     /// Send the message, self-react ✨ — recognizes earned vocabulary.
     Celebrate,
 }
+
+/// Action names that no longer exist but still deserialize, so an existing
+/// sidecar cannot be broken by a tier's removal. Logged on load so the entries
+/// get cleaned up rather than lingering indefinitely.
+const RETIRED_ACTIONS: &[&str] = &["warn"];
 
 /// How the pattern is matched against outbound text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -47,7 +63,7 @@ pub struct Entry {
 }
 
 fn default_action() -> Action {
-    Action::Warn
+    Action::Block
 }
 
 fn default_match_mode() -> MatchMode {
@@ -87,11 +103,15 @@ struct SidecarFile {
 /// ```toml
 /// [[entry]]
 /// pattern = "load-bearing"
-/// action = "warn"
+/// action = "block"
 /// reason = "substrate tell — use keystone/linchpin"
 /// ```
 ///
 /// Returns `Ok(vec![])` if the file does not exist (opt-in sidecar).
+///
+/// Note that an unparseable entry fails the *whole file* — callers get `Err`
+/// and no entries at all, not a partial load. That is why retired action names
+/// keep deserializing (see [`RETIRED_ACTIONS`]) rather than being deleted.
 pub fn load_sidecar_entries(path: &Path) -> Result<Vec<Entry>, String> {
     if !path.exists() {
         return Ok(Vec::new());
@@ -102,13 +122,51 @@ pub fn load_sidecar_entries(path: &Path) -> Result<Vec<Entry>, String> {
             path.display()
         )
     })?;
-    let sidecar: SidecarFile = toml::from_str(&contents).map_err(|e| {
+    let value: toml::Value = toml::from_str(&contents).map_err(|e| {
+        format!(
+            "failed to parse contradictionary sidecar {}: {e}",
+            path.display()
+        )
+    })?;
+    for (pattern, action) in find_retired_actions(&value) {
+        tracing::warn!(
+            path = %path.display(),
+            pattern,
+            action,
+            "contradictionary entry uses retired action; treating it as 'block'. \
+             Update the entry — this alias is a migration shim, not a supported value."
+        );
+    }
+    let sidecar = SidecarFile::deserialize(value).map_err(|e| {
         format!(
             "failed to parse contradictionary sidecar {}: {e}",
             path.display()
         )
     })?;
     Ok(sidecar.entry)
+}
+
+/// Find entries still using a retired action name, as `(pattern, action)`
+/// pairs, so the caller can name both the entry and its file when reporting
+/// the deprecation. Returns an empty vec for a sidecar with nothing retired.
+fn find_retired_actions(value: &toml::Value) -> Vec<(String, String)> {
+    let Some(entries) = value.get("entry").and_then(toml::Value::as_array) else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let action = entry.get("action").and_then(toml::Value::as_str)?;
+            if !RETIRED_ACTIONS.contains(&action) {
+                return None;
+            }
+            let pattern = entry
+                .get("pattern")
+                .and_then(toml::Value::as_str)
+                .unwrap_or("<unnamed>");
+            Some((pattern.to_string(), action.to_string()))
+        })
+        .collect()
 }
 
 /// A match found in outbound text.
@@ -399,15 +457,18 @@ mod tests {
 
     fn test_entries() -> Vec<Entry> {
         vec![
+            // Non-blocking tells. These were `warn` before that tier was
+            // retired; `log` is now the only send-and-record action, so it
+            // carries the "caught but not gated" case these tests rely on.
             Entry {
                 pattern: "load-bearing".into(),
-                action: Action::Warn,
+                action: Action::Log,
                 match_mode: MatchMode::Word,
                 reason: Some("claudian tell — try keystone, linchpin, or just 'important'".into()),
             },
             Entry {
                 pattern: "honestly".into(),
-                action: Action::Warn,
+                action: Action::Log,
                 match_mode: MatchMode::Word,
                 reason: Some("if you need this word, the sentence is already lying".into()),
             },
@@ -438,7 +499,7 @@ mod tests {
         let hits = c.check("this is the load-bearing component of the system");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].pattern, "load-bearing");
-        assert_eq!(hits[0].action, Action::Warn);
+        assert_eq!(hits[0].action, Action::Log);
     }
 
     #[test]
@@ -481,7 +542,7 @@ mod tests {
     fn assert_empty_pattern_matches_all(mode: MatchMode) {
         let c = Contradictionary::new(vec![Entry {
             pattern: "".into(),
-            action: Action::Warn,
+            action: Action::Block,
             match_mode: mode,
             reason: Some("empty pattern test".into()),
         }]);
@@ -546,7 +607,9 @@ reason = "the practice that keeps us awake"
         let entries = load_sidecar_entries(&path).unwrap();
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].pattern, "It's worth noting");
-        assert_eq!(entries[0].action, Action::Warn);
+        // Written as `action = "warn"` — a retired tier kept as a deserializing
+        // alias so real sidecars survive its removal. Resolves to `block`.
+        assert_eq!(entries[0].action, Action::Block);
         assert_eq!(entries[0].match_mode, MatchMode::Word);
         assert_eq!(
             entries[0].reason.as_deref(),
@@ -647,9 +710,9 @@ reason = "the practice that keeps us awake"
     }
 
     #[test]
-    fn no_rly_does_not_affect_warn_log_celebrate() {
+    fn no_rly_does_not_affect_log_celebrate() {
         let c = Contradictionary::new(test_entries());
-        // warn (honestly) + log (I find myself) + celebrate (prejection), no block.
+        // log (honestly, I find myself) + celebrate (prejection), no block.
         let content = "honestly, I find myself admiring prejection";
         let hits = c.check(content);
         assert!(!c.has_block(&hits));
@@ -657,8 +720,11 @@ reason = "the practice that keeps us awake"
         assert_eq!(c.evaluate_block(&hits, content, false), BlockOutcome::Clear);
     }
 
+    /// The default action is `block`, per `contradictionary-action-tiers-v2`
+    /// (2026-07-05): the substrate defaults to send, so the prosthetic defaults
+    /// to stop. An entry that names no action must gate, not decorate.
     #[test]
-    fn sidecar_action_defaults_to_warn() {
+    fn sidecar_action_defaults_to_block() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("contradictionary.toml");
         std::fs::write(
@@ -670,8 +736,101 @@ pattern = "leverage"
         )
         .unwrap();
         let entries = load_sidecar_entries(&path).unwrap();
-        assert_eq!(entries[0].action, Action::Warn);
+        assert_eq!(entries[0].action, Action::Block);
         assert_eq!(entries[0].match_mode, MatchMode::Word);
+    }
+
+    /// Migration shim: `action = "warn"` is a retired tier that must still
+    /// deserialize. Dropping the variant outright would make the whole sidecar
+    /// fail to parse — and `load_sidecar_entries` returns `Err` for the entire
+    /// file, so a single stale entry would silently erase every rule on that
+    /// seat. The alias maps to `block` (gate, don't decorate).
+    #[test]
+    fn sidecar_retired_warn_action_deserializes_to_block() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("contradictionary.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[entry]]
+pattern = "leverage"
+action = "warn"
+
+[[entry]]
+pattern = "confidential"
+action = "block"
+"#,
+        )
+        .unwrap();
+        let entries = load_sidecar_entries(&path)
+            .expect("a retired warn action must not fail the whole sidecar");
+        assert_eq!(entries.len(), 2, "no entry may be dropped by the migration");
+        assert_eq!(entries[0].action, Action::Block);
+        assert_eq!(entries[1].action, Action::Block);
+    }
+
+    /// The deprecation is reported per entry, naming the pattern — a silent
+    /// alias would let retired spellings accumulate forever.
+    #[test]
+    fn retired_actions_are_found_and_named() {
+        let value: toml::Value = toml::from_str(
+            r#"
+[[entry]]
+pattern = "stale"
+action = "warn"
+
+[[entry]]
+pattern = "current"
+action = "block"
+
+[[entry]]
+pattern = "defaulted"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            find_retired_actions(&value),
+            vec![("stale".to_string(), "warn".to_string())],
+            "only the retired entry is reported, and it is named"
+        );
+    }
+
+    #[test]
+    fn no_retired_actions_reports_nothing() {
+        let value: toml::Value = toml::from_str(
+            r#"
+[[entry]]
+pattern = "current"
+action = "block"
+"#,
+        )
+        .unwrap();
+        assert!(find_retired_actions(&value).is_empty());
+    }
+
+    /// The failure mode the alias exists to prevent: one unparseable entry
+    /// takes the entire file down, not just itself.
+    #[test]
+    fn sidecar_unknown_action_fails_whole_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("contradictionary.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[entry]]
+pattern = "kept"
+action = "block"
+
+[[entry]]
+pattern = "bogus"
+action = "nonsense"
+"#,
+        )
+        .unwrap();
+        assert!(
+            load_sidecar_entries(&path).is_err(),
+            "an unknown action must fail the load — this is why 'warn' needs an alias"
+        );
     }
 
     // ── Word mode tests ──────────────────────────────────────────────────
@@ -722,7 +881,7 @@ pattern = "leverage"
     fn word_mode_multi_token() {
         let entries = vec![Entry {
             pattern: "load-bearing".into(),
-            action: Action::Warn,
+            action: Action::Block,
             match_mode: MatchMode::Word,
             reason: None,
         }];
@@ -863,7 +1022,7 @@ reason = "chom-chom game"
     fn unicode_substring_match() {
         let entries = vec![Entry {
             pattern: "café".into(),
-            action: Action::Warn,
+            action: Action::Block,
             match_mode: MatchMode::Substring,
             reason: None,
         }];
@@ -878,7 +1037,7 @@ reason = "chom-chom game"
     fn unicode_word_match() {
         let entries = vec![Entry {
             pattern: "naïve".into(),
-            action: Action::Warn,
+            action: Action::Block,
             match_mode: MatchMode::Word,
             reason: None,
         }];
@@ -922,7 +1081,7 @@ reason = "chom-chom game"
         // prêt-à-porter: Unicode on both sides of hyphens
         let entries = vec![Entry {
             pattern: "porter".into(),
-            action: Action::Warn,
+            action: Action::Block,
             match_mode: MatchMode::Word,
             reason: None,
         }];
@@ -936,7 +1095,7 @@ reason = "chom-chom game"
         // Ülkü-Özlem: Unicode on BOTH sides of the hyphen (ü-Ö)
         let entries = vec![Entry {
             pattern: "Özlem".into(),
-            action: Action::Warn,
+            action: Action::Block,
             match_mode: MatchMode::Word,
             reason: None,
         }];
@@ -951,7 +1110,7 @@ reason = "chom-chom game"
     fn substring_hit_has_correct_byte_offsets() {
         let entries = vec![Entry {
             pattern: "fizz".into(),
-            action: Action::Warn,
+            action: Action::Block,
             match_mode: MatchMode::Substring,
             reason: None,
         }];
@@ -966,7 +1125,7 @@ reason = "chom-chom game"
     fn substring_hit_byte_offsets_with_unicode() {
         let entries = vec![Entry {
             pattern: "café".into(),
-            action: Action::Warn,
+            action: Action::Block,
             match_mode: MatchMode::Substring,
             reason: None,
         }];
@@ -997,7 +1156,7 @@ reason = "chom-chom game"
     fn word_mode_does_not_match_partial_token() {
         let entries = vec![Entry {
             pattern: "honest".into(),
-            action: Action::Warn,
+            action: Action::Block,
             match_mode: MatchMode::Word,
             reason: None,
         }];
