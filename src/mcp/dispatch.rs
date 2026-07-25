@@ -13,12 +13,12 @@ use crate::{
             access::{approve_access, deny_access, list_access_requests},
             bot_state::{send_typing, set_presence},
             diagnostics::{get_version, set_stderr_level, set_trace_level},
+            embed::parse_embeds,
             introspection::{
                 get_channel, get_member, get_user, list_channels, list_emojis, list_guilds,
                 list_roles,
             },
             management::{create_thread, delete_message, pin_message, unpin_message},
-            embed::parse_embeds,
             messaging::{
                 download_attachment, edit_message_with_hook_overrides, fetch_messages,
                 fetch_new_since, get_message, react as discord_react, reply_with_hook_overrides,
