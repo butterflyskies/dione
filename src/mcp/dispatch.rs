@@ -18,6 +18,7 @@ use crate::{
                 list_roles,
             },
             management::{create_thread, delete_message, pin_message, unpin_message},
+            embed::parse_embeds,
             messaging::{
                 download_attachment, edit_message_with_hook_overrides, fetch_messages,
                 fetch_new_since, get_message, react as discord_react, reply_with_hook_overrides,
@@ -191,6 +192,10 @@ pub(crate) async fn call_tool(
                 .unwrap_or(false);
             let no_rly = args.get("no_rly").and_then(Value::as_bool).unwrap_or(false);
             let no_rly_hooks = parse_hook_overrides(&args)?;
+            let embeds = match args.get("embeds") {
+                Some(v) => parse_embeds(v).map_err(|e| format!("invalid embeds: {e}"))?,
+                None => Vec::new(),
+            };
             reply_with_hook_overrides(
                 &ctx,
                 channel_id,
@@ -199,6 +204,7 @@ pub(crate) async fn call_tool(
                 suppress_ping,
                 no_rly,
                 &no_rly_hooks,
+                embeds,
             )
             .await
         }
@@ -279,7 +285,11 @@ pub(crate) async fn call_tool(
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing content".to_string())?;
             let no_rly_hooks = parse_hook_overrides(&args)?;
-            send_dm_with_hook_overrides(&ctx, user_id, content, &no_rly_hooks).await
+            let embeds = match args.get("embeds") {
+                Some(v) => parse_embeds(v).map_err(|e| format!("invalid embeds: {e}"))?,
+                None => Vec::new(),
+            };
+            send_dm_with_hook_overrides(&ctx, user_id, content, &no_rly_hooks, embeds).await
         }
 
         // Introspection

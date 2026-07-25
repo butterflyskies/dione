@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use camino::Utf8PathBuf;
 use serde_json::{Value, json};
-use serenity::builder::{CreateAllowedMentions, CreateAttachment, CreateMessage, EditMessage};
+use serenity::builder::{
+    CreateAllowedMentions, CreateAttachment, CreateEmbed, CreateMessage, EditMessage,
+};
 use serenity::http::MessagePagination;
 use serenity::model::Timestamp;
 use serenity::model::channel::Message;
@@ -362,10 +364,12 @@ pub async fn reply(
         suppress_ping,
         no_rly,
         &[],
+        Vec::new(),
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn reply_with_hook_overrides(
     ctx: &MessagingCtx,
     channel_id: ChannelId,
@@ -374,6 +378,7 @@ pub async fn reply_with_hook_overrides(
     suppress_ping: bool,
     no_rly: bool,
     no_rly_hooks: &[HookName],
+    embeds: Vec<CreateEmbed>,
 ) -> Value {
     let prepared = match prepare_outbound(
         ctx,
@@ -398,6 +403,7 @@ pub async fn reply_with_hook_overrides(
         ReplyTransportOptions {
             suppress_ping,
             no_rly,
+            embeds,
         },
     )
     .await
@@ -406,6 +412,7 @@ pub async fn reply_with_hook_overrides(
 struct ReplyTransportOptions {
     suppress_ping: bool,
     no_rly: bool,
+    embeds: Vec<CreateEmbed>,
 }
 
 async fn deliver_prepared_reply(
@@ -497,6 +504,11 @@ async fn deliver_prepared_reply(
 
     for (i, chunk_text) in chunks.iter().enumerate() {
         let mut builder = CreateMessage::new().content(*chunk_text);
+
+        // Attach embeds to the first chunk only.
+        if i == 0 && !options.embeds.is_empty() {
+            builder = builder.embeds(options.embeds.clone());
+        }
 
         // Reply threading.
         let should_reply = match reply_mode {
@@ -946,7 +958,7 @@ pub(crate) async fn create_dm_channel(
 // ── send_dm ──────────────────────────────────────────────────────────────────
 
 pub async fn send_dm(ctx: &MessagingCtx, user_id: UserId, content: &str) -> Value {
-    send_dm_with_hook_overrides(ctx, user_id, content, &[]).await
+    send_dm_with_hook_overrides(ctx, user_id, content, &[], Vec::new()).await
 }
 
 pub async fn send_dm_with_hook_overrides(
@@ -954,6 +966,7 @@ pub async fn send_dm_with_hook_overrides(
     user_id: UserId,
     content: &str,
     no_rly_hooks: &[HookName],
+    embeds: Vec<CreateEmbed>,
 ) -> Value {
     if ctx.config.access.dm_policy == DmPolicy::Disabled {
         return json!({ "error": "dm_policy is set to disabled; cannot initiate DMs" });
@@ -983,6 +996,7 @@ pub async fn send_dm_with_hook_overrides(
             ReplyTransportOptions {
                 suppress_ping: false,
                 no_rly: false,
+                embeds,
             },
         )
         .await;
@@ -1006,6 +1020,7 @@ pub async fn send_dm_with_hook_overrides(
         ReplyTransportOptions {
             suppress_ping: false,
             no_rly: false,
+            embeds,
         },
     )
     .await;

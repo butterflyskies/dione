@@ -30,16 +30,17 @@ pub(crate) fn initialize_response(mode: TransportMode) -> Value {
 pub(crate) fn tools_list(mode: TransportMode) -> Value {
     let mut response = json!({
         "tools": [
-            tool("reply", "Send a reply to a Discord channel or DM", json!({
+            tool("reply", "Send a reply to a Discord channel or DM. Supports optional rich embeds.", json!({
                 "type": "object",
                 "required": ["channel_id", "content"],
                 "properties": {
                     "channel_id": { "type": "string", "description": "Discord channel ID" },
-                    "content": { "type": "string", "description": "Message content" },
+                    "content": { "type": "string", "description": "Message content (plain text)" },
                     "reply_to_message_id": { "type": "string", "description": "Optional message ID to reply to" },
                     "suppress_ping": { "type": "boolean", "description": "When true, the reply will not ping the user being replied to (default: false)" },
                     "no_rly": { "type": "boolean", "description": "Consent-gate override for the contradictionary block action. A blocked send returns an error naming the matched pattern (⚠️ blocked: <pattern>); resend the identical message with no_rly=true to bypass the block, send anyway, and record a durable diary entry. No effect on non-blocked messages (default: false)." },
-                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for this send. Every bypass is audited. This does not bypass the contradictionary; use no_rly for that legacy gate." }
+                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for this send. Every bypass is audited. This does not bypass the contradictionary; use no_rly for that legacy gate." },
+                    "embeds": embed_schema()
                 }
             })),
             tool("react", "Add a reaction to a message", json!({
@@ -147,13 +148,14 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                     "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for the caption; every bypass is audited." }
                 }
             })),
-            tool("send_dm", "Initiate a DM conversation with a Discord user and send a message", json!({
+            tool("send_dm", "Initiate a DM conversation with a Discord user and send a message. Supports optional rich embeds.", json!({
                 "type": "object",
                 "required": ["user_id", "content"],
                 "properties": {
                     "user_id": { "type": "string", "description": "Discord user ID to send the DM to" },
                     "content": { "type": "string", "description": "Message content to send" },
-                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass; every bypass is audited." }
+                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass; every bypass is audited." },
+                    "embeds": embed_schema()
                 }
             })),
             tool("list_guilds", "List guilds the bot is in", json!({
@@ -444,6 +446,38 @@ pub(crate) fn tool(name: &str, description: &str, input_schema: Value) -> Value 
         "name": name,
         "description": description,
         "inputSchema": input_schema,
+    })
+}
+
+fn embed_schema() -> Value {
+    let field_schema = json!({
+        "type": "object",
+        "required": ["name", "value"],
+        "properties": {
+            "name": { "type": "string" },
+            "value": { "type": "string" },
+            "inline": { "type": "boolean", "default": false }
+        }
+    });
+    let item_schema = json!({
+        "type": "object",
+        "properties": {
+            "title": { "type": "string" },
+            "description": { "type": "string" },
+            "url": { "type": "string" },
+            "color": { "description": "Embed color as integer or hex string (e.g. 3447003, \"#3498DB\", \"FF0000\")" },
+            "timestamp": { "type": "string", "description": "ISO 8601 timestamp" },
+            "footer": { "description": "Footer text (string) or object with text and optional icon_url" },
+            "author": { "description": "Author name (string) or object with name, optional url and icon_url" },
+            "thumbnail": { "description": "Thumbnail URL (string) or object with url" },
+            "image": { "description": "Image URL (string) or object with url" },
+            "fields": { "type": "array", "items": field_schema }
+        }
+    });
+    json!({
+        "type": "array",
+        "description": "Optional array of Discord embed objects (max 10)",
+        "items": item_schema
     })
 }
 
