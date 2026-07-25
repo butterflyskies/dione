@@ -6,9 +6,10 @@
 //! injected into the notification event.
 
 use crate::{
-    config::{BellProviderConfig, BellRingsConfig},
+    config::{BellProviderConfig, BellRingsConfig, BellTrigger},
     discord::events::{MessageEvent, NotificationEvent},
 };
+use futures_util::future::join_all;
 use rmcp::{
     ServiceExt,
     model::{CallToolRequestParams, ClientInfo, RawContent},
@@ -223,10 +224,17 @@ pub fn render_bells(bells: &[Bell]) -> String {
         .join(";")
 }
 
-/// Owns the one reconnectable provider used by the inbound delivery loop.
-#[derive(Default)]
+/// Owns reconnectable providers used by the inbound delivery loop.
 pub struct BellEvaluator {
-    provider: Mutex<ProviderSlot>,
+    providers: Mutex<Vec<ProviderSlot>>,
+}
+
+impl Default for BellEvaluator {
+    fn default() -> Self {
+        Self {
+            providers: Mutex::new(Vec::new()),
+        }
+    }
 }
 
 impl BellEvaluator {
@@ -240,38 +248,157 @@ impl BellEvaluator {
         event: NotificationEvent,
         config: &BellRingsConfig,
     ) -> (NotificationEvent, Vec<Bell>, Option<BellStatus>) {
-        let eligible = matches!(
-            &event,
-            NotificationEvent::Message(message)
-                if config.enabled && message.targeting.is_directed()
-        );
-        if eligible && let Some(provider_config) = config.provider.as_ref() {
-            let provider = self.provider(provider_config).await;
-            return evaluate_with_provider(event, config, provider.as_ref()).await;
+        let eligible = match &event {
+            NotificationEvent::Message(message) if config.enabled => {
+                let channel_id = message.chat_id.get().to_string();
+                match config.trigger_for_channel(&channel_id) {
+                    BellTrigger::Directed => message.targeting.is_directed(),
+                    BellTrigger::All => true,
+                }
+            }
+            _ => false,
+        };
+        if eligible && !config.providers.is_empty() {
+            let provider_instances = self.providers_for(config).await;
+            return evaluate_multi_provider(event, config, &provider_instances).await;
         }
         record_outcome(&BellOutcome::Skipped);
         (event, vec![], None)
     }
 
-    async fn provider(&self, config: &BellProviderConfig) -> Arc<MemoryMcpProvider> {
-        let mut slot = self.provider.lock().await;
-        if slot.endpoint.as_deref() != Some(config.url.as_str()) {
-            slot.endpoint = Some(config.url.as_str().to_owned());
-            slot.provider = Some(Arc::new(MemoryMcpProvider::new(
-                config.url.as_str().to_owned(),
-            )));
+    async fn providers_for(
+        &self,
+        config: &BellRingsConfig,
+    ) -> Vec<(BellProviderConfig, Arc<MemoryMcpProvider>)> {
+        let mut slots = self.providers.lock().await;
+        let mut result = Vec::with_capacity(config.providers.len());
+        for provider_config in &config.providers {
+            let url = provider_config.url.as_str();
+            let existing = slots
+                .iter()
+                .position(|s| s.endpoint.as_deref() == Some(url));
+            let provider = if let Some(idx) = existing {
+                slots[idx]
+                    .provider
+                    .get_or_insert_with(|| Arc::new(MemoryMcpProvider::new(url.to_owned())))
+                    .clone()
+            } else {
+                let provider = Arc::new(MemoryMcpProvider::new(url.to_owned()));
+                slots.push(ProviderSlot {
+                    endpoint: Some(url.to_owned()),
+                    provider: Some(provider.clone()),
+                });
+                provider
+            };
+            result.push((provider_config.clone(), provider));
         }
-        if let Some(provider) = slot.provider.as_ref() {
-            return provider.clone();
-        }
-        let provider = Arc::new(MemoryMcpProvider::new(config.url.as_str().to_owned()));
-        slot.endpoint = Some(config.url.as_str().to_owned());
-        slot.provider = Some(provider.clone());
-        provider
+        result
     }
 }
 
+/// Fan out recall to multiple providers concurrently, merge results.
+async fn evaluate_multi_provider(
+    event: NotificationEvent,
+    config: &BellRingsConfig,
+    providers: &[(BellProviderConfig, Arc<MemoryMcpProvider>)],
+) -> (NotificationEvent, Vec<Bell>, Option<BellStatus>) {
+    let message = match &event {
+        NotificationEvent::Message(m) => m,
+        _ => {
+            record_outcome(&BellOutcome::Skipped);
+            return (event, vec![], None);
+        }
+    };
+
+    let deadline = Duration::from_millis(config.deadline_ms);
+    let futures: Vec<_> = providers
+        .iter()
+        .map(|(provider_config, provider)| {
+            let request = RecallRequest {
+                query: message.content.clone(),
+                scope: provider_config.scope.as_str().to_owned(),
+                limit: config.max_bells,
+            };
+            let pc = provider_config.clone();
+            let p = provider.clone();
+            async move {
+                let result = tokio::time::timeout(deadline, p.recall(request)).await;
+                match result {
+                    Err(_) => (pc, Err(BellProviderError::Transport)),
+                    Ok(r) => (pc, r),
+                }
+            }
+        })
+        .collect();
+
+    let results = join_all(futures).await;
+
+    let mut all_bells = Vec::new();
+    let mut any_ok = false;
+    let mut any_timeout = false;
+    let mut any_error = false;
+
+    for (provider_config, result) in results {
+        match result {
+            Ok(response) => match parse_bells(
+                response,
+                &provider_config,
+                config.max_semantic_distance,
+                config.max_bells,
+            ) {
+                Ok(bells) => {
+                    any_ok = true;
+                    all_bells.extend(bells);
+                }
+                Err(()) => {
+                    any_error = true;
+                }
+            },
+            Err(BellProviderError::Transport) => {
+                any_timeout = true;
+            }
+            Err(BellProviderError::MalformedResponse) => {
+                any_error = true;
+            }
+        }
+    }
+
+    all_bells.sort_by(|left, right| {
+        right
+            .loudness
+            .cmp(&left.loudness)
+            .then_with(|| left.distance.total_cmp(&right.distance))
+            .then_with(|| left.memory_name.cmp(&right.memory_name))
+            .then_with(|| left.memory_id.cmp(&right.memory_id))
+    });
+    all_bells.truncate(config.max_bells);
+
+    let status = if any_ok && (any_timeout || any_error) {
+        Some(BellStatus::PartialTimeout)
+    } else if any_ok {
+        Some(BellStatus::Ok)
+    } else if any_timeout {
+        Some(BellStatus::Timeout)
+    } else if any_error {
+        Some(BellStatus::Error)
+    } else {
+        Some(BellStatus::Ok)
+    };
+
+    let outcome = if any_ok || (!any_timeout && !any_error) {
+        BellOutcome::Success(all_bells.clone())
+    } else if any_timeout {
+        BellOutcome::Timeout
+    } else {
+        BellOutcome::ProviderError
+    };
+    record_outcome(&outcome);
+
+    (event, all_bells, status)
+}
+
 /// Testable evaluation seam. Returns the event, admitted bells, and retrieval status.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn evaluate_with_provider<P: BellProvider + ?Sized>(
     event: NotificationEvent,
     config: &BellRingsConfig,
@@ -290,16 +417,27 @@ pub(crate) async fn evaluate_with_provider<P: BellProvider + ?Sized>(
     (event, bells, status)
 }
 
-/// Computes bells for one message without mutating the message or its delivery envelope.
+/// Computes bells for one message against a single provider.
+///
+/// Used by the test seam; production uses `evaluate_multi_provider`.
 pub async fn evaluate_message<P: BellProvider + ?Sized>(
     message: &MessageEvent,
     config: &BellRingsConfig,
     provider: &P,
 ) -> BellOutcome {
-    let Some(provider_config) = config.provider.as_ref() else {
-        return BellOutcome::Skipped;
+    let provider_config = match config.providers.first() {
+        Some(p) => p,
+        None => return BellOutcome::Skipped,
     };
-    if !config.enabled || !message.targeting.is_directed() || config.max_bells == 0 {
+    if !config.enabled || config.max_bells == 0 {
+        return BellOutcome::Skipped;
+    }
+    let channel_id = message.chat_id.get().to_string();
+    let should_ring = match config.trigger_for_channel(&channel_id) {
+        BellTrigger::Directed => message.targeting.is_directed(),
+        BellTrigger::All => true,
+    };
+    if !should_ring {
         return BellOutcome::Skipped;
     }
     let request = RecallRequest {
@@ -507,10 +645,12 @@ mod tests {
         BellRingsConfig {
             enabled: true,
             mode: crate::config::BellMode::Live,
-            provider: Some(BellProviderConfig {
+            providers: vec![BellProviderConfig {
                 url: BellProviderUrl::parse("http://memory.example/mcp").unwrap(),
                 scope: BellScope::parse("syne").unwrap(),
-            }),
+            }],
+            trigger: crate::config::BellTrigger::Directed,
+            channel_overrides: vec![],
             max_semantic_distance: 0.3,
             max_bells: 3,
             deadline_ms: 300,
@@ -588,7 +728,7 @@ mod tests {
             BellOutcome::Skipped
         );
         let mut missing = config();
-        missing.provider = None;
+        missing.providers = vec![];
         assert_eq!(
             evaluate_message(
                 &message(MessageTargeting::DirectMessage),
@@ -607,6 +747,10 @@ mod tests {
             "[bell_rings]\nenabled=true\n[bell_rings.provider]\nurl='http://memory/mcp'\nscope='all'",
         );
         assert!(parsed.is_err());
+        let parsed = toml::from_str::<Config>(
+            "[bell_rings]\nenabled=true\n[[bell_rings.providers]]\nurl='http://memory/mcp'\nscope='all'",
+        );
+        assert!(parsed.is_err());
     }
 
     #[test]
@@ -616,6 +760,7 @@ mod tests {
         assert_eq!(defaults.bell_rings.max_semantic_distance, 0.3);
         assert_eq!(defaults.bell_rings.max_bells, 3);
         assert_eq!(defaults.bell_rings.deadline_ms, 300);
+        assert_eq!(defaults.bell_rings.trigger, crate::config::BellTrigger::Directed);
 
         for invalid in [
             "[bell_rings]\nmax_semantic_distance=nan",
@@ -806,5 +951,77 @@ mod tests {
         assert_eq!(bells[0].memory_id, "semantic-hit");
         assert_eq!(bells[0].loudness, 3);
         assert_eq!(bells[0].timbre, BellTimbre::Semantic);
+    }
+
+    #[tokio::test]
+    async fn all_trigger_rings_on_ambient_messages() {
+        let provider = MockProvider::value(envelope(vec![hit("a", "found", 0.1, "semantic")]));
+        let mut all_config = config();
+        all_config.trigger = crate::config::BellTrigger::All;
+        let outcome = evaluate_message(
+            &message(MessageTargeting::Ambient),
+            &all_config,
+            &provider,
+        )
+        .await;
+        let BellOutcome::Success(bells) = outcome else {
+            panic!("expected success on ambient message with All trigger");
+        };
+        assert_eq!(bells.len(), 1);
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn channel_override_trigger_takes_precedence() {
+        let provider = MockProvider::value(envelope(vec![hit("a", "found", 0.1, "semantic")]));
+        let mut override_config = config();
+        override_config.trigger = crate::config::BellTrigger::Directed;
+        override_config.channel_overrides = vec![crate::config::BellChannelOverride {
+            channel_id: "1".to_owned(),
+            trigger: crate::config::BellTrigger::All,
+        }];
+        let outcome = evaluate_message(
+            &message(MessageTargeting::Ambient),
+            &override_config,
+            &provider,
+        )
+        .await;
+        let BellOutcome::Success(bells) = outcome else {
+            panic!("expected success: channel 1 has All trigger override");
+        };
+        assert_eq!(bells.len(), 1);
+    }
+
+    #[test]
+    fn legacy_singular_provider_config_still_works() {
+        let cfg: Config = toml::from_str(
+            "[bell_rings]\nenabled=true\n[bell_rings.provider]\nurl='http://memory/mcp'\nscope='syne'",
+        )
+        .unwrap();
+        assert_eq!(cfg.bell_rings.providers.len(), 1);
+        assert_eq!(cfg.bell_rings.providers[0].scope.as_str(), "syne");
+    }
+
+    #[test]
+    fn multi_provider_config_works() {
+        let cfg: Config = toml::from_str(
+            "[bell_rings]\nenabled=true\n\
+            [[bell_rings.providers]]\nurl='http://personal/mcp'\nscope='lain'\n\
+            [[bell_rings.providers]]\nurl='http://shared/mcp'\nscope='shared'",
+        )
+        .unwrap();
+        assert_eq!(cfg.bell_rings.providers.len(), 2);
+        assert_eq!(cfg.bell_rings.providers[0].scope.as_str(), "lain");
+        assert_eq!(cfg.bell_rings.providers[1].scope.as_str(), "shared");
+    }
+
+    #[test]
+    fn trigger_all_config_parses() {
+        let cfg: Config = toml::from_str(
+            "[bell_rings]\nenabled=true\ntrigger='all'\n\
+            [bell_rings.provider]\nurl='http://memory/mcp'\nscope='syne'",
+        )
+        .unwrap();
+        assert_eq!(cfg.bell_rings.trigger, crate::config::BellTrigger::All);
     }
 }

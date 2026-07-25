@@ -160,6 +160,25 @@ pub enum BellMode {
     Live,
 }
 
+/// Which inbound messages trigger bell evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BellTrigger {
+    /// Only messages directed at the construct (mention, DM, reply).
+    #[default]
+    Directed,
+    /// All inbound messages in configured channels.
+    All,
+}
+
+/// Per-channel bell override.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BellChannelOverride {
+    pub channel_id: String,
+    pub trigger: BellTrigger,
+}
+
 /// Inbound memory-bell configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BellRingsConfig {
@@ -167,9 +186,13 @@ pub struct BellRingsConfig {
     pub enabled: bool,
     /// Shadow (log only) or live (inject into metadata).
     pub mode: BellMode,
-    /// The single memory-mcp provider. A singular field makes multi-provider
-    /// fan-out unrepresentable in the first slice.
-    pub provider: Option<BellProviderConfig>,
+    /// Memory-mcp providers to fan out recall to. All are queried concurrently
+    /// within the total deadline; results are merged and sorted by loudness.
+    pub providers: Vec<BellProviderConfig>,
+    /// Which messages trigger evaluation by default.
+    pub trigger: BellTrigger,
+    /// Per-channel trigger overrides.
+    pub channel_overrides: Vec<BellChannelOverride>,
     /// Largest admitted cosine distance.
     pub max_semantic_distance: f64,
     /// Maximum candidates requested and bells retained.
@@ -183,7 +206,14 @@ pub struct BellRingsConfig {
 struct BellRingsConfigWire {
     enabled: bool,
     mode: BellMode,
+    /// Legacy singular provider (backward compat). Merged into `providers`.
     provider: Option<BellProviderConfig>,
+    /// Multi-provider list. Takes precedence if non-empty.
+    #[serde(default)]
+    providers: Vec<BellProviderConfig>,
+    trigger: BellTrigger,
+    #[serde(default)]
+    channel_overrides: Vec<BellChannelOverride>,
     #[serde(deserialize_with = "deserialize_max_semantic_distance")]
     max_semantic_distance: f64,
     #[serde(deserialize_with = "deserialize_max_bells")]
@@ -198,7 +228,10 @@ impl Default for BellRingsConfigWire {
         Self {
             enabled: defaults.enabled,
             mode: defaults.mode,
-            provider: defaults.provider,
+            provider: None,
+            providers: vec![],
+            trigger: defaults.trigger,
+            channel_overrides: defaults.channel_overrides,
             max_semantic_distance: defaults.max_semantic_distance,
             max_bells: defaults.max_bells,
             deadline_ms: defaults.deadline_ms,
@@ -212,15 +245,24 @@ impl<'de> Deserialize<'de> for BellRingsConfig {
         D: Deserializer<'de>,
     {
         let wire = BellRingsConfigWire::deserialize(deserializer)?;
-        if wire.enabled && wire.provider.is_none() {
+        let providers = if !wire.providers.is_empty() {
+            wire.providers
+        } else if let Some(provider) = wire.provider {
+            vec![provider]
+        } else {
+            vec![]
+        };
+        if wire.enabled && providers.is_empty() {
             return Err(D::Error::custom(
-                "enabled bell_rings requires exactly one provider",
+                "enabled bell_rings requires at least one provider",
             ));
         }
         Ok(Self {
             enabled: wire.enabled,
             mode: wire.mode,
-            provider: wire.provider,
+            providers,
+            trigger: wire.trigger,
+            channel_overrides: wire.channel_overrides,
             max_semantic_distance: wire.max_semantic_distance,
             max_bells: wire.max_bells,
             deadline_ms: wire.deadline_ms,
@@ -233,11 +275,24 @@ impl Default for BellRingsConfig {
         Self {
             enabled: false,
             mode: BellMode::Shadow,
-            provider: None,
+            providers: vec![],
+            trigger: BellTrigger::Directed,
+            channel_overrides: vec![],
             max_semantic_distance: 0.3,
             max_bells: 3,
             deadline_ms: 300,
         }
+    }
+}
+
+impl BellRingsConfig {
+    /// Returns the effective trigger mode for a channel.
+    pub fn trigger_for_channel(&self, channel_id: &str) -> BellTrigger {
+        self.channel_overrides
+            .iter()
+            .find(|o| o.channel_id == channel_id)
+            .map(|o| o.trigger)
+            .unwrap_or(self.trigger)
     }
 }
 
