@@ -1371,6 +1371,7 @@ mod tests {
 
     /// A `warn`-level event captured from the tracing pipeline.
     struct CapturedWarning {
+        level: String,
         target: String,
         message: String,
         fields: Vec<(String, String)>,
@@ -1391,8 +1392,8 @@ mod tests {
         }
     }
 
-    /// Installs a thread-local tracing subscriber, runs `f`, and returns the
-    /// `warn`-level events it emitted — excluding the canary described below.
+    /// Installs a thread-local tracing subscriber, runs `f`, and returns every
+    /// event it emitted, at any level, with the canary filtered out.
     ///
     /// `DefaultGuard` is `!Send`, which makes this future `!Send` and therefore
     /// unspawnable; `block_on` drives it on the thread holding the guard under
@@ -1403,7 +1404,7 @@ mod tests {
     /// "does not warn" test pass for the wrong reason — the tests would still
     /// be green with the feature deleted, which is exactly the failure this
     /// suite is meant to rule out.
-    async fn capture_warnings<F, Fut>(f: F) -> Vec<CapturedWarning>
+    async fn capture_events<F, Fut>(f: F) -> Vec<CapturedWarning>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = ()>,
@@ -1418,7 +1419,7 @@ mod tests {
             tracing::warn!(target: "dione_test_canary", "canary");
         }
 
-        let mut warnings = Vec::new();
+        let mut events = Vec::new();
         while let Ok(event) = rx.try_recv() {
             if let NotificationEvent::Trace {
                 level,
@@ -1426,9 +1427,9 @@ mod tests {
                 message,
                 fields,
             } = event
-                && level == "WARN"
             {
-                warnings.push(CapturedWarning {
+                events.push(CapturedWarning {
+                    level,
                     target,
                     message,
                     fields,
@@ -1436,16 +1437,97 @@ mod tests {
             }
         }
 
-        let canaries = warnings
-            .iter()
-            .filter(|w| w.target == CANARY_TARGET)
-            .count();
+        let canaries = events.iter().filter(|e| e.target == CANARY_TARGET).count();
         assert_eq!(
             canaries, 1,
             "capture harness is broken: expected exactly 1 canary warning, saw {canaries}"
         );
-        warnings.retain(|w| w.target != CANARY_TARGET);
-        warnings
+        events.retain(|e| e.target != CANARY_TARGET);
+        events
+    }
+
+    /// As [`capture_events`], narrowed to `warn` level.
+    async fn capture_warnings<F, Fut>(f: F) -> Vec<CapturedWarning>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        let mut events = capture_events(f).await;
+        events.retain(|e| e.level == "WARN");
+        events
+    }
+
+    /// The CHANGELOG and the doc comments both promise a one-hour cooldown.
+    /// Nothing else pins the constant, so a change to it would silently make
+    /// that prose false.
+    #[test]
+    fn test_dropped_bot_warn_cooldown_is_one_hour() {
+        assert_eq!(
+            DROPPED_BOT_WARN_COOLDOWN,
+            Duration::from_secs(60 * 60),
+            "the documented cooldown is one hour"
+        );
+    }
+
+    /// Every drop is recorded at `debug`, including the classes that are
+    /// deliberately not warned about — that unthrottled record is the stated
+    /// reason suppressing a warning is acceptable, so it has to actually exist.
+    #[tokio::test]
+    async fn test_every_drop_is_recorded_at_debug() {
+        let config = watched_config();
+        let quiet_cases = [
+            (
+                "own echo",
+                BotMessageContext {
+                    user_id: UserId::new(7),
+                    ..dropped_bot_ctx()
+                },
+            ),
+            (
+                "unknown self id",
+                BotMessageContext {
+                    self_id: None,
+                    ..dropped_bot_ctx()
+                },
+            ),
+            (
+                "unwatched channel",
+                BotMessageContext {
+                    channel_id: ChannelId::new(55555),
+                    ..dropped_bot_ctx()
+                },
+            ),
+        ];
+
+        for (label, ctx) in quiet_cases {
+            let state = crate::state::new_state();
+            state.write().await.record_thread_parent(55555, None);
+            let http = serenity::http::Http::new("fake");
+            let events = capture_events(|| async {
+                should_filter_bot_message(&http, &state, &config, &ctx).await;
+            })
+            .await;
+
+            assert!(
+                !events.iter().any(|e| e.level == "WARN"),
+                "{label} must not warn"
+            );
+            let debug: Vec<_> = events.iter().filter(|e| e.level == "DEBUG").collect();
+            assert_eq!(
+                debug.len(),
+                1,
+                "{label} must leave exactly one debug record, got: {:?}",
+                events
+                    .iter()
+                    .map(|e| (&e.level, &e.message))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                debug[0].field("bot_user_id"),
+                Some(ctx.user_id.get().to_string().as_str()),
+                "{label} debug record must key the sender under the same field as the warning"
+            );
+        }
     }
 
     /// A config with one guild channel and `100` globally allowlisted.
