@@ -25,6 +25,7 @@ use tokio::sync::Mutex;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Bell {
     pub provider_url: String,
+    pub provider_alias: String,
     pub scope: String,
     pub recall_id: String,
     pub memory_id: String,
@@ -63,6 +64,8 @@ pub enum BellStatus {
     Ok,
     /// Some providers completed, others timed out. Partial results available.
     PartialTimeout,
+    /// Some providers completed, others failed (non-timeout). Partial results available.
+    PartialError,
     /// Total deadline elapsed before retrieval completed.
     Timeout,
     /// Retrieval failed due to provider error or malformed response.
@@ -73,7 +76,8 @@ impl BellStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             BellStatus::Ok => "ok",
-            BellStatus::PartialTimeout => "partial",
+            BellStatus::PartialTimeout => "partial_timeout",
+            BellStatus::PartialError => "partial_error",
             BellStatus::Timeout => "timeout",
             BellStatus::Error => "error",
         }
@@ -116,6 +120,7 @@ pub struct RecallRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BellProviderError {
+    TimedOut,
     Transport,
     MalformedResponse,
 }
@@ -219,20 +224,21 @@ struct ProviderSlot {
     provider: Option<Arc<MemoryMcpProvider>>,
 }
 
-/// Render admitted bells into the compact wire format.
+/// Render admitted bells into the compact wire format with provider provenance.
 ///
-/// Format: `"3s lain/person-pace;1l shared/construct-cosmology"`
-/// — `{loudness}{timbre} {scope}/{name}`.
+/// Format: `"3s lain/person-pace@personal;1l shared/construct-cosmology@cc"`
+/// — `{loudness}{timbre} {scope}/{name}@{provider_alias}`.
 pub fn render_bells(bells: &[Bell]) -> String {
     bells
         .iter()
         .map(|bell| {
             format!(
-                "{}{} {}/{}",
+                "{}{} {}/{}@{}",
                 bell.loudness,
                 bell.timbre.code(),
                 bell.scope,
                 bell.memory_name,
+                bell.provider_alias,
             )
         })
         .collect::<Vec<_>>()
@@ -345,7 +351,7 @@ async fn evaluate_multi_provider(
             async move {
                 let result = tokio::time::timeout(deadline, p.recall(request)).await;
                 match result {
-                    Err(_) => (pc, Err(BellProviderError::Transport)),
+                    Err(_) => (pc, Err(BellProviderError::TimedOut)),
                     Ok(r) => (pc, r),
                 }
             }
@@ -357,7 +363,8 @@ async fn evaluate_multi_provider(
     let mut all_bells = Vec::new();
     let mut any_ok = false;
     let mut any_timeout = false;
-    let mut any_error = false;
+    let mut any_transport_error = false;
+    let mut any_malformed = false;
 
     for (provider_config, result) in results {
         match result {
@@ -372,14 +379,17 @@ async fn evaluate_multi_provider(
                     all_bells.extend(bells);
                 }
                 Err(()) => {
-                    any_error = true;
+                    any_malformed = true;
                 }
             },
-            Err(BellProviderError::Transport) => {
+            Err(BellProviderError::TimedOut) => {
                 any_timeout = true;
             }
+            Err(BellProviderError::Transport) => {
+                any_transport_error = true;
+            }
             Err(BellProviderError::MalformedResponse) => {
-                any_error = true;
+                any_malformed = true;
             }
         }
     }
@@ -394,19 +404,22 @@ async fn evaluate_multi_provider(
     });
     all_bells.truncate(config.max_bells);
 
-    let status = if any_ok && (any_timeout || any_error) {
+    let any_failure = any_timeout || any_transport_error || any_malformed;
+    let status = if any_ok && any_timeout {
         Some(BellStatus::PartialTimeout)
+    } else if any_ok && any_failure {
+        Some(BellStatus::PartialError)
     } else if any_ok {
         Some(BellStatus::Ok)
     } else if any_timeout {
         Some(BellStatus::Timeout)
-    } else if any_error {
+    } else if any_failure {
         Some(BellStatus::Error)
     } else {
         Some(BellStatus::Ok)
     };
 
-    let outcome = if any_ok || (!any_timeout && !any_error) {
+    let outcome = if any_ok || !any_failure {
         BellOutcome::Success(all_bells.clone())
     } else if any_timeout {
         BellOutcome::Timeout
@@ -473,6 +486,7 @@ pub async fn evaluate_message<P: BellProvider + ?Sized>(
     .await;
     let response = match recall {
         Err(_) => return BellOutcome::Timeout,
+        Ok(Err(BellProviderError::TimedOut)) => return BellOutcome::Timeout,
         Ok(Err(BellProviderError::Transport)) => return BellOutcome::ProviderError,
         Ok(Err(BellProviderError::MalformedResponse)) => {
             return BellOutcome::MalformedResponse;
@@ -549,6 +563,7 @@ fn parse_bells(
         };
         bells.push(Bell {
             provider_url: provider.url.as_str().to_owned(),
+            provider_alias: provider.alias().to_owned(),
             scope: hit.scope,
             recall_id: envelope.recall_id.clone(),
             memory_id: hit.id,
@@ -669,6 +684,7 @@ mod tests {
             providers: vec![BellProviderConfig {
                 url: BellProviderUrl::parse("http://memory.example/mcp").unwrap(),
                 scope: BellScope::parse("syne").unwrap(),
+                alias: None,
             }],
             trigger: crate::config::BellTrigger::Directed,
             channel_overrides: vec![],
@@ -781,7 +797,10 @@ mod tests {
         assert_eq!(defaults.bell_rings.max_semantic_distance, 0.3);
         assert_eq!(defaults.bell_rings.max_bells, 3);
         assert_eq!(defaults.bell_rings.deadline_ms, 300);
-        assert_eq!(defaults.bell_rings.trigger, crate::config::BellTrigger::Directed);
+        assert_eq!(
+            defaults.bell_rings.trigger,
+            crate::config::BellTrigger::Directed
+        );
 
         for invalid in [
             "[bell_rings]\nmax_semantic_distance=nan",
@@ -893,10 +912,11 @@ mod tests {
     }
 
     #[test]
-    fn render_bells_produces_compact_format() {
+    fn render_bells_produces_compact_format_with_provenance() {
         let bells = vec![
             Bell {
                 provider_url: "http://memory/mcp".to_owned(),
+                provider_alias: "personal".to_owned(),
                 scope: "lain".to_owned(),
                 recall_id: "r_test".to_owned(),
                 memory_id: "a".to_owned(),
@@ -907,20 +927,21 @@ mod tests {
                 provider_rank: 0,
             },
             Bell {
-                provider_url: "http://memory/mcp".to_owned(),
-                scope: "lain".to_owned(),
-                recall_id: "r_test".to_owned(),
+                provider_url: "http://cc/mcp".to_owned(),
+                provider_alias: "cc".to_owned(),
+                scope: "shared".to_owned(),
+                recall_id: "r_test2".to_owned(),
                 memory_id: "b".to_owned(),
-                memory_name: "feedback-no-platitudes".to_owned(),
+                memory_name: "construct-cosmology".to_owned(),
                 timbre: BellTimbre::Both,
                 distance: 0.25,
                 loudness: 2,
-                provider_rank: 1,
+                provider_rank: 0,
             },
         ];
         assert_eq!(
             render_bells(&bells),
-            "3s lain/person-pace;2b lain/feedback-no-platitudes"
+            "3s lain/person-pace@personal;2b shared/construct-cosmology@cc"
         );
     }
 
@@ -979,12 +1000,8 @@ mod tests {
         let provider = MockProvider::value(envelope(vec![hit("a", "found", 0.1, "semantic")]));
         let mut all_config = config();
         all_config.trigger = crate::config::BellTrigger::All;
-        let outcome = evaluate_message(
-            &message(MessageTargeting::Ambient),
-            &all_config,
-            &provider,
-        )
-        .await;
+        let outcome =
+            evaluate_message(&message(MessageTargeting::Ambient), &all_config, &provider).await;
         let BellOutcome::Success(bells) = outcome else {
             panic!("expected success on ambient message with All trigger");
         };

@@ -138,6 +138,15 @@ pub async fn run(
     let mut delivery_buffer = DeliveryBuffer::new();
     let bell_evaluator = Arc::new(BellEvaluator::new());
 
+    // Pre-warm bell providers so the first real bell doesn't pay cold-start latency.
+    if config.bell_rings.enabled {
+        let bell_config = config.bell_rings.clone();
+        let evaluator = bell_evaluator.clone();
+        tokio::spawn(async move {
+            evaluator.warm_providers(&bell_config).await;
+        });
+    }
+
     // Resolve timezone once at startup so `deliver_flushed` doesn't need to
     // load config just for the tz. Updated opportunistically when we already
     // load config per-event for the rate limiter.

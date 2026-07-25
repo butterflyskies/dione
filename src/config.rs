@@ -175,8 +175,28 @@ pub enum BellTrigger {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BellChannelOverride {
+    #[serde(deserialize_with = "deserialize_channel_override_id")]
     pub channel_id: String,
     pub trigger: BellTrigger,
+}
+
+fn deserialize_channel_override_id<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(D::Error::custom(
+            "bell_rings channel_override channel_id must not be empty",
+        ));
+    }
+    if trimmed.parse::<u64>().is_err() {
+        return Err(D::Error::custom(format!(
+            "bell_rings channel_override channel_id must be a numeric Discord snowflake, got: {trimmed}"
+        )));
+    }
+    Ok(trimmed.to_owned())
 }
 
 /// Inbound memory-bell configuration.
@@ -257,6 +277,18 @@ impl<'de> Deserialize<'de> for BellRingsConfig {
                 "enabled bell_rings requires at least one provider",
             ));
         }
+        // Reject duplicate channel override IDs.
+        {
+            let mut seen = std::collections::HashSet::new();
+            for ov in &wire.channel_overrides {
+                if !seen.insert(&ov.channel_id) {
+                    return Err(D::Error::custom(format!(
+                        "duplicate bell_rings channel_override for channel_id {}",
+                        ov.channel_id,
+                    )));
+                }
+            }
+        }
         Ok(Self {
             enabled: wire.enabled,
             mode: wire.mode,
@@ -304,6 +336,15 @@ pub struct BellProviderConfig {
     pub url: BellProviderUrl,
     /// Explicit recall scope. `all` and empty scopes are rejected while parsing.
     pub scope: BellScope,
+    /// Stable non-secret alias for provenance tracking. Defaults to the scope value.
+    #[serde(default)]
+    pub alias: Option<String>,
+}
+
+impl BellProviderConfig {
+    pub fn alias(&self) -> &str {
+        self.alias.as_deref().unwrap_or(self.scope.as_str())
+    }
 }
 
 /// A validated HTTP(S) memory-mcp endpoint without embedded credentials.
@@ -1917,5 +1958,118 @@ action = "celebrate"
         raw.pre_send.construct_id = "Not Valid".to_owned();
         let loaded = LoadedConfig::from_raw(raw);
         assert!(!loaded.pre_send.enabled);
+    }
+
+    #[test]
+    fn bell_channel_override_rejects_non_numeric_id() {
+        let toml = r#"
+            [bell_rings]
+            enabled = true
+            [[bell_rings.providers]]
+            url = "http://localhost:8080/mcp"
+            scope = "test"
+            [[bell_rings.channel_overrides]]
+            channel_id = "not-a-snowflake"
+            trigger = "directed"
+        "#;
+        let result: Result<Config, _> = toml::from_str(toml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("numeric Discord snowflake"),
+            "expected snowflake error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn bell_channel_override_rejects_empty_id() {
+        let toml = r#"
+            [bell_rings]
+            enabled = true
+            [[bell_rings.providers]]
+            url = "http://localhost:8080/mcp"
+            scope = "test"
+            [[bell_rings.channel_overrides]]
+            channel_id = ""
+            trigger = "directed"
+        "#;
+        let result: Result<Config, _> = toml::from_str(toml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("must not be empty"),
+            "expected empty error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn bell_channel_override_rejects_duplicates() {
+        let toml = r#"
+            [bell_rings]
+            enabled = true
+            [[bell_rings.providers]]
+            url = "http://localhost:8080/mcp"
+            scope = "test"
+            [[bell_rings.channel_overrides]]
+            channel_id = "123456789"
+            trigger = "directed"
+            [[bell_rings.channel_overrides]]
+            channel_id = "123456789"
+            trigger = "all"
+        "#;
+        let result: Result<Config, _> = toml::from_str(toml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("duplicate"),
+            "expected duplicate error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn bell_channel_override_accepts_valid_snowflake() {
+        let toml = r#"
+            [bell_rings]
+            enabled = true
+            [[bell_rings.providers]]
+            url = "http://localhost:8080/mcp"
+            scope = "test"
+            [[bell_rings.channel_overrides]]
+            channel_id = "1517581372141867038"
+            trigger = "all"
+        "#;
+        let config: Config = toml::from_str(toml).expect("valid config");
+        assert_eq!(config.bell_rings.channel_overrides.len(), 1);
+        assert_eq!(
+            config.bell_rings.channel_overrides[0].channel_id,
+            "1517581372141867038"
+        );
+    }
+
+    #[test]
+    fn bell_provider_alias_defaults_to_scope() {
+        let toml = r#"
+            [bell_rings]
+            enabled = true
+            [[bell_rings.providers]]
+            url = "http://localhost:8080/mcp"
+            scope = "my-project"
+        "#;
+        let config: Config = toml::from_str(toml).expect("valid config");
+        assert_eq!(config.bell_rings.providers[0].alias(), "my-project");
+    }
+
+    #[test]
+    fn bell_provider_alias_overrides_scope() {
+        let toml = r#"
+            [bell_rings]
+            enabled = true
+            [[bell_rings.providers]]
+            url = "http://localhost:8080/mcp"
+            scope = "lain"
+            alias = "personal"
+        "#;
+        let config: Config = toml::from_str(toml).expect("valid config");
+        assert_eq!(config.bell_rings.providers[0].alias(), "personal");
     }
 }

@@ -26,13 +26,31 @@ construct_id = "dione"
 [bell_rings]
 enabled = false
 mode = "shadow"         # "shadow" (log only) or "live" (inject bells into metadata)
+trigger = "directed"    # "directed" (mentions/DMs/replies only) or "all" (every inbound message)
 max_semantic_distance = 0.3
 max_bells = 3
-deadline_ms = 300
+deadline_ms = 300       # total evaluation deadline in ms (max 2000)
 
+# Single provider (backward compatible):
 # [bell_rings.provider]
 # url = "http://memory-mcp:8080/mcp"
-# scope = "my-project" # explicit only; `all` is rejected
+# scope = "my-project"   # explicit only; `all` is rejected
+
+# Multi-provider (fan-out recall to multiple memory stores concurrently):
+# [[bell_rings.providers]]
+# url = "http://memory-mcp:8080/mcp"
+# scope = "my-project"
+# alias = "personal"     # stable label for provenance tracking (defaults to scope)
+#
+# [[bell_rings.providers]]
+# url = "http://collective-conscious:8080/mcp"
+# scope = "shared"
+# alias = "cc"
+
+# Per-channel trigger overrides (channel_id must be a valid Discord snowflake):
+# [[bell_rings.channel_overrides]]
+# channel_id = "1234567890"
+# trigger = "all"         # override the global trigger for this channel
 
 [access]
 dm_policy = "queue"     # "queue", "drop", or "disabled"
