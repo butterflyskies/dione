@@ -14,8 +14,11 @@ updates:
     groups:
       rust-dependencies:
         update-types:
+          - major
           - minor
           - patch
+        patterns:
+          - "*"
 
   - package-ecosystem: github-actions
     directory: /
