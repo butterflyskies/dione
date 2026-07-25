@@ -84,6 +84,15 @@ impl std::fmt::Display for EventId {
     }
 }
 
+/// Validate an ASCII identifier: non-empty, max `max_len` bytes, `[A-Za-z0-9_-]` only.
+fn validate_ascii_id(value: &str, max_len: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max_len
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
 /// Exact Codex conversation receiving live inbound delivery.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
@@ -92,12 +101,7 @@ pub struct CodexThreadId(String);
 impl CodexThreadId {
     pub fn parse(value: &str) -> Result<Self, CodexQueueError> {
         let value = value.trim();
-        if value.is_empty()
-            || value.len() > 128
-            || !value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        {
+        if !validate_ascii_id(value, 128) {
             return Err(CodexQueueError::InvalidThreadId);
         }
         Ok(Self(value.to_owned()))
@@ -167,12 +171,7 @@ pub struct ConsumerId(String);
 impl ConsumerId {
     pub fn parse(value: &str) -> Result<Self, CodexQueueError> {
         let value = value.trim();
-        if value.is_empty()
-            || value.len() > 128
-            || !value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        {
+        if !validate_ascii_id(value, 128) {
             return Err(CodexQueueError::InvalidConsumerId);
         }
         Ok(Self(value.to_owned()))
