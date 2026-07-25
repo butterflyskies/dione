@@ -139,10 +139,15 @@ pub async fn run(
     let bell_evaluator = Arc::new(BellEvaluator::new());
 
     // Pre-warm bell providers so the first real bell doesn't pay cold-start latency.
-    if config.bell_rings.enabled {
+    // Each provider has a 10s timeout; warm runs concurrently across providers.
+    if config.bell_rings.enabled && !config.bell_rings.providers.is_empty() {
         let bell_config = config.bell_rings.clone();
         let evaluator = bell_evaluator.clone();
         tokio::spawn(async move {
+            tracing::info!(
+                providers = bell_config.providers.len(),
+                "pre-warming bell providers"
+            );
             evaluator.warm_providers(&bell_config).await;
         });
     }

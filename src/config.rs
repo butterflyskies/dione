@@ -191,10 +191,15 @@ where
             "bell_rings channel_override channel_id must not be empty",
         ));
     }
-    if trimmed.parse::<u64>().is_err() {
-        return Err(D::Error::custom(format!(
+    let parsed = trimmed.parse::<u64>().map_err(|_| {
+        D::Error::custom(format!(
             "bell_rings channel_override channel_id must be a numeric Discord snowflake, got: {trimmed}"
-        )));
+        ))
+    })?;
+    if parsed == 0 {
+        return Err(D::Error::custom(
+            "bell_rings channel_override channel_id must be nonzero",
+        ));
     }
     Ok(trimmed.to_owned())
 }
@@ -276,6 +281,23 @@ impl<'de> Deserialize<'de> for BellRingsConfig {
             return Err(D::Error::custom(
                 "enabled bell_rings requires at least one provider",
             ));
+        }
+        // Reject empty or colliding provider aliases.
+        {
+            let mut seen = std::collections::HashSet::new();
+            for provider in &providers {
+                let alias = provider.alias();
+                if alias.is_empty() {
+                    return Err(D::Error::custom(
+                        "bell_rings provider alias must not be empty (set alias or use a non-empty scope)",
+                    ));
+                }
+                if !seen.insert(alias.to_owned()) {
+                    return Err(D::Error::custom(format!(
+                        "duplicate bell_rings provider alias: {alias}"
+                    )));
+                }
+            }
         }
         // Reject duplicate channel override IDs.
         {

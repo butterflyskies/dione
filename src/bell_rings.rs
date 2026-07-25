@@ -151,13 +151,32 @@ impl MemoryMcpProvider {
         }
     }
 
-    async fn warm(&self) {
+    async fn warm(&self) -> bool {
         let mut client = self.client.lock().await;
         if client.as_ref().is_none_or(RunningService::is_closed) {
             let transport = StreamableHttpClientTransport::from_uri(self.endpoint.clone());
-            if let Ok(connected) = ClientInfo::default().serve(transport).await {
-                *client = Some(connected);
+            match tokio::time::timeout(
+                Duration::from_secs(10),
+                ClientInfo::default().serve(transport),
+            )
+            .await
+            {
+                Ok(Ok(connected)) => {
+                    tracing::info!(endpoint = %self.endpoint, "bell provider pre-warm succeeded");
+                    *client = Some(connected);
+                    true
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(endpoint = %self.endpoint, error = %e, "bell provider pre-warm failed");
+                    false
+                }
+                Err(_) => {
+                    tracing::warn!(endpoint = %self.endpoint, "bell provider pre-warm timed out (10s)");
+                    false
+                }
             }
+        } else {
+            true
         }
     }
 
@@ -224,21 +243,24 @@ struct ProviderSlot {
     provider: Option<Arc<MemoryMcpProvider>>,
 }
 
-/// Render admitted bells into the compact wire format with provider provenance.
+/// Render admitted bells into the compact wire format with full provenance.
 ///
-/// Format: `"3s lain/person-pace@personal;1l shared/construct-cosmology@cc"`
-/// — `{loudness}{timbre} {scope}/{name}@{provider_alias}`.
+/// Format: `"3s lain/person-pace@personal d=0.12 id=a rid=r_test;1l shared/foo@cc d=-1.00 id=b rid=r_test2"`
+/// — `{loudness}{timbre} {scope}/{name}@{provider_alias} d={distance} id={memory_id} rid={recall_id}`.
 pub fn render_bells(bells: &[Bell]) -> String {
     bells
         .iter()
         .map(|bell| {
             format!(
-                "{}{} {}/{}@{}",
+                "{}{} {}/{}@{} d={:.2} id={} rid={}",
                 bell.loudness,
                 bell.timbre.code(),
                 bell.scope,
                 bell.memory_name,
                 bell.provider_alias,
+                bell.distance,
+                bell.memory_id,
+                bell.recall_id,
             )
         })
         .collect::<Vec<_>>()
@@ -289,8 +311,19 @@ impl BellEvaluator {
 
     pub async fn warm_providers(&self, config: &BellRingsConfig) {
         let providers = self.providers_for(config).await;
+        let count = providers.len();
         let futs: Vec<_> = providers.iter().map(|(_, p)| p.warm()).collect();
-        join_all(futs).await;
+        let results = join_all(futs).await;
+        let succeeded = results.iter().filter(|ok| **ok).count();
+        if succeeded == count {
+            tracing::info!(count, "all bell providers pre-warmed");
+        } else {
+            tracing::warn!(
+                succeeded,
+                total = count,
+                "some bell providers failed to pre-warm"
+            );
+        }
     }
 
     async fn providers_for(
@@ -941,7 +974,7 @@ mod tests {
         ];
         assert_eq!(
             render_bells(&bells),
-            "3s lain/person-pace@personal;2b shared/construct-cosmology@cc"
+            "3s lain/person-pace@personal d=0.12 id=a rid=r_test;2b shared/construct-cosmology@cc d=0.25 id=b rid=r_test2"
         );
     }
 
@@ -1028,6 +1061,48 @@ mod tests {
             panic!("expected success: channel 1 has All trigger override");
         };
         assert_eq!(bells.len(), 1);
+    }
+
+    #[test]
+    fn zero_channel_id_is_rejected() {
+        let parsed = toml::from_str::<Config>(
+            "[bell_rings]\nenabled=true\ntrigger='all'\n\
+            [bell_rings.provider]\nurl='http://memory/mcp'\nscope='syne'\n\
+            [[bell_rings.channel_overrides]]\nchannel_id='0'\ntrigger='directed'",
+        );
+        assert!(parsed.is_err(), "channel_id=0 must be rejected");
+    }
+
+    #[tokio::test]
+    async fn global_all_with_directed_channel_override_skips_ambient() {
+        let provider = MockProvider::value(envelope(vec![hit("a", "found", 0.1, "semantic")]));
+        let mut override_config = config();
+        override_config.trigger = crate::config::BellTrigger::All;
+        override_config.channel_overrides = vec![crate::config::BellChannelOverride {
+            channel_id: "1".to_owned(),
+            trigger: crate::config::BellTrigger::Directed,
+        }];
+        let outcome = evaluate_message(
+            &message(MessageTargeting::Ambient),
+            &override_config,
+            &provider,
+        )
+        .await;
+        assert_eq!(
+            outcome,
+            BellOutcome::Skipped,
+            "channel 1 overrides to directed, ambient should be skipped"
+        );
+    }
+
+    #[test]
+    fn duplicate_provider_aliases_are_rejected() {
+        let parsed = toml::from_str::<Config>(
+            "[bell_rings]\nenabled=true\n\
+            [[bell_rings.providers]]\nurl='http://personal/mcp'\nscope='lain'\nalias='same'\n\
+            [[bell_rings.providers]]\nurl='http://shared/mcp'\nscope='shared'\nalias='same'",
+        );
+        assert!(parsed.is_err(), "duplicate aliases must be rejected");
     }
 
     #[test]
