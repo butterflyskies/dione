@@ -12,10 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   silently discarded messages from any bot missing from the global
   `[access].allow_from` list, so a peer construct simply appeared to be ignoring
   its neighbours with nothing in the logs to explain it. Qualifying drops now
-  emit a `warn` naming the sending bot's user ID, the channel, and every
-  configuration gate still standing in the way: whether the channel keeps an
-  `allow_from` of its own that also needs the ID, and whether it gates on
-  `require_mention`. Throttled per (bot user ID, channel ID) pair on a one-hour
+  emit a `warn` naming the sending bot's user ID, the channel, the
+  `[[channels]]` entry that actually holds the policy (the parent, for threads),
+  and every configuration gate still standing in the way: whether the channel
+  keeps an `allow_from` of its own that needs the ID too, already lists it, or
+  has none, and whether the channel gates on `require_mention` — which defaults
+  to true, so allowlisting alone will not surface a bot's ambient chatter.
+  Throttled per (bot user ID, channel ID) pair on a one-hour
   cooldown so a chatty bot cannot flood the log; at capacity the throttle goes
   quiet rather than evicting, since evicting re-arms the evicted pair. Drops the
   allowlist would not fix — the construct's own gateway echoes, webhook-authored
