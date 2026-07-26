@@ -154,25 +154,25 @@ impl PronounProvider {
 /// Top-level pronoun service that combines config + provider.
 pub struct PronounService {
     provider: PronounProvider,
-    opted_in_users: std::collections::HashSet<u64>,
+    excluded_users: std::collections::HashSet<u64>,
 }
 
 impl PronounService {
     pub fn new(
-        opted_in_users: std::collections::HashSet<u64>,
+        excluded_users: std::collections::HashSet<u64>,
         deadline_ms: u64,
         cache_ttl: Duration,
     ) -> Self {
         Self {
             provider: PronounProvider::new(deadline_ms, cache_ttl),
-            opted_in_users,
+            excluded_users,
         }
     }
 
     /// Returns the display name with pronouns appended, if available.
-    /// Only queries PronounDB for users who have opted in via config.
+    /// Queries PronounDB for all users except those in the exclude list.
     pub async fn resolve_display_name(&self, user_id: u64, display_name: &str) -> String {
-        if !self.opted_in_users.contains(&user_id) {
+        if self.excluded_users.contains(&user_id) {
             return display_name.to_string();
         }
 
@@ -182,8 +182,8 @@ impl PronounService {
         }
     }
 
-    pub fn is_opted_in(&self, user_id: u64) -> bool {
-        self.opted_in_users.contains(&user_id)
+    pub fn is_excluded(&self, user_id: u64) -> bool {
+        self.excluded_users.contains(&user_id)
     }
 }
 
@@ -263,21 +263,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_service_skips_non_opted_in_users() {
-        let service = PronounService::new(
-            std::collections::HashSet::new(),
-            500,
-            Duration::from_secs(300),
-        );
+    async fn test_service_skips_excluded_users() {
+        let mut excluded = std::collections::HashSet::new();
+        excluded.insert(12345u64);
+        let service = PronounService::new(excluded, 500, Duration::from_secs(300));
         let result = service.resolve_display_name(12345, "TestUser").await;
         assert_eq!(result, "TestUser");
     }
 
     #[tokio::test]
-    async fn test_service_opted_in_but_provider_fails() {
-        let mut opted = std::collections::HashSet::new();
-        opted.insert(12345u64);
-        let service = PronounService::new(opted, 100, Duration::from_secs(300));
+    async fn test_service_non_excluded_but_provider_fails() {
+        let service = PronounService::new(
+            std::collections::HashSet::new(),
+            100,
+            Duration::from_secs(300),
+        );
         let result = service.resolve_display_name(12345, "TestUser").await;
         assert_eq!(result, "TestUser");
     }
