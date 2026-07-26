@@ -20,6 +20,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::{collections::HashSet, future::Future, pin::Pin, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
+use tokio::time::Instant;
 
 /// One admitted memory hit, with provenance preserved for later rendering and feedback slices.
 #[derive(Debug, Clone, PartialEq)]
@@ -237,11 +238,46 @@ impl BellProvider for MemoryMcpProvider {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum WarmState {
     Cold,
     Warming,
     Warm,
+    Failed {
+        attempts: u32,
+        next_retry: Option<Instant>,
+    },
+}
+
+impl WarmState {
+    fn should_retry(&self) -> bool {
+        match self {
+            WarmState::Failed {
+                next_retry: Some(at),
+                ..
+            } => Instant::now() >= *at,
+            WarmState::Failed {
+                next_retry: None, ..
+            } => false,
+            _ => false,
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            WarmState::Cold => "cold",
+            WarmState::Warming => "warming",
+            WarmState::Warm => "warm",
+            WarmState::Failed { .. } => "failed",
+        }
+    }
+}
+
+const MAX_WARM_RETRIES: u32 = 5;
+const WARM_RETRY_BASE_SECS: u64 = 5;
+
+fn retry_delay(attempts: u32) -> Duration {
+    Duration::from_secs(WARM_RETRY_BASE_SECS * 2u64.pow(attempts.min(4)))
 }
 
 struct ProviderSlot {
@@ -334,25 +370,29 @@ impl BellEvaluator {
         {
             let mut slots = self.providers.lock().await;
             for slot in slots.iter_mut() {
-                if slot.warm_state == WarmState::Cold {
+                if matches!(slot.warm_state, WarmState::Cold | WarmState::Failed { .. }) {
                     slot.warm_state = WarmState::Warming;
                 }
             }
         }
 
         let count = providers.len();
-        let urls: Vec<_> = providers
+        // Carry (url, outcome) through futures — no positional zipping
+        let futs: Vec<_> = providers
             .iter()
-            .map(|(pc, _)| pc.url.as_str().to_owned())
+            .map(|(pc, p)| {
+                let url = pc.url.as_str().to_owned();
+                let provider = Arc::clone(p);
+                async move { (url, provider.warm().await) }
+            })
             .collect();
-        let futs: Vec<_> = providers.iter().map(|(_, p)| p.warm()).collect();
-        let results = join_all(futs).await;
-        let succeeded = results.iter().filter(|ok| **ok).count();
+        let results: Vec<(String, bool)> = join_all(futs).await;
+        let succeeded = results.iter().filter(|(_, ok)| *ok).count();
 
-        // Update warm state based on results
+        // Update warm state by URL match, not position
         {
             let mut slots = self.providers.lock().await;
-            for (url, ok) in urls.iter().zip(results.iter()) {
+            for (url, ok) in &results {
                 if let Some(slot) = slots
                     .iter_mut()
                     .find(|s| s.endpoint.as_deref() == Some(url.as_str()))
@@ -360,7 +400,10 @@ impl BellEvaluator {
                     slot.warm_state = if *ok {
                         WarmState::Warm
                     } else {
-                        WarmState::Cold
+                        WarmState::Failed {
+                            attempts: 1,
+                            next_retry: Some(Instant::now() + retry_delay(1)),
+                        }
                     };
                 }
             }
@@ -383,8 +426,21 @@ impl BellEvaluator {
         slots.iter().filter_map(|s| s.endpoint.clone()).collect()
     }
 
-    /// Returns true if the provider set has changed since last check.
-    /// If changed, triggers warm-up for new providers and updates tracked set.
+    /// Returns `(url, state_label)` pairs for all tracked providers.
+    pub async fn provider_status(&self) -> Vec<(String, &'static str)> {
+        let slots = self.providers.lock().await;
+        slots
+            .iter()
+            .filter_map(|s| {
+                s.endpoint
+                    .as_ref()
+                    .map(|url| (url.clone(), s.warm_state.label()))
+            })
+            .collect()
+    }
+
+    /// Returns true if the provider set has changed or a failed provider is due for retry.
+    /// If changed, triggers warm-up for new/re-added/retryable providers.
     pub async fn warm_if_changed(&self, config: &BellRingsConfig) -> bool {
         let current_urls: HashSet<String> = config
             .providers
@@ -392,74 +448,143 @@ impl BellEvaluator {
             .map(|p| p.url.as_str().to_owned())
             .collect();
 
+        // Check for retryable failed providers even if URL set hasn't changed
+        let has_retryable = {
+            let slots = self.providers.lock().await;
+            slots.iter().any(|s| s.warm_state.should_retry())
+        };
+
         let mut known = self.known_urls.lock().await;
-        if *known == current_urls {
+        let url_set_changed = *known != current_urls;
+        if !url_set_changed && !has_retryable {
             return false;
         }
 
         let new_urls: Vec<String> = current_urls.difference(&known).cloned().collect();
+        let removed_urls: Vec<String> = known.difference(&current_urls).cloned().collect();
         *known = current_urls;
         drop(known);
 
-        if new_urls.is_empty() {
-            return true;
+        // Remove slots for URLs no longer in config
+        if !removed_urls.is_empty() {
+            let mut slots = self.providers.lock().await;
+            slots.retain(|s| {
+                s.endpoint
+                    .as_ref()
+                    .map(|e| !removed_urls.contains(e))
+                    .unwrap_or(true)
+            });
         }
 
-        tracing::info!(
-            count = new_urls.len(),
-            "warming newly configured bell providers"
-        );
-
-        // Create slots and mark them as Warming before starting
-        {
+        // Collect URLs to warm: new URLs + re-added URLs (reset to Cold) + retryable failed
+        let urls_to_warm: Vec<String> = {
             let mut slots = self.providers.lock().await;
+
+            // Create slots for genuinely new URLs
             for url in &new_urls {
-                let exists = slots.iter().any(|s| s.endpoint.as_deref() == Some(url.as_str()));
-                if !exists {
-                    let provider = Arc::new(MemoryMcpProvider::new(url.clone()));
+                let exists = slots
+                    .iter()
+                    .any(|s| s.endpoint.as_deref() == Some(url.as_str()));
+                if exists {
+                    // Re-added URL: reset state to Warming (fixes bug #2)
+                    if let Some(slot) = slots
+                        .iter_mut()
+                        .find(|s| s.endpoint.as_deref() == Some(url.as_str()))
+                    {
+                        slot.warm_state = WarmState::Warming;
+                        slot.provider = Some(Arc::new(MemoryMcpProvider::new(url.clone())));
+                    }
+                } else {
                     slots.push(ProviderSlot {
                         endpoint: Some(url.clone()),
-                        provider: Some(provider),
+                        provider: Some(Arc::new(MemoryMcpProvider::new(url.clone()))),
                         warm_state: WarmState::Warming,
                     });
                 }
             }
-        }
 
-        // Warm the new providers
-        let providers: Vec<_> = {
-            let slots = self.providers.lock().await;
+            // Mark retryable failed providers as Warming
+            for slot in slots.iter_mut() {
+                if slot.warm_state.should_retry() {
+                    slot.warm_state = WarmState::Warming;
+                }
+            }
+
+            // Collect all Warming URLs
             slots
                 .iter()
-                .filter(|s| new_urls.contains(s.endpoint.as_ref().unwrap_or(&String::new())))
-                .filter_map(|s| s.provider.clone())
+                .filter(|s| s.warm_state == WarmState::Warming)
+                .filter_map(|s| s.endpoint.clone())
                 .collect()
         };
 
-        let futs: Vec<_> = providers.iter().map(|p| p.warm()).collect();
-        let results = join_all(futs).await;
-        let succeeded = results.iter().filter(|ok| **ok).count();
+        if urls_to_warm.is_empty() {
+            return url_set_changed;
+        }
 
-        // Update warm state based on results
+        tracing::info!(count = urls_to_warm.len(), "warming bell providers");
+
+        // Collect (url, provider) pairs for warming
+        let to_warm: Vec<(String, Arc<MemoryMcpProvider>)> = {
+            let slots = self.providers.lock().await;
+            urls_to_warm
+                .iter()
+                .filter_map(|url| {
+                    slots
+                        .iter()
+                        .find(|s| s.endpoint.as_deref() == Some(url.as_str()))
+                        .and_then(|s| s.provider.clone().map(|p| (url.clone(), p)))
+                })
+                .collect()
+        };
+
+        // Warm with (url, outcome) pairs — no positional zipping (fixes bug #3)
+        let futs: Vec<_> = to_warm
+            .iter()
+            .map(|(url, p)| {
+                let url = url.clone();
+                let provider = Arc::clone(p);
+                async move { (url, provider.warm().await) }
+            })
+            .collect();
+        let results: Vec<(String, bool)> = join_all(futs).await;
+        let succeeded = results.iter().filter(|(_, ok)| *ok).count();
+
+        // Update warm state by URL match (fixes bug #3)
         {
             let mut slots = self.providers.lock().await;
-            for (url, ok) in new_urls.iter().zip(results.iter()) {
+            for (url, ok) in &results {
                 if let Some(slot) = slots
                     .iter_mut()
                     .find(|s| s.endpoint.as_deref() == Some(url.as_str()))
                 {
-                    slot.warm_state = if *ok {
-                        WarmState::Warm
+                    if *ok {
+                        slot.warm_state = WarmState::Warm;
                     } else {
-                        WarmState::Cold
-                    };
+                        let attempts = match &slot.warm_state {
+                            WarmState::Failed { attempts, .. } => attempts + 1,
+                            _ => 1,
+                        };
+                        slot.warm_state = if attempts >= MAX_WARM_RETRIES {
+                            tracing::error!(url, "bell provider exhausted warm retries");
+                            WarmState::Failed {
+                                attempts,
+                                next_retry: None,
+                            }
+                        } else {
+                            WarmState::Failed {
+                                attempts,
+                                next_retry: Some(Instant::now() + retry_delay(attempts)),
+                            }
+                        };
+                    }
                 }
             }
         }
 
         tracing::info!(
             succeeded,
-            total = providers.len(),
+            total = to_warm.len(),
             "bell provider warm-up complete"
         );
 
@@ -467,23 +592,40 @@ impl BellEvaluator {
     }
 
     /// Like `providers_for` but only returns providers with `WarmState::Warm`.
-    /// Used by evaluate to skip cold/warming providers (fail-open).
+    /// Used by evaluate to skip cold/warming/failed providers (fail-open).
+    /// Logs unavailable providers for observability.
     async fn warm_providers_for(
         &self,
         config: &BellRingsConfig,
     ) -> Vec<(BellProviderConfig, Arc<MemoryMcpProvider>)> {
         let providers = self.providers_for(config).await;
         let slots = self.providers.lock().await;
-        providers
-            .into_iter()
-            .filter(|(pc, _)| {
-                slots
-                    .iter()
-                    .find(|s| s.endpoint.as_deref() == Some(pc.url.as_str()))
-                    .map(|s| s.warm_state == WarmState::Warm)
-                    .unwrap_or(false)
-            })
-            .collect()
+        let mut available = Vec::new();
+        for (pc, p) in providers {
+            let state = slots
+                .iter()
+                .find(|s| s.endpoint.as_deref() == Some(pc.url.as_str()))
+                .map(|s| &s.warm_state);
+            match state {
+                Some(WarmState::Warm) => available.push((pc, p)),
+                Some(other) => {
+                    tracing::debug!(
+                        url = pc.url.as_str(),
+                        state = other.label(),
+                        "bell provider unavailable, skipping (fail-open)"
+                    );
+                }
+                None => {}
+            }
+        }
+        if available.len() < config.providers.len() {
+            tracing::info!(
+                available = available.len(),
+                configured = config.providers.len(),
+                "evaluating with partial bell providers"
+            );
+        }
+        available
     }
 
     async fn providers_for(
@@ -1353,7 +1495,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn warm_if_changed_only_fires_on_new_providers() {
+    async fn warm_if_changed_detects_new_providers() {
         let evaluator = BellEvaluator::new();
         let cfg = BellRingsConfig {
             enabled: true,
@@ -1408,6 +1550,102 @@ mod tests {
             warm.is_empty(),
             "cold providers should be skipped by evaluate"
         );
+    }
+
+    #[tokio::test]
+    async fn failed_warm_allows_retry() {
+        let evaluator = BellEvaluator::new();
+        let cfg = BellRingsConfig {
+            enabled: true,
+            providers: vec![BellProviderConfig {
+                url: BellProviderUrl::parse("http://localhost:19999/nonexistent").unwrap(),
+                scope: BellScope::parse("test").unwrap(),
+                alias: Some("failing".into()),
+            }],
+            ..BellRingsConfig::default()
+        };
+
+        // First warm fails
+        evaluator.warm_providers(&cfg).await;
+        let status = evaluator.provider_status().await;
+        assert_eq!(status.len(), 1);
+        assert_eq!(
+            status[0].1, "failed",
+            "failed warm should be in Failed state"
+        );
+
+        // Provider should NOT be permanently excluded — should_retry eventually returns true
+        let slots = evaluator.providers.lock().await;
+        let slot = &slots[0];
+        match &slot.warm_state {
+            WarmState::Failed {
+                attempts,
+                next_retry,
+            } => {
+                assert_eq!(*attempts, 1);
+                assert!(next_retry.is_some(), "first failure should schedule retry");
+            }
+            other => panic!("expected Failed, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn remove_and_readd_resets_state() {
+        let evaluator = BellEvaluator::new();
+        let url = "http://localhost:19995/removable";
+        let cfg1 = BellRingsConfig {
+            enabled: true,
+            providers: vec![BellProviderConfig {
+                url: BellProviderUrl::parse(url).unwrap(),
+                scope: BellScope::parse("test").unwrap(),
+                alias: Some("removable".into()),
+            }],
+            ..BellRingsConfig::default()
+        };
+
+        // Warm initially (will fail since endpoint doesn't exist, but creates slot)
+        evaluator.warm_if_changed(&cfg1).await;
+        let status = evaluator.provider_status().await;
+        assert_eq!(status.len(), 1);
+
+        // Remove the provider
+        let cfg_empty = BellRingsConfig {
+            enabled: true,
+            providers: vec![],
+            ..BellRingsConfig::default()
+        };
+        evaluator.warm_if_changed(&cfg_empty).await;
+        let status = evaluator.provider_status().await;
+        assert!(status.is_empty(), "removed provider should have no slot");
+
+        // Re-add the provider — must start fresh, not retain old state
+        evaluator.warm_if_changed(&cfg1).await;
+        let status = evaluator.provider_status().await;
+        assert_eq!(status.len(), 1, "re-added provider should have a slot");
+        // State should be either Warming or Failed (from attempted warm), not Warm
+        assert_ne!(
+            status[0].1, "warm",
+            "re-added provider must not retain old Warm state"
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_status_reports_all_states() {
+        let evaluator = BellEvaluator::new();
+        let cfg = BellRingsConfig {
+            enabled: true,
+            providers: vec![BellProviderConfig {
+                url: BellProviderUrl::parse("http://localhost:19994/status-test").unwrap(),
+                scope: BellScope::parse("test").unwrap(),
+                alias: Some("status".into()),
+            }],
+            ..BellRingsConfig::default()
+        };
+
+        // Before any warm: Cold
+        let _ = evaluator.providers_for(&cfg).await;
+        let status = evaluator.provider_status().await;
+        assert_eq!(status[0].1, "cold");
     }
 
     #[test]
