@@ -138,19 +138,7 @@ pub async fn run(
     let mut delivery_buffer = DeliveryBuffer::new();
     let bell_evaluator = Arc::new(BellEvaluator::new());
 
-    // Pre-warm bell providers so the first real bell doesn't pay cold-start latency.
-    // Each provider has a 10s timeout; warm runs concurrently across providers.
-    if config.bell_rings.enabled && !config.bell_rings.providers.is_empty() {
-        let bell_config = config.bell_rings.clone();
-        let evaluator = bell_evaluator.clone();
-        tokio::spawn(async move {
-            tracing::info!(
-                providers = bell_config.providers.len(),
-                "pre-warming bell providers"
-            );
-            evaluator.warm_providers(&bell_config).await;
-        });
-    }
+    // Lazy-init: providers connect on first message, no pre-warming.
 
     // Resolve timezone once at startup so `deliver_flushed` doesn't need to
     // load config just for the tz. Updated opportunistically when we already
@@ -218,17 +206,6 @@ pub async fn run(
                         rate_limiter.update_config(new_rl_config.clone());
                     }
 
-                    // Warm newly configured bell providers on config change.
-                    // Only fires when the provider URL set has actually changed,
-                    // not on every event. Evaluation skips not-yet-warm providers
-                    // (fail-open) so there is no race.
-                    if cfg.bell_rings.enabled {
-                        let evaluator = Arc::clone(&bell_evaluator);
-                        let bell_cfg = cfg.bell_rings.clone();
-                        tokio::spawn(async move {
-                            evaluator.warm_if_changed(&bell_cfg).await;
-                        });
-                    }
 
                     // Rate-limit check for message events.
                     if let NotificationEvent::Message(MessageEvent { ref user_id, ref chat_id, .. }) = event {
