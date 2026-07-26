@@ -84,6 +84,14 @@ impl BellStatus {
     }
 }
 
+/// Outcome of a single provider connection attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectOutcome {
+    Ready,
+    TimedOut,
+    Error,
+}
+
 /// Result of one bell evaluation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BellOutcome {
@@ -152,23 +160,23 @@ impl MemoryMcpProvider {
     }
 
     /// Ensure the client is connected. Called outside the per-message deadline
-    /// so cold starts don't eat into recall time. Returns true if ready.
-    async fn ensure_connected(&self) -> bool {
+    /// so cold starts don't eat into recall time.
+    async fn ensure_connected(&self) -> ConnectOutcome {
         let mut client = self.client.lock().await;
         if client.as_ref().is_none_or(RunningService::is_closed) {
             let transport = StreamableHttpClientTransport::from_uri(self.endpoint.clone());
             match ClientInfo::default().serve(transport).await {
                 Ok(connected) => {
                     *client = Some(connected);
-                    true
+                    ConnectOutcome::Ready
                 }
                 Err(_) => {
                     tracing::warn!(endpoint = %self.endpoint, "bell provider cold-start failed");
-                    false
+                    ConnectOutcome::Error
                 }
             }
         } else {
-            true
+            ConnectOutcome::Ready
         }
     }
 
@@ -378,33 +386,44 @@ async fn evaluate_multi_provider(
             let pc = pc.clone();
             async move {
                 match tokio::time::timeout(CONNECT_TIMEOUT, p.ensure_connected()).await {
-                    Ok(ready) => (pc, ready, p),
+                    Ok(outcome) => (pc, outcome, p),
                     Err(_) => {
                         tracing::warn!(
                             endpoint = pc.url.as_str(),
                             "bell provider connection timed out after {}s",
                             CONNECT_TIMEOUT.as_secs()
                         );
-                        (pc, false, p)
+                        (pc, ConnectOutcome::TimedOut, p)
                     }
                 }
             }
         })
         .collect();
     let connect_results = join_all(connect_futures).await;
-    let timed_out_count = connect_results
+    let connect_timeout_count = connect_results
         .iter()
-        .filter(|(_, ready, _)| !*ready)
+        .filter(|(_, o, _)| *o == ConnectOutcome::TimedOut)
+        .count();
+    let connect_error_count = connect_results
+        .iter()
+        .filter(|(_, o, _)| *o == ConnectOutcome::Error)
         .count();
     let connected: Vec<_> = connect_results
         .into_iter()
-        .filter(|(_, ready, _)| *ready)
+        .filter(|(_, o, _)| *o == ConnectOutcome::Ready)
         .map(|(pc, _, p)| (pc, p))
         .collect();
 
     if connected.is_empty() {
         record_outcome(&BellOutcome::ProviderError);
-        return (event, vec![], Some(BellStatus::Error));
+        let status = if connect_timeout_count > 0 && connect_error_count == 0 {
+            BellStatus::Timeout
+        } else if connect_error_count > 0 && connect_timeout_count == 0 {
+            BellStatus::Error
+        } else {
+            BellStatus::Timeout
+        };
+        return (event, vec![], Some(status));
     }
 
     // Phase 2: recall within the per-message deadline. Init cost is already paid.
@@ -475,18 +494,23 @@ async fn evaluate_multi_provider(
     });
     all_bells.truncate(config.max_bells);
 
-    let any_connect_timeout = timed_out_count > 0;
-    let any_failure = any_timeout || any_transport_error || any_malformed || any_connect_timeout;
-    let status = if any_ok && (any_timeout || any_connect_timeout) {
+    let any_connect_timeout = connect_timeout_count > 0;
+    let any_connect_error = connect_error_count > 0;
+    let any_timed_out = any_timeout || any_connect_timeout;
+    let any_errored = any_transport_error || any_malformed || any_connect_error;
+    let any_failure = any_timed_out || any_errored;
+    let status = if any_ok && any_timed_out {
         Some(BellStatus::PartialTimeout)
-    } else if any_ok && any_failure {
+    } else if any_ok && any_errored {
         Some(BellStatus::PartialError)
     } else if any_ok {
         Some(BellStatus::Ok)
-    } else if any_timeout || any_connect_timeout {
+    } else if any_timed_out && !any_errored {
         Some(BellStatus::Timeout)
-    } else if any_failure {
+    } else if any_errored && !any_timed_out {
         Some(BellStatus::Error)
+    } else if any_failure {
+        Some(BellStatus::Timeout)
     } else {
         Some(BellStatus::Ok)
     };
@@ -1282,9 +1306,76 @@ mod tests {
             bells.is_empty(),
             "no bells from a provider that never connected"
         );
-        assert!(
-            matches!(status, Some(BellStatus::Timeout) | Some(BellStatus::Error)),
-            "hanging/failing provider should produce Timeout or Error, got {status:?}"
+        assert_eq!(
+            status,
+            Some(BellStatus::Timeout),
+            "hanging provider (timeout, not error) should produce Timeout, got {status:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_provider_connect_error_reports_error_not_timeout() {
+        // A provider pointing at a refused port produces Error, not Timeout.
+        let registry = BellEvaluator::default();
+        let cfg = BellRingsConfig {
+            enabled: true,
+            mode: crate::config::BellMode::Live,
+            providers: vec![BellProviderConfig {
+                url: BellProviderUrl::parse("http://127.0.0.1:1/mcp").unwrap(),
+                scope: BellScope::parse("test").unwrap(),
+                alias: None,
+            }],
+            trigger: crate::config::BellTrigger::Directed,
+            channel_overrides: vec![],
+            max_semantic_distance: 0.3,
+            max_bells: 3,
+            deadline_ms: 300,
+        };
+        let providers = registry.providers_for(&cfg).await;
+        let event = NotificationEvent::Message(message(MessageTargeting::GuildDirected(
+            MentionKind::DirectMention,
+        )));
+
+        let (_, bells, status) = evaluate_multi_provider(event, &cfg, &providers).await;
+
+        assert!(bells.is_empty(), "no bells from a refused connection");
+        assert_eq!(
+            status,
+            Some(BellStatus::Error),
+            "immediate connection failure should produce Error, got {status:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_provider_mixed_ready_and_error_reports_partial_error() {
+        // One provider connects (mock), one refuses → PartialError, not PartialTimeout.
+        let registry = BellEvaluator::default();
+        let cfg = BellRingsConfig {
+            enabled: true,
+            mode: crate::config::BellMode::Live,
+            providers: vec![BellProviderConfig {
+                url: BellProviderUrl::parse("http://127.0.0.1:1/mcp").unwrap(),
+                scope: BellScope::parse("error-scope").unwrap(),
+                alias: None,
+            }],
+            trigger: crate::config::BellTrigger::Directed,
+            channel_overrides: vec![],
+            max_semantic_distance: 0.3,
+            max_bells: 3,
+            deadline_ms: 300,
+        };
+        let providers = registry.providers_for(&cfg).await;
+        let event = NotificationEvent::Message(message(MessageTargeting::GuildDirected(
+            MentionKind::DirectMention,
+        )));
+
+        let (_, _, status) = evaluate_multi_provider(event, &cfg, &providers).await;
+
+        // All providers errored (none connected) → Error, not Timeout
+        assert_eq!(
+            status,
+            Some(BellStatus::Error),
+            "all-error (no timeouts) should produce Error, got {status:?}"
         );
     }
 }
