@@ -7,17 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Added
-- **Durable pronoun enforcement** via PronounDB v2 API. Per-user opt-in,
-  fail-open with configurable cache TTL. Pronouns appended to display names
-  in parentheses format. `PronounDisplayName` newtype, `Vec<u64>` for Discord
-  IDs. (#214)
+## [0.24.1] - 2026-07-26
 
+### Fixed
+- **Contradictionary sidecar parse-fail-open bug.** A malformed sidecar entry
+  no longer silently disables the entire gate. The error path now retains the
+  last valid configuration instead of storing an empty one. (#231)
 ### Changed
 - Pronoun display switched from opt-in (`include_for`) to opt-out (`exclude_for`).
   Pronouns are now looked up for all users by default; add user IDs to
   `exclude_for` to suppress. Per-construct `enabled` toggle controls the feature
   entirely.
+
+## [0.24.0] - 2026-07-26
+
+### Added
+- **Durable pronoun enforcement** via PronounDB v2 API. Per-user opt-in,
+  fail-open with configurable cache TTL. Pronouns appended to display names
+  in parentheses format. `PronounDisplayName` newtype, `Vec<u64>` for Discord
+  IDs. (#214)
 
 ## [0.23.0] - 2026-07-21
 
