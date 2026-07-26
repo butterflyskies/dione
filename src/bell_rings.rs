@@ -367,17 +367,36 @@ async fn evaluate_multi_provider(
     };
 
     // Phase 1: ensure all providers are connected (outside the per-message
-    // deadline). Providers that fail to connect are skipped for this message.
+    // deadline). Each provider gets a bounded timeout so a hanging handshake
+    // cannot stall the live inbound loop. Providers that fail or time out are
+    // skipped for this message and reported in aggregate status.
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
     let connect_futures: Vec<_> = providers
         .iter()
         .map(|(pc, p)| {
             let p = p.clone();
             let pc = pc.clone();
-            async move { (pc, p.ensure_connected().await, p) }
+            async move {
+                match tokio::time::timeout(CONNECT_TIMEOUT, p.ensure_connected()).await {
+                    Ok(ready) => (pc, ready, p),
+                    Err(_) => {
+                        tracing::warn!(
+                            endpoint = pc.url.as_str(),
+                            "bell provider connection timed out after {}s",
+                            CONNECT_TIMEOUT.as_secs()
+                        );
+                        (pc, false, p)
+                    }
+                }
+            }
         })
         .collect();
-    let connected: Vec<_> = join_all(connect_futures)
-        .await
+    let connect_results = join_all(connect_futures).await;
+    let timed_out_count = connect_results
+        .iter()
+        .filter(|(_, ready, _)| !*ready)
+        .count();
+    let connected: Vec<_> = connect_results
         .into_iter()
         .filter(|(_, ready, _)| *ready)
         .map(|(pc, _, p)| (pc, p))
@@ -456,14 +475,15 @@ async fn evaluate_multi_provider(
     });
     all_bells.truncate(config.max_bells);
 
-    let any_failure = any_timeout || any_transport_error || any_malformed;
-    let status = if any_ok && any_timeout {
+    let any_connect_timeout = timed_out_count > 0;
+    let any_failure = any_timeout || any_transport_error || any_malformed || any_connect_timeout;
+    let status = if any_ok && (any_timeout || any_connect_timeout) {
         Some(BellStatus::PartialTimeout)
     } else if any_ok && any_failure {
         Some(BellStatus::PartialError)
     } else if any_ok {
         Some(BellStatus::Ok)
-    } else if any_timeout {
+    } else if any_timeout || any_connect_timeout {
         Some(BellStatus::Timeout)
     } else if any_failure {
         Some(BellStatus::Error)
@@ -473,7 +493,7 @@ async fn evaluate_multi_provider(
 
     let outcome = if any_ok || !any_failure {
         BellOutcome::Success(all_bells.clone())
-    } else if any_timeout {
+    } else if any_timeout || any_connect_timeout {
         BellOutcome::Timeout
     } else {
         BellOutcome::ProviderError
@@ -1212,5 +1232,59 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cfg.bell_rings.trigger, crate::config::BellTrigger::All);
+    }
+
+    #[tokio::test]
+    async fn multi_provider_hanging_connect_is_bounded() {
+        // A provider pointing at a listener that never completes the MCP
+        // handshake must not stall the inbound loop. The 5s CONNECT_TIMEOUT
+        // should fire and the provider should be skipped.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Accept but never send data — simulates a hanging handshake.
+        tokio::spawn(async move {
+            loop {
+                let (_socket, _) = listener.accept().await.unwrap();
+                tokio::time::sleep(Duration::from_secs(600)).await;
+            }
+        });
+
+        let registry = BellEvaluator::default();
+        let cfg = BellRingsConfig {
+            enabled: true,
+            mode: crate::config::BellMode::Live,
+            providers: vec![BellProviderConfig {
+                url: BellProviderUrl::parse(&format!("http://{addr}/mcp")).unwrap(),
+                scope: BellScope::parse("test").unwrap(),
+                alias: None,
+            }],
+            trigger: crate::config::BellTrigger::Directed,
+            channel_overrides: vec![],
+            max_semantic_distance: 0.3,
+            max_bells: 3,
+            deadline_ms: 300,
+        };
+        let providers = registry.providers_for(&cfg).await;
+        let event = NotificationEvent::Message(message(MessageTargeting::GuildDirected(
+            MentionKind::DirectMention,
+        )));
+
+        let start = tokio::time::Instant::now();
+        let (_, bells, status) = evaluate_multi_provider(event, &cfg, &providers).await;
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "hanging connect must be bounded, took {:?}",
+            elapsed
+        );
+        assert!(
+            bells.is_empty(),
+            "no bells from a provider that never connected"
+        );
+        assert!(
+            matches!(status, Some(BellStatus::Timeout) | Some(BellStatus::Error)),
+            "hanging/failing provider should produce Timeout or Error, got {status:?}"
+        );
     }
 }
