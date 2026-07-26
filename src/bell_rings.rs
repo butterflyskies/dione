@@ -151,15 +151,33 @@ impl MemoryMcpProvider {
         }
     }
 
-    async fn recall_inner(&self, request: RecallRequest) -> Result<Value, BellProviderError> {
+    /// Ensure the client is connected. Called outside the per-message deadline
+    /// so cold starts don't eat into recall time. Returns true if ready.
+    async fn ensure_connected(&self) -> bool {
         let mut client = self.client.lock().await;
         if client.as_ref().is_none_or(RunningService::is_closed) {
             let transport = StreamableHttpClientTransport::from_uri(self.endpoint.clone());
-            let connected = ClientInfo::default()
-                .serve(transport)
-                .await
-                .map_err(|_| BellProviderError::Transport)?;
-            *client = Some(connected);
+            match ClientInfo::default().serve(transport).await {
+                Ok(connected) => {
+                    *client = Some(connected);
+                    true
+                }
+                Err(_) => {
+                    tracing::warn!(endpoint = %self.endpoint, "bell provider cold-start failed");
+                    false
+                }
+            }
+        } else {
+            true
+        }
+    }
+
+    async fn recall_inner(&self, request: RecallRequest) -> Result<Value, BellProviderError> {
+        let mut client = self.client.lock().await;
+        // At this point the client should already be connected via
+        // ensure_connected(). If not (race or prior failure), skip.
+        if client.as_ref().is_none_or(RunningService::is_closed) {
+            return Err(BellProviderError::Transport);
         }
 
         let arguments = json!({
@@ -211,9 +229,17 @@ impl BellProvider for MemoryMcpProvider {
 // Pre-warming was stripped in favor of lazy-init. See commit 76ac05c for the
 // WarmState machine if pre-warming is needed later.
 
+/// Cache key for provider sessions. Two config entries with the same URL but
+/// different scopes get independent sessions so fan-out is genuinely concurrent.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ProviderKey {
+    endpoint: String,
+    scope: String,
+}
+
 struct ProviderSlot {
-    endpoint: Option<String>,
-    provider: Option<Arc<MemoryMcpProvider>>,
+    key: ProviderKey,
+    provider: Arc<MemoryMcpProvider>,
 }
 
 /// Render admitted bells into the compact wire format with full provenance.
@@ -289,22 +315,34 @@ impl BellEvaluator {
         config: &BellRingsConfig,
     ) -> Vec<(BellProviderConfig, Arc<MemoryMcpProvider>)> {
         let mut slots = self.providers.lock().await;
+
+        // Build the set of keys the current config needs.
+        let wanted: std::collections::HashSet<ProviderKey> = config
+            .providers
+            .iter()
+            .map(|p| ProviderKey {
+                endpoint: p.url.as_str().to_owned(),
+                scope: p.scope.as_str().to_owned(),
+            })
+            .collect();
+
+        // Evict slots whose key is no longer in the config.
+        slots.retain(|s| wanted.contains(&s.key));
+
         let mut result = Vec::with_capacity(config.providers.len());
         for provider_config in &config.providers {
-            let url = provider_config.url.as_str();
-            let existing = slots
-                .iter()
-                .position(|s| s.endpoint.as_deref() == Some(url));
+            let key = ProviderKey {
+                endpoint: provider_config.url.as_str().to_owned(),
+                scope: provider_config.scope.as_str().to_owned(),
+            };
+            let existing = slots.iter().position(|s| s.key == key);
             let provider = if let Some(idx) = existing {
-                slots[idx]
-                    .provider
-                    .get_or_insert_with(|| Arc::new(MemoryMcpProvider::new(url.to_owned())))
-                    .clone()
+                slots[idx].provider.clone()
             } else {
-                let provider = Arc::new(MemoryMcpProvider::new(url.to_owned()));
+                let provider = Arc::new(MemoryMcpProvider::new(key.endpoint.clone()));
                 slots.push(ProviderSlot {
-                    endpoint: Some(url.to_owned()),
-                    provider: Some(provider.clone()),
+                    key,
+                    provider: provider.clone(),
                 });
                 provider
             };
@@ -328,8 +366,31 @@ async fn evaluate_multi_provider(
         }
     };
 
+    // Phase 1: ensure all providers are connected (outside the per-message
+    // deadline). Providers that fail to connect are skipped for this message.
+    let connect_futures: Vec<_> = providers
+        .iter()
+        .map(|(pc, p)| {
+            let p = p.clone();
+            let pc = pc.clone();
+            async move { (pc, p.ensure_connected().await, p) }
+        })
+        .collect();
+    let connected: Vec<_> = join_all(connect_futures)
+        .await
+        .into_iter()
+        .filter(|(_, ready, _)| *ready)
+        .map(|(pc, _, p)| (pc, p))
+        .collect();
+
+    if connected.is_empty() {
+        record_outcome(&BellOutcome::ProviderError);
+        return (event, vec![], Some(BellStatus::Error));
+    }
+
+    // Phase 2: recall within the per-message deadline. Init cost is already paid.
     let deadline = Duration::from_millis(config.deadline_ms);
-    let futures: Vec<_> = providers
+    let futures: Vec<_> = connected
         .iter()
         .map(|(provider_config, provider)| {
             let request = RecallRequest {
