@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   in parentheses format. `PronounDisplayName` newtype, `Vec<u64>` for Discord
   IDs. (#214)
 
+## [0.24.1] - 2026-07-26
+
+### Fixed
+- **Contradictionary sidecar parse-fail-open bug.** A malformed sidecar entry
+  no longer silently disables the entire gate. The error path now retains the
+  last valid configuration instead of storing an empty one. (#231)
+
 ## [0.23.0] - 2026-07-21
 
 ### Changed
