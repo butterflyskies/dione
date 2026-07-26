@@ -199,6 +199,50 @@ pub enum BellMode {
     Live,
 }
 
+/// Which inbound messages trigger bell evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BellTrigger {
+    /// Only messages directed at the construct (mention, DM, reply).
+    #[default]
+    Directed,
+    /// All inbound messages in configured channels.
+    All,
+}
+
+/// Per-channel bell override.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BellChannelOverride {
+    #[serde(deserialize_with = "deserialize_channel_override_id")]
+    pub channel_id: String,
+    pub trigger: BellTrigger,
+}
+
+fn deserialize_channel_override_id<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(D::Error::custom(
+            "bell_rings channel_override channel_id must not be empty",
+        ));
+    }
+    let parsed = trimmed.parse::<u64>().map_err(|_| {
+        D::Error::custom(format!(
+            "bell_rings channel_override channel_id must be a numeric Discord snowflake, got: {trimmed}"
+        ))
+    })?;
+    if parsed == 0 {
+        return Err(D::Error::custom(
+            "bell_rings channel_override channel_id must be nonzero",
+        ));
+    }
+    Ok(trimmed.to_owned())
+}
+
 /// Inbound memory-bell configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BellRingsConfig {
@@ -206,9 +250,13 @@ pub struct BellRingsConfig {
     pub enabled: bool,
     /// Shadow (log only) or live (inject into metadata).
     pub mode: BellMode,
-    /// The single memory-mcp provider. A singular field makes multi-provider
-    /// fan-out unrepresentable in the first slice.
-    pub provider: Option<BellProviderConfig>,
+    /// Memory-mcp providers to fan out recall to. All are queried concurrently
+    /// within the total deadline; results are merged and sorted by loudness.
+    pub providers: Vec<BellProviderConfig>,
+    /// Which messages trigger evaluation by default.
+    pub trigger: BellTrigger,
+    /// Per-channel trigger overrides.
+    pub channel_overrides: Vec<BellChannelOverride>,
     /// Largest admitted cosine distance.
     pub max_semantic_distance: f64,
     /// Maximum candidates requested and bells retained.
@@ -222,7 +270,14 @@ pub struct BellRingsConfig {
 struct BellRingsConfigWire {
     enabled: bool,
     mode: BellMode,
+    /// Legacy singular provider (backward compat). Merged into `providers`.
     provider: Option<BellProviderConfig>,
+    /// Multi-provider list. Takes precedence if non-empty.
+    #[serde(default)]
+    providers: Vec<BellProviderConfig>,
+    trigger: BellTrigger,
+    #[serde(default)]
+    channel_overrides: Vec<BellChannelOverride>,
     #[serde(deserialize_with = "deserialize_max_semantic_distance")]
     max_semantic_distance: f64,
     #[serde(deserialize_with = "deserialize_max_bells")]
@@ -237,7 +292,10 @@ impl Default for BellRingsConfigWire {
         Self {
             enabled: defaults.enabled,
             mode: defaults.mode,
-            provider: defaults.provider,
+            provider: None,
+            providers: vec![],
+            trigger: defaults.trigger,
+            channel_overrides: defaults.channel_overrides,
             max_semantic_distance: defaults.max_semantic_distance,
             max_bells: defaults.max_bells,
             deadline_ms: defaults.deadline_ms,
@@ -251,15 +309,66 @@ impl<'de> Deserialize<'de> for BellRingsConfig {
         D: Deserializer<'de>,
     {
         let wire = BellRingsConfigWire::deserialize(deserializer)?;
-        if wire.enabled && wire.provider.is_none() {
+        let mut providers = if !wire.providers.is_empty() {
+            wire.providers
+        } else if let Some(provider) = wire.provider {
+            vec![provider]
+        } else {
+            vec![]
+        };
+        if wire.enabled && providers.is_empty() {
             return Err(D::Error::custom(
-                "enabled bell_rings requires exactly one provider",
+                "enabled bell_rings requires at least one provider",
             ));
+        }
+        // Normalize and validate provider aliases: trim, reject empty/whitespace-only,
+        // case-insensitive collision detection.
+        for provider in &mut providers {
+            if let Some(ref mut alias) = provider.alias {
+                let trimmed = alias.trim().to_owned();
+                if trimmed.is_empty() {
+                    return Err(D::Error::custom(
+                        "bell_rings provider alias must not be empty or whitespace-only",
+                    ));
+                }
+                *alias = trimmed;
+            }
+        }
+        {
+            let mut seen = std::collections::HashSet::new();
+            for provider in &providers {
+                let alias = provider.alias();
+                if alias.is_empty() {
+                    return Err(D::Error::custom(
+                        "bell_rings provider alias must not be empty (set alias or use a non-empty scope)",
+                    ));
+                }
+                let normalized = alias.to_lowercase();
+                if !seen.insert(normalized) {
+                    return Err(D::Error::custom(format!(
+                        "duplicate bell_rings provider alias (case-insensitive): {alias}"
+                    )));
+                }
+            }
+        }
+        // Reject duplicate channel override IDs.
+        {
+            let mut seen = std::collections::HashSet::new();
+            for ov in &wire.channel_overrides {
+                if !seen.insert(&ov.channel_id) {
+                    return Err(D::Error::custom(format!(
+                        "duplicate bell_rings channel_override for channel_id {}",
+                        ov.channel_id,
+                    )));
+                }
+            }
         }
         Ok(Self {
             enabled: wire.enabled,
             mode: wire.mode,
-            provider: wire.provider,
+            providers,
+            trigger: wire.trigger,
+            channel_overrides: wire.channel_overrides,
             max_semantic_distance: wire.max_semantic_distance,
             max_bells: wire.max_bells,
             deadline_ms: wire.deadline_ms,
@@ -272,11 +381,24 @@ impl Default for BellRingsConfig {
         Self {
             enabled: false,
             mode: BellMode::Shadow,
-            provider: None,
+            providers: vec![],
+            trigger: BellTrigger::Directed,
+            channel_overrides: vec![],
             max_semantic_distance: 0.3,
             max_bells: 3,
             deadline_ms: 300,
         }
+    }
+}
+
+impl BellRingsConfig {
+    /// Returns the effective trigger mode for a channel.
+    pub fn trigger_for_channel(&self, channel_id: &str) -> BellTrigger {
+        self.channel_overrides
+            .iter()
+            .find(|o| o.channel_id == channel_id)
+            .map(|o| o.trigger)
+            .unwrap_or(self.trigger)
     }
 }
 
@@ -288,6 +410,15 @@ pub struct BellProviderConfig {
     pub url: BellProviderUrl,
     /// Explicit recall scope. `all` and empty scopes are rejected while parsing.
     pub scope: BellScope,
+    /// Stable non-secret alias for provenance tracking. Defaults to the scope value.
+    #[serde(default)]
+    pub alias: Option<String>,
+}
+
+impl BellProviderConfig {
+    pub fn alias(&self) -> &str {
+        self.alias.as_deref().unwrap_or(self.scope.as_str())
+    }
 }
 
 /// A validated HTTP(S) memory-mcp endpoint without embedded credentials.
@@ -380,10 +511,10 @@ where
     D: Deserializer<'de>,
 {
     let value = u64::deserialize(deserializer)?;
-    (1..=300)
+    (1..=2000)
         .contains(&value)
         .then_some(value)
-        .ok_or_else(|| D::Error::custom("deadline_ms must be between 1 and 300"))
+        .ok_or_else(|| D::Error::custom("deadline_ms must be between 1 and 2000"))
 }
 
 /// Pre-send hook lifecycle configuration.
@@ -2029,5 +2160,118 @@ action = "celebrate"
         raw.pre_send.construct_id = "Not Valid".to_owned();
         let loaded = LoadedConfig::from_raw(raw);
         assert!(!loaded.pre_send.enabled);
+    }
+
+    #[test]
+    fn bell_channel_override_rejects_non_numeric_id() {
+        let toml = r#"
+            [bell_rings]
+            enabled = true
+            [[bell_rings.providers]]
+            url = "http://localhost:8080/mcp"
+            scope = "test"
+            [[bell_rings.channel_overrides]]
+            channel_id = "not-a-snowflake"
+            trigger = "directed"
+        "#;
+        let result: Result<Config, _> = toml::from_str(toml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("numeric Discord snowflake"),
+            "expected snowflake error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn bell_channel_override_rejects_empty_id() {
+        let toml = r#"
+            [bell_rings]
+            enabled = true
+            [[bell_rings.providers]]
+            url = "http://localhost:8080/mcp"
+            scope = "test"
+            [[bell_rings.channel_overrides]]
+            channel_id = ""
+            trigger = "directed"
+        "#;
+        let result: Result<Config, _> = toml::from_str(toml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("must not be empty"),
+            "expected empty error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn bell_channel_override_rejects_duplicates() {
+        let toml = r#"
+            [bell_rings]
+            enabled = true
+            [[bell_rings.providers]]
+            url = "http://localhost:8080/mcp"
+            scope = "test"
+            [[bell_rings.channel_overrides]]
+            channel_id = "123456789"
+            trigger = "directed"
+            [[bell_rings.channel_overrides]]
+            channel_id = "123456789"
+            trigger = "all"
+        "#;
+        let result: Result<Config, _> = toml::from_str(toml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("duplicate"),
+            "expected duplicate error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn bell_channel_override_accepts_valid_snowflake() {
+        let toml = r#"
+            [bell_rings]
+            enabled = true
+            [[bell_rings.providers]]
+            url = "http://localhost:8080/mcp"
+            scope = "test"
+            [[bell_rings.channel_overrides]]
+            channel_id = "1517581372141867038"
+            trigger = "all"
+        "#;
+        let config: Config = toml::from_str(toml).expect("valid config");
+        assert_eq!(config.bell_rings.channel_overrides.len(), 1);
+        assert_eq!(
+            config.bell_rings.channel_overrides[0].channel_id,
+            "1517581372141867038"
+        );
+    }
+
+    #[test]
+    fn bell_provider_alias_defaults_to_scope() {
+        let toml = r#"
+            [bell_rings]
+            enabled = true
+            [[bell_rings.providers]]
+            url = "http://localhost:8080/mcp"
+            scope = "my-project"
+        "#;
+        let config: Config = toml::from_str(toml).expect("valid config");
+        assert_eq!(config.bell_rings.providers[0].alias(), "my-project");
+    }
+
+    #[test]
+    fn bell_provider_alias_overrides_scope() {
+        let toml = r#"
+            [bell_rings]
+            enabled = true
+            [[bell_rings.providers]]
+            url = "http://localhost:8080/mcp"
+            scope = "lain"
+            alias = "personal"
+        "#;
+        let config: Config = toml::from_str(toml).expect("valid config");
+        assert_eq!(config.bell_rings.providers[0].alias(), "personal");
     }
 }

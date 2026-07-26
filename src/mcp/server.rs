@@ -138,6 +138,8 @@ pub async fn run(
     let mut delivery_buffer = DeliveryBuffer::new();
     let bell_evaluator = Arc::new(BellEvaluator::new());
 
+    // Lazy-init: providers connect on first message, no pre-warming.
+
     // Resolve timezone once at startup so `deliver_flushed` doesn't need to
     // load config just for the tz. Updated opportunistically when we already
     // load config per-event for the rate limiter.
@@ -203,6 +205,7 @@ pub async fn run(
                         tracing::info!("rate limiter config changed, applying");
                         rate_limiter.update_config(new_rl_config.clone());
                     }
+
 
                     // Rate-limit check for message events.
                     if let NotificationEvent::Message(MessageEvent { ref user_id, ref chat_id, .. }) = event {

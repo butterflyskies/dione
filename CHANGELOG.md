@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-07-26
+
+### Added
+- **Multi-provider bell fan-out.** Concurrent recall across multiple memory-mcp
+  providers with merged results. Configurable bell trigger mode (`directed` | `all`)
+  with per-channel overrides. Full bell provenance (provider alias, candidate ID,
+  distance, recall_id) in delivered events. Nonzero snowflake validation for
+  channel override IDs. (#204, #206)
+
+### Changed
+- Bell `deadline_ms` validation cap raised from 300ms to 2000ms.
+- Transport errors distinguished from partial timeouts in bell status.
+- Provider sessions keyed by (endpoint, scope) for concurrent fan-out.
+- Cold-start initialization separated from per-message recall deadline.
+
 ## [0.24.1] - 2026-07-26
 
 ### Fixed
