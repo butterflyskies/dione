@@ -32,6 +32,10 @@ struct Cli {
     #[arg(long)]
     config: Option<Utf8PathBuf>,
 
+    /// Path to a log file for persistent structured logs
+    #[arg(long, env = "DIONE_LOG_FILE")]
+    log_file: Option<Utf8PathBuf>,
+
     /// Agent harness transport for inbound Discord events
     #[arg(long, value_enum, default_value_t = TransportMode::ClaudeCode)]
     mode: TransportMode,
@@ -67,6 +71,26 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .with_filter(stderr_filter_layer);
 
+    // File logging layer — persistent structured logs alongside MCP transport.
+    let file_layer = if let Some(ref log_file_path) = cli.log_file {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_file_path.as_std_path())
+            .wrap_err_with(|| format!("failed to open log file: {log_file_path}"))?;
+        let file_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            EnvFilter::try_new(&cli.log_level).expect("--log-level validated by clap")
+        });
+        Some(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::sync::Mutex::new(file))
+                .with_ansi(false)
+                .with_filter(file_filter),
+        )
+    } else {
+        None
+    };
+
     // Channel-forwarding layer — starts disabled (off). When set_trace_level is called,
     // events above the threshold are forwarded as channel notifications with type="trace".
     let (channel_layer, channel_event_rx) = TracingChannelLayer::new();
@@ -76,6 +100,7 @@ async fn main() -> Result<()> {
 
     tracing_subscriber::registry()
         .with(stderr_layer)
+        .with(file_layer)
         .with(channel_layer.with_filter(channel_filter_layer))
         .init();
 
