@@ -177,7 +177,7 @@ impl PronounService {
         }
 
         match self.provider.lookup(user_id).await {
-            Some(pronouns) => format!("{display_name} — {pronouns}"),
+            Some(pronouns) => format!("{display_name} ({pronouns})"),
             None => display_name.to_string(),
         }
     }
