@@ -18,7 +18,7 @@ use rmcp::{
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
-use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::HashSet, future::Future, pin::Pin, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
 /// One admitted memory hit, with provenance preserved for later rendering and feedback slices.
@@ -237,10 +237,17 @@ impl BellProvider for MemoryMcpProvider {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WarmState {
+    Cold,
+    Warming,
+    Warm,
+}
+
 struct ProviderSlot {
     endpoint: Option<String>,
     provider: Option<Arc<MemoryMcpProvider>>,
+    warm_state: WarmState,
 }
 
 /// Render admitted bells into the compact wire format with full provenance.
@@ -270,12 +277,14 @@ pub fn render_bells(bells: &[Bell]) -> String {
 /// Owns reconnectable providers used by the inbound delivery loop.
 pub struct BellEvaluator {
     providers: Mutex<Vec<ProviderSlot>>,
+    known_urls: Mutex<HashSet<String>>,
 }
 
 impl Default for BellEvaluator {
     fn default() -> Self {
         Self {
             providers: Mutex::new(Vec::new()),
+            known_urls: Mutex::new(HashSet::new()),
         }
     }
 }
@@ -302,19 +311,61 @@ impl BellEvaluator {
             _ => false,
         };
         if eligible && !config.providers.is_empty() {
-            let provider_instances = self.providers_for(config).await;
-            return evaluate_multi_provider(event, config, &provider_instances).await;
+            let provider_instances = self.warm_providers_for(config).await;
+            if !provider_instances.is_empty() {
+                return evaluate_multi_provider(event, config, &provider_instances).await;
+            }
         }
         record_outcome(&BellOutcome::Skipped);
         (event, vec![], None)
     }
 
     pub async fn warm_providers(&self, config: &BellRingsConfig) {
+        // Seed the known-URLs tracker so warm_if_changed won't re-warm these
+        {
+            let mut known = self.known_urls.lock().await;
+            for p in &config.providers {
+                known.insert(p.url.as_str().to_owned());
+            }
+        }
+
+        // Mark all slots as Warming before starting
         let providers = self.providers_for(config).await;
+        {
+            let mut slots = self.providers.lock().await;
+            for slot in slots.iter_mut() {
+                if slot.warm_state == WarmState::Cold {
+                    slot.warm_state = WarmState::Warming;
+                }
+            }
+        }
+
         let count = providers.len();
+        let urls: Vec<_> = providers
+            .iter()
+            .map(|(pc, _)| pc.url.as_str().to_owned())
+            .collect();
         let futs: Vec<_> = providers.iter().map(|(_, p)| p.warm()).collect();
         let results = join_all(futs).await;
         let succeeded = results.iter().filter(|ok| **ok).count();
+
+        // Update warm state based on results
+        {
+            let mut slots = self.providers.lock().await;
+            for (url, ok) in urls.iter().zip(results.iter()) {
+                if let Some(slot) = slots
+                    .iter_mut()
+                    .find(|s| s.endpoint.as_deref() == Some(url.as_str()))
+                {
+                    slot.warm_state = if *ok {
+                        WarmState::Warm
+                    } else {
+                        WarmState::Cold
+                    };
+                }
+            }
+        }
+
         if succeeded == count {
             tracing::info!(count, "all bell providers pre-warmed");
         } else {
@@ -332,34 +383,107 @@ impl BellEvaluator {
         slots.iter().filter_map(|s| s.endpoint.clone()).collect()
     }
 
-    /// Warm only providers whose endpoints are not yet known (hot-reload path).
-    pub async fn warm_new_providers(&self, config: &BellRingsConfig) {
-        let known = self.known_endpoints().await;
-        let new_endpoints: Vec<_> = config
+    /// Returns true if the provider set has changed since last check.
+    /// If changed, triggers warm-up for new providers and updates tracked set.
+    pub async fn warm_if_changed(&self, config: &BellRingsConfig) -> bool {
+        let current_urls: HashSet<String> = config
             .providers
             .iter()
-            .filter(|p| !known.contains(&p.url.as_str().to_owned()))
+            .map(|p| p.url.as_str().to_owned())
             .collect();
-        if new_endpoints.is_empty() {
-            return;
+
+        let mut known = self.known_urls.lock().await;
+        if *known == current_urls {
+            return false;
         }
+
+        let new_urls: Vec<String> = current_urls.difference(&known).cloned().collect();
+        *known = current_urls;
+        drop(known);
+
+        if new_urls.is_empty() {
+            return true;
+        }
+
         tracing::info!(
-            count = new_endpoints.len(),
+            count = new_urls.len(),
             "warming newly configured bell providers"
         );
-        let providers = self.providers_for(config).await;
-        let new_providers: Vec<_> = providers
-            .iter()
-            .filter(|(pc, _)| !known.contains(&pc.url.as_str().to_owned()))
-            .collect();
-        let futs: Vec<_> = new_providers.iter().map(|(_, p)| p.warm()).collect();
+
+        // Create slots and mark them as Warming before starting
+        {
+            let mut slots = self.providers.lock().await;
+            for url in &new_urls {
+                let exists = slots.iter().any(|s| s.endpoint.as_deref() == Some(url.as_str()));
+                if !exists {
+                    let provider = Arc::new(MemoryMcpProvider::new(url.clone()));
+                    slots.push(ProviderSlot {
+                        endpoint: Some(url.clone()),
+                        provider: Some(provider),
+                        warm_state: WarmState::Warming,
+                    });
+                }
+            }
+        }
+
+        // Warm the new providers
+        let providers: Vec<_> = {
+            let slots = self.providers.lock().await;
+            slots
+                .iter()
+                .filter(|s| new_urls.contains(s.endpoint.as_ref().unwrap_or(&String::new())))
+                .filter_map(|s| s.provider.clone())
+                .collect()
+        };
+
+        let futs: Vec<_> = providers.iter().map(|p| p.warm()).collect();
         let results = join_all(futs).await;
         let succeeded = results.iter().filter(|ok| **ok).count();
+
+        // Update warm state based on results
+        {
+            let mut slots = self.providers.lock().await;
+            for (url, ok) in new_urls.iter().zip(results.iter()) {
+                if let Some(slot) = slots
+                    .iter_mut()
+                    .find(|s| s.endpoint.as_deref() == Some(url.as_str()))
+                {
+                    slot.warm_state = if *ok {
+                        WarmState::Warm
+                    } else {
+                        WarmState::Cold
+                    };
+                }
+            }
+        }
+
         tracing::info!(
             succeeded,
-            total = new_providers.len(),
-            "hot-reload bell provider warm-up complete"
+            total = providers.len(),
+            "bell provider warm-up complete"
         );
+
+        true
+    }
+
+    /// Like `providers_for` but only returns providers with `WarmState::Warm`.
+    /// Used by evaluate to skip cold/warming providers (fail-open).
+    async fn warm_providers_for(
+        &self,
+        config: &BellRingsConfig,
+    ) -> Vec<(BellProviderConfig, Arc<MemoryMcpProvider>)> {
+        let providers = self.providers_for(config).await;
+        let slots = self.providers.lock().await;
+        providers
+            .into_iter()
+            .filter(|(pc, _)| {
+                slots
+                    .iter()
+                    .find(|s| s.endpoint.as_deref() == Some(pc.url.as_str()))
+                    .map(|s| s.warm_state == WarmState::Warm)
+                    .unwrap_or(false)
+            })
+            .collect()
     }
 
     async fn providers_for(
@@ -383,6 +507,7 @@ impl BellEvaluator {
                 slots.push(ProviderSlot {
                     endpoint: Some(url.to_owned()),
                     provider: Some(provider.clone()),
+                    warm_state: WarmState::Cold,
                 });
                 provider
             };
@@ -1203,6 +1328,86 @@ mod tests {
         let evaluator = BellEvaluator::new();
         let known = evaluator.known_endpoints().await;
         assert!(known.is_empty(), "no endpoints known for fresh evaluator");
+    }
+
+    #[tokio::test]
+    async fn warm_providers_seeds_known_urls_tracker() {
+        let evaluator = BellEvaluator::new();
+        let cfg = BellRingsConfig {
+            enabled: true,
+            providers: vec![BellProviderConfig {
+                url: BellProviderUrl::parse("http://localhost:19999/nonexistent").unwrap(),
+                scope: BellScope::parse("test").unwrap(),
+                alias: Some("test".into()),
+            }],
+            ..BellRingsConfig::default()
+        };
+        evaluator.warm_providers(&cfg).await;
+        let known = evaluator.known_endpoints().await;
+        assert_eq!(known.len(), 1, "startup warm creates provider slot");
+        let tracked = evaluator.known_urls.lock().await;
+        assert!(
+            tracked.contains("http://localhost:19999/nonexistent"),
+            "startup warm seeds known-URLs tracker"
+        );
+    }
+
+    #[tokio::test]
+    async fn warm_if_changed_only_fires_on_new_providers() {
+        let evaluator = BellEvaluator::new();
+        let cfg = BellRingsConfig {
+            enabled: true,
+            providers: vec![BellProviderConfig {
+                url: BellProviderUrl::parse("http://localhost:19998/test").unwrap(),
+                scope: BellScope::parse("test").unwrap(),
+                alias: Some("test".into()),
+            }],
+            ..BellRingsConfig::default()
+        };
+        let changed = evaluator.warm_if_changed(&cfg).await;
+        assert!(changed, "first call should detect new providers");
+
+        let changed = evaluator.warm_if_changed(&cfg).await;
+        assert!(!changed, "same config should not detect change");
+
+        let cfg2 = BellRingsConfig {
+            enabled: true,
+            providers: vec![
+                BellProviderConfig {
+                    url: BellProviderUrl::parse("http://localhost:19998/test").unwrap(),
+                    scope: BellScope::parse("test").unwrap(),
+                    alias: Some("test".into()),
+                },
+                BellProviderConfig {
+                    url: BellProviderUrl::parse("http://localhost:19997/test2").unwrap(),
+                    scope: BellScope::parse("shared").unwrap(),
+                    alias: Some("shared".into()),
+                },
+            ],
+            ..BellRingsConfig::default()
+        };
+        let changed = evaluator.warm_if_changed(&cfg2).await;
+        assert!(changed, "added provider should detect change");
+    }
+
+    #[tokio::test]
+    async fn evaluate_skips_cold_providers() {
+        let evaluator = BellEvaluator::new();
+        let cfg = BellRingsConfig {
+            enabled: true,
+            providers: vec![BellProviderConfig {
+                url: BellProviderUrl::parse("http://localhost:19996/cold").unwrap(),
+                scope: BellScope::parse("test").unwrap(),
+                alias: Some("cold".into()),
+            }],
+            ..BellRingsConfig::default()
+        };
+        let _ = evaluator.providers_for(&cfg).await;
+        let warm = evaluator.warm_providers_for(&cfg).await;
+        assert!(
+            warm.is_empty(),
+            "cold providers should be skipped by evaluate"
+        );
     }
 
     #[test]

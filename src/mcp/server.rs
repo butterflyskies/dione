@@ -218,13 +218,15 @@ pub async fn run(
                         rate_limiter.update_config(new_rl_config.clone());
                     }
 
-                    // Warm any newly configured bell providers so they don't
-                    // pay cold-start latency on their first real bell.
+                    // Warm newly configured bell providers on config change.
+                    // Only fires when the provider URL set has actually changed,
+                    // not on every event. Evaluation skips not-yet-warm providers
+                    // (fail-open) so there is no race.
                     if cfg.bell_rings.enabled {
                         let evaluator = Arc::clone(&bell_evaluator);
                         let bell_cfg = cfg.bell_rings.clone();
                         tokio::spawn(async move {
-                            evaluator.warm_new_providers(&bell_cfg).await;
+                            evaluator.warm_if_changed(&bell_cfg).await;
                         });
                     }
 
