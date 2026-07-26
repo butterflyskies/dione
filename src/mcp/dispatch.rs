@@ -20,7 +20,8 @@ use crate::{
             management::{create_thread, delete_message, pin_message, unpin_message},
             messaging::{
                 download_attachment, edit_message_with_hook_overrides, fetch_messages,
-                fetch_new_since, get_message, react as discord_react, reply_with_hook_overrides,
+                fetch_new_since, get_message, react as discord_react,
+                remove_reaction as discord_remove_reaction, reply_with_hook_overrides,
                 send_dm_with_hook_overrides, send_file_with_hook_overrides,
             },
             render::{render_latex, render_latex_to_channel_with_hook_overrides},
@@ -211,6 +212,16 @@ pub(crate) async fn call_tool(
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing emoji".to_string())?;
             discord_react(&ctx, channel_id, message_id, emoji).await
+        }
+        "remove_reaction" => {
+            let ctx = server.messaging_ctx(config.clone());
+            let channel_id = parse_id(&args, "channel_id")?.channel();
+            let message_id = parse_id(&args, "message_id")?.message();
+            let emoji = args
+                .get("emoji")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing emoji".to_string())?;
+            discord_remove_reaction(&ctx, channel_id, message_id, emoji).await
         }
         "edit_message" => {
             let ctx = server.messaging_ctx(config.clone());
