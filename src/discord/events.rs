@@ -143,7 +143,7 @@ impl Handler {
     async fn resolve_pronoun_name(&self, msg: &Message) -> Option<PronounDisplayName> {
         let service = self.pronoun_service.as_ref()?;
         let user_id = msg.author.id.get();
-        if !service.is_opted_in(user_id) {
+        if service.is_excluded(user_id) {
             return None;
         }
         let base_name = resolve_user_identity(Some(&display_name(msg)), Some(&msg.author.name));

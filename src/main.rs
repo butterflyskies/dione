@@ -182,10 +182,10 @@ async fn main() -> Result<()> {
     let (discord_cmd_tx, discord_cmd_rx) =
         mpsc::channel::<dione::mcp::tools::bot_state::DiscordCommand>(16);
 
-    // Build pronoun service if configured.
-    let pronoun_service = if !config.pronoun_opted_in.is_empty() {
+    // Build pronoun service if enabled in this construct's config.
+    let pronoun_service = if config.raw.pronouns.enabled {
         Some(std::sync::Arc::new(dione::pronouns::PronounService::new(
-            config.pronoun_opted_in.clone(),
+            config.pronoun_excluded.clone(),
             config.raw.pronouns.deadline_ms,
             std::time::Duration::from_secs(config.raw.pronouns.cache_ttl_seconds),
         )))
