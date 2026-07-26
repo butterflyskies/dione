@@ -10,7 +10,7 @@ use serenity::model::id::{ChannelId, MessageId, UserId};
 
 use crate::config::{ChunkMode, DmPolicy, LoadedConfig};
 use crate::contradictionary::{Action, BlockOutcome, append_diary_record};
-use crate::discord::chunk;
+use crate::discord::chunk_preserving_fences;
 use crate::gate::OutboundGate;
 use crate::pre_send::{
     ChannelType as HookChannelType, ConstructId, HookContext, HookDecision, HookName,
@@ -493,12 +493,12 @@ async fn deliver_prepared_reply(
     };
     let effective_limit = if limit == 0 { 2000 } else { limit };
 
-    let chunks = chunk(&content, effective_limit, effective_mode);
+    let chunks = chunk_preserving_fences(&content, effective_limit, effective_mode);
     let mut sent_ids: Vec<u64> = Vec::new();
     let mut first_msg_id: Option<MessageId> = None;
 
     for (i, chunk_text) in chunks.iter().enumerate() {
-        let mut builder = CreateMessage::new().content(*chunk_text);
+        let mut builder = CreateMessage::new().content(chunk_text);
 
         // Reply threading.
         let should_reply = match reply_mode {
