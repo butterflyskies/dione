@@ -13,6 +13,51 @@ use serde_json::Value;
 /// Maximum number of embeds Discord allows per message.
 const MAX_EMBEDS_PER_MESSAGE: usize = 10;
 
+/// Extract all text surfaces from an embed JSON array for hook scanning.
+///
+/// Collects title, description, field names/values, footer text, and author
+/// name — every text surface that appears in the channel with the bot's name
+/// on it. URLs and non-text fields are excluded.
+pub fn extract_text_surfaces(value: &Value) -> String {
+    let Some(arr) = value.as_array() else {
+        return String::new();
+    };
+    let mut surfaces = Vec::new();
+    for obj in arr.iter().filter_map(Value::as_object) {
+        if let Some(title) = obj.get("title").and_then(Value::as_str) {
+            surfaces.push(title);
+        }
+        if let Some(desc) = obj.get("description").and_then(Value::as_str) {
+            surfaces.push(desc);
+        }
+        if let Some(footer) = obj.get("footer") {
+            if let Some(text) = footer.as_str() {
+                surfaces.push(text);
+            } else if let Some(text) = footer.get("text").and_then(Value::as_str) {
+                surfaces.push(text);
+            }
+        }
+        if let Some(author) = obj.get("author") {
+            if let Some(name) = author.as_str() {
+                surfaces.push(name);
+            } else if let Some(name) = author.get("name").and_then(Value::as_str) {
+                surfaces.push(name);
+            }
+        }
+        if let Some(fields) = obj.get("fields").and_then(Value::as_array) {
+            for field in fields.iter().filter_map(Value::as_object) {
+                if let Some(name) = field.get("name").and_then(Value::as_str) {
+                    surfaces.push(name);
+                }
+                if let Some(val) = field.get("value").and_then(Value::as_str) {
+                    surfaces.push(val);
+                }
+            }
+        }
+    }
+    surfaces.join("\n")
+}
+
 /// Parse a JSON array of embed objects into serenity [`CreateEmbed`] builders.
 ///
 /// Returns `Err` with a human-readable message on malformed input.
@@ -195,6 +240,69 @@ fn apply_fields(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // ── extract_text_surfaces ───────────────────────────────────────────────
+
+    #[test]
+    fn extracts_title_and_description() {
+        let text = extract_text_surfaces(&json!([{
+            "title": "My Title",
+            "description": "My description"
+        }]));
+        assert!(text.contains("My Title"));
+        assert!(text.contains("My description"));
+    }
+
+    #[test]
+    fn extracts_field_names_and_values() {
+        let text = extract_text_surfaces(&json!([{
+            "fields": [
+                { "name": "Field Name", "value": "Field Value" }
+            ]
+        }]));
+        assert!(text.contains("Field Name"));
+        assert!(text.contains("Field Value"));
+    }
+
+    #[test]
+    fn extracts_footer_and_author() {
+        let text = extract_text_surfaces(&json!([{
+            "footer": { "text": "Footer Text" },
+            "author": { "name": "Author Name" }
+        }]));
+        assert!(text.contains("Footer Text"));
+        assert!(text.contains("Author Name"));
+    }
+
+    #[test]
+    fn extracts_footer_from_string_shorthand() {
+        let text = extract_text_surfaces(&json!([{
+            "footer": "Simple Footer"
+        }]));
+        assert!(text.contains("Simple Footer"));
+    }
+
+    #[test]
+    fn excludes_urls_and_non_text() {
+        let text = extract_text_surfaces(&json!([{
+            "url": "https://example.com",
+            "thumbnail": "https://example.com/thumb.png",
+            "image": "https://example.com/img.png",
+            "color": 0xFF0000
+        }]));
+        assert!(!text.contains("https://"));
+    }
+
+    #[test]
+    fn empty_on_non_array() {
+        assert!(extract_text_surfaces(&json!("not an array")).is_empty());
+        assert!(extract_text_surfaces(&json!(42)).is_empty());
+    }
+
+    #[test]
+    fn empty_on_empty_array() {
+        assert!(extract_text_surfaces(&json!([])).is_empty());
+    }
 
     // ── parse_embeds: input validation ──────────────────────────────────────
 

@@ -13,7 +13,7 @@ use crate::{
             access::{approve_access, deny_access, list_access_requests},
             bot_state::{send_typing, set_presence},
             diagnostics::{get_version, set_stderr_level, set_trace_level},
-            embed::parse_embeds,
+            embed::{extract_text_surfaces, parse_embeds},
             introspection::{
                 get_channel, get_member, get_user, list_channels, list_emojis, list_guilds,
                 list_roles,
@@ -192,6 +192,7 @@ pub(crate) async fn call_tool(
                 .unwrap_or(false);
             let no_rly = args.get("no_rly").and_then(Value::as_bool).unwrap_or(false);
             let no_rly_hooks = parse_hook_overrides(&args)?;
+            let embed_text = args.get("embeds").map(extract_text_surfaces);
             let embeds = match args.get("embeds") {
                 Some(v) => parse_embeds(v).map_err(|e| format!("invalid embeds: {e}"))?,
                 None => Vec::new(),
@@ -205,6 +206,7 @@ pub(crate) async fn call_tool(
                 no_rly,
                 &no_rly_hooks,
                 embeds,
+                embed_text,
             )
             .await
         }
@@ -285,11 +287,13 @@ pub(crate) async fn call_tool(
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing content".to_string())?;
             let no_rly_hooks = parse_hook_overrides(&args)?;
+            let embed_text = args.get("embeds").map(extract_text_surfaces);
             let embeds = match args.get("embeds") {
                 Some(v) => parse_embeds(v).map_err(|e| format!("invalid embeds: {e}"))?,
                 None => Vec::new(),
             };
-            send_dm_with_hook_overrides(&ctx, user_id, content, &no_rly_hooks, embeds).await
+            send_dm_with_hook_overrides(&ctx, user_id, content, &no_rly_hooks, embeds, embed_text)
+                .await
         }
 
         // Introspection

@@ -157,6 +157,7 @@ struct OutboundDraft<'a> {
     text: &'a str,
     reply_to: Option<MessageId>,
     pre_send: PreSendOptions<'a>,
+    embed_text: Option<String>,
 }
 
 impl<'a> OutboundDraft<'a> {
@@ -171,15 +172,38 @@ impl<'a> OutboundDraft<'a> {
             text,
             reply_to,
             pre_send,
+            embed_text: None,
         }
     }
 
-    fn dm_recipient(user_id: UserId, text: &'a str, pre_send: PreSendOptions<'a>) -> Self {
+    fn channel_with_embed_text(
+        channel_id: ChannelId,
+        text: &'a str,
+        reply_to: Option<MessageId>,
+        pre_send: PreSendOptions<'a>,
+        embed_text: Option<String>,
+    ) -> Self {
+        Self {
+            destination: OutboundDestination::Channel(channel_id),
+            text,
+            reply_to,
+            pre_send,
+            embed_text,
+        }
+    }
+
+    fn dm_recipient(
+        user_id: UserId,
+        text: &'a str,
+        pre_send: PreSendOptions<'a>,
+        embed_text: Option<String>,
+    ) -> Self {
         Self {
             destination: OutboundDestination::DmRecipient(user_id),
             text,
             reply_to: None,
             pre_send,
+            embed_text,
         }
     }
 }
@@ -264,6 +288,7 @@ async fn prepare_outbound(
         channel_type,
         ctx.construct_id.clone(),
     )
+    .with_embed_text(draft.embed_text.clone())
     .with_author_id(ctx.author_id)
     .with_reply_to(draft.reply_to)
     .with_metadata("outbound_surface", draft.pre_send.surface.as_str());
@@ -365,6 +390,7 @@ pub async fn reply(
         no_rly,
         &[],
         Vec::new(),
+        None,
     )
     .await
 }
@@ -379,10 +405,11 @@ pub async fn reply_with_hook_overrides(
     no_rly: bool,
     no_rly_hooks: &[HookName],
     embeds: Vec<CreateEmbed>,
+    embed_text: Option<String>,
 ) -> Value {
     let prepared = match prepare_outbound(
         ctx,
-        OutboundDraft::channel(
+        OutboundDraft::channel_with_embed_text(
             channel_id,
             content,
             reply_to_message_id,
@@ -390,6 +417,7 @@ pub async fn reply_with_hook_overrides(
                 surface: OutboundSurface::Reply,
                 bypasses: no_rly_hooks,
             },
+            embed_text.clone(),
         ),
     )
     .await
@@ -404,6 +432,7 @@ pub async fn reply_with_hook_overrides(
             suppress_ping,
             no_rly,
             embeds,
+            embed_text,
         },
     )
     .await
@@ -413,6 +442,7 @@ struct ReplyTransportOptions {
     suppress_ping: bool,
     no_rly: bool,
     embeds: Vec<CreateEmbed>,
+    embed_text: Option<String>,
 }
 
 async fn deliver_prepared_reply(
@@ -433,11 +463,17 @@ async fn deliver_prepared_reply(
     let ch = channel_id;
 
     // ── Contradictionary check (scan once, reuse post-send) ─────────────
+    // Scan both message content AND embed text surfaces — embed fields are
+    // authored text that appears in the channel with the bot's name on it.
+    let scannable = match &options.embed_text {
+        Some(et) if !et.is_empty() => format!("{content}\n{et}"),
+        _ => content.clone(),
+    };
     let contradictionary_hits = ctx
         .config
         .contradictionary
         .as_ref()
-        .map(|c| c.check(&content))
+        .map(|c| c.check(&scannable))
         .unwrap_or_default();
 
     if let Some(ref contradictionary) = ctx.config.contradictionary {
@@ -958,7 +994,7 @@ pub(crate) async fn create_dm_channel(
 // ── send_dm ──────────────────────────────────────────────────────────────────
 
 pub async fn send_dm(ctx: &MessagingCtx, user_id: UserId, content: &str) -> Value {
-    send_dm_with_hook_overrides(ctx, user_id, content, &[], Vec::new()).await
+    send_dm_with_hook_overrides(ctx, user_id, content, &[], Vec::new(), None).await
 }
 
 pub async fn send_dm_with_hook_overrides(
@@ -967,6 +1003,7 @@ pub async fn send_dm_with_hook_overrides(
     content: &str,
     no_rly_hooks: &[HookName],
     embeds: Vec<CreateEmbed>,
+    embed_text: Option<String>,
 ) -> Value {
     if ctx.config.access.dm_policy == DmPolicy::Disabled {
         return json!({ "error": "dm_policy is set to disabled; cannot initiate DMs" });
@@ -981,6 +1018,7 @@ pub async fn send_dm_with_hook_overrides(
                 surface: OutboundSurface::SendDm,
                 bypasses: no_rly_hooks,
             },
+            embed_text.clone(),
         ),
     )
     .await
@@ -997,6 +1035,7 @@ pub async fn send_dm_with_hook_overrides(
                 suppress_ping: false,
                 no_rly: false,
                 embeds,
+                embed_text,
             },
         )
         .await;
@@ -1021,6 +1060,7 @@ pub async fn send_dm_with_hook_overrides(
             suppress_ping: false,
             no_rly: false,
             embeds,
+            embed_text,
         },
     )
     .await;

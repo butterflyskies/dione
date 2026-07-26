@@ -86,6 +86,7 @@ impl Default for ConstructId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookContext {
     text: String,
+    embed_text: Option<String>,
     author_id: Option<UserId>,
     destination: OutboundDestination,
     channel_type: ChannelType,
@@ -104,6 +105,7 @@ impl HookContext {
     ) -> Self {
         Self {
             text: text.into(),
+            embed_text: None,
             author_id: None,
             destination,
             channel_type,
@@ -116,6 +118,23 @@ impl HookContext {
 
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    pub fn embed_text(&self) -> Option<&str> {
+        self.embed_text.as_deref()
+    }
+
+    /// All scannable text surfaces: message content plus embed text.
+    pub fn scannable_text(&self) -> String {
+        match &self.embed_text {
+            Some(et) if !et.is_empty() => format!("{}\n{et}", self.text),
+            _ => self.text.clone(),
+        }
+    }
+
+    pub fn with_embed_text(mut self, embed_text: Option<String>) -> Self {
+        self.embed_text = embed_text;
+        self
     }
 
     pub fn destination(&self) -> OutboundDestination {
