@@ -95,23 +95,22 @@ GatewayIntents::DIRECT_MESSAGES
 | `chrono` | Timestamps | Minimal features (clock, serde) |
 | `camino` | UTF-8 path types | |
 
-Not used: `async-trait` (native async traits on 1.95), `anyhow` (color-eyre
+Not used: `async-trait` (native async traits are available at the MSRV), `anyhow` (color-eyre
 at boundaries, thiserror for domain).
 
-### 9. Modern Rust features leveraged (1.89–1.95)
+### 9. Modern Rust features leveraged (1.89–1.93)
 
 | Feature | Use |
 |---------|-----|
 | `str::ceil_char_boundary` (1.91) | Message chunking at valid UTF-8 split points |
-| `if let` guards (1.95) | Gate logic match arms with secondary checks |
 | `BTreeMap::extract_if` (1.91) | Pruning expired access requests |
 | `VecDeque::pop_front_if` (1.93) | Queue management |
 | `File::try_lock()` (1.89) | Safe concurrent config reads |
 | `Result::flatten()` (1.89) | API call chains |
-| `core::hint::cold_path` (1.95) | Error branch codegen hints |
 | `fmt::from_fn` (1.93) | Custom formatters for Discord rendering |
-| `LazyLock::get` (1.94) | Lazy initialization patterns |
 | Native async traits (1.75+) | No `async-trait` crate needed |
+
+Features stabilized after Rust 1.93 require an explicit MSRV change before use.
 
 ## Module Structure
 
@@ -489,3 +488,24 @@ Default `$DIONE_STATE_DIR`: `~/.claude/channels/dione/`
 | Config parse | Rename corrupt file, fall back to defaults, log at error level |
 | Queue persistence | Best-effort write; in-memory state is authoritative |
 | Shutdown | 2s timeout; force-exit if tasks don't terminate |
+## GAIE Atom 1b backfill architecture
+
+The one-shot archive path gains a discovery phase before its existing message
+producer:
+
+1. Build a typed capture root from the configured corpus, guild, and parent.
+2. Collect active snapshot A, paginate public/private archives according to
+   route-specific cursor rules, and collect active snapshot B.
+3. Validate every candidate's guild, parent, and thread type and construct an
+   opaque verified capture target. No raw child ID crosses into message fetch.
+4. Union and deduplicate targets, then sort parent first and thread snowflakes
+   numerically.
+5. Load or migrate checkpoint v2 and fetch each stream from its independent
+   cursor. New streams begin with a nullable cursor.
+6. Sort messages numerically, deduplicate by Discord-global message ID, append
+   and fsync each message batch, then advance only the source stream cursor.
+
+Discovery precedes archive mutation in default mode. This keeps an incomplete
+enumeration from producing an archive that appears complete. The two active
+snapshots bound—but cannot eliminate—the Discord race, so coverage receipts
+must say principal-visible and non-atomic.

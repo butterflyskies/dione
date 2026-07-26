@@ -40,6 +40,7 @@ use std::fmt::Write;
 
 /// Result of attempting to coalesce a batch of flushed events.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum CoalesceResult {
     /// Only one event — return it as an individual notification (no batching).
     Single(NotificationEvent),
@@ -479,6 +480,8 @@ mod tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
+            bells: None,
+            bells_status: None,
         })
     }
 
@@ -696,6 +699,8 @@ mod tests {
                 reply_to_user_id: None,
                 reply_to_user: None,
                 reply_to_content_preview: None,
+                bells: None,
+                bells_status: None,
             }),
             NotificationEvent::Reaction {
                 chat_id: ChannelId::new(555),

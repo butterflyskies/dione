@@ -118,3 +118,15 @@ These are carried directly from the TypeScript plugin:
 None required. The existing architecture already accounts for these threats.
 The new requirements (R-36 through R-41) are implementation-level controls
 that fit within the current module structure.
+## GAIE Atom 1b threat additions
+
+| Threat | Boundary | Mitigation |
+|---|---|---|
+| A Discord response injects an unrelated child channel | Discovery to message fetch | Validate guild, exact parent, and admitted thread type; construct a verified target; reject before child fetch |
+| Missing permissions are mistaken for complete history | Coverage claim | Describe coverage as principal-visible; default enumeration failure is closed; private-all 403 uses the explicit joined-private fallback |
+| Threads appear or archive during discovery | Discord's non-atomic API | Union active snapshot A, archived pages, and active snapshot B; never claim an atomic/global snapshot |
+| Route pagination silently truncates on a short page | Archived-thread enumeration | Continue only according to `has_more`; use the route's specified cursor type |
+| Checkpoint from another root redirects or suppresses capture | Durable resume boundary | Bind v2 to corpus, guild, and parent; reject foreign, mixed, unknown, or corrupt forms |
+| Commit succeeds but checkpoint write fails | Archive/checkpoint ordering | Commit and fsync first; on retry deduplicate by global message ID and repair only the stream cursor |
+| Parent/thread starter alias creates duplicate history | Cross-stream identity | Keep Discord-global message identity while retaining the embedded thread relationship |
+| Partial mode is mistaken for complete capture | Operator contract | Keep `allow_partial` explicit and parent-only; do not invent durable partial-thread semantics |

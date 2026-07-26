@@ -14,6 +14,11 @@ use crate::contradictionary::{Contradictionary, ContradictionaryConfig, load_sid
 use crate::pre_send::ConstructId;
 use crate::timestamp::Timestamp;
 
+/// Default maximum size of one GAIE attachment (25 MiB).
+pub const DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;
+/// Default cumulative GAIE attachment download budget for one backfill run (250 MiB).
+pub const DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES: u64 = 250 * 1024 * 1024;
+
 // ── Error type ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Error)]
@@ -48,13 +53,120 @@ pub struct Config {
     pub pre_send: PreSendConfig,
     /// Inbound memory-bell shadow evaluation.
     pub bell_rings: BellRingsConfig,
+    /// Restart-only, one-shot GAIE archive configuration.
+    pub archive: ArchiveConfig,
 }
 
-/// Shadow-only inbound memory-bell configuration.
+/// Configuration for the opt-in GAIE one-shot archive commands.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ArchiveConfig {
+    /// Enables archive commands. The daemon never starts an archive job.
+    pub enabled: bool,
+    /// The sole parent channel admitted to the archive.
+    pub channel_id: String,
+    /// The guild which owns the parent channel.
+    pub guild_id: String,
+    /// The filesystem-safe corpus identifier.
+    pub corpus_id: String,
+    /// The local directory containing archive artifacts.
+    pub data_dir: Utf8PathBuf,
+    /// Permits successful completion when Discord coverage is incomplete.
+    pub allow_partial: bool,
+    /// Maximum admitted size of one attachment.
+    pub max_attachment_bytes: u64,
+    /// Maximum cumulative attachment download bytes admitted during one backfill run.
+    pub max_run_download_bytes: u64,
+}
+
+impl Default for ArchiveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            channel_id: String::new(),
+            guild_id: String::new(),
+            corpus_id: String::new(),
+            data_dir: Utf8PathBuf::new(),
+            allow_partial: false,
+            max_attachment_bytes: DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES,
+            max_run_download_bytes: DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES,
+        }
+    }
+}
+
+impl ArchiveConfig {
+    /// Validates the archive gate and its relationship to configured channels.
+    pub fn validate(&self, channels: &[ChannelConfig]) -> Result<(), String> {
+        if !self.enabled {
+            return Err("archive is disabled; set archive.enabled = true".to_owned());
+        }
+        let channel_id = self
+            .channel_id
+            .parse::<u64>()
+            .map_err(|_| "archive.channel_id must be a nonzero Discord ID".to_owned())?;
+        if channel_id == 0 {
+            return Err("archive.channel_id must be a nonzero Discord ID".to_owned());
+        }
+        let guild_id = self
+            .guild_id
+            .parse::<u64>()
+            .map_err(|_| "archive.guild_id must be a nonzero Discord ID".to_owned())?;
+        if guild_id == 0 {
+            return Err("archive.guild_id must be a nonzero Discord ID".to_owned());
+        }
+        crate::gaie::CorpusId::parse(&self.corpus_id).map_err(|error| error.to_string())?;
+        if self.data_dir.as_str().is_empty()
+            || !self.data_dir.is_absolute()
+            || self
+                .data_dir
+                .components()
+                .any(|component| component.as_str() == "..")
+        {
+            return Err("archive.data_dir must be an absolute path without `..`".to_owned());
+        }
+        let occurrences = channels
+            .iter()
+            .filter(|channel| channel.id == self.channel_id)
+            .count();
+        if occurrences != 1 {
+            return Err(format!(
+                "archive.channel_id must appear exactly once in [[channels]]; found {occurrences}"
+            ));
+        }
+        if self.max_attachment_bytes == 0 {
+            return Err("archive.max_attachment_bytes must be nonzero".to_owned());
+        }
+        if self.max_run_download_bytes == 0 {
+            return Err("archive.max_run_download_bytes must be nonzero".to_owned());
+        }
+        if self.max_run_download_bytes < self.max_attachment_bytes {
+            return Err(
+                "archive.max_run_download_bytes must be at least archive.max_attachment_bytes"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Whether bell evaluation results are injected into delivery metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BellMode {
+    /// Evaluate and log, but do not alter delivery.
+    #[default]
+    Shadow,
+    /// Evaluate and inject `bells` into notification metadata.
+    Live,
+}
+
+/// Inbound memory-bell configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BellRingsConfig {
-    /// Enables evaluation. Results never alter delivery in this slice.
+    /// Enables evaluation.
     pub enabled: bool,
+    /// Shadow (log only) or live (inject into metadata).
+    pub mode: BellMode,
     /// The single memory-mcp provider. A singular field makes multi-provider
     /// fan-out unrepresentable in the first slice.
     pub provider: Option<BellProviderConfig>,
@@ -70,6 +182,7 @@ pub struct BellRingsConfig {
 #[serde(default)]
 struct BellRingsConfigWire {
     enabled: bool,
+    mode: BellMode,
     provider: Option<BellProviderConfig>,
     #[serde(deserialize_with = "deserialize_max_semantic_distance")]
     max_semantic_distance: f64,
@@ -84,6 +197,7 @@ impl Default for BellRingsConfigWire {
         let defaults = BellRingsConfig::default();
         Self {
             enabled: defaults.enabled,
+            mode: defaults.mode,
             provider: defaults.provider,
             max_semantic_distance: defaults.max_semantic_distance,
             max_bells: defaults.max_bells,
@@ -105,6 +219,7 @@ impl<'de> Deserialize<'de> for BellRingsConfig {
         }
         Ok(Self {
             enabled: wire.enabled,
+            mode: wire.mode,
             provider: wire.provider,
             max_semantic_distance: wire.max_semantic_distance,
             max_bells: wire.max_bells,
@@ -117,6 +232,7 @@ impl Default for BellRingsConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            mode: BellMode::Shadow,
             provider: None,
             max_semantic_distance: 0.3,
             max_bells: 3,
@@ -878,6 +994,122 @@ mod tests {
     }
 
     #[test]
+    fn test_archive_config_is_disabled_by_default() {
+        assert!(!Config::default().archive.enabled);
+    }
+
+    #[test]
+    fn test_archive_config_requires_exactly_one_allowlisted_channel() {
+        let archive = ArchiveConfig {
+            enabled: true,
+            channel_id: "42".to_owned(),
+            guild_id: "7".to_owned(),
+            corpus_id: "fixture-v1".to_owned(),
+            data_dir: Utf8PathBuf::from("/tmp/gaie-fixture"),
+            allow_partial: false,
+            ..ArchiveConfig::default()
+        };
+        assert!(archive.validate(&[]).is_err());
+        assert!(
+            archive
+                .validate(&[ChannelConfig {
+                    id: "42".to_owned(),
+                    ..ChannelConfig::default()
+                }])
+                .is_ok()
+        );
+        assert!(
+            archive
+                .validate(&[
+                    ChannelConfig {
+                        id: "42".to_owned(),
+                        ..ChannelConfig::default()
+                    },
+                    ChannelConfig {
+                        id: "42".to_owned(),
+                        ..ChannelConfig::default()
+                    },
+                ])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_archive_config_rejects_path_like_corpus_and_relative_data_dir() {
+        let mut archive = ArchiveConfig {
+            enabled: true,
+            channel_id: "42".into(),
+            guild_id: "7".into(),
+            corpus_id: "../escape".into(),
+            data_dir: Utf8PathBuf::from("relative"),
+            allow_partial: false,
+            ..ArchiveConfig::default()
+        };
+        let channels = [ChannelConfig {
+            id: "42".into(),
+            ..ChannelConfig::default()
+        }];
+        assert!(archive.validate(&channels).is_err());
+        archive.corpus_id = "safe".into();
+        assert!(archive.validate(&channels).is_err());
+    }
+
+    #[test]
+    fn test_archive_attachment_limits_have_safe_defaults() {
+        let archive = ArchiveConfig::default();
+        let deserialized: ArchiveConfig = toml::from_str("").unwrap();
+
+        assert_eq!(
+            archive.max_attachment_bytes,
+            DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES
+        );
+        assert_eq!(
+            archive.max_run_download_bytes,
+            DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES
+        );
+        assert!(archive.max_run_download_bytes >= archive.max_attachment_bytes);
+        assert_eq!(deserialized, archive);
+    }
+
+    #[test]
+    fn test_archive_attachment_limits_must_be_nonzero_and_ordered() {
+        let channels = [ChannelConfig {
+            id: "42".into(),
+            ..ChannelConfig::default()
+        }];
+        let mut archive = ArchiveConfig {
+            enabled: true,
+            channel_id: "42".into(),
+            guild_id: "7".into(),
+            corpus_id: "safe".into(),
+            data_dir: Utf8PathBuf::from("/tmp/gaie-fixture"),
+            ..ArchiveConfig::default()
+        };
+
+        archive.max_attachment_bytes = 0;
+        assert_eq!(
+            archive.validate(&channels).unwrap_err(),
+            "archive.max_attachment_bytes must be nonzero"
+        );
+
+        archive.max_attachment_bytes = 10;
+        archive.max_run_download_bytes = 0;
+        assert_eq!(
+            archive.validate(&channels).unwrap_err(),
+            "archive.max_run_download_bytes must be nonzero"
+        );
+
+        archive.max_run_download_bytes = 9;
+        assert_eq!(
+            archive.validate(&channels).unwrap_err(),
+            "archive.max_run_download_bytes must be at least archive.max_attachment_bytes"
+        );
+
+        archive.max_run_download_bytes = 10;
+        assert!(archive.validate(&channels).is_ok());
+    }
+
+    #[test]
     fn test_missing_config_generates_and_returns_defaults() {
         let (_dir, state_dir) = temp_state_dir();
         let config_path = state_dir.join("config.toml");
@@ -1449,6 +1681,58 @@ action = "block"
         let hits = c.check("load-bearing synergy");
         assert_eq!(hits.len(), 2);
         assert!(c.has_block(&hits));
+    }
+
+    /// The migration guarantee, at the layer where breaking it actually hurts.
+    ///
+    /// A sidecar parse failure is not contained to the bad entry: the `extend`
+    /// is skipped for the whole file and `store_loaded_config` still installs
+    /// the entry-less config as live. So a seat carrying one retired `warn`
+    /// entry would lose its entire contradictionary, announced only by a
+    /// `tracing::warn!` line no construct reads.
+    #[test]
+    fn test_contradictionary_retired_warn_action_keeps_whole_sidecar() {
+        let (_dir, state_dir) = temp_state_dir();
+        let config_path = state_dir.join("config.toml");
+        let sidecar_path = state_dir.join("contradictionary.toml");
+
+        fs::write(
+            config_path.as_std_path(),
+            b"[contradictionary]\nenabled = true\n",
+        )
+        .unwrap();
+        fs::write(
+            sidecar_path.as_std_path(),
+            r#"
+[[entry]]
+pattern = "retired-tier"
+action = "warn"
+
+[[entry]]
+pattern = "still-here"
+action = "block"
+"#,
+        )
+        .unwrap();
+
+        let (cfg, error) = reload_config(&state_dir);
+        assert!(
+            error.is_none(),
+            "a retired action must not error the config load: {error:?}"
+        );
+        let c = cfg
+            .contradictionary
+            .as_ref()
+            .expect("the sidecar must still build a contradictionary");
+        assert_eq!(
+            c.check("retired-tier still-here").len(),
+            2,
+            "both entries must survive — a retired action may not take the file down"
+        );
+        assert!(
+            c.has_block(&c.check("retired-tier")),
+            "the retired warn tier must resolve to block, not vanish"
+        );
     }
 
     #[test]

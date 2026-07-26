@@ -103,3 +103,19 @@ API actions.
    on SIGTERM/SIGINT.
 5. Config-driven — all policy changes via TOML, no restart required.
 6. Single static binary, low resource footprint.
+## GAIE owned-thread backfill
+
+Archiving only an allowlisted Discord parent channel omits messages whose
+canonical message endpoint belongs to an owned thread. The product boundary is
+one capture root, not one HTTP channel: the configured parent plus every active
+or archived thread visible to the authenticated principal and verified to have
+that exact parent. The system must close this gap without widening the
+allowlist, claiming globally complete Discord history, or accepting arbitrary
+child channel IDs at the message-fetch boundary.
+
+Discord thread discovery is not an atomic snapshot. Atom 1b therefore promises
+principal-visible, non-atomic coverage using active snapshot A, archived-page
+enumeration, and active snapshot B. The failure to enumerate or validate that
+set is a failure of the default backfill, not permission to silently archive the
+parent alone. Parent-only capture remains an explicit `allow_partial`
+break-glass mode.

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-07-21
+
+### Changed
+- **Bells modernization.** Typed `Bell` struct with `loudness` (f64) and
+  `timbre` (String) fields, replacing unstructured bell data. `bells_status`
+  tightened from `Option<String>` to `Option<BellStatus>` with proper enum
+  type (including `PartialTimeout` variant). Wire field renamed from `mem_hits`
+  to `bells`. Bells sorted by loudness descending. Lexical bells included
+  in output. (#211)
+
 ## [0.22.0] - 2026-07-18
 
 ### Added

@@ -774,7 +774,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "aho-corasick",
  "arc-swap",
@@ -786,6 +786,7 @@ dependencies = [
  "fs2",
  "futures-util",
  "insta",
+ "libc",
  "mitex",
  "notify",
  "pretty_assertions",
@@ -796,6 +797,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serenity",
+ "sha2",
  "tempfile",
  "test-case",
  "thiserror 2.0.19",
@@ -810,6 +812,7 @@ dependencies = [
  "typst-as-lib",
  "typst-assets",
  "typst-render",
+ "uuid",
 ]
 
 [[package]]
@@ -4939,6 +4942,7 @@ version = "1.23.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "144d6b123cef80b301b8f72a9e2ca4370ddec21950d0a103dd22c437006d2db7"
 dependencies = [
+ "getrandom 0.4.2",
  "js-sys",
  "wasm-bindgen",
 ]

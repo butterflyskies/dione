@@ -155,3 +155,19 @@ lightweight threat model in [threat-model.md](threat-model.md).
 - Mock MCP transport: in-memory channel pair simulating stdio
 - Snapshot testing via `insta` for notification payloads and tool responses
 - Parameterized tests via `test-case` for gate decision matrices
+## GAIE archive Atom 1b acceptance tests
+
+| Test | Requirement | Independent oracle |
+|---|---|---|
+| Default root captures parent plus verified active/archived threads | GAIE-1B-R1–R5 | Scripted route transcript and child-fetch call log |
+| Wrong-parent candidate never reaches message endpoint | GAIE-1B-R6 | Empty child-fetch call log |
+| Exact v1 checkpoint migrates to exact v2 parent-only shape | GAIE-1B-R8–R9 | Literal input and expected JSON fixtures |
+| Stream cursors resume independently after commit-before-checkpoint fault | GAIE-1B-R10 | Committed-event fixture plus call log and pure stream-map model |
+| Discovery permutations produce identical plan and output | GAIE-1B-R4 | Numeric `BTreeSet` target model and pre/post archive bytes |
+| A later run discovers a new thread without replaying old streams | GAIE-1B-R10 | Literal prior checkpoint and per-stream request cursors |
+| Parent/thread starter alias deduplicates globally and retains relation | GAIE-1B-R7 | Literal duplicate payloads and relation assertions |
+| Identical rerun appends nothing and does not churn checkpoint | GAIE-1B-R10 | Byte-for-byte archive and checkpoint snapshots |
+
+The first phase installs these as executable red contracts. Production
+discovery, verified targets, stream checkpointing, and migration are implemented
+only after the coordinator observes the intended failures.

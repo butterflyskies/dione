@@ -16,7 +16,7 @@ separation for permission relay, and an access request queue for unknown senders
 
 ## Quick Reference
 
-- **Language:** Rust (edition 2024, MSRV 1.95)
+- **Language:** Rust (edition 2024, MSRV 1.93)
 - **Discord:** serenity (gateway + REST, raw events)
 - **MCP:** rmcp (stdio transport)
 - **Runtime:** tokio
