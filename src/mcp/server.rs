@@ -19,6 +19,7 @@ use crate::{
     config::BellMode,
     delivery_buffer::{BufferResult, DeliveryBuffer},
     discord::events::{MessageEvent, NotificationEvent},
+    masks::MaskChecker,
     mcp::{
         dispatch::call_tool,
         notifications::IntoNotification,
@@ -147,12 +148,16 @@ pub async fn run(
 
     let state_dir_notif = server.state_dir.clone();
 
+    // Mask checker for cross-turn capsule injection.
+    let mask_checker = Arc::new(MaskChecker::new(config.masks.clone()));
+
     // Notification forwarding task.
     // Exits on cancellation or when the event channel closes.
     let notification_sink =
         NotificationSink::new(server.mode, stdout.clone(), server.codex_queue.clone())
             .map_err(std::io::Error::other)?;
     let cancel_notif = cancel.clone();
+    let mask_checker_notif = mask_checker.clone();
     let notif_task = tokio::spawn(async move {
         let mut rx = event_rx;
         let mut events_since_prune: u64 = 0;
@@ -180,7 +185,7 @@ pub async fn run(
                 } => {
                     let now = tokio::time::Instant::now();
                     let flushed = delivery_buffer.flush_ready(now);
-                    if let Err(error) = deliver_flushed(&notification_sink, flushed, tz).await {
+                    if let Err(error) = deliver_flushed(&notification_sink, flushed, tz, &mask_checker_notif).await {
                         tracing::error!(error = %error, "inbound delivery failed; shutting down");
                         cancel_notif.cancel();
                         break;
@@ -269,7 +274,10 @@ pub async fn run(
 
                     match delivery_buffer.buffer_event(event, delay_ms) {
                         BufferResult::Immediate(event) => {
-                            let notification = (*event).into_notification();
+                            let mut notification = (*event).into_notification();
+                            if let Some(capsule) = mask_checker_notif.get_capsule() {
+                                crate::masks::inject_capsule(&mut notification, &capsule);
+                            }
                             if let Err(error) = notification_sink.deliver(&notification).await {
                                 tracing::error!(error = %error, "inbound delivery failed; shutting down");
                                 cancel_notif.cancel();
@@ -293,7 +301,7 @@ pub async fn run(
 
         // Channel closed — flush any remaining buffered events.
         let remaining = delivery_buffer.flush_all();
-        if let Err(error) = deliver_flushed(&notification_sink, remaining, tz).await {
+        if let Err(error) = deliver_flushed(&notification_sink, remaining, tz, &mask_checker_notif).await {
             tracing::error!(error = %error, "failed to persist final inbound events");
             cancel_notif.cancel();
         }
@@ -510,27 +518,38 @@ async fn write_line(stdout: &Arc<Mutex<tokio::io::Stdout>>, value: &Value) {
 /// Single events pass through as individual notifications. Multiple events
 /// are coalesced into a single batched notification so the LLM receives one
 /// prompt injection per batch window instead of N.
+///
+/// If the mask checker has an active mask, the capsule text is injected into
+/// each notification's metadata before delivery.
 async fn deliver_flushed(
     sink: &NotificationSink,
     events: Vec<NotificationEvent>,
     tz: Option<chrono_tz::Tz>,
+    mask_checker: &MaskChecker,
 ) -> Result<(), String> {
     if events.is_empty() {
         return Ok(());
     }
 
     let event_count = events.len();
+    let capsule = mask_checker.get_capsule();
 
     match coalesce(events, tz) {
         Some(CoalesceResult::Single(event)) => {
-            let notification = event.into_notification();
+            let mut notification = event.into_notification();
+            if let Some(ref capsule) = capsule {
+                crate::masks::inject_capsule(&mut notification, capsule);
+            }
             sink.deliver(&notification).await?;
         }
-        Some(CoalesceResult::Coalesced(notification)) => {
+        Some(CoalesceResult::Coalesced(mut notification)) => {
             tracing::debug!(
                 event_count,
                 "coalesced {event_count} events into single delivery"
             );
+            if let Some(ref capsule) = capsule {
+                crate::masks::inject_capsule(&mut notification, capsule);
+            }
             sink.deliver(&notification).await?;
         }
         None => {

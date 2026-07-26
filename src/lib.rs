@@ -10,6 +10,7 @@ pub mod delivery_buffer;
 pub mod discord;
 pub mod gaie;
 pub mod gate;
+pub mod masks;
 pub mod mcp;
 pub mod permissions;
 pub mod pre_send;

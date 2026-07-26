@@ -57,6 +57,8 @@ pub struct Config {
     pub archive: ArchiveConfig,
     /// Pronoun enforcement via PronounDB.
     pub pronouns: PronounConfig,
+    /// Cross-turn mask capsule injection.
+    pub masks: MasksConfig,
 }
 
 /// Configuration for the opt-in GAIE one-shot archive commands.
@@ -186,6 +188,25 @@ where
     strs.iter()
         .map(|s| s.parse::<u64>().map_err(serde::de::Error::custom))
         .collect()
+}
+
+/// Cross-turn mask capsule injection configuration.
+///
+/// When enabled, dione queries a masks-mcp SQLite database on each notification
+/// delivery. If the configured principal has an active (non-expired) mask, the
+/// mask's capsule text is injected into the notification metadata.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct MasksConfig {
+    /// Enables mask capsule injection.
+    pub enabled: bool,
+    /// Path to the masks-mcp SQLite database.
+    pub database_path: Option<String>,
+    /// The principal whose mask state to check.
+    pub principal: Option<String>,
+    /// Optional path to the masks catalog TOML (for mask descriptions).
+    /// If omitted, capsule includes only the mask name and timing.
+    pub catalog_path: Option<String>,
 }
 
 /// Whether bell evaluation results are injected into delivery metadata.
