@@ -17,6 +17,9 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
+/// A display name with pronouns already resolved and appended (e.g. "paceheart (she/her)").
+pub struct PronounDisplayName(pub String);
+
 // ── Event types ───────────────────────────────────────────────────────────────
 
 /// Metadata about a Discord attachment, forwarded to the MCP client.
@@ -137,7 +140,7 @@ pub struct Handler {
 }
 
 impl Handler {
-    async fn resolve_pronoun_name(&self, msg: &Message) -> Option<String> {
+    async fn resolve_pronoun_name(&self, msg: &Message) -> Option<PronounDisplayName> {
         let service = self.pronoun_service.as_ref()?;
         let user_id = msg.author.id.get();
         if !service.is_opted_in(user_id) {
@@ -148,7 +151,7 @@ impl Handler {
         if resolved == base_name {
             None
         } else {
-            Some(resolved)
+            Some(PronounDisplayName(resolved))
         }
     }
 }
@@ -865,7 +868,7 @@ fn build_message_event(
     config: &crate::config::LoadedConfig,
     thread_parent_id: Option<u64>,
     targeting: MessageTargeting,
-    pronoun_display_name: Option<String>,
+    pronoun_display_name: Option<PronounDisplayName>,
 ) -> NotificationEvent {
     let attachments = msg
         .attachments
@@ -886,6 +889,7 @@ fn build_message_event(
     let (reply_to_user_id, reply_to_user, reply_to_content_preview) = reply_context(msg);
 
     let resolved_name = pronoun_display_name
+        .map(|p| p.0)
         .unwrap_or_else(|| resolve_user_identity(Some(&display_name(msg)), Some(&msg.author.name)));
 
     NotificationEvent::Message(MessageEvent {

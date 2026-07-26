@@ -158,7 +158,9 @@ pub struct PronounConfig {
     /// Enables PronounDB lookups for opted-in users.
     pub enabled: bool,
     /// Discord user IDs that opt in to pronoun display.
-    pub include_for: Vec<String>,
+    /// Accepts string IDs in config (TOML i64 can't represent all snowflakes).
+    #[serde(deserialize_with = "deserialize_id_vec")]
+    pub include_for: Vec<u64>,
     /// Deadline in milliseconds for PronounDB API lookups. Fail-open on timeout.
     pub deadline_ms: u64,
     /// Cache TTL in seconds. Avoids re-fetching on every message.
@@ -174,6 +176,16 @@ impl Default for PronounConfig {
             cache_ttl_seconds: 3600,
         }
     }
+}
+
+fn deserialize_id_vec<'de, D>(deserializer: D) -> Result<Vec<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let strs: Vec<String> = Vec::deserialize(deserializer)?;
+    strs.iter()
+        .map(|s| s.parse::<u64>().map_err(serde::de::Error::custom))
+        .collect()
 }
 
 /// Whether bell evaluation results are injected into delivery metadata.
@@ -733,7 +745,7 @@ impl LoadedConfig {
             }
         };
         let pronoun_opted_in = if raw.pronouns.enabled {
-            parse_id_set(&raw.pronouns.include_for)
+            raw.pronouns.include_for.iter().copied().collect()
         } else {
             HashSet::new()
         };
