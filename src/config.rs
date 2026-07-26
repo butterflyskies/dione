@@ -155,12 +155,12 @@ impl ArchiveConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct PronounConfig {
-    /// Enables PronounDB lookups for opted-in users.
+    /// Enables PronounDB lookups. Per-construct toggle.
     pub enabled: bool,
-    /// Discord user IDs that opt in to pronoun display.
+    /// Discord user IDs excluded from pronoun display (opt-out list).
     /// Accepts string IDs in config (TOML i64 can't represent all snowflakes).
     #[serde(deserialize_with = "deserialize_id_vec")]
-    pub include_for: Vec<u64>,
+    pub exclude_for: Vec<u64>,
     /// Deadline in milliseconds for PronounDB API lookups. Fail-open on timeout.
     pub deadline_ms: u64,
     /// Cache TTL in seconds. Avoids re-fetching on every message.
@@ -170,8 +170,8 @@ pub struct PronounConfig {
 impl Default for PronounConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            include_for: Vec::new(),
+            enabled: true,
+            exclude_for: Vec::new(),
             deadline_ms: 500,
             cache_ttl_seconds: 3600,
         }
@@ -801,8 +801,8 @@ pub struct LoadedConfig {
     pub pre_send_author_id: Option<UserId>,
     /// Validated construct identity for outbound hook context.
     pub pre_send_construct_id: ConstructId,
-    /// User IDs that opted into pronoun display via PronounDB.
-    pub pronoun_opted_in: HashSet<u64>,
+    /// User IDs excluded from pronoun display (opt-out).
+    pub pronoun_excluded: HashSet<u64>,
 }
 
 /// Pre-parsed per-channel access policy.
@@ -875,8 +875,8 @@ impl LoadedConfig {
                 ConstructId::default()
             }
         };
-        let pronoun_opted_in = if raw.pronouns.enabled {
-            raw.pronouns.include_for.iter().copied().collect()
+        let pronoun_excluded = if raw.pronouns.enabled {
+            raw.pronouns.exclude_for.iter().copied().collect()
         } else {
             HashSet::new()
         };
@@ -891,7 +891,7 @@ impl LoadedConfig {
             contradictionary,
             pre_send_author_id,
             pre_send_construct_id,
-            pronoun_opted_in,
+            pronoun_excluded,
         }
     }
 
