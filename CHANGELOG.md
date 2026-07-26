@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Durable pronoun enforcement** via PronounDB v2 API. Per-user opt-in,
+  fail-open with configurable cache TTL. Pronouns appended to display names
+  in parentheses format. `PronounDisplayName` newtype, `Vec<u64>` for Discord
+  IDs. (#214)
+
 ## [0.23.0] - 2026-07-21
 
 ### Changed
