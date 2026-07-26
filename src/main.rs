@@ -182,6 +182,17 @@ async fn main() -> Result<()> {
     let (discord_cmd_tx, discord_cmd_rx) =
         mpsc::channel::<dione::mcp::tools::bot_state::DiscordCommand>(16);
 
+    // Build pronoun service if configured.
+    let pronoun_service = if !config.pronoun_opted_in.is_empty() {
+        Some(std::sync::Arc::new(dione::pronouns::PronounService::new(
+            config.pronoun_opted_in.clone(),
+            config.raw.pronouns.deadline_ms,
+            std::time::Duration::from_secs(config.raw.pronouns.cache_ttl_seconds),
+        )))
+    } else {
+        None
+    };
+
     // Build Discord event handler.
     let handler = Handler {
         state: state.clone(),
@@ -190,6 +201,7 @@ async fn main() -> Result<()> {
         state_dir: state_dir.clone(),
         bot_user_id: AtomicU64::new(0),
         discord_cmd_rx: tokio::sync::Mutex::new(Some(discord_cmd_rx)),
+        pronoun_service,
     };
 
     let mut discord_client = dione::discord::client::build_client(&token, handler)
