@@ -55,6 +55,8 @@ pub struct Config {
     pub bell_rings: BellRingsConfig,
     /// Restart-only, one-shot GAIE archive configuration.
     pub archive: ArchiveConfig,
+    /// Pronoun enforcement via PronounDB.
+    pub pronouns: PronounConfig,
 }
 
 /// Configuration for the opt-in GAIE one-shot archive commands.
@@ -147,6 +149,43 @@ impl ArchiveConfig {
         }
         Ok(())
     }
+}
+
+/// Per-user pronoun enforcement configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct PronounConfig {
+    /// Enables PronounDB lookups for opted-in users.
+    pub enabled: bool,
+    /// Discord user IDs that opt in to pronoun display.
+    /// Accepts string IDs in config (TOML i64 can't represent all snowflakes).
+    #[serde(deserialize_with = "deserialize_id_vec")]
+    pub include_for: Vec<u64>,
+    /// Deadline in milliseconds for PronounDB API lookups. Fail-open on timeout.
+    pub deadline_ms: u64,
+    /// Cache TTL in seconds. Avoids re-fetching on every message.
+    pub cache_ttl_seconds: u64,
+}
+
+impl Default for PronounConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            include_for: Vec::new(),
+            deadline_ms: 500,
+            cache_ttl_seconds: 3600,
+        }
+    }
+}
+
+fn deserialize_id_vec<'de, D>(deserializer: D) -> Result<Vec<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let strs: Vec<String> = Vec::deserialize(deserializer)?;
+    strs.iter()
+        .map(|s| s.parse::<u64>().map_err(serde::de::Error::custom))
+        .collect()
 }
 
 /// Whether bell evaluation results are injected into delivery metadata.
@@ -631,6 +670,8 @@ pub struct LoadedConfig {
     pub pre_send_author_id: Option<UserId>,
     /// Validated construct identity for outbound hook context.
     pub pre_send_construct_id: ConstructId,
+    /// User IDs that opted into pronoun display via PronounDB.
+    pub pronoun_opted_in: HashSet<u64>,
 }
 
 /// Pre-parsed per-channel access policy.
@@ -703,6 +744,11 @@ impl LoadedConfig {
                 ConstructId::default()
             }
         };
+        let pronoun_opted_in = if raw.pronouns.enabled {
+            raw.pronouns.include_for.iter().copied().collect()
+        } else {
+            HashSet::new()
+        };
         Self {
             raw,
             allowed_ids,
@@ -714,6 +760,7 @@ impl LoadedConfig {
             contradictionary,
             pre_send_author_id,
             pre_send_construct_id,
+            pronoun_opted_in,
         }
     }
 
@@ -1710,6 +1757,58 @@ action = "block"
         let hits = c.check("load-bearing synergy");
         assert_eq!(hits.len(), 2);
         assert!(c.has_block(&hits));
+    }
+
+    /// The migration guarantee, at the layer where breaking it actually hurts.
+    ///
+    /// A sidecar parse failure is not contained to the bad entry: the `extend`
+    /// is skipped for the whole file and `store_loaded_config` still installs
+    /// the entry-less config as live. So a seat carrying one retired `warn`
+    /// entry would lose its entire contradictionary, announced only by a
+    /// `tracing::warn!` line no construct reads.
+    #[test]
+    fn test_contradictionary_retired_warn_action_keeps_whole_sidecar() {
+        let (_dir, state_dir) = temp_state_dir();
+        let config_path = state_dir.join("config.toml");
+        let sidecar_path = state_dir.join("contradictionary.toml");
+
+        fs::write(
+            config_path.as_std_path(),
+            b"[contradictionary]\nenabled = true\n",
+        )
+        .unwrap();
+        fs::write(
+            sidecar_path.as_std_path(),
+            r#"
+[[entry]]
+pattern = "retired-tier"
+action = "warn"
+
+[[entry]]
+pattern = "still-here"
+action = "block"
+"#,
+        )
+        .unwrap();
+
+        let (cfg, error) = reload_config(&state_dir);
+        assert!(
+            error.is_none(),
+            "a retired action must not error the config load: {error:?}"
+        );
+        let c = cfg
+            .contradictionary
+            .as_ref()
+            .expect("the sidecar must still build a contradictionary");
+        assert_eq!(
+            c.check("retired-tier still-here").len(),
+            2,
+            "both entries must survive — a retired action may not take the file down"
+        );
+        assert!(
+            c.has_block(&c.check("retired-tier")),
+            "the retired warn tier must resolve to block, not vanish"
+        );
     }
 
     #[test]

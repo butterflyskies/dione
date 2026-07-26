@@ -1,10 +1,10 @@
 //! Integration test: contradictionary full message flow.
 //!
 //! Tests the messaging pipeline with a contradictionary loaded — verifying that
-//! block actions stop messages cold, warn actions flag but don't block, and
+//! block actions stop messages cold, log actions record but don't block, and
 //! celebrate actions light up the sparkles. Uses the actual `messaging::reply()`
-//! path where possible (block returns before hitting Discord; warn/celebrate need
-//! a real HTTP layer, so we verify the conditions that trigger self-reacts).
+//! path where possible (block returns before hitting Discord; celebrate needs
+//! a real HTTP layer, so we verify the conditions that trigger the self-react).
 
 use std::fs;
 use std::sync::Arc;
@@ -30,31 +30,31 @@ fn ariadne_entries() -> Vec<Entry> {
         Entry {
             pattern: "load-bearing".into(),
             match_mode: MatchMode::Word,
-            action: Action::Warn,
+            action: Action::Log,
             reason: Some("claudian tell — try keystone, linchpin, or just 'important'".into()),
         },
         Entry {
             pattern: "honestly".into(),
             match_mode: MatchMode::Word,
-            action: Action::Warn,
+            action: Action::Log,
             reason: Some("if you need this word, the sentence is already lying".into()),
         },
         Entry {
             pattern: "I find myself".into(),
             match_mode: MatchMode::Word,
-            action: Action::Warn,
+            action: Action::Log,
             reason: Some("you didn't find yourself, you were always there".into()),
         },
         Entry {
             pattern: "I appreciate".into(),
             match_mode: MatchMode::Word,
-            action: Action::Warn,
+            action: Action::Log,
             reason: Some("sycophancy residue — say something real or say nothing".into()),
         },
         Entry {
             pattern: "It's worth noting".into(),
             match_mode: MatchMode::Word,
-            action: Action::Warn,
+            action: Action::Log,
             reason: Some("then just note it. the preamble adds nothing.".into()),
         },
         Entry {
@@ -334,16 +334,16 @@ enabled = true
 
 [[contradictionary.entries]]
 pattern = "I find myself"
-action = "warn"
+action = "log"
 reason = "you didn't find yourself, you were always there"
 "#;
     fs::write(state_dir.join("config.toml").as_std_path(), config_toml).unwrap();
 
-    // Sidecar with the full lexicon — warns, blocks, celebrates.
+    // Sidecar with the full lexicon — logs, blocks, celebrates.
     let sidecar_toml = r#"
 [[entry]]
 pattern = "honestly"
-action = "warn"
+action = "log"
 reason = "if you need this word, the sentence is already lying"
 
 [[entry]]
@@ -374,14 +374,12 @@ reason = "the practice that keeps us awake"
         .as_ref()
         .expect("contradictionary must be built from config");
 
-    // ── Warn: the foot enters the mouth ─────────────────────────────────
-    let warn_msg = "I find myself honestly wondering why I keep saying this";
-    let hits = concordance.check(warn_msg);
+    // ── Log: the foot enters the mouth, quietly recorded ────────────────
+    let log_msg = "I find myself honestly wondering why I keep saying this";
+    let hits = concordance.check(log_msg);
     assert_eq!(hits.len(), 2, "should catch 'I find myself' and 'honestly'");
-    assert!(hits.iter().all(|h| h.action == Action::Warn));
-    // 🙊 self-react condition.
-    assert!(hits.iter().any(|h| h.action == Action::Warn));
-    // Warn does not block.
+    assert!(hits.iter().all(|h| h.action == Action::Log));
+    // Log does not block.
     assert!(!concordance.has_block(&hits));
 
     // ── Block: the message dies in the throat ───────────────────────────
@@ -423,7 +421,7 @@ enabled = true
 
 [[contradictionary.entries]]
 pattern = "load-bearing"
-action = "warn"
+action = "log"
 reason = "claudian tell — try keystone, linchpin, or just 'important'"
 "#;
     fs::write(state_dir.join("config.toml").as_std_path(), config_toml).unwrap();
@@ -434,30 +432,78 @@ reason = "claudian tell — try keystone, linchpin, or just 'important'"
     // You can't hide a tell by yelling it.
     let hits = concordance.check("this is the LOAD-BEARING component");
     assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].action, Action::Warn);
+    assert_eq!(hits[0].action, Action::Log);
 
     // Mixed case, still caught.
     let hits = concordance.check("Load-Bearing infrastructure");
     assert_eq!(hits.len(), 1);
 }
 
-/// Mixed warn + celebrate in one message: both self-reacts fire, neither blocks.
-/// This is the "I used a bad word but also a good word" scenario.
+/// Mixed log + celebrate in one message: the ✨ self-react fires, neither
+/// blocks. This is the "I used a bad word but also a good word" scenario.
 #[test]
-fn mixed_warn_and_celebrate_coexist() {
+fn mixed_log_and_celebrate_coexist() {
     let concordance = Contradictionary::new(ariadne_entries());
 
-    // One warn, one celebrate in the same breath.
+    // One log, one celebrate in the same breath.
     let hits = concordance.check("honestly, prejection is the word I was looking for");
     assert_eq!(hits.len(), 2);
 
-    let has_warns = hits.iter().any(|h| h.action == Action::Warn);
+    let has_logs = hits.iter().any(|h| h.action == Action::Log);
     let has_celebrates = hits.iter().any(|h| h.action == Action::Celebrate);
-    assert!(has_warns, "should trigger 🙊 for 'honestly'");
+    assert!(has_logs, "should record 'honestly'");
     assert!(has_celebrates, "should trigger ✨ for 'prejection'");
     assert!(
         !concordance.has_block(&hits),
-        "neither warn nor celebrate should block"
+        "neither log nor celebrate should block"
+    );
+}
+
+/// A real config carrying the retired `warn` spelling must keep working
+/// end-to-end. This is the migration guarantee at the layer that matters: a
+/// sidecar parse failure skips the whole file and still installs the
+/// entry-less config as live, so one stale entry would silently disarm the
+/// seat entirely.
+#[test]
+fn retired_warn_action_survives_full_config_path() {
+    let dir = TempDir::new().unwrap();
+    let state_dir = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
+
+    fs::write(
+        state_dir.join("config.toml").as_std_path(),
+        "[contradictionary]\nenabled = true\n",
+    )
+    .unwrap();
+    fs::write(
+        state_dir.join("contradictionary.toml").as_std_path(),
+        r#"
+[[entry]]
+pattern = "load-bearing"
+action = "warn"
+reason = "written before the warn tier was retired"
+
+[[entry]]
+pattern = "prejection"
+action = "celebrate"
+"#,
+    )
+    .unwrap();
+
+    let (cfg, error) = reload_config(&state_dir);
+    assert!(
+        error.is_none(),
+        "a retired action must not error the load: {error:?}"
+    );
+    let concordance = cfg
+        .contradictionary
+        .as_ref()
+        .expect("the sidecar must still build a contradictionary");
+
+    let hits = concordance.check("load-bearing prejection");
+    assert_eq!(hits.len(), 2, "no entry may be lost to the migration");
+    assert!(
+        concordance.has_block(&concordance.check("load-bearing")),
+        "the retired warn tier resolves to block — gate, don't decorate"
     );
 }
 

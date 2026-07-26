@@ -57,5 +57,6 @@ text_chunk_limit = 2000
 # # Patterns are matched case-insensitively.
 # # [[contradictionary.entries]]
 # # pattern = "load-bearing"
-# # action = "warn"        # "warn" (🙊), "block" (reject), "log" (silent), "celebrate" (✨)
+# # action = "block"       # "block" (reject, default), "log" (silent), "celebrate" (✨)
+# #                        # "warn" is retired — it still parses, as "block", but update it
 # # match_mode = "word"    # "word" (default, whole-word), "substring" (anywhere in text)

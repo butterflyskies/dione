@@ -1,6 +1,6 @@
 [package]
 name = "dione"
-version = "0.23.0"
+version = "0.24.0"
 edition = "2024"
 rust-version = "1.93"
 license = "MIT OR Apache-2.0"
@@ -12,7 +12,7 @@ categories = ["command-line-utilities"]
 
 [dependencies]
 arc-swap = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "http", "rustls_backend", "cache"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "fs", "io-util", "io-std", "net", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
@@ -33,7 +33,7 @@ chrono-tz = "0.10"
 camino = { version = "1", features = ["serde1"] }
 futures-util = "0.3"
 notify = "8"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 rmcp = { version = "1.1", features = ["client", "transport-streamable-http-client-reqwest"] }
