@@ -218,6 +218,16 @@ pub async fn run(
                         rate_limiter.update_config(new_rl_config.clone());
                     }
 
+                    // Warm any newly configured bell providers so they don't
+                    // pay cold-start latency on their first real bell.
+                    if cfg.bell_rings.enabled {
+                        let evaluator = Arc::clone(&bell_evaluator);
+                        let bell_cfg = cfg.bell_rings.clone();
+                        tokio::spawn(async move {
+                            evaluator.warm_new_providers(&bell_cfg).await;
+                        });
+                    }
+
                     // Rate-limit check for message events.
                     if let NotificationEvent::Message(MessageEvent { ref user_id, ref chat_id, .. }) = event {
                         let user_id_str = user_id.get().to_string();

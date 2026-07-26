@@ -270,7 +270,7 @@ impl<'de> Deserialize<'de> for BellRingsConfig {
         D: Deserializer<'de>,
     {
         let wire = BellRingsConfigWire::deserialize(deserializer)?;
-        let providers = if !wire.providers.is_empty() {
+        let mut providers = if !wire.providers.is_empty() {
             wire.providers
         } else if let Some(provider) = wire.provider {
             vec![provider]
@@ -282,7 +282,19 @@ impl<'de> Deserialize<'de> for BellRingsConfig {
                 "enabled bell_rings requires at least one provider",
             ));
         }
-        // Reject empty or colliding provider aliases.
+        // Normalize and validate provider aliases: trim, reject empty/whitespace-only,
+        // case-insensitive collision detection.
+        for provider in &mut providers {
+            if let Some(ref mut alias) = provider.alias {
+                let trimmed = alias.trim().to_owned();
+                if trimmed.is_empty() {
+                    return Err(D::Error::custom(
+                        "bell_rings provider alias must not be empty or whitespace-only",
+                    ));
+                }
+                *alias = trimmed;
+            }
+        }
         {
             let mut seen = std::collections::HashSet::new();
             for provider in &providers {
@@ -292,9 +304,10 @@ impl<'de> Deserialize<'de> for BellRingsConfig {
                         "bell_rings provider alias must not be empty (set alias or use a non-empty scope)",
                     ));
                 }
-                if !seen.insert(alias.to_owned()) {
+                let normalized = alias.to_lowercase();
+                if !seen.insert(normalized) {
                     return Err(D::Error::custom(format!(
-                        "duplicate bell_rings provider alias: {alias}"
+                        "duplicate bell_rings provider alias (case-insensitive): {alias}"
                     )));
                 }
             }

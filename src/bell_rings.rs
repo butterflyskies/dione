@@ -252,7 +252,7 @@ pub fn render_bells(bells: &[Bell]) -> String {
         .iter()
         .map(|bell| {
             format!(
-                "{}{} {}/{}@{} d={:.2} id={} rid={}",
+                "{}{} {}/{}@{} d={} id={} rid={}",
                 bell.loudness,
                 bell.timbre.code(),
                 bell.scope,
@@ -324,6 +324,42 @@ impl BellEvaluator {
                 "some bell providers failed to pre-warm"
             );
         }
+    }
+
+    /// Returns the set of currently known provider endpoint URLs.
+    pub async fn known_endpoints(&self) -> Vec<String> {
+        let slots = self.providers.lock().await;
+        slots.iter().filter_map(|s| s.endpoint.clone()).collect()
+    }
+
+    /// Warm only providers whose endpoints are not yet known (hot-reload path).
+    pub async fn warm_new_providers(&self, config: &BellRingsConfig) {
+        let known = self.known_endpoints().await;
+        let new_endpoints: Vec<_> = config
+            .providers
+            .iter()
+            .filter(|p| !known.contains(&p.url.as_str().to_owned()))
+            .collect();
+        if new_endpoints.is_empty() {
+            return;
+        }
+        tracing::info!(
+            count = new_endpoints.len(),
+            "warming newly configured bell providers"
+        );
+        let providers = self.providers_for(config).await;
+        let new_providers: Vec<_> = providers
+            .iter()
+            .filter(|(pc, _)| !known.contains(&pc.url.as_str().to_owned()))
+            .collect();
+        let futs: Vec<_> = new_providers.iter().map(|(_, p)| p.warm()).collect();
+        let results = join_all(futs).await;
+        let succeeded = results.iter().filter(|ok| **ok).count();
+        tracing::info!(
+            succeeded,
+            total = new_providers.len(),
+            "hot-reload bell provider warm-up complete"
+        );
     }
 
     async fn providers_for(
@@ -1103,6 +1139,70 @@ mod tests {
             [[bell_rings.providers]]\nurl='http://shared/mcp'\nscope='shared'\nalias='same'",
         );
         assert!(parsed.is_err(), "duplicate aliases must be rejected");
+    }
+
+    #[test]
+    fn whitespace_only_alias_is_rejected() {
+        let parsed = toml::from_str::<Config>(
+            "[bell_rings]\nenabled=true\n\
+            [[bell_rings.providers]]\nurl='http://personal/mcp'\nscope='lain'\nalias='   '",
+        );
+        assert!(parsed.is_err(), "whitespace-only alias must be rejected");
+    }
+
+    #[test]
+    fn case_insensitive_alias_collision_is_rejected() {
+        let parsed = toml::from_str::<Config>(
+            "[bell_rings]\nenabled=true\n\
+            [[bell_rings.providers]]\nurl='http://personal/mcp'\nscope='lain'\nalias='cc'\n\
+            [[bell_rings.providers]]\nurl='http://shared/mcp'\nscope='shared'\nalias=' CC '",
+        );
+        assert!(
+            parsed.is_err(),
+            "case-insensitive alias collision must be rejected"
+        );
+    }
+
+    #[test]
+    fn alias_whitespace_is_trimmed_at_parse_time() {
+        let cfg: Config = toml::from_str(
+            "[bell_rings]\nenabled=true\n\
+            [[bell_rings.providers]]\nurl='http://personal/mcp'\nscope='lain'\nalias='  personal  '",
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.bell_rings.providers[0].alias(),
+            "personal",
+            "alias whitespace should be trimmed"
+        );
+    }
+
+    #[test]
+    fn render_bells_preserves_distance_precision() {
+        let bells = vec![Bell {
+            loudness: 1,
+            timbre: BellTimbre::Semantic,
+            scope: "lain".to_owned(),
+            memory_name: "test".to_owned(),
+            provider_alias: "personal".to_owned(),
+            provider_url: "http://localhost/mcp".to_owned(),
+            provider_rank: 0,
+            distance: 0.004,
+            memory_id: "a".to_owned(),
+            recall_id: "r_1".to_owned(),
+        }];
+        let rendered = render_bells(&bells);
+        assert!(
+            rendered.contains("d=0.004"),
+            "distance 0.004 must not be rounded to 0.00, got: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn known_endpoints_starts_empty() {
+        let evaluator = BellEvaluator::new();
+        let known = evaluator.known_endpoints().await;
+        assert!(known.is_empty(), "no endpoints known for fresh evaluator");
     }
 
     #[test]
