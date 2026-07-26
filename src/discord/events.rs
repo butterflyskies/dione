@@ -132,6 +132,25 @@ pub struct Handler {
     /// Receiver for gateway-level commands from MCP tools (e.g. presence updates).
     /// Taken once during `ready()` to spawn the command processing task.
     pub discord_cmd_rx: tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<DiscordCommand>>>,
+    /// Pronoun resolution service (PronounDB v2 adapter with cache).
+    pub pronoun_service: Option<Arc<crate::pronouns::PronounService>>,
+}
+
+impl Handler {
+    async fn resolve_pronoun_name(&self, msg: &Message) -> Option<String> {
+        let service = self.pronoun_service.as_ref()?;
+        let user_id = msg.author.id.get();
+        if !service.is_opted_in(user_id) {
+            return None;
+        }
+        let base_name = resolve_user_identity(Some(&display_name(msg)), Some(&msg.author.name));
+        let resolved = service.resolve_display_name(user_id, &base_name).await;
+        if resolved == base_name {
+            None
+        } else {
+            Some(resolved)
+        }
+    }
 }
 
 // ── EventHandler impl ─────────────────────────────────────────────────────────
@@ -192,8 +211,14 @@ impl EventHandler for Handler {
                         state.record_dm_channel(sender_id, channel_id);
                     }
 
-                    let event =
-                        build_message_event(&msg, &config, None, MessageTargeting::DirectMessage);
+                    let pronoun_name = self.resolve_pronoun_name(&msg).await;
+                    let event = build_message_event(
+                        &msg,
+                        &config,
+                        None,
+                        MessageTargeting::DirectMessage,
+                        pronoun_name,
+                    );
                     if let Err(e) = self.tx.send(event).await {
                         tracing::warn!(error = %e, "failed to send DM notification event");
                     }
@@ -267,8 +292,14 @@ impl EventHandler for Handler {
                 GateDecision::Deliver => {
                     let targeting = mention_kind
                         .map_or(MessageTargeting::Ambient, MessageTargeting::GuildDirected);
-                    let event =
-                        build_message_event(&msg, &config, resolved.thread_parent_id, targeting);
+                    let pronoun_name = self.resolve_pronoun_name(&msg).await;
+                    let event = build_message_event(
+                        &msg,
+                        &config,
+                        resolved.thread_parent_id,
+                        targeting,
+                        pronoun_name,
+                    );
                     if let Err(e) = self.tx.send(event).await {
                         tracing::warn!(error = %e, "failed to send guild notification event");
                     }
@@ -452,7 +483,12 @@ impl EventHandler for Handler {
                 .as_ref()
                 .map(display_name)
                 .unwrap_or_else(|| display_name_from_user(author));
-            let sender_name = resolve_user_identity(Some(&resolved), Some(&author.name));
+            let mut sender_name = resolve_user_identity(Some(&resolved), Some(&author.name));
+            if let Some(svc) = &self.pronoun_service {
+                sender_name = svc
+                    .resolve_display_name(author.id.get(), &sender_name)
+                    .await;
+            }
             state.cache_username(author.id.get(), sender_name.clone());
             sender_name
         };
@@ -829,6 +865,7 @@ fn build_message_event(
     config: &crate::config::LoadedConfig,
     thread_parent_id: Option<u64>,
     targeting: MessageTargeting,
+    pronoun_display_name: Option<String>,
 ) -> NotificationEvent {
     let attachments = msg
         .attachments
@@ -848,10 +885,13 @@ fn build_message_event(
     let reply_to_message_id = msg.message_reference.as_ref().and_then(reply_to_id);
     let (reply_to_user_id, reply_to_user, reply_to_content_preview) = reply_context(msg);
 
+    let resolved_name = pronoun_display_name
+        .unwrap_or_else(|| resolve_user_identity(Some(&display_name(msg)), Some(&msg.author.name)));
+
     NotificationEvent::Message(MessageEvent {
         chat_id: msg.channel_id,
         message_id: msg.id,
-        user: resolve_user_identity(Some(&display_name(msg)), Some(&msg.author.name)),
+        user: resolved_name,
         user_id: msg.author.id,
         content: msg.content.clone(),
         targeting,
@@ -1339,7 +1379,7 @@ mod tests {
             )),
         );
 
-        let event = build_message_event(&msg, &config, None, MessageTargeting::Ambient);
+        let event = build_message_event(&msg, &config, None, MessageTargeting::Ambient, None);
         let NotificationEvent::Message(MessageEvent {
             reply_to_message_id,
             reply_to_user_id,

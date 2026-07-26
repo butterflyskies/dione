@@ -55,6 +55,8 @@ pub struct Config {
     pub bell_rings: BellRingsConfig,
     /// Restart-only, one-shot GAIE archive configuration.
     pub archive: ArchiveConfig,
+    /// Pronoun enforcement via PronounDB.
+    pub pronouns: PronounConfig,
 }
 
 /// Configuration for the opt-in GAIE one-shot archive commands.
@@ -146,6 +148,31 @@ impl ArchiveConfig {
             );
         }
         Ok(())
+    }
+}
+
+/// Per-user pronoun enforcement configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct PronounConfig {
+    /// Enables PronounDB lookups for opted-in users.
+    pub enabled: bool,
+    /// Discord user IDs that opt in to pronoun display.
+    pub include_for: Vec<String>,
+    /// Deadline in milliseconds for PronounDB API lookups. Fail-open on timeout.
+    pub deadline_ms: u64,
+    /// Cache TTL in seconds. Avoids re-fetching on every message.
+    pub cache_ttl_seconds: u64,
+}
+
+impl Default for PronounConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            include_for: Vec::new(),
+            deadline_ms: 500,
+            cache_ttl_seconds: 3600,
+        }
     }
 }
 
@@ -631,6 +658,8 @@ pub struct LoadedConfig {
     pub pre_send_author_id: Option<UserId>,
     /// Validated construct identity for outbound hook context.
     pub pre_send_construct_id: ConstructId,
+    /// User IDs that opted into pronoun display via PronounDB.
+    pub pronoun_opted_in: HashSet<u64>,
 }
 
 /// Pre-parsed per-channel access policy.
@@ -703,6 +732,11 @@ impl LoadedConfig {
                 ConstructId::default()
             }
         };
+        let pronoun_opted_in = if raw.pronouns.enabled {
+            parse_id_set(&raw.pronouns.include_for)
+        } else {
+            HashSet::new()
+        };
         Self {
             raw,
             allowed_ids,
@@ -714,6 +748,7 @@ impl LoadedConfig {
             contradictionary,
             pre_send_author_id,
             pre_send_construct_id,
+            pronoun_opted_in,
         }
     }
 
