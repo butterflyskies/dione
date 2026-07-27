@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Bell connections to internal MCP servers now trust the system CA store.**
+  Switched reqwest from `rustls-tls` (embedded Mozilla bundle) to
+  `rustls-tls-native-roots` (reads `/etc/ssl/certs/`). Fixes `partial_error`
+  on every bell ring since 0.25.0 when the collective-conscious provider uses
+  a certificate signed by the house CA (RosiePKI 2025).
+
 ## [0.25.0] - 2026-07-26
 
 ### Added
