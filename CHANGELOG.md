@@ -9,10 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 - **Bell connections to internal MCP servers now trust the system CA store.**
-  Switched reqwest from `rustls-tls` (embedded Mozilla bundle) to
-  `rustls-tls-native-roots` (reads `/etc/ssl/certs/`). Fixes `partial_error`
-  on every bell ring since 0.25.0 when the collective-conscious provider uses
-  a certificate signed by the house CA (RosiePKI 2025).
+  Two stacked fixes: (1) switched dione's reqwest 0.12 from `rustls-tls`
+  (embedded Mozilla bundle) to `rustls-tls-native-roots` (reads
+  `/etc/ssl/certs/`); (2) added an explicit reqwest 0.13 dependency with
+  `rustls` to enable HTTPS in rmcp's transport — rmcp uses reqwest 0.13
+  which Cargo treats as a separate crate, so feature unification from
+  dione's 0.12 dep did not apply. Without (2), the bell client failed with
+  "invalid URL, scheme is not http" on any HTTPS endpoint.
 
 ## [0.25.0] - 2026-07-26
 
