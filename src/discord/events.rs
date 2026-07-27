@@ -189,6 +189,13 @@ impl EventHandler for Handler {
         )
         .await
         {
+            tracing::info!(
+                author_id = msg.author.id.get(),
+                channel_id = msg.channel_id.get(),
+                message_id = msg.id.get(),
+                policy = "global_bot_allow_from",
+                "bot-authored message suppressed from live delivery; message remains available through Discord history"
+            );
             return;
         }
         let bot_user_id = self.bot_user_id.load(Ordering::Relaxed);
@@ -445,6 +452,13 @@ impl EventHandler for Handler {
         )
         .await
         {
+            tracing::info!(
+                author_id = author.id.get(),
+                channel_id = event.channel_id.get(),
+                message_id = event.id.get(),
+                policy = "global_bot_allow_from",
+                "bot-authored message edit suppressed from live delivery; message remains available through Discord history"
+            );
             return;
         }
 
@@ -1141,6 +1155,40 @@ mod tests {
         assert!(
             should_drop_bot_message(true, 42, &config),
             "bot must be dropped when allow_from is empty"
+        );
+    }
+
+    /// Channel visibility and live bot wake admission are distinct policies:
+    /// an opted-in channel can admit any member while the global bot filter
+    /// still suppresses an unlisted bot from push delivery. Pull tools use the
+    /// channel policy, so the message remains retrievable from Discord history.
+    #[test]
+    fn test_unlisted_bot_can_remain_channel_visible_without_live_delivery() {
+        let raw = Config {
+            access: AccessConfig {
+                dm_policy: DmPolicy::Queue,
+                allow_from: vec![],
+                admins: vec![],
+                admin_only_mutations: false,
+            },
+            channels: vec![crate::config::ChannelConfig {
+                id: "123".to_owned(),
+                require_mention: false,
+                allow_from: vec![],
+                delivery_delay_ms: None,
+            }],
+            ..Default::default()
+        };
+        let config = LoadedConfig::from_raw(raw);
+
+        assert_eq!(
+            InboundGate::check_guild(&config, 123, 42, false),
+            GateDecision::Deliver,
+            "the configured channel remains visible to any member"
+        );
+        assert!(
+            should_drop_bot_message(true, 42, &config),
+            "an unlisted bot must not gain live wake authority"
         );
     }
 
