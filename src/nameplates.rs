@@ -67,11 +67,10 @@ impl NameplateProvider {
     async fn get_or_fetch(&self, user_id: u64) -> Option<Nameplate> {
         {
             let cache = self.cache.read().await;
-            if let Some(ref cached) = *cache {
-                if cached.fetched_at.elapsed() < self.ttl {
+            if let Some(ref cached) = *cache
+                && cached.fetched_at.elapsed() < self.ttl {
                     return cached.entries.get(&user_id).cloned();
                 }
-            }
         }
 
         match self.fetch_nameplates().await {
@@ -117,8 +116,8 @@ impl NameplateProvider {
             };
 
         // Check Content-Length before reading body.
-        if let Some(cl) = resp.content_length() {
-            if cl as usize > MAX_RESPONSE_BYTES {
+        if let Some(cl) = resp.content_length()
+            && cl as usize > MAX_RESPONSE_BYTES {
                 tracing::debug!(
                     content_length = cl,
                     max = MAX_RESPONSE_BYTES,
@@ -126,7 +125,6 @@ impl NameplateProvider {
                 );
                 return None;
             }
-        }
 
         let body = match resp.text().await {
             Ok(t) => t,

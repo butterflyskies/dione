@@ -149,16 +149,14 @@ impl Handler {
         base_name: &str,
     ) -> String {
         if is_bot {
-            if let Some(svc) = self.nameplate_service.as_ref() {
-                if !svc.is_excluded(user_id) {
+            if let Some(svc) = self.nameplate_service.as_ref()
+                && !svc.is_excluded(user_id) {
                     return svc.resolve_display_name(user_id, base_name).await;
                 }
-            }
-        } else if let Some(svc) = self.pronoun_service.as_ref() {
-            if !svc.is_excluded(user_id) {
+        } else if let Some(svc) = self.pronoun_service.as_ref()
+            && !svc.is_excluded(user_id) {
                 return svc.resolve_display_name(user_id, base_name).await;
             }
-        }
         base_name.to_string()
     }
 
