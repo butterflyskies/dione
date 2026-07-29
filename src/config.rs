@@ -188,6 +188,9 @@ pub struct NameplateConfig {
     pub enabled: bool,
     /// URL to fetch nameplates.yaml from. Defaults to the butterflyskies repo.
     pub url: String,
+    /// Bot user IDs excluded from nameplate enrichment.
+    #[serde(deserialize_with = "deserialize_id_vec")]
+    pub exclude_for: Vec<u64>,
     /// Deadline in milliseconds for nameplate fetches. Fail-open on timeout.
     pub deadline_ms: u64,
     /// Cache TTL in seconds.
@@ -199,6 +202,7 @@ impl Default for NameplateConfig {
         Self {
             enabled: true,
             url: crate::nameplates::DEFAULT_NAMEPLATES_URL.to_string(),
+            exclude_for: Vec::new(),
             deadline_ms: 500,
             cache_ttl_seconds: 3600,
         }

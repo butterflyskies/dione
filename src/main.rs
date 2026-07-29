@@ -198,6 +198,7 @@ async fn main() -> Result<()> {
             &config.raw.nameplates.url,
             config.raw.nameplates.deadline_ms,
             std::time::Duration::from_secs(config.raw.nameplates.cache_ttl_seconds),
+            &config.raw.nameplates.exclude_for,
         )))
     } else {
         None
