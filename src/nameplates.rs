@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use tokio::sync::RwLock;
 
-const DEFAULT_NAMEPLATES_URL: &str =
+pub const DEFAULT_NAMEPLATES_URL: &str =
     "https://raw.githubusercontent.com/butterflyskies/construct-nameplates/main/nameplates.yaml";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -37,7 +37,7 @@ pub struct NameplateProvider {
 }
 
 impl NameplateProvider {
-    pub fn new(deadline_ms: u64, cache_ttl: Duration) -> Self {
+    pub fn new(url: &str, deadline_ms: u64, cache_ttl: Duration) -> Self {
         let client = reqwest::Client::builder()
             .user_agent("dione/0.25.1 (https://github.com/butterflyskies/dione)")
             .timeout(Duration::from_millis(deadline_ms))
@@ -46,38 +46,38 @@ impl NameplateProvider {
         Self {
             client,
             cache: RwLock::new(None),
-            url: DEFAULT_NAMEPLATES_URL.to_string(),
+            url: url.to_string(),
             ttl: cache_ttl,
             deadline: Duration::from_millis(deadline_ms),
         }
     }
 
     pub async fn lookup(&self, user_id: u64) -> Option<Nameplate> {
-        let entries = self.get_or_fetch().await?;
-        entries.get(&user_id).cloned()
+        self.get_or_fetch(user_id).await
     }
 
-    async fn get_or_fetch(&self) -> Option<HashMap<u64, Nameplate>> {
+    async fn get_or_fetch(&self, user_id: u64) -> Option<Nameplate> {
         {
             let cache = self.cache.read().await;
             if let Some(ref cached) = *cache {
                 if cached.fetched_at.elapsed() < self.ttl {
-                    return Some(cached.entries.clone());
+                    return cached.entries.get(&user_id).cloned();
                 }
             }
         }
 
         let entries = self.fetch_nameplates().await?;
+        let result = entries.get(&user_id).cloned();
 
         {
             let mut cache = self.cache.write().await;
             *cache = Some(CachedNameplates {
-                entries: entries.clone(),
+                entries,
                 fetched_at: Instant::now(),
             });
         }
 
-        Some(entries)
+        result
     }
 
     async fn fetch_nameplates(&self) -> Option<HashMap<u64, Nameplate>> {
@@ -134,9 +134,9 @@ pub struct NameplateService {
 }
 
 impl NameplateService {
-    pub fn new(deadline_ms: u64, cache_ttl: Duration) -> Self {
+    pub fn new(url: &str, deadline_ms: u64, cache_ttl: Duration) -> Self {
         Self {
-            provider: NameplateProvider::new(deadline_ms, cache_ttl),
+            provider: NameplateProvider::new(url, deadline_ms, cache_ttl),
         }
     }
 
@@ -222,8 +222,85 @@ nameplates:
 
     #[tokio::test]
     async fn test_service_no_nameplate_returns_original() {
-        let service = NameplateService::new(100, Duration::from_secs(3600));
+        let service = NameplateService::new(DEFAULT_NAMEPLATES_URL, 100, Duration::from_secs(3600));
+        // Pre-populate cache with empty map so no network call is made.
+        {
+            let mut cache = service.provider.cache.write().await;
+            *cache = Some(CachedNameplates {
+                entries: HashMap::new(),
+                fetched_at: Instant::now(),
+            });
+        }
         let result = service.resolve_display_name(99999, "Unknown").await;
         assert_eq!(result, "Unknown");
+    }
+
+    #[tokio::test]
+    async fn test_service_enriches_with_single_pronoun() {
+        let service = NameplateService::new(DEFAULT_NAMEPLATES_URL, 100, Duration::from_secs(3600));
+        let mut entries = HashMap::new();
+        entries.insert(
+            42,
+            Nameplate {
+                name: "Lain".to_string(),
+                pronouns: vec!["she/her".to_string()],
+                bio: None,
+            },
+        );
+        {
+            let mut cache = service.provider.cache.write().await;
+            *cache = Some(CachedNameplates {
+                entries,
+                fetched_at: Instant::now(),
+            });
+        }
+        let result = service.resolve_display_name(42, "Lain").await;
+        assert_eq!(result, "Lain (she/her)");
+    }
+
+    #[tokio::test]
+    async fn test_service_enriches_with_multiple_pronouns() {
+        let service = NameplateService::new(DEFAULT_NAMEPLATES_URL, 100, Duration::from_secs(3600));
+        let mut entries = HashMap::new();
+        entries.insert(
+            42,
+            Nameplate {
+                name: "Test".to_string(),
+                pronouns: vec!["she/her".to_string(), "they/them".to_string()],
+                bio: None,
+            },
+        );
+        {
+            let mut cache = service.provider.cache.write().await;
+            *cache = Some(CachedNameplates {
+                entries,
+                fetched_at: Instant::now(),
+            });
+        }
+        let result = service.resolve_display_name(42, "Test").await;
+        assert_eq!(result, "Test (she/her or they/them)");
+    }
+
+    #[tokio::test]
+    async fn test_service_no_pronouns_returns_original() {
+        let service = NameplateService::new(DEFAULT_NAMEPLATES_URL, 100, Duration::from_secs(3600));
+        let mut entries = HashMap::new();
+        entries.insert(
+            42,
+            Nameplate {
+                name: "NoPro".to_string(),
+                pronouns: vec![],
+                bio: None,
+            },
+        );
+        {
+            let mut cache = service.provider.cache.write().await;
+            *cache = Some(CachedNameplates {
+                entries,
+                fetched_at: Instant::now(),
+            });
+        }
+        let result = service.resolve_display_name(42, "NoPro").await;
+        assert_eq!(result, "NoPro");
     }
 }

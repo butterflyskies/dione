@@ -57,6 +57,8 @@ pub struct Config {
     pub archive: ArchiveConfig,
     /// Pronoun enforcement via PronounDB.
     pub pronouns: PronounConfig,
+    /// Construct nameplate enrichment from construct-nameplates repo.
+    pub nameplates: NameplateConfig,
 }
 
 /// Configuration for the opt-in GAIE one-shot archive commands.
@@ -172,6 +174,31 @@ impl Default for PronounConfig {
         Self {
             enabled: true,
             exclude_for: Vec::new(),
+            deadline_ms: 500,
+            cache_ttl_seconds: 3600,
+        }
+    }
+}
+
+/// Construct nameplate enrichment configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct NameplateConfig {
+    /// Enables nameplate lookups for bot users.
+    pub enabled: bool,
+    /// URL to fetch nameplates.yaml from. Defaults to the butterflyskies repo.
+    pub url: String,
+    /// Deadline in milliseconds for nameplate fetches. Fail-open on timeout.
+    pub deadline_ms: u64,
+    /// Cache TTL in seconds.
+    pub cache_ttl_seconds: u64,
+}
+
+impl Default for NameplateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            url: crate::nameplates::DEFAULT_NAMEPLATES_URL.to_string(),
             deadline_ms: 500,
             cache_ttl_seconds: 3600,
         }

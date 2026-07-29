@@ -193,11 +193,11 @@ async fn main() -> Result<()> {
         None
     };
 
-    // Build nameplate service for construct pronoun resolution.
-    let nameplate_service = if config.raw.pronouns.enabled {
+    let nameplate_service = if config.raw.nameplates.enabled {
         Some(std::sync::Arc::new(dione::nameplates::NameplateService::new(
-            config.raw.pronouns.deadline_ms,
-            std::time::Duration::from_secs(config.raw.pronouns.cache_ttl_seconds),
+            &config.raw.nameplates.url,
+            config.raw.nameplates.deadline_ms,
+            std::time::Duration::from_secs(config.raw.nameplates.cache_ttl_seconds),
         )))
     } else {
         None
