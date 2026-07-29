@@ -41,9 +41,14 @@ pub struct NameplateProvider {
 
 fn sanitize_nameplate_string(s: &str, max_len: usize) -> String {
     s.chars()
-        .filter(|c| *c != '@' && *c != '`' && *c != '\n' && *c != '\r'
-            && !matches!(c, '\u{200E}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
-                | '\u{2066}'..='\u{2069}' | '\u{061C}' | '\u{FEFF}'))
+        .filter(|c| {
+            *c != '@'
+                && *c != '`'
+                && *c != '\n'
+                && *c != '\r'
+                && !matches!(c, '\u{200E}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}' | '\u{061C}' | '\u{FEFF}')
+        })
         .take(max_len)
         .collect()
 }
@@ -68,9 +73,10 @@ impl NameplateProvider {
         {
             let cache = self.cache.read().await;
             if let Some(ref cached) = *cache
-                && cached.fetched_at.elapsed() < self.ttl {
-                    return cached.entries.get(&user_id).cloned();
-                }
+                && cached.fetched_at.elapsed() < self.ttl
+            {
+                return cached.entries.get(&user_id).cloned();
+            }
         }
 
         match self.fetch_nameplates().await {
@@ -117,14 +123,15 @@ impl NameplateProvider {
 
         // Check Content-Length before reading body.
         if let Some(cl) = resp.content_length()
-            && cl as usize > MAX_RESPONSE_BYTES {
-                tracing::debug!(
-                    content_length = cl,
-                    max = MAX_RESPONSE_BYTES,
-                    "nameplates response too large"
-                );
-                return None;
-            }
+            && cl as usize > MAX_RESPONSE_BYTES
+        {
+            tracing::debug!(
+                content_length = cl,
+                max = MAX_RESPONSE_BYTES,
+                "nameplates response too large"
+            );
+            return None;
+        }
 
         let body = match resp.text().await {
             Ok(t) => t,

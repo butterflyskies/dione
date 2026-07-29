@@ -194,12 +194,14 @@ async fn main() -> Result<()> {
     };
 
     let nameplate_service = if config.raw.nameplates.enabled {
-        Some(std::sync::Arc::new(dione::nameplates::NameplateService::new(
-            &config.raw.nameplates.url,
-            config.raw.nameplates.deadline_ms,
-            std::time::Duration::from_secs(config.raw.nameplates.cache_ttl_seconds),
-            &config.raw.nameplates.exclude_for,
-        )))
+        Some(std::sync::Arc::new(
+            dione::nameplates::NameplateService::new(
+                &config.raw.nameplates.url,
+                config.raw.nameplates.deadline_ms,
+                std::time::Duration::from_secs(config.raw.nameplates.cache_ttl_seconds),
+                &config.raw.nameplates.exclude_for,
+            ),
+        ))
     } else {
         None
     };
