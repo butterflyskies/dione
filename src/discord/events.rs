@@ -137,17 +137,30 @@ pub struct Handler {
     pub discord_cmd_rx: tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<DiscordCommand>>>,
     /// Pronoun resolution service (PronounDB v2 adapter with cache).
     pub pronoun_service: Option<Arc<crate::pronouns::PronounService>>,
+    /// Construct nameplate service (construct-nameplates repo adapter with cache).
+    pub nameplate_service: Option<Arc<crate::nameplates::NameplateService>>,
 }
 
 impl Handler {
     async fn resolve_pronoun_name(&self, msg: &Message) -> Option<PronounDisplayName> {
-        let service = self.pronoun_service.as_ref()?;
         let user_id = msg.author.id.get();
-        if service.is_excluded(user_id) {
-            return None;
-        }
         let base_name = resolve_user_identity(Some(&display_name(msg)), Some(&msg.author.name));
-        let resolved = service.resolve_display_name(user_id, &base_name).await;
+
+        // Route bots to nameplate provider, humans to PronounDB.
+        let resolved = if msg.author.bot {
+            if let Some(svc) = self.nameplate_service.as_ref() {
+                svc.resolve_display_name(user_id, &base_name).await
+            } else {
+                return None;
+            }
+        } else {
+            let service = self.pronoun_service.as_ref()?;
+            if service.is_excluded(user_id) {
+                return None;
+            }
+            service.resolve_display_name(user_id, &base_name).await
+        };
+
         if resolved == base_name {
             None
         } else {
@@ -487,7 +500,13 @@ impl EventHandler for Handler {
                 .map(display_name)
                 .unwrap_or_else(|| display_name_from_user(author));
             let mut sender_name = resolve_user_identity(Some(&resolved), Some(&author.name));
-            if let Some(svc) = &self.pronoun_service {
+            if author.bot {
+                if let Some(svc) = &self.nameplate_service {
+                    sender_name = svc
+                        .resolve_display_name(author.id.get(), &sender_name)
+                        .await;
+                }
+            } else if let Some(svc) = &self.pronoun_service {
                 sender_name = svc
                     .resolve_display_name(author.id.get(), &sender_name)
                     .await;
