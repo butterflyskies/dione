@@ -193,6 +193,19 @@ async fn main() -> Result<()> {
         None
     };
 
+    let nameplate_service = if config.raw.nameplates.enabled {
+        Some(std::sync::Arc::new(
+            dione::nameplates::NameplateService::new(
+                &config.raw.nameplates.url,
+                config.raw.nameplates.deadline_ms,
+                std::time::Duration::from_secs(config.raw.nameplates.cache_ttl_seconds),
+                &config.raw.nameplates.exclude_for,
+            ),
+        ))
+    } else {
+        None
+    };
+
     // Build Discord event handler.
     let handler = Handler {
         state: state.clone(),
@@ -202,6 +215,7 @@ async fn main() -> Result<()> {
         bot_user_id: AtomicU64::new(0),
         discord_cmd_rx: tokio::sync::Mutex::new(Some(discord_cmd_rx)),
         pronoun_service,
+        nameplate_service,
     };
 
     let mut discord_client = dione::discord::client::build_client(&token, handler)

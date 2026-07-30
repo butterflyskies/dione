@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-07-29
+
+### Added
+- **Construct nameplate provider.** Enriches bot users with name/pronouns from
+  butterflyskies/construct-nameplates repo, parallel to PronounDB for humans.
+  Separate `[nameplates]` config section with own `enabled` flag and configurable
+  URL. Input sanitization, response body cap, stale-cache fallback. (#269, #270)
+
 ## [0.25.0] - 2026-07-26
 
 ### Added

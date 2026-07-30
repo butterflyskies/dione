@@ -137,17 +137,39 @@ pub struct Handler {
     pub discord_cmd_rx: tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<DiscordCommand>>>,
     /// Pronoun resolution service (PronounDB v2 adapter with cache).
     pub pronoun_service: Option<Arc<crate::pronouns::PronounService>>,
+    /// Construct nameplate service (construct-nameplates repo adapter with cache).
+    pub nameplate_service: Option<Arc<crate::nameplates::NameplateService>>,
 }
 
 impl Handler {
-    async fn resolve_pronoun_name(&self, msg: &Message) -> Option<PronounDisplayName> {
-        let service = self.pronoun_service.as_ref()?;
-        let user_id = msg.author.id.get();
-        if service.is_excluded(user_id) {
-            return None;
+    async fn resolve_identity_enrichment(
+        &self,
+        user_id: u64,
+        is_bot: bool,
+        base_name: &str,
+    ) -> String {
+        if is_bot {
+            if let Some(svc) = self.nameplate_service.as_ref()
+                && !svc.is_excluded(user_id)
+            {
+                return svc.resolve_display_name(user_id, base_name).await;
+            }
+        } else if let Some(svc) = self.pronoun_service.as_ref()
+            && !svc.is_excluded(user_id)
+        {
+            return svc.resolve_display_name(user_id, base_name).await;
         }
+        base_name.to_string()
+    }
+
+    async fn resolve_pronoun_name(&self, msg: &Message) -> Option<PronounDisplayName> {
+        let user_id = msg.author.id.get();
         let base_name = resolve_user_identity(Some(&display_name(msg)), Some(&msg.author.name));
-        let resolved = service.resolve_display_name(user_id, &base_name).await;
+
+        let resolved = self
+            .resolve_identity_enrichment(user_id, msg.author.bot, &base_name)
+            .await;
+
         if resolved == base_name {
             None
         } else {
@@ -486,12 +508,10 @@ impl EventHandler for Handler {
                 .as_ref()
                 .map(display_name)
                 .unwrap_or_else(|| display_name_from_user(author));
-            let mut sender_name = resolve_user_identity(Some(&resolved), Some(&author.name));
-            if let Some(svc) = &self.pronoun_service {
-                sender_name = svc
-                    .resolve_display_name(author.id.get(), &sender_name)
-                    .await;
-            }
+            let base_name = resolve_user_identity(Some(&resolved), Some(&author.name));
+            let sender_name = self
+                .resolve_identity_enrichment(author.id.get(), author.bot, &base_name)
+                .await;
             state.cache_username(author.id.get(), sender_name.clone());
             sender_name
         };
