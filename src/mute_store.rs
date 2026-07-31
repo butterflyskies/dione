@@ -1229,4 +1229,230 @@ mod tests {
         assert_eq!(r2.guild_id, 42);
         assert_eq!(r2.actor, "system");
     }
+
+    // ── Scheduler invariant tests ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn earlier_deadline_mute_wakes_scheduler() {
+        // When the scheduler is sleeping until a distant deadline and a new
+        // overdue entry appears, expiry_notify must wake the scheduler so it
+        // recalculates and reconciles the overdue entry — rather than
+        // sleeping until the original deadline.
+        //
+        // Note: tokio::time::pause cannot control chrono::Utc::now() which
+        // the store uses for is_active(). This test uses real wall-clock
+        // time with short sleeps for synchronization.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = camino::Utf8Path::from_path(dir.path()).unwrap();
+
+        let mut state = MuteState::default();
+        // Guild 42: active mute expiring far in the future (10 minutes).
+        // The scheduler will sleep for ~600 seconds.
+        state.mutes.insert(
+            42,
+            GuildMute {
+                guild_id: 42,
+                muted_until: Utc::now() + chrono::Duration::seconds(600),
+                muted_by: "admin".into(),
+                reason: Some("long mute".into()),
+                muted_at: Utc::now(),
+                cutoff_event_id: "cutoff-42".into(),
+            },
+        );
+
+        let store = Arc::new(MuteStore::from_state(state, path));
+        let handle = store.spawn_expiry_task();
+
+        // Yield to let the spawned task enter the select! branch
+        // (sleeping until guild 42's distant deadline).
+        tokio::task::yield_now().await;
+
+        // Inject an already-expired entry directly into the projection.
+        // This simulates a mute whose deadline was earlier and has already
+        // passed — the scheduler must wake up and reconcile it rather than
+        // continuing to sleep for the original 600s.
+        {
+            let current = store.load_state();
+            let mut new_state = MuteState::clone(&current);
+            new_state.mutes.insert(
+                99,
+                GuildMute {
+                    guild_id: 99,
+                    muted_until: Utc::now() - chrono::Duration::seconds(1),
+                    muted_by: "admin".into(),
+                    reason: Some("already expired".into()),
+                    muted_at: Utc::now() - chrono::Duration::seconds(61),
+                    cutoff_event_id: "cutoff-99".into(),
+                },
+            );
+            store.state.store(Arc::new(new_state));
+        }
+
+        // Wake the scheduler — same mechanism mute_guild uses.
+        store.expiry_notify.notify_one();
+
+        // Give the scheduler time to wake, recalculate, and reconcile.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Guild 99 (overdue) should be reconciled immediately upon wake.
+        assert!(
+            !store.load_state().mutes.contains_key(&99),
+            "overdue guild 99 should be reconciled after scheduler wake"
+        );
+
+        // Guild 42 (still active, 10 min remaining) must NOT be touched.
+        assert!(
+            store.is_guild_muted(42),
+            "guild 42 should still be active (not yet at deadline)"
+        );
+
+        // The scheduler should still be running — not deadlocked on the
+        // old 600s sleep.
+        assert!(!handle.is_finished(), "expiry task should still be running");
+
+        // Verify the Expire receipt was written for guild 99.
+        let receipt_path = path.join("guild_mute_receipts.jsonl");
+        let contents = std::fs::read_to_string(receipt_path).expect("receipt file should exist");
+        let receipts: Vec<MuteReceipt> = contents
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].operation, MuteOperation::Expire);
+        assert_eq!(receipts[0].guild_id, 99);
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn failed_reconciliation_leaves_entry_for_retry() {
+        // When append_receipt fails, reconcile_expiries must leave the
+        // failed entry in the HashMap so the scheduler can retry it.
+        let bad_path = camino::Utf8Path::new("/nonexistent/dir");
+
+        let mut state = MuteState::default();
+        // Expired entry — needs reconciliation.
+        state.mutes.insert(
+            1,
+            GuildMute {
+                guild_id: 1,
+                muted_until: Utc::now() - chrono::Duration::seconds(10),
+                muted_by: "admin".into(),
+                reason: Some("expired".into()),
+                muted_at: Utc::now() - chrono::Duration::seconds(70),
+                cutoff_event_id: "cutoff-1".into(),
+            },
+        );
+
+        let store = MuteStore::from_state(state, bad_path);
+
+        // Reconciliation should fail (unwritable path).
+        let result = store.reconcile_expiries().await;
+        assert!(
+            result.is_err(),
+            "reconcile should fail when receipt write fails"
+        );
+
+        // The failed entry must remain in the projection.
+        let post_state = store.load_state();
+        assert!(
+            post_state.mutes.contains_key(&1),
+            "failed entry must stay in HashMap for retry"
+        );
+
+        // The has_overdue check (same logic the scheduler uses) should
+        // find the entry and trigger immediate reconciliation.
+        let has_overdue = post_state.mutes.values().any(|m| !m.is_active());
+        assert!(
+            has_overdue,
+            "has_overdue must be true so scheduler retries rather than parking"
+        );
+
+        // Now verify that reconciliation succeeds with a writable path.
+        let dir = tempfile::TempDir::new().unwrap();
+        let writable_path = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let store2 = MuteStore::from_state(MuteState::clone(&post_state), writable_path);
+
+        let reconciled = store2
+            .reconcile_expiries()
+            .await
+            .expect("reconcile should succeed with writable path");
+        assert_eq!(
+            reconciled, 1,
+            "the previously-failed entry should reconcile"
+        );
+        assert!(
+            store2.load_state().mutes.is_empty(),
+            "entry should be removed after successful reconciliation"
+        );
+    }
+
+    #[tokio::test]
+    async fn overdue_entries_trigger_immediate_reconciliation() {
+        // When the projection contains expired-but-unreceipted entries
+        // (e.g. from a previous failed reconciliation), spawn_expiry_task
+        // must reconcile them immediately — not park on Notify (which is
+        // the bug that was fixed in 7ced6a0).
+        //
+        // Uses real wall-clock time with a short sleep for synchronization,
+        // since is_active() checks chrono::Utc::now().
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = camino::Utf8Path::from_path(dir.path()).unwrap();
+
+        let mut state = MuteState::default();
+        // Pre-populate an expired entry (simulates a previous failure that
+        // left the entry in the HashMap).
+        state.mutes.insert(
+            1,
+            GuildMute {
+                guild_id: 1,
+                muted_until: Utc::now() - chrono::Duration::seconds(10),
+                muted_by: "admin".into(),
+                reason: Some("overdue".into()),
+                muted_at: Utc::now() - chrono::Duration::seconds(70),
+                cutoff_event_id: "cutoff-1".into(),
+            },
+        );
+
+        let store = Arc::new(MuteStore::from_state(state, path));
+
+        // Verify the overdue entry is present before spawning.
+        assert!(
+            store.load_state().mutes.contains_key(&1),
+            "overdue entry should be present before spawn"
+        );
+
+        // Spawn the expiry task.
+        let handle = store.spawn_expiry_task();
+
+        // Give the scheduler time to detect the overdue entry and
+        // reconcile it. The has_overdue check should fire on the first
+        // loop iteration — no Notify or sleep involved.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // The overdue entry should be reconciled.
+        assert!(
+            !store.load_state().mutes.contains_key(&1),
+            "overdue entry must be reconciled immediately, not parked on Notify"
+        );
+
+        // After reconciliation the store is empty — the scheduler should
+        // park on Notify (not spin). Verify the task is still alive.
+        assert!(
+            !handle.is_finished(),
+            "expiry task should be parked on Notify, not exited"
+        );
+
+        // Verify the Expire receipt was written.
+        let receipt_path = path.join("guild_mute_receipts.jsonl");
+        let contents = std::fs::read_to_string(receipt_path).expect("receipt file should exist");
+        let lines: Vec<&str> = contents.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(lines.len(), 1, "should have exactly one Expire receipt");
+        let r: MuteReceipt = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(r.operation, MuteOperation::Expire);
+        assert_eq!(r.guild_id, 1);
+
+        handle.abort();
+    }
 }
