@@ -276,14 +276,32 @@ impl MuteStore {
                     Some(deadline) => {
                         let duration = (deadline - Utc::now())
                             .to_std()
-                            .unwrap_or(Duration::from_secs(1));
-                        tokio::time::sleep(duration).await;
-                        if let Err(e) = store.reconcile_expiries().await {
-                            tracing::warn!("expiry reconciliation failed: {e}");
+                            .unwrap_or(Duration::from_secs(0));
+                        // Register the notified future BEFORE the select to
+                        // avoid a race where a notification fires between the
+                        // deadline calculation and the sleep.
+                        let notified = store.expiry_notify.notified();
+                        tokio::select! {
+                            _ = tokio::time::sleep(duration) => {
+                                // Deadline reached — reconcile expired entries.
+                                match store.reconcile_expiries().await {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        tracing::warn!("expiry reconciliation failed: {e}");
+                                        // Retry after backoff so failed entries
+                                        // aren't forgotten.
+                                        tokio::time::sleep(Duration::from_secs(5)).await;
+                                    }
+                                }
+                            }
+                            _ = notified => {
+                                // New mute arrived — recalculate deadline.
+                                continue;
+                            }
                         }
                     }
                     None => {
-                        // No active mutes — wait for notification.
+                        // No active mutes — park until notified.
                         store.expiry_notify.notified().await;
                     }
                 }
@@ -475,7 +493,11 @@ impl MuteStore {
             return Ok(0);
         }
 
-        let count = expired.len();
+        // Process each expired entry individually: only remove entries whose
+        // Expire receipt was successfully appended. Failed entries stay in the
+        // projection so the next reconciliation pass can retry them.
+        let mut succeeded: Vec<u64> = Vec::new();
+        let mut last_error: Option<Box<dyn std::error::Error + Send + Sync>> = None;
 
         for mute in &expired {
             let receipt = MuteReceipt {
@@ -491,20 +513,40 @@ impl MuteStore {
                     Some(mute.cutoff_event_id.clone())
                 },
             };
-            self.append_receipt(&receipt).await?;
+            match self.append_receipt(&receipt).await {
+                Ok(()) => succeeded.push(mute.guild_id),
+                Err(e) => {
+                    tracing::warn!(
+                        guild_id = mute.guild_id,
+                        error = %e,
+                        "failed to append Expire receipt; entry will be retried"
+                    );
+                    last_error = Some(e);
+                }
+            }
         }
 
-        // Rebuild projection without expired entries.
-        let mut new_state = MuteState::clone(&current);
-        for mute in &expired {
-            new_state.mutes.remove(&mute.guild_id);
+        // Only remove entries whose receipts were successfully written.
+        if !succeeded.is_empty() {
+            let mut new_state = MuteState::clone(&current);
+            for guild_id in &succeeded {
+                new_state.mutes.remove(guild_id);
+            }
+            self.state.store(Arc::new(new_state));
         }
 
-        self.state.store(Arc::new(new_state));
+        let ok_count = succeeded.len();
+        if ok_count > 0 {
+            tracing::info!(reconciled = ok_count, "reconciled expired guild mutes");
+        }
 
-        tracing::info!(reconciled = count, "reconciled expired guild mutes");
+        // If any entry failed, propagate the last error so the caller can
+        // retry (with backoff).
+        if let Some(e) = last_error {
+            return Err(e);
+        }
 
-        Ok(count)
+        Ok(ok_count)
     }
 
     /// List all currently active mutes.
