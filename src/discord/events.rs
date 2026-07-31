@@ -6,6 +6,7 @@ use crate::{
     queue::AccessRequest,
     timestamp::Timestamp,
 };
+use serde::{Deserialize, Serialize};
 use serenity::{
     async_trait,
     builder::{CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage},
@@ -75,6 +76,42 @@ impl MessageTargeting {
     /// Returns whether the message is eligible for directed-only processing.
     pub fn is_directed(self) -> bool {
         !matches!(self, Self::Ambient)
+    }
+
+    /// Delivery priority derived from authenticated ingress targeting.
+    pub(crate) fn delivery_priority(self) -> DeliveryPriority {
+        match self {
+            Self::DirectMessage | Self::GuildDirected(_) => DeliveryPriority::Directed,
+            Self::Ambient => DeliveryPriority::Ambient,
+        }
+    }
+}
+
+/// Priority lane for durable harness delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DeliveryPriority {
+    #[default]
+    Ambient,
+    Directed,
+    Critical,
+}
+
+impl DeliveryPriority {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Ambient => "ambient",
+            Self::Directed => "directed",
+            Self::Critical => "critical",
+        }
+    }
+
+    pub(crate) fn from_label(label: Option<&str>) -> Self {
+        match label {
+            Some("critical") => Self::Critical,
+            Some("directed") => Self::Directed,
+            _ => Self::Ambient,
+        }
     }
 }
 
@@ -213,6 +250,15 @@ impl EventHandler for Handler {
         {
             return;
         }
+        tracing::info!(
+            target: "dione::latency",
+            stage = "discord_received",
+            message_id = msg.id.get(),
+            channel_id = msg.channel_id.get(),
+            discord_created_at = %msg.timestamp,
+            received_at = %chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "Discord message passed Dione's bot-message filter"
+        );
         let bot_user_id = self.bot_user_id.load(Ordering::Relaxed);
 
         {

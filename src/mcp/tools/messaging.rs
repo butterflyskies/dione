@@ -413,6 +413,7 @@ async fn deliver_prepared_reply(
     prepared: PreparedOutbound,
     options: ReplyTransportOptions,
 ) -> Value {
+    let delivery_started = std::time::Instant::now();
     debug_assert!(matches!(
         prepared.surface,
         OutboundSurface::Reply | OutboundSurface::SendDm
@@ -424,6 +425,14 @@ async fn deliver_prepared_reply(
     let content = prepared.text;
 
     let ch = channel_id;
+    tracing::info!(
+        target: "dione::latency",
+        stage = "discord_reply_requested",
+        channel_id = channel_id.get(),
+        reply_to_message_id = reply_to_message_id.map(MessageId::get).unwrap_or_default(),
+        requested_at = %chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "Codex requested a Discord reply"
+    );
 
     // ── Contradictionary check (scan once, reuse post-send) ─────────────
     let contradictionary_hits = ctx
@@ -536,6 +545,18 @@ async fn deliver_prepared_reply(
             }
         }
     }
+
+    tracing::info!(
+        target: "dione::latency",
+        stage = "discord_reply_completed",
+        channel_id = channel_id.get(),
+        reply_to_message_id = reply_to_message_id.map(MessageId::get).unwrap_or_default(),
+        first_sent_message_id = sent_ids.first().copied().unwrap_or_default(),
+        chunk_count = sent_ids.len(),
+        elapsed_ms = delivery_started.elapsed().as_millis() as u64,
+        completed_at = %chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "Discord reply completed"
+    );
 
     // ── Contradictionary post-send: self-react on celebrate hits ───
     if !contradictionary_hits.is_empty()

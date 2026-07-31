@@ -148,12 +148,18 @@ src/
 Dione sits between two fundamentally different trust domains: Discord
 (untrusted public users) and the local agent harness (trusted local process).
 Claude Code consumes server-initiated MCP notifications directly. Codex mode
-persists structured events to `codex-inbox.json`; the live worker leases new
-events, connects to the app-server Unix socket using WebSocket, resumes one
-explicit thread, then uses `turn/start` or `turn/steer`. It removes an event
-only after app-server accepts delivery. Explicit MCP pull consumers remain
-available, leases expire for redelivery, and a lifetime filesystem lock
-enforces one Dione owner per Codex state directory.
+persists structured events to `codex-inbox.json`; the live worker leases up to
+128 pending events from the highest-priority compatible lane as one durable
+batch, connects to the app-server Unix socket using WebSocket, and resumes one
+explicit thread. It derives active-turn state once from the resume receipt,
+then maintains it from `turn/start` responses and lifecycle notifications
+instead of rereading the full thread history before each delivery. The worker
+uses `turn/start` or `turn/steer` and removes the whole batch atomically only
+after app-server accepts delivery. Batch membership and the app-server client
+message ID survive lease expiry and restart, so retries preserve order and
+idempotent identity without absorbing later arrivals. Explicit MCP pull
+consumers remain available, leases expire for redelivery, and a lifetime
+filesystem lock enforces one Dione owner per Codex state directory.
 
 ```mermaid
 C4Context
