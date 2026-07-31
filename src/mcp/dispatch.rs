@@ -379,6 +379,7 @@ pub(crate) async fn call_tool(
                         "guild_id": m.guild_id.to_string(),
                         "muted_until": m.muted_until.to_rfc3339(),
                         "remaining_seconds": m.remaining_seconds(),
+                        "cutoff_event_id": m.cutoff_event_id,
                     })
                 }).collect();
                 if !mutes.is_empty() {
@@ -585,6 +586,7 @@ pub(crate) async fn call_tool(
                     "guild_id": guild_id.to_string(),
                     "muted_until": mute.muted_until.to_rfc3339(),
                     "remaining_seconds": mute.remaining_seconds(),
+                    "cutoff_event_id": mute.cutoff_event_id,
                 }),
                 Err(e) => json!({ "error": e }),
             }
@@ -619,6 +621,7 @@ pub(crate) async fn call_tool(
                     "muted_by": m.muted_by,
                     "reason": m.reason,
                     "remaining_seconds": m.remaining_seconds(),
+                    "cutoff_event_id": m.cutoff_event_id,
                 })
             }).collect();
             json!({ "muted_servers": mutes })
