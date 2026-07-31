@@ -1455,4 +1455,89 @@ mod tests {
 
         handle.abort();
     }
+
+    #[tokio::test]
+    async fn scheduler_retries_after_failure_and_commits_on_recovery() {
+        // End-to-end: the scheduler's first reconciliation fails (bad path),
+        // then the path becomes writable, and the scheduler retries through
+        // the backoff and commits exactly one Expire receipt — no Notify
+        // needed, the overdue branch drives the retry.
+        //
+        // This exercises the production code path:
+        //   overdue detected → reconcile → fail → backoff → loop →
+        //   overdue still detected → reconcile → succeed → receipt committed
+
+        // Phase 1: create a store with an expired entry and a non-writable
+        // receipt path.
+        let dir = tempfile::TempDir::new().unwrap();
+        let bad_path = dir.path().join("nonexistent_subdir");
+        let bad_utf8 = camino::Utf8Path::from_path(&bad_path).unwrap();
+
+        let mut state = MuteState::default();
+        state.mutes.insert(
+            77,
+            GuildMute {
+                guild_id: 77,
+                muted_until: Utc::now() - chrono::Duration::seconds(10),
+                muted_by: "admin".into(),
+                reason: Some("will-fail".into()),
+                muted_at: Utc::now() - chrono::Duration::seconds(70),
+                cutoff_event_id: "cutoff-77".into(),
+            },
+        );
+
+        let store = Arc::new(MuteStore::from_state(state, bad_utf8));
+
+        // Spawn the scheduler — it will detect the overdue entry and try
+        // to reconcile, but the receipt append will fail (directory doesn't
+        // exist). It should backoff and retry.
+        let handle = store.spawn_expiry_task();
+
+        // Wait long enough for the first attempt + backoff start (the
+        // backoff is 5 seconds, but the attempt itself is fast).
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // The entry should STILL be in the HashMap — the failed
+        // reconciliation must not remove it.
+        assert!(
+            store.load_state().mutes.contains_key(&77),
+            "failed reconciliation must not remove the entry"
+        );
+
+        // The task should still be alive (retrying, not parked).
+        assert!(
+            !handle.is_finished(),
+            "scheduler should be alive and retrying"
+        );
+
+        // Phase 2: create the directory so the receipt path becomes writable.
+        std::fs::create_dir_all(&bad_path).expect("should create directory");
+
+        // Wait for the backoff (5s) to elapse and the retry to succeed.
+        // Use 6s to give margin.
+        tokio::time::sleep(Duration::from_secs(6)).await;
+
+        // The entry should now be reconciled.
+        assert!(
+            !store.load_state().mutes.contains_key(&77),
+            "entry should be reconciled after path becomes writable"
+        );
+
+        // Verify exactly one Expire receipt was committed.
+        let receipt_file = bad_path.join("guild_mute_receipts.jsonl");
+        let contents = std::fs::read_to_string(&receipt_file).expect("receipt file should exist");
+        let lines: Vec<&str> = contents.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(lines.len(), 1, "exactly one Expire receipt");
+        let r: MuteReceipt = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(r.operation, MuteOperation::Expire);
+        assert_eq!(r.guild_id, 77);
+
+        // Task should still be alive (parked on Notify, no more work).
+        assert!(
+            !handle.is_finished(),
+            "scheduler should be parked on Notify after successful reconciliation"
+        );
+
+        handle.abort();
+    }
 }
