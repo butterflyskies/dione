@@ -263,15 +263,29 @@ impl MuteStore {
         let store = Arc::clone(self);
         tokio::spawn(async move {
             loop {
-                let next_deadline = {
+                let (next_deadline, has_overdue) = {
                     let state = store.load_state();
-                    state
+                    let has_overdue = state.mutes.values().any(|m| !m.is_active());
+                    let next_active = state
                         .mutes
                         .values()
                         .filter(|m| m.is_active())
                         .map(|m| m.muted_until)
-                        .min()
+                        .min();
+                    (next_active, has_overdue)
                 };
+                // Overdue entries (expired but unreceipted) need immediate
+                // reconciliation — don't park on Notify when work is pending.
+                if has_overdue {
+                    match store.reconcile_expiries().await {
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::warn!("expiry reconciliation retry failed: {e}");
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                        }
+                    }
+                    continue;
+                }
                 match next_deadline {
                     Some(deadline) => {
                         let duration = (deadline - Utc::now())
