@@ -498,7 +498,12 @@ impl EventHandler for Handler {
         let decision = if is_dm {
             InboundGate::check_dm(&config, author.id.get())
         } else {
-            InboundGate::check_guild_passive(&config, resolved.gate_channel_id, author.id.get(), event.guild_id.map(|g| g.get()))
+            InboundGate::check_guild_passive(
+                &config,
+                resolved.gate_channel_id,
+                author.id.get(),
+                event.guild_id.map(|g| g.get()),
+            )
         };
         if !matches!(decision, GateDecision::Deliver) {
             tracing::trace!(
@@ -580,7 +585,11 @@ impl EventHandler for Handler {
         if let Some(gid) = guild_id {
             if let Some(store) = crate::mute_store::global() {
                 if store.is_guild_muted(gid.get()) {
-                    tracing::debug!(guild_id = gid.get(), channel_id = cid, "message delete dropped: guild muted");
+                    tracing::debug!(
+                        guild_id = gid.get(),
+                        channel_id = cid,
+                        "message delete dropped: guild muted"
+                    );
                     return;
                 }
             }

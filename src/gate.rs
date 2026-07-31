@@ -59,7 +59,11 @@ impl InboundGate {
         if let Some(gid) = guild_id {
             if let Some(store) = crate::mute_store::global() {
                 if store.is_guild_muted(gid) {
-                    tracing::debug!(guild_id = gid, channel_id, "guild message dropped: guild muted");
+                    tracing::debug!(
+                        guild_id = gid,
+                        channel_id,
+                        "guild message dropped: guild muted"
+                    );
                     return GateDecision::Drop;
                 }
             }
@@ -105,7 +109,11 @@ impl InboundGate {
         if let Some(gid) = guild_id {
             if let Some(store) = crate::mute_store::global() {
                 if store.is_guild_muted(gid) {
-                    tracing::debug!(guild_id = gid, channel_id, "guild event dropped: guild muted");
+                    tracing::debug!(
+                        guild_id = gid,
+                        channel_id,
+                        "guild event dropped: guild muted"
+                    );
                     return GateDecision::Drop;
                 }
             }

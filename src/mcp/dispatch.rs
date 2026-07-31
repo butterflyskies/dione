@@ -374,14 +374,18 @@ pub(crate) async fn call_tool(
             // alongside the channel list (channels don't carry guild_id, so
             // per-channel annotation isn't possible).
             if let Some(store) = crate::mute_store::global() {
-                let mutes: Vec<Value> = store.list_muted().into_iter().map(|m| {
-                    json!({
-                        "guild_id": m.guild_id.to_string(),
-                        "muted_until": m.muted_until.to_rfc3339(),
-                        "remaining_seconds": m.remaining_seconds(),
-                        "cutoff_event_id": m.cutoff_event_id,
+                let mutes: Vec<Value> = store
+                    .list_muted()
+                    .into_iter()
+                    .map(|m| {
+                        json!({
+                            "guild_id": m.guild_id.to_string(),
+                            "muted_until": m.muted_until.to_rfc3339(),
+                            "remaining_seconds": m.remaining_seconds(),
+                            "cutoff_event_id": m.cutoff_event_id,
+                        })
                     })
-                }).collect();
+                    .collect();
                 if !mutes.is_empty() {
                     result["guild_mutes"] = json!(mutes);
                 }
@@ -580,7 +584,10 @@ pub(crate) async fn call_tool(
             let reason = args.get("reason").and_then(Value::as_str).map(String::from);
             let store = crate::mute_store::global()
                 .ok_or_else(|| "mute store not initialized".to_string())?;
-            match store.mute_guild(guild_id, ttl_minutes, "admin".into(), reason).await {
+            match store
+                .mute_guild(guild_id, ttl_minutes, "admin".into(), reason)
+                .await
+            {
                 Ok(mute) => json!({
                     "ok": true,
                     "guild_id": guild_id.to_string(),
@@ -613,17 +620,21 @@ pub(crate) async fn call_tool(
             check_admin_gate(&config)?;
             let store = crate::mute_store::global()
                 .ok_or_else(|| "mute store not initialized".to_string())?;
-            let mutes: Vec<Value> = store.list_muted().into_iter().map(|m| {
-                json!({
-                    "guild_id": m.guild_id.to_string(),
-                    "muted_until": m.muted_until.to_rfc3339(),
-                    "muted_at": m.muted_at.to_rfc3339(),
-                    "muted_by": m.muted_by,
-                    "reason": m.reason,
-                    "remaining_seconds": m.remaining_seconds(),
-                    "cutoff_event_id": m.cutoff_event_id,
+            let mutes: Vec<Value> = store
+                .list_muted()
+                .into_iter()
+                .map(|m| {
+                    json!({
+                        "guild_id": m.guild_id.to_string(),
+                        "muted_until": m.muted_until.to_rfc3339(),
+                        "muted_at": m.muted_at.to_rfc3339(),
+                        "muted_by": m.muted_by,
+                        "reason": m.reason,
+                        "remaining_seconds": m.remaining_seconds(),
+                        "cutoff_event_id": m.cutoff_event_id,
+                    })
                 })
-            }).collect();
+                .collect();
             json!({ "muted_servers": mutes })
         }
         "set_trace_level" => {

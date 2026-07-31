@@ -2,9 +2,8 @@
 //!
 //! The append-only JSONL receipt log (`guild_mute_receipts.jsonl`) is the
 //! canonical source of truth for mute state. On startup the log is replayed
-//! to rebuild the in-memory `MuteState` projection. A JSON snapshot
-//! (`guild_mutes.json`) serves as a disposable cache keyed by the SHA-256
-//! hash of the last receipt line — when the hash matches, replay is skipped.
+//! to rebuild the in-memory `MuteState` projection — there is no cache file;
+//! the receipt log is small enough that replay is always fast.
 //!
 //! All mutations (mute, unmute, extend) are serialized through a
 //! `tokio::sync::Mutex`. The receipt is appended to the log *first* — this
@@ -16,16 +15,21 @@
 //! and returns `false` for expired entries without emitting receipts.
 //! Explicit `reconcile_expiries()` runs under the writer lock to emit
 //! `Expire` receipts for entries whose TTL has elapsed.
+//!
+//! A background expiry task (`spawn_expiry_task`) sleeps until the nearest
+//! `muted_until` deadline and then calls `reconcile_expiries` to emit
+//! `Expire` receipts promptly. When no active mutes exist it parks on a
+//! `Notify` that `mute_guild` triggers.
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use camino::Utf8Path;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -108,29 +112,15 @@ pub struct MuteReceipt {
     pub cutoff_event_id: Option<String>,
 }
 
-// ── Cache envelope ──────────────────────────────────────────────────────────
-
-/// On-disk cache format: the mutes projection tagged with the log head hash.
-#[derive(Serialize, Deserialize)]
-struct CacheEnvelope {
-    /// SHA-256 hex digest of the last line in the receipt log.
-    log_head: String,
-    /// The projected mute state.
-    mutes: HashMap<u64, GuildMute>,
-}
-
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-/// Compute SHA-256 hex digest of a byte slice.
-fn sha256_hex(data: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    format!("{:x}", hasher.finalize())
-}
 
 /// Generate a deterministic cutoff event identity from timestamp + guild_id.
 fn generate_cutoff_event_id(timestamp: &DateTime<Utc>, guild_id: u64) -> String {
-    format!("{}-{}", timestamp.timestamp_nanos_opt().unwrap_or(0), guild_id)
+    format!(
+        "{}-{}",
+        timestamp.timestamp_nanos_opt().unwrap_or(0),
+        guild_id
+    )
 }
 
 /// Apply a single receipt to the mute state projection.
@@ -146,10 +136,7 @@ fn apply_receipt(state: &mut MuteState, receipt: &MuteReceipt) {
                         muted_by: receipt.actor.clone(),
                         reason: receipt.reason.clone(),
                         muted_at: receipt.timestamp,
-                        cutoff_event_id: receipt
-                            .cutoff_event_id
-                            .clone()
-                            .unwrap_or_default(),
+                        cutoff_event_id: receipt.cutoff_event_id.clone().unwrap_or_default(),
                     },
                 );
             }
@@ -170,9 +157,8 @@ fn replay_receipt_log(
         if trimmed.is_empty() {
             continue;
         }
-        let receipt: MuteReceipt = serde_json::from_str(trimmed).map_err(|e| {
-            format!("corrupt receipt at line {}: {e}", i + 1)
-        })?;
+        let receipt: MuteReceipt = serde_json::from_str(trimmed)
+            .map_err(|e| format!("corrupt receipt at line {}: {e}", i + 1))?;
         apply_receipt(&mut state, &receipt);
     }
     Ok(state)
@@ -187,18 +173,17 @@ fn replay_receipt_log(
 /// successful write.
 pub struct MuteStore {
     state: ArcSwap<MuteState>,
-    cache_path: camino::Utf8PathBuf,
     receipt_path: camino::Utf8PathBuf,
     /// Serializes all write operations (mute, unmute, extend, reconcile).
     write_lock: Mutex<()>,
+    /// Wakes the background expiry task when a new mute is created.
+    expiry_notify: Notify,
 }
 
 impl MuteStore {
     /// Load mute state by replaying the receipt log.
     ///
-    /// If a cache file exists whose `log_head` hash matches the SHA-256 of
-    /// the last receipt line, the cached projection is used directly.
-    /// Otherwise the full log is replayed.
+    /// The full log is always replayed — there is no cache.
     ///
     /// After loading, `reconcile_expiries` is called to emit `Expire`
     /// receipts for any entries whose TTL has elapsed while the process
@@ -206,10 +191,9 @@ impl MuteStore {
     pub async fn load(
         state_dir: &Utf8Path,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let cache_path = state_dir.join("guild_mutes.json");
         let receipt_path = state_dir.join("guild_mute_receipts.jsonl");
 
-        let state = Self::load_from_log_with_cache(&receipt_path, &cache_path).await?;
+        let state = Self::replay_log(&receipt_path).await?;
 
         let active = state.mutes.values().filter(|m| m.is_active()).count();
         let total = state.mutes.len();
@@ -217,9 +201,9 @@ impl MuteStore {
 
         let store = Self {
             state: ArcSwap::from_pointee(state),
-            cache_path,
             receipt_path,
             write_lock: Mutex::new(()),
+            expiry_notify: Notify::new(),
         };
 
         // Reconcile expired entries — emits Expire receipts for entries
@@ -231,13 +215,10 @@ impl MuteStore {
         Ok(store)
     }
 
-    /// Replay the receipt log to build the projection, using the cache when
-    /// the log head hash matches.
-    async fn load_from_log_with_cache(
+    /// Replay the receipt log to build the projection.
+    async fn replay_log(
         receipt_path: &camino::Utf8Path,
-        cache_path: &camino::Utf8Path,
     ) -> Result<MuteState, Box<dyn std::error::Error + Send + Sync>> {
-        // Read the receipt log.
         let log_contents = match tokio::fs::read_to_string(receipt_path).await {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -252,31 +233,10 @@ impl MuteStore {
             return Ok(MuteState::default());
         }
 
-        // Find the last non-empty line and compute its hash.
-        let last_line = log_contents
+        let line_count = log_contents
             .lines()
-            .rev()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or("");
-        let log_head_hash = sha256_hex(last_line.trim().as_bytes());
-
-        // Try the cache — use it only if the log_head hash matches.
-        if let Ok(cache_json) = tokio::fs::read_to_string(cache_path).await {
-            if let Ok(envelope) = serde_json::from_str::<CacheEnvelope>(&cache_json) {
-                if envelope.log_head == log_head_hash {
-                    tracing::debug!("cache log_head matches receipt log, using cached projection");
-                    return Ok(MuteState {
-                        mutes: envelope.mutes,
-                    });
-                }
-                tracing::debug!("cache log_head mismatch, replaying receipt log");
-            } else {
-                tracing::debug!("cache format unrecognized (migration?), replaying receipt log");
-            }
-        }
-
-        // Full replay.
-        let line_count = log_contents.lines().filter(|l| !l.trim().is_empty()).count();
+            .filter(|l| !l.trim().is_empty())
+            .count();
         tracing::info!(lines = line_count, "replaying receipt log");
         replay_receipt_log(&log_contents)
     }
@@ -285,10 +245,50 @@ impl MuteStore {
     pub fn from_state(state: MuteState, state_dir: &Utf8Path) -> Self {
         Self {
             state: ArcSwap::from_pointee(state),
-            cache_path: state_dir.join("guild_mutes.json"),
             receipt_path: state_dir.join("guild_mute_receipts.jsonl"),
             write_lock: Mutex::new(()),
+            expiry_notify: Notify::new(),
         }
+    }
+
+    /// Spawn a background task that reconciles expired mutes at their
+    /// deadline rather than waiting for the next startup.
+    ///
+    /// The task sleeps until the nearest `muted_until` among active mutes,
+    /// then calls `reconcile_expiries`. When no active mutes exist it parks
+    /// on `expiry_notify` until `mute_guild` wakes it.
+    ///
+    /// Returns a `JoinHandle` that can be aborted on shutdown.
+    pub fn spawn_expiry_task(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let store = Arc::clone(self);
+        tokio::spawn(async move {
+            loop {
+                let next_deadline = {
+                    let state = store.load_state();
+                    state
+                        .mutes
+                        .values()
+                        .filter(|m| m.is_active())
+                        .map(|m| m.muted_until)
+                        .min()
+                };
+                match next_deadline {
+                    Some(deadline) => {
+                        let duration = (deadline - Utc::now())
+                            .to_std()
+                            .unwrap_or(Duration::from_secs(1));
+                        tokio::time::sleep(duration).await;
+                        if let Err(e) = store.reconcile_expiries().await {
+                            tracing::warn!("expiry reconciliation failed: {e}");
+                        }
+                    }
+                    None => {
+                        // No active mutes — wait for notification.
+                        store.expiry_notify.notified().await;
+                    }
+                }
+            }
+        })
     }
 
     /// Lock-free read of current mute state.
@@ -368,8 +368,7 @@ impl MuteStore {
         };
 
         // Append receipt FIRST — this is the commit point.
-        let log_line = self
-            .append_receipt(&receipt)
+        self.append_receipt(&receipt)
             .await
             .map_err(|e| format!("failed to append mute receipt: {e}"))?;
 
@@ -387,13 +386,7 @@ impl MuteStore {
         new_state.mutes.insert(guild_id, mute.clone());
 
         // Update in-memory projection.
-        self.state.store(Arc::new(new_state.clone()));
-
-        // Update cache (best-effort).
-        let log_head = sha256_hex(log_line.as_bytes());
-        if let Err(e) = self.save_cache(&new_state, &log_head).await {
-            tracing::warn!(error = %e, "failed to update mute cache");
-        }
+        self.state.store(Arc::new(new_state));
 
         tracing::info!(
             guild_id,
@@ -404,6 +397,9 @@ impl MuteStore {
             ?operation,
             "guild muted"
         );
+
+        // Wake the expiry task so it recalculates the next deadline.
+        self.expiry_notify.notify_one();
 
         Ok(mute)
     }
@@ -434,8 +430,7 @@ impl MuteStore {
         };
 
         // Append receipt FIRST — this is the commit point.
-        let log_line = self
-            .append_receipt(&receipt)
+        self.append_receipt(&receipt)
             .await
             .map_err(|e| format!("failed to append unmute receipt: {e}"))?;
 
@@ -444,13 +439,7 @@ impl MuteStore {
         new_state.mutes.remove(&guild_id);
 
         // Update in-memory projection.
-        self.state.store(Arc::new(new_state.clone()));
-
-        // Update cache (best-effort).
-        let log_head = sha256_hex(log_line.as_bytes());
-        if let Err(e) = self.save_cache(&new_state, &log_head).await {
-            tracing::warn!(error = %e, "failed to update mute cache");
-        }
+        self.state.store(Arc::new(new_state));
 
         tracing::info!(
             guild_id,
@@ -464,7 +453,7 @@ impl MuteStore {
     /// Reconcile expired mute entries by emitting `Expire` receipts and
     /// removing them from the projection.
     ///
-    /// Called at startup (after replay) and may be called periodically.
+    /// Called at startup (after replay) and periodically by the expiry task.
     /// Each `Expire` receipt carries the original `muted_until` and
     /// `cutoff_event_id` for audit continuity.
     pub async fn reconcile_expiries(
@@ -487,7 +476,6 @@ impl MuteStore {
         }
 
         let count = expired.len();
-        let mut last_log_line = String::new();
 
         for mute in &expired {
             let receipt = MuteReceipt {
@@ -503,7 +491,7 @@ impl MuteStore {
                     Some(mute.cutoff_event_id.clone())
                 },
             };
-            last_log_line = self.append_receipt(&receipt).await?;
+            self.append_receipt(&receipt).await?;
         }
 
         // Rebuild projection without expired entries.
@@ -512,13 +500,7 @@ impl MuteStore {
             new_state.mutes.remove(&mute.guild_id);
         }
 
-        self.state.store(Arc::new(new_state.clone()));
-
-        // Update cache.
-        let log_head = sha256_hex(last_log_line.as_bytes());
-        if let Err(e) = self.save_cache(&new_state, &log_head).await {
-            tracing::warn!(error = %e, "failed to update mute cache after expiry reconciliation");
-        }
+        self.state.store(Arc::new(new_state));
 
         tracing::info!(reconciled = count, "reconciled expired guild mutes");
 
@@ -538,16 +520,16 @@ impl MuteStore {
 
     /// Append a receipt to the JSONL receipt log.
     ///
-    /// Returns the serialized JSON line (without trailing newline) on
-    /// success, for use in cache hash computation.
+    /// Flushes and fsyncs (`sync_data`) before returning so the receipt is
+    /// durable on disk before the in-memory projection is updated.
     async fn append_receipt(
         &self,
         receipt: &MuteReceipt,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use tokio::io::AsyncWriteExt;
 
         let line = serde_json::to_string(receipt)?;
-        let mut with_newline = line.clone();
+        let mut with_newline = line;
         with_newline.push('\n');
 
         let mut file = tokio::fs::OpenOptions::new()
@@ -557,32 +539,8 @@ impl MuteStore {
             .await?;
         file.write_all(with_newline.as_bytes()).await?;
         file.flush().await?;
+        file.sync_data().await?;
 
-        Ok(line)
-    }
-
-    /// Write the cache file with the log head hash for fast startup.
-    async fn save_cache(
-        &self,
-        state: &MuteState,
-        log_head: &str,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let envelope = CacheEnvelope {
-            log_head: log_head.to_string(),
-            mutes: state.mutes.clone(),
-        };
-        let serialized = serde_json::to_string_pretty(&envelope)?;
-
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let tmp_path = format!("{}.tmp.{}.{}", self.cache_path, std::process::id(), nanos);
-        tokio::fs::write(&tmp_path, &serialized).await?;
-        if let Err(e) = tokio::fs::rename(&tmp_path, &self.cache_path).await {
-            let _ = tokio::fs::remove_file(&tmp_path).await;
-            return Err(e.into());
-        }
         Ok(())
     }
 }
@@ -622,16 +580,6 @@ mod tests {
             contents.push('\n');
         }
         std::fs::write(path, contents).unwrap();
-    }
-
-    /// Helper to write a cache file for testing cache validation.
-    fn write_cache(state_dir: &Utf8Path, log_head: &str, mutes: &HashMap<u64, GuildMute>) {
-        let path = state_dir.join("guild_mutes.json");
-        let envelope = CacheEnvelope {
-            log_head: log_head.to_string(),
-            mutes: mutes.clone(),
-        };
-        std::fs::write(path, serde_json::to_string_pretty(&envelope).unwrap()).unwrap();
     }
 
     #[test]
@@ -824,7 +772,10 @@ mod tests {
             .expect("mute should succeed");
         assert_eq!(mute.guild_id, 42);
         assert!(store.is_guild_muted(42));
-        assert!(!mute.cutoff_event_id.is_empty(), "cutoff_event_id must be set");
+        assert!(
+            !mute.cutoff_event_id.is_empty(),
+            "cutoff_event_id must be set"
+        );
 
         // Unmute guild 42.
         let removed = store.unmute_guild(42).await.expect("unmute should succeed");
@@ -941,7 +892,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn load_uses_cache_when_log_head_matches() {
+    async fn load_always_replays_receipt_log() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = camino::Utf8Path::from_path(dir.path()).unwrap();
 
@@ -954,79 +905,21 @@ mod tests {
             guild_id: 42,
             operation: MuteOperation::Mute,
             actor: "admin".into(),
-            reason: Some("cached".into()),
-            muted_until: Some(muted_until),
-            cutoff_event_id: Some("cutoff-42".into()),
-        };
-        write_receipt_log(path, &[receipt.clone()]);
-
-        // Compute the hash of the last log line.
-        let line = serde_json::to_string(&receipt).unwrap();
-        let log_head = sha256_hex(line.as_bytes());
-
-        // Write a cache with the matching log_head.
-        let mut mutes = HashMap::new();
-        mutes.insert(
-            42,
-            GuildMute {
-                guild_id: 42,
-                muted_until,
-                muted_by: "admin".into(),
-                reason: Some("cached".into()),
-                muted_at: now,
-                cutoff_event_id: "cutoff-42".into(),
-            },
-        );
-        write_cache(path, &log_head, &mutes);
-
-        // Load — should use cache (verified by tracing, but functionally
-        // the result must match).
-        let store = MuteStore::load(path).await.expect("load should succeed");
-        assert!(store.is_guild_muted(42));
-        let listed = store.list_muted();
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].cutoff_event_id, "cutoff-42");
-    }
-
-    #[tokio::test]
-    async fn load_replays_log_when_cache_log_head_mismatches() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = camino::Utf8Path::from_path(dir.path()).unwrap();
-
-        let now = Utc::now();
-        let muted_until = now + chrono::Duration::minutes(60);
-
-        // Write a receipt log with a mute.
-        let receipt = MuteReceipt {
-            timestamp: now,
-            guild_id: 42,
-            operation: MuteOperation::Mute,
-            actor: "admin".into(),
             reason: Some("from-log".into()),
             muted_until: Some(muted_until),
             cutoff_event_id: Some("cutoff-42".into()),
         };
         write_receipt_log(path, &[receipt]);
 
-        // Write a cache with a WRONG log_head — force replay.
-        let mut mutes = HashMap::new();
-        mutes.insert(
-            99,
-            GuildMute {
-                guild_id: 99,
-                muted_until,
-                muted_by: "stale".into(),
-                reason: Some("stale-cache".into()),
-                muted_at: now,
-                cutoff_event_id: "stale".into(),
-            },
-        );
-        write_cache(path, "wrong-hash", &mutes);
-
-        // Load — should replay log, not use the stale cache.
+        // Load — always replays the log.
         let store = MuteStore::load(path).await.expect("load should succeed");
-        assert!(store.is_guild_muted(42), "guild 42 should be muted from log replay");
-        assert!(!store.is_guild_muted(99), "guild 99 should not be muted (stale cache)");
+        assert!(
+            store.is_guild_muted(42),
+            "guild 42 should be muted from log replay"
+        );
+        let listed = store.list_muted();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].cutoff_event_id, "cutoff-42");
     }
 
     #[tokio::test]
@@ -1160,7 +1053,10 @@ mod tests {
         assert_eq!(r1.operation, MuteOperation::Mute);
         assert_eq!(r1.guild_id, 42);
         assert!(r1.muted_until.is_some());
-        assert!(r1.cutoff_event_id.is_some(), "Mute receipt must carry cutoff_event_id");
+        assert!(
+            r1.cutoff_event_id.is_some(),
+            "Mute receipt must carry cutoff_event_id"
+        );
 
         let r2: MuteReceipt = serde_json::from_str(lines[1]).expect("valid receipt JSON");
         assert_eq!(r2.operation, MuteOperation::Unmute);
@@ -1204,9 +1100,9 @@ mod tests {
         // the ArcSwap is NOT updated.
         let store = MuteStore {
             state: ArcSwap::from_pointee(MuteState::default()),
-            cache_path: camino::Utf8PathBuf::from("/nonexistent/dir/guild_mutes.json"),
             receipt_path: camino::Utf8PathBuf::from("/nonexistent/dir/guild_mute_receipts.jsonl"),
             write_lock: Mutex::new(()),
+            expiry_notify: Notify::new(),
         };
 
         let result = store.mute_guild(42, 60, "admin".into(), None).await;
@@ -1276,47 +1172,5 @@ mod tests {
         assert_eq!(r2.operation, MuteOperation::Expire);
         assert_eq!(r2.guild_id, 42);
         assert_eq!(r2.actor, "system");
-    }
-
-    #[tokio::test]
-    async fn old_cache_format_triggers_replay() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = camino::Utf8Path::from_path(dir.path()).unwrap();
-
-        let now = Utc::now();
-        let muted_until = now + chrono::Duration::minutes(60);
-
-        // Write a receipt log.
-        let receipt = MuteReceipt {
-            timestamp: now,
-            guild_id: 42,
-            operation: MuteOperation::Mute,
-            actor: "admin".into(),
-            reason: None,
-            muted_until: Some(muted_until),
-            cutoff_event_id: Some("cutoff-42".into()),
-        };
-        write_receipt_log(path, &[receipt]);
-
-        // Write an OLD format cache (no log_head, just bare MuteState).
-        let old_cache = serde_json::json!({
-            "mutes": {
-                "99": {
-                    "guild_id": 99,
-                    "muted_until": muted_until.to_rfc3339(),
-                    "muted_by": "stale",
-                    "reason": null,
-                    "muted_at": now.to_rfc3339(),
-                    "cutoff_event_id": ""
-                }
-            }
-        });
-        let cache_path = path.join("guild_mutes.json");
-        std::fs::write(cache_path, serde_json::to_string(&old_cache).unwrap()).unwrap();
-
-        // Load — old cache format should be ignored, log replayed.
-        let store = MuteStore::load(path).await.expect("load should succeed");
-        assert!(store.is_guild_muted(42));
-        assert!(!store.is_guild_muted(99));
     }
 }
