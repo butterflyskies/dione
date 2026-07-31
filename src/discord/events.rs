@@ -311,6 +311,7 @@ impl EventHandler for Handler {
                 resolved.gate_channel_id,
                 msg.author.id.get(),
                 mention_kind.is_some(),
+                msg.guild_id.map(|g| g.get()),
             );
 
             match decision {
@@ -487,7 +488,7 @@ impl EventHandler for Handler {
         let decision = if is_dm {
             InboundGate::check_dm(&config, author.id.get())
         } else {
-            InboundGate::check_guild_passive(&config, resolved.gate_channel_id, author.id.get())
+            InboundGate::check_guild_passive(&config, resolved.gate_channel_id, author.id.get(), event.guild_id.map(|g| g.get()))
         };
         if !matches!(decision, GateDecision::Deliver) {
             tracing::trace!(
@@ -564,6 +565,16 @@ impl EventHandler for Handler {
         let is_dm = guild_id.is_none();
 
         let resolved = resolve_guild_channel(&ctx.http, &self.state, &config, cid, is_dm).await;
+
+        // Guild mute check — suppress push delivery for muted guilds.
+        if let Some(gid) = guild_id {
+            if let Some(store) = crate::mute_store::global() {
+                if store.is_guild_muted(gid.get()) {
+                    tracing::debug!(guild_id = gid.get(), channel_id = cid, "message delete dropped: guild muted");
+                    return;
+                }
+            }
+        }
 
         let is_known = if is_dm {
             config.access.dm_policy != crate::config::DmPolicy::Disabled && {

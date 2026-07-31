@@ -373,6 +373,26 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                     "user_id": { "type": "string", "description": "Discord user ID to remove" }
                 }
             })),
+            tool("mute_server", "Admin only. Suspend push delivery for all channels in a guild. Outbound (reply, send_file) and manual pull (fetch_messages, search_messages) remain available. Re-issuing a mute with a shorter TTL is rejected to prevent accidental shortening; unmute first to replace.", json!({
+                "type": "object",
+                "required": ["guild_id", "ttl_minutes"],
+                "properties": {
+                    "guild_id": { "type": "string", "description": "Discord guild (server) ID to mute" },
+                    "ttl_minutes": { "type": "integer", "minimum": 1, "description": "Duration of mute in minutes" },
+                    "reason": { "type": "string", "description": "Optional reason for the mute" }
+                }
+            })),
+            tool("unmute_server", "Admin only. Manually unmute a guild, resuming push delivery.", json!({
+                "type": "object",
+                "required": ["guild_id"],
+                "properties": {
+                    "guild_id": { "type": "string", "description": "Discord guild (server) ID to unmute" }
+                }
+            })),
+            tool("list_muted_servers", "Admin only. List all currently muted guilds with remaining TTL and metadata.", json!({
+                "type": "object",
+                "properties": {}
+            })),
         ]
     });
     if mode == TransportMode::Codex

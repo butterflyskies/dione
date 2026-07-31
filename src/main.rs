@@ -112,6 +112,13 @@ async fn main() -> Result<()> {
     let pre_send_pipeline = dione::pre_send::observe_pipeline(Vec::new())
         .wrap_err("failed to configure Observe pre-send pipeline")?;
     dione::pre_send::install_pipeline(Some(pre_send_pipeline));
+
+    // Initialize the guild mute store (persistent, lock-free reads).
+    let mute_store = dione::mute_store::MuteStore::load(&state_dir)
+        .await
+        .map_err(|e| color_eyre::eyre::eyre!("failed to load guild mute store: {e}"))?;
+    dione::mute_store::init_global(mute_store);
+
     tracing::info!(
         ?state_dir,
         dm_policy = ?config.access.dm_policy,

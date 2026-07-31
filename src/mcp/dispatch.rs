@@ -368,7 +368,25 @@ pub(crate) async fn call_tool(
         }
 
         // Config management — read-only (no ConfigStore mutation needed)
-        "list_config_channels" => ConfigStore::list_channels(&server.state_dir),
+        "list_config_channels" => {
+            let mut result = ConfigStore::list_channels(&server.state_dir);
+            // Annotate with active guild mutes so the caller sees muted guilds
+            // alongside the channel list (channels don't carry guild_id, so
+            // per-channel annotation isn't possible).
+            if let Some(store) = crate::mute_store::global() {
+                let mutes: Vec<Value> = store.list_muted().into_iter().map(|m| {
+                    json!({
+                        "guild_id": m.guild_id.to_string(),
+                        "muted_until": m.muted_until.to_rfc3339(),
+                        "remaining_seconds": m.remaining_seconds(),
+                    })
+                }).collect();
+                if !mutes.is_empty() {
+                    result["guild_mutes"] = json!(mutes);
+                }
+            }
+            result
+        }
         "get_access_config" => ConfigStore::get_access(&server.state_dir),
 
         // Config management — mutations (ConfigStore, admin-gated)
@@ -536,6 +554,69 @@ pub(crate) async fn call_tool(
             }
         }
         "get_version" => get_version().await,
+
+        // Guild mute management (admin-gated)
+        "mute_server" => {
+            check_admin_gate(&config)?;
+            let guild_id_str = parse_str(&args, "guild_id")?;
+            DiscordId::parse(guild_id_str)?;
+            let guild_id: u64 = guild_id_str
+                .parse()
+                .map_err(|_| format!("invalid guild_id: {guild_id_str}"))?;
+            let ttl_minutes = args
+                .get("ttl_minutes")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| "missing or invalid ttl_minutes".to_string())?;
+            if ttl_minutes == 0 {
+                return Err("ttl_minutes must be at least 1".to_string());
+            }
+            let reason = args.get("reason").and_then(Value::as_str).map(String::from);
+            let store = crate::mute_store::global()
+                .ok_or_else(|| "mute store not initialized".to_string())?;
+            match store.mute_guild(guild_id, ttl_minutes, "admin".into(), reason).await {
+                Ok(mute) => json!({
+                    "ok": true,
+                    "guild_id": guild_id.to_string(),
+                    "muted_until": mute.muted_until.to_rfc3339(),
+                    "remaining_seconds": mute.remaining_seconds(),
+                }),
+                Err(e) => json!({ "error": e }),
+            }
+        }
+        "unmute_server" => {
+            check_admin_gate(&config)?;
+            let guild_id_str = parse_str(&args, "guild_id")?;
+            DiscordId::parse(guild_id_str)?;
+            let guild_id: u64 = guild_id_str
+                .parse()
+                .map_err(|_| format!("invalid guild_id: {guild_id_str}"))?;
+            let store = crate::mute_store::global()
+                .ok_or_else(|| "mute store not initialized".to_string())?;
+            match store.unmute_guild(guild_id).await {
+                Ok(mute) => json!({
+                    "ok": true,
+                    "guild_id": guild_id.to_string(),
+                    "was_muted_until": mute.muted_until.to_rfc3339(),
+                }),
+                Err(e) => json!({ "error": e }),
+            }
+        }
+        "list_muted_servers" => {
+            check_admin_gate(&config)?;
+            let store = crate::mute_store::global()
+                .ok_or_else(|| "mute store not initialized".to_string())?;
+            let mutes: Vec<Value> = store.list_muted().into_iter().map(|m| {
+                json!({
+                    "guild_id": m.guild_id.to_string(),
+                    "muted_until": m.muted_until.to_rfc3339(),
+                    "muted_at": m.muted_at.to_rfc3339(),
+                    "muted_by": m.muted_by,
+                    "reason": m.reason,
+                    "remaining_seconds": m.remaining_seconds(),
+                })
+            }).collect();
+            json!({ "muted_servers": mutes })
+        }
         "set_trace_level" => {
             let ctx = server.diagnostics_ctx();
             let filter = args
