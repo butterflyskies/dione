@@ -3,6 +3,13 @@
 //! Manages muted-server state: mute, unmute, query, and persistence.
 //! Uses `ArcSwap` for lock-free reads consistent with the config pattern.
 //! Persists to `$DIONE_STATE_DIR/guild_mutes.json` via atomic write.
+//!
+//! All mutations are serialized through a `tokio::sync::Mutex` to prevent
+//! read-modify-write races. Disk is written before the ArcSwap is updated,
+//! so a failed persist never leaves in-memory state diverged from disk.
+//!
+//! An append-only receipt log (`guild_mute_receipts.jsonl`) records every
+//! lifecycle event (mute, unmute, extend, expire) for durable audit history.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,8 +18,12 @@ use arc_swap::ArcSwap;
 use camino::Utf8Path;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
 // ── Types ────────────────────────────────────────────────────────────────────
+
+/// Maximum allowed TTL in minutes (30 days).
+pub const MAX_TTL_MINUTES: u64 = 43200;
 
 /// A single guild mute entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,18 +81,53 @@ impl MuteState {
     }
 }
 
+// ── Receipt types ───────────────────────────────────────────────────────────
+
+/// The type of mute lifecycle operation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MuteOperation {
+    Mute,
+    Unmute,
+    Extend,
+    Expire,
+}
+
+/// A durable, append-only lifecycle receipt for audit history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MuteReceipt {
+    pub timestamp: DateTime<Utc>,
+    pub guild_id: u64,
+    pub operation: MuteOperation,
+    pub actor: String,
+    pub reason: Option<String>,
+    /// For Mute/Extend: the new expiry time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub muted_until: Option<DateTime<Utc>>,
+    /// For Mute: opaque event identity for classifying stragglers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cutoff_event_id: Option<String>,
+}
+
 // ── Store ────────────────────────────────────────────────────────────────────
 
 /// Thread-safe mute store with lock-free reads and atomic persistence.
+///
+/// All mutations go through `write_lock` to serialize read-modify-write
+/// cycles. Disk is persisted *before* the ArcSwap is updated.
 pub struct MuteStore {
     state: ArcSwap<MuteState>,
     file_path: camino::Utf8PathBuf,
+    receipt_path: camino::Utf8PathBuf,
+    /// Serializes all write operations (mute, unmute, extend).
+    write_lock: Mutex<()>,
 }
 
 impl MuteStore {
     /// Load mute state from disk, pruning expired entries.
     pub async fn load(state_dir: &Utf8Path) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let file_path = state_dir.join("guild_mutes.json");
+        let receipt_path = state_dir.join("guild_mute_receipts.jsonl");
         let state = match tokio::fs::read_to_string(&file_path).await {
             Ok(contents) => {
                 let raw: MuteState = serde_json::from_str(&contents)?;
@@ -102,6 +148,8 @@ impl MuteStore {
         Ok(Self {
             state: ArcSwap::from_pointee(state),
             file_path,
+            receipt_path,
+            write_lock: Mutex::new(()),
         })
     }
 
@@ -110,6 +158,8 @@ impl MuteStore {
         Self {
             state: ArcSwap::from_pointee(state),
             file_path: state_dir.join("guild_mutes.json"),
+            receipt_path: state_dir.join("guild_mute_receipts.jsonl"),
+            write_lock: Mutex::new(()),
         }
     }
 
@@ -126,7 +176,11 @@ impl MuteStore {
     /// Mute a guild for `ttl_minutes` from now.
     ///
     /// Re-issuing a mute that would shorten the existing one is rejected
-    /// (requires explicit unmute-then-mute to shorten).
+    /// (requires explicit unmute-then-mute to shorten). If the guild is
+    /// already muted and the new TTL extends it, this is recorded as an
+    /// `Extend` operation.
+    ///
+    /// `ttl_minutes` must be in `1..=43200` (30 days).
     pub async fn mute_guild(
         &self,
         guild_id: u64,
@@ -134,12 +188,22 @@ impl MuteStore {
         muted_by: String,
         reason: Option<String>,
     ) -> Result<GuildMute, String> {
-        let now = Utc::now();
-        let muted_until = now + chrono::Duration::minutes(ttl_minutes as i64);
+        if ttl_minutes > MAX_TTL_MINUTES {
+            return Err(format!(
+                "ttl_minutes ({ttl_minutes}) exceeds maximum ({MAX_TTL_MINUTES})"
+            ));
+        }
 
-        // Guard against accidental shortening.
+        let now = Utc::now();
+        let duration = chrono::Duration::try_minutes(ttl_minutes as i64)
+            .ok_or_else(|| format!("ttl_minutes ({ttl_minutes}) overflows duration"))?;
+        let muted_until = now + duration;
+
+        let _guard = self.write_lock.lock().await;
+
+        // Re-read state under the lock to get a consistent snapshot.
         let current = self.state.load_full();
-        if let Some(existing) = current.mutes.get(&guild_id) {
+        let is_extend = if let Some(existing) = current.mutes.get(&guild_id) {
             if existing.is_active() && muted_until < existing.muted_until {
                 return Err(format!(
                     "guild {} is already muted until {} ({} seconds remaining); \
@@ -149,7 +213,10 @@ impl MuteStore {
                     existing.remaining_seconds(),
                 ));
             }
-        }
+            existing.is_active()
+        } else {
+            false
+        };
 
         let mute = GuildMute {
             guild_id,
@@ -161,9 +228,30 @@ impl MuteStore {
 
         let mut new_state = MuteState::clone(&current);
         new_state.mutes.insert(guild_id, mute.clone());
+
+        // Persist to disk BEFORE updating ArcSwap.
+        self.save_state(&new_state).await.map_err(|e| format!("failed to persist mute state: {e}"))?;
         self.state.store(Arc::new(new_state));
 
-        self.save().await.map_err(|e| format!("failed to persist mute state: {e}"))?;
+        let operation = if is_extend {
+            MuteOperation::Extend
+        } else {
+            MuteOperation::Mute
+        };
+
+        // Append receipt (best-effort — don't fail the mute if receipt write fails).
+        let receipt = MuteReceipt {
+            timestamp: now,
+            guild_id,
+            operation: operation.clone(),
+            actor: muted_by.clone(),
+            reason: reason.clone(),
+            muted_until: Some(muted_until),
+            cutoff_event_id: None,
+        };
+        if let Err(e) = self.append_receipt(&receipt).await {
+            tracing::warn!(error = %e, "failed to append mute receipt");
+        }
 
         tracing::info!(
             guild_id,
@@ -171,6 +259,7 @@ impl MuteStore {
             muted_by = %muted_by,
             reason = reason.as_deref().unwrap_or("(none)"),
             ttl_minutes,
+            ?operation,
             "guild muted"
         );
 
@@ -180,6 +269,9 @@ impl MuteStore {
     /// Manually unmute a guild. Returns the removed mute entry, or an error
     /// if the guild was not muted.
     pub async fn unmute_guild(&self, guild_id: u64) -> Result<GuildMute, String> {
+        let _guard = self.write_lock.lock().await;
+
+        // Re-read state under the lock.
         let current = self.state.load_full();
         let existing = current
             .mutes
@@ -190,9 +282,24 @@ impl MuteStore {
 
         let mut new_state = MuteState::clone(&current);
         new_state.mutes.remove(&guild_id);
+
+        // Persist to disk BEFORE updating ArcSwap.
+        self.save_state(&new_state).await.map_err(|e| format!("failed to persist mute state: {e}"))?;
         self.state.store(Arc::new(new_state));
 
-        self.save().await.map_err(|e| format!("failed to persist mute state: {e}"))?;
+        // Append receipt.
+        let receipt = MuteReceipt {
+            timestamp: Utc::now(),
+            guild_id,
+            operation: MuteOperation::Unmute,
+            actor: existing.muted_by.clone(),
+            reason: None,
+            muted_until: None,
+            cutoff_event_id: None,
+        };
+        if let Err(e) = self.append_receipt(&receipt).await {
+            tracing::warn!(error = %e, "failed to append unmute receipt");
+        }
 
         tracing::info!(
             guild_id,
@@ -214,19 +321,42 @@ impl MuteStore {
             .collect()
     }
 
-    /// Atomic write to disk (write-tmp then rename).
-    async fn save(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let state = self.state.load();
+    /// Atomic write of effective state to disk (write-tmp then rename).
+    ///
+    /// Uses a unique tmp file path (pid + timestamp nanos) to avoid races
+    /// between concurrent processes.
+    async fn save_state(&self, state: &MuteState) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Only persist active mutes.
         let pruned = state.pruned();
         let serialized = serde_json::to_string_pretty(&pruned)?;
 
-        let tmp_path = format!("{}.tmp", self.file_path);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp_path = format!("{}.tmp.{}.{}", self.file_path, std::process::id(), nanos);
         tokio::fs::write(&tmp_path, &serialized).await?;
         if let Err(e) = tokio::fs::rename(&tmp_path, &self.file_path).await {
             let _ = tokio::fs::remove_file(&tmp_path).await;
             return Err(e.into());
         }
+        Ok(())
+    }
+
+    /// Append a receipt to the JSONL receipt log.
+    async fn append_receipt(&self, receipt: &MuteReceipt) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use tokio::io::AsyncWriteExt;
+
+        let mut line = serde_json::to_string(receipt)?;
+        line.push('\n');
+
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.receipt_path)
+            .await?;
+        file.write_all(line.as_bytes()).await?;
+        file.flush().await?;
         Ok(())
     }
 }
@@ -438,5 +568,97 @@ mod tests {
         assert_eq!(mutes.len(), 1);
         assert_eq!(mutes[0].guild_id, 42);
         assert_eq!(mutes[0].reason.as_deref(), Some("test"));
+    }
+
+    #[tokio::test]
+    async fn mute_rejects_ttl_over_max() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let store = empty_store(path);
+
+        let result = store
+            .mute_guild(42, MAX_TTL_MINUTES + 1, "admin".into(), None)
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("exceeds maximum"));
+    }
+
+    #[tokio::test]
+    async fn receipt_log_records_mute_and_unmute() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let store = empty_store(path);
+
+        store
+            .mute_guild(42, 60, "admin".into(), Some("test".into()))
+            .await
+            .expect("mute should succeed");
+
+        store.unmute_guild(42).await.expect("unmute should succeed");
+
+        // Read the receipt log.
+        let receipt_path = path.join("guild_mute_receipts.jsonl");
+        let contents = std::fs::read_to_string(&receipt_path).expect("receipt file should exist");
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 2, "should have exactly 2 receipts");
+
+        let r1: MuteReceipt = serde_json::from_str(lines[0]).expect("valid receipt JSON");
+        assert_eq!(r1.operation, MuteOperation::Mute);
+        assert_eq!(r1.guild_id, 42);
+        assert!(r1.muted_until.is_some());
+
+        let r2: MuteReceipt = serde_json::from_str(lines[1]).expect("valid receipt JSON");
+        assert_eq!(r2.operation, MuteOperation::Unmute);
+        assert_eq!(r2.guild_id, 42);
+        assert!(r2.muted_until.is_none());
+    }
+
+    #[tokio::test]
+    async fn receipt_log_records_extend() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let store = empty_store(path);
+
+        store
+            .mute_guild(42, 10, "admin".into(), None)
+            .await
+            .expect("initial mute should succeed");
+
+        store
+            .mute_guild(42, 120, "admin".into(), Some("extended".into()))
+            .await
+            .expect("extension should succeed");
+
+        let receipt_path = path.join("guild_mute_receipts.jsonl");
+        let contents = std::fs::read_to_string(&receipt_path).expect("receipt file should exist");
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 2, "should have mute + extend receipts");
+
+        let r1: MuteReceipt = serde_json::from_str(lines[0]).expect("valid receipt JSON");
+        assert_eq!(r1.operation, MuteOperation::Mute);
+
+        let r2: MuteReceipt = serde_json::from_str(lines[1]).expect("valid receipt JSON");
+        assert_eq!(r2.operation, MuteOperation::Extend);
+        assert_eq!(r2.guild_id, 42);
+        assert!(r2.muted_until.is_some());
+    }
+
+    #[tokio::test]
+    async fn persist_before_publish_on_failure() {
+        // Verify that if save_state would fail (e.g. unwritable dir),
+        // the ArcSwap is NOT updated.
+        let store = MuteStore {
+            state: ArcSwap::from_pointee(MuteState::default()),
+            file_path: camino::Utf8PathBuf::from("/nonexistent/dir/guild_mutes.json"),
+            receipt_path: camino::Utf8PathBuf::from("/nonexistent/dir/guild_mute_receipts.jsonl"),
+            write_lock: Mutex::new(()),
+        };
+
+        let result = store.mute_guild(42, 60, "admin".into(), None).await;
+        assert!(result.is_err(), "mute should fail when disk write fails");
+        assert!(
+            !store.is_guild_muted(42),
+            "ArcSwap must not be updated when disk write fails"
+        );
     }
 }

@@ -350,6 +350,16 @@ impl EventHandler for Handler {
         let channel_id = reaction.channel_id;
         let bot_id = self.bot_user_id.load(Ordering::Relaxed);
 
+        // Guild mute check — suppress reaction delivery for muted guilds.
+        if let Some(gid) = reaction.guild_id {
+            if let Some(store) = crate::mute_store::global() {
+                if store.is_guild_muted(gid.get()) {
+                    tracing::debug!(guild_id = gid.get(), "reaction dropped: guild muted");
+                    return;
+                }
+            }
+        }
+
         // Discard reactions with no user attribution or from the bot itself
         // before the potentially-expensive message authorship lookup.
         let Some(user_id) = reaction.user_id else {

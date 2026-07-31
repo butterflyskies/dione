@@ -570,6 +570,12 @@ pub(crate) async fn call_tool(
             if ttl_minutes == 0 {
                 return Err("ttl_minutes must be at least 1".to_string());
             }
+            if ttl_minutes > crate::mute_store::MAX_TTL_MINUTES {
+                return Err(format!(
+                    "ttl_minutes ({ttl_minutes}) exceeds maximum ({})",
+                    crate::mute_store::MAX_TTL_MINUTES,
+                ));
+            }
             let reason = args.get("reason").and_then(Value::as_str).map(String::from);
             let store = crate::mute_store::global()
                 .ok_or_else(|| "mute store not initialized".to_string())?;

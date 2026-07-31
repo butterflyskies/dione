@@ -319,7 +319,7 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                     "filter": { "type": "string", "description": "tracing EnvFilter string, e.g. \"dione=debug\", \"dione::discord::events=trace\"" }
                 }
             })),
-            tool("list_config_channels", "List all channels in dione's config with their settings", json!({
+            tool("list_config_channels", "List all channels in dione's config with their settings. Active guild mutes are listed in a separate guild_mutes array because channel-to-guild mapping requires Discord event context and is not available at config-list time.", json!({
                 "type": "object",
                 "properties": {}
             })),
@@ -378,7 +378,7 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                 "required": ["guild_id", "ttl_minutes"],
                 "properties": {
                     "guild_id": { "type": "string", "description": "Discord guild (server) ID to mute" },
-                    "ttl_minutes": { "type": "integer", "minimum": 1, "description": "Duration of mute in minutes" },
+                    "ttl_minutes": { "type": "integer", "minimum": 1, "maximum": 43200, "description": "Duration of mute in minutes (max 30 days)" },
                     "reason": { "type": "string", "description": "Optional reason for the mute" }
                 }
             })),
