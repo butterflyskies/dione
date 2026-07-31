@@ -11,6 +11,7 @@ pub mod discord;
 pub mod gaie;
 pub mod gate;
 pub mod mcp;
+pub mod mute_store;
 pub mod nameplates;
 pub mod permissions;
 pub mod pre_send;
