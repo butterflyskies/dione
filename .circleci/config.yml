@@ -12,7 +12,7 @@ orbs:
 executors:
   linux:
     docker:
-      - image: cimg/rust:1.86.0
+      - image: cimg/rust:1.93.0
     resource_class: medium
   linux-msrv:
     docker:
