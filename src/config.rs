@@ -740,7 +740,17 @@ pub struct DeliveryConfig {
     /// Global default coalescing delay for channel events (milliseconds).
     /// Per-channel `delivery_delay_ms` overrides this. Default: 0 (no buffering).
     pub delivery_delay_ms: u64,
+    /// When to prepend the preamble to delivered events.
+    ///
+    /// - `always` (default): every event gets the preamble.
+    /// - `first`: only the first event after session start; subsequent events
+    ///   in the same thread binding are delivered without it.
+    /// - `never`: no preamble is ever included (advanced/unsupported).
     pub preamble_mode: PreambleMode,
+    /// Template text prepended to event payloads (subject to `preamble_mode`).
+    ///
+    /// Capped at [`MAX_PREAMBLE_BYTES`] (1024) bytes; oversized values are
+    /// silently truncated at a character boundary during deserialization.
     pub preamble_template: PreambleTemplate,
 }
 
