@@ -159,7 +159,20 @@ async fn main() -> Result<()> {
         let mut delivery_config = CodexDeliveryConfig::resolve(cli.codex_app_server_socket)
             .wrap_err("failed to configure Codex live delivery")?;
         delivery_config.preamble_mode = config.delivery.preamble_mode;
-        delivery_config.preamble_template = config.delivery.preamble_template.clone();
+        let mut template = config.delivery.preamble_template.clone();
+        if template.len() > dione::config::MAX_PREAMBLE_BYTES {
+            tracing::warn!(
+                len = template.len(),
+                max = dione::config::MAX_PREAMBLE_BYTES,
+                "preamble_template exceeds maximum length, truncating"
+            );
+            let mut end = dione::config::MAX_PREAMBLE_BYTES;
+            while end > 0 && !template.is_char_boundary(end) {
+                end -= 1;
+            }
+            template.truncate(end);
+        }
+        delivery_config.preamble_template = template;
         let initial_thread = match cli.codex_thread_id {
             Some(thread_id) => Some(thread_id),
             None => env::var("CODEX_THREAD_ID")

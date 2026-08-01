@@ -1087,17 +1087,25 @@ mod tests {
     }
 
     #[test]
-    fn preamble_passes_through_oversized_template() {
-        let phrase = "I will remember to length-bound my strings. ";
-        let repeats = 1_000_000 / phrase.len() + 1;
-        let giant = phrase.repeat(repeats);
-        assert!(giant.len() >= 1_000_000);
+    fn preamble_template_capped_at_max_length() {
+        use crate::config::{DeliveryConfig, MAX_PREAMBLE_BYTES};
+
+        let phrase = "I will not exceed the preamble limit. ";
+        let repeats = 1025 / phrase.len() + 1;
+        let oversized = phrase.repeat(repeats);
+        assert!(oversized.len() > MAX_PREAMBLE_BYTES);
+
+        let mut config = DeliveryConfig {
+            preamble_template: oversized,
+            ..DeliveryConfig::default()
+        };
+        config.clamp_preamble();
+        assert!(config.preamble_template.len() <= MAX_PREAMBLE_BYTES);
 
         let event = test_event();
-        let result = event_input(&event, Some(&giant));
+        let result = event_input(&event, Some(&config.preamble_template));
         let text = result[0]["text"].as_str().unwrap();
-        assert!(text.starts_with(phrase));
-        assert!(text.len() > 1_000_000);
+        assert!(text.len() <= MAX_PREAMBLE_BYTES + 500);
     }
 
     #[test]
