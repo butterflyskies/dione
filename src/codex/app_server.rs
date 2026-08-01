@@ -140,6 +140,9 @@ fn is_stale_steer_rejection(error: &AppServerRequestError) -> bool {
             message,
             ..
         } if message == "no active turn to steer"
+            || (message.starts_with("expected active turn id `")
+                && message.contains("` but found `")
+                && message.ends_with('`'))
     )
 }
 
@@ -198,8 +201,15 @@ impl AppServerClient {
                 json!({ "method": "initialized", "params": {} }),
             )
             .await?;
+        // The residency service resumes the exact durable thread before Dione
+        // starts. Re-resuming here can block behind an already-active turn and
+        // prevent the durable queue from reconnecting at all. Read the current
+        // state instead; this also gives us the authoritative active turn ID.
         let resumed = client
-            .request("thread/resume", json!({ "threadId": client.thread_id }))
+            .request(
+                "thread/read",
+                json!({ "threadId": client.thread_id, "includeTurns": true }),
+            )
             .await?;
         client.set_active_turn_from_thread(resumed.get("thread").unwrap_or(&Value::Null))?;
         Ok(client)
@@ -217,11 +227,16 @@ impl AppServerClient {
             return delivery.map_err(Into::into);
         }
 
-        // The turn finished after the last notification Dione observed.
-        // Treat the app-server's exact stale-steer response as authoritative,
-        // drain any adjacent lifecycle notifications, and route once more.
-        self.active_turn_id = None;
-        self.drain_notifications().await?;
+        // The turn changed after the last notification Dione observed. Refresh
+        // authoritative thread state once and route the same idempotent batch
+        // to the replacement turn (or start a turn if it became idle).
+        let refreshed = self
+            .request(
+                "thread/read",
+                json!({ "threadId": self.thread_id, "includeTurns": true }),
+            )
+            .await?;
+        self.set_active_turn_from_thread(refreshed.get("thread").unwrap_or(&Value::Null))?;
         let active_turn_id = self.active_turn_id.clone();
         self.deliver_to_current_turn(active_turn_id.as_deref(), &client_message_id, &input)
             .await
@@ -821,6 +836,30 @@ mod tests {
             active_turn_id(&thread),
             Err(CodexDeliveryError::ActiveTurnUnknown)
         ));
+    }
+
+    #[test]
+    fn recognizes_both_codex_stale_steer_rejections() {
+        for message in [
+            "no active turn to steer",
+            "expected active turn id `old-turn` but found `replacement-turn`",
+        ] {
+            let error = AppServerRequestError::Rejected {
+                method: "turn/steer",
+                code: Some(-32600),
+                message: message.to_owned(),
+                public_message: message.to_owned(),
+            };
+            assert!(is_stale_steer_rejection(&error), "{message}");
+        }
+
+        let unrelated = AppServerRequestError::Rejected {
+            method: "turn/steer",
+            code: Some(-32600),
+            message: "expected active turn id without a replacement".to_owned(),
+            public_message: "unrelated".to_owned(),
+        };
+        assert!(!is_stale_steer_rejection(&unrelated));
     }
 
     #[test]
