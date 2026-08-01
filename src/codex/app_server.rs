@@ -325,7 +325,7 @@ fn active_turn_id(thread: &Value) -> Result<Option<String>, CodexDeliveryError> 
 
 fn event_input(event: &LeasedEvent, preamble: Option<&str>) -> Value {
     let prompt = match preamble {
-        Some(pre) => format!("{pre}\n\n{}", event.event),
+        Some(pre) => format!("{pre}\n{}", event.event),
         None => event.event.to_string(),
     };
     json!([{ "type": "text", "text": prompt, "text_elements": [] }])
@@ -1074,5 +1074,61 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result["thread"]["id"], thread_id);
+    }
+
+    fn test_event() -> LeasedEvent {
+        LeasedEvent {
+            event_id: crate::codex::EventId::new(99),
+            delivery_token: DeliveryToken::parse("token-test").unwrap(),
+            lease_expires_at: chrono::Utc::now(),
+            consumer_id: ConsumerId::parse("consumer-test").unwrap(),
+            event: json!({ "params": { "content": "test event" } }),
+        }
+    }
+
+    #[test]
+    fn preamble_passes_through_oversized_template() {
+        let phrase = "I will remember to length-bound my strings. ";
+        let repeats = 1_000_000 / phrase.len() + 1;
+        let giant = phrase.repeat(repeats);
+        assert!(giant.len() >= 1_000_000);
+
+        let event = test_event();
+        let result = event_input(&event, Some(&giant));
+        let text = result[0]["text"].as_str().unwrap();
+        assert!(text.starts_with(phrase));
+        assert!(text.len() > 1_000_000);
+    }
+
+    #[test]
+    fn event_input_without_preamble() {
+        let event = test_event();
+        let result = event_input(&event, None);
+        let text = result[0]["text"].as_str().unwrap();
+        assert!(!text.is_empty());
+        assert!(!text.contains("[dione]"));
+    }
+
+    #[test]
+    fn resolve_preamble_first_mode_emits_once() {
+        use crate::config::PreambleMode;
+        let mut sent = false;
+        let template = "hello";
+        let first = match PreambleMode::First {
+            PreambleMode::First if !sent => {
+                sent = true;
+                Some(template.to_string())
+            }
+            _ => None,
+        };
+        let second = match PreambleMode::First {
+            PreambleMode::First if !sent => {
+                sent = true;
+                Some(template.to_string())
+            }
+            _ => None,
+        };
+        assert_eq!(first.as_deref(), Some("hello"));
+        assert_eq!(second, None);
     }
 }
