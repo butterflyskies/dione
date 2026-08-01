@@ -55,6 +55,11 @@ app-server socket is `$CODEX_HOME/app-server-control/app-server-control.sock`
 or `$HOME/.codex/app-server-control/app-server-control.sock`; override it with
 `--codex-app-server-socket` or `CODEX_APP_SERVER_SOCKET`.
 
+Live delivery opts into Codex's experimental app-server API. Dione requires a
+Codex build whose `thread/resume` request supports `excludeTurns` and
+`initialTurnsPage`; those fields are version-dependent until that API is
+stabilized.
+
 The lease/ACK MCP tools remain available for explicit pull consumers:
 
 1. Call `register_event_consumer`. Set `make_primary=true` only when no live

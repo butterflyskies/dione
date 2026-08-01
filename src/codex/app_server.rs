@@ -3,6 +3,7 @@ use super::LeasedEvent;
 use super::{CodexEventQueue, CodexQueueError, CodexThreadId, LeasedEventBatch};
 use camino::Utf8PathBuf;
 use futures_util::{FutureExt, SinkExt, StreamExt};
+use serde::{Deserialize, Deserializer, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{env, io, time::Duration};
 use thiserror::Error;
@@ -94,6 +95,12 @@ pub enum CodexDeliveryError {
     },
     #[error("Codex thread is active but its current turn id is unavailable")]
     ActiveTurnUnknown,
+    #[error("Codex app-server returned an invalid `{method}` result")]
+    InvalidResult {
+        method: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
     #[error(transparent)]
     Queue(#[from] CodexQueueError),
 }
@@ -154,6 +161,88 @@ struct AppServerClient {
     active_turn_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ThreadResumeResult {
+    thread: ResumedThread,
+    #[serde(rename = "initialTurnsPage")]
+    initial_turns_page: TurnPage,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResumedThread {
+    status: Option<ThreadStatus>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ThreadStatus {
+    #[serde(rename = "type")]
+    kind: ThreadState,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum ThreadState {
+    Active,
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Deserialize)]
+struct TurnPage {
+    data: Vec<TurnSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TurnSummary {
+    id: TurnId,
+    status: TurnState,
+}
+
+#[derive(Debug, Clone)]
+struct TurnId(String);
+
+impl<'de> Deserialize<'de> for TurnId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if value.is_empty() {
+            return Err(serde::de::Error::custom("turn id must not be empty"));
+        }
+        Ok(Self(value))
+    }
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum TurnState {
+    InProgress,
+    #[serde(other)]
+    Other,
+}
+
+impl ThreadResumeResult {
+    fn active_turn_id(&self) -> Result<Option<String>, CodexDeliveryError> {
+        let active = self
+            .thread
+            .status
+            .as_ref()
+            .is_some_and(|status| status.kind == ThreadState::Active);
+        let turn_id = self
+            .initial_turns_page
+            .data
+            .iter()
+            .rev()
+            .find(|turn| turn.status == TurnState::InProgress)
+            .map(|turn| turn.id.0.clone());
+        if active && turn_id.is_none() {
+            return Err(CodexDeliveryError::ActiveTurnUnknown);
+        }
+        Ok(turn_id)
+    }
+}
+
 impl AppServerClient {
     async fn connect(
         config: CodexDeliveryConfig,
@@ -204,23 +293,24 @@ impl AppServerClient {
                 json!({ "method": "initialized", "params": {} }),
             )
             .await?;
-        // The residency service resumes the exact durable thread before Dione
-        // starts. Re-resuming here can block behind an already-active turn.
-        // Reading the entire thread is also unbounded: a long-lived seat can
-        // take longer than the request timeout merely to deserialize history.
-        // Fetch only the newest turn summary to recover routing state.
-        let latest = client
-            .request(
-                "thread/turns/list",
+        // Resume the exact durable thread in this app-server process. Keep the
+        // initial page bounded: a long-lived seat's full turn history can take
+        // longer than the request timeout merely to deserialize.
+        let resumed: ThreadResumeResult = client
+            .request_typed(
+                "thread/resume",
                 json!({
                     "threadId": client.thread_id,
-                    "limit": 1,
-                    "sortDirection": "desc",
-                    "itemsView": "notLoaded"
+                    "excludeTurns": true,
+                    "initialTurnsPage": {
+                        "limit": 1,
+                        "sortDirection": "desc",
+                        "itemsView": "notLoaded"
+                    }
                 }),
             )
             .await?;
-        client.set_active_turn_from_latest(latest.get("data").unwrap_or(&Value::Null))?;
+        client.active_turn_id = resumed.active_turn_id()?;
         Ok(client)
     }
 
@@ -476,6 +566,17 @@ impl AppServerClient {
         })
         .await
         .map_err(|_| AppServerRequestError::Delivery(CodexDeliveryError::Timeout { method }))?
+    }
+
+    async fn request_typed<T: DeserializeOwned>(
+        &mut self,
+        method: &'static str,
+        params: Value,
+    ) -> Result<T, AppServerRequestError> {
+        let result = self.request(method, params).await?;
+        serde_json::from_value(result).map_err(|source| {
+            AppServerRequestError::Delivery(CodexDeliveryError::InvalidResult { method, source })
+        })
     }
 
     async fn send(
@@ -858,6 +959,30 @@ mod tests {
     }
 
     #[test]
+    fn typed_resume_result_routes_active_turn() {
+        let resumed: ThreadResumeResult = serde_json::from_value(json!({
+            "thread": { "status": { "type": "active" } },
+            "initialTurnsPage": {
+                "data": [{ "id": "live", "status": "inProgress" }]
+            }
+        }))
+        .unwrap();
+        assert_eq!(resumed.active_turn_id().unwrap().as_deref(), Some("live"));
+    }
+
+    #[test]
+    fn typed_resume_result_rejects_empty_turn_id() {
+        let error = serde_json::from_value::<ThreadResumeResult>(json!({
+            "thread": { "status": { "type": "active" } },
+            "initialTurnsPage": {
+                "data": [{ "id": "", "status": "inProgress" }]
+            }
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("turn id must not be empty"));
+    }
+
+    #[test]
     fn recognizes_both_codex_stale_steer_rejections() {
         for message in [
             "no active turn to steer",
@@ -982,11 +1107,21 @@ mod tests {
                 let Some(id) = request.get("id").and_then(Value::as_u64) else {
                     continue;
                 };
+                let result = if request["method"] == "thread/resume" {
+                    json!({
+                        "thread": { "status": { "type": "idle" } },
+                        "initialTurnsPage": { "data": [] }
+                    })
+                } else {
+                    json!({})
+                };
                 websocket
-                    .send(Message::Text(json!({ "id": id, "result": {} }).to_string()))
+                    .send(Message::Text(
+                        json!({ "id": id, "result": result }).to_string(),
+                    ))
                     .await
                     .unwrap();
-                if request["method"] == "thread/turns/list" {
+                if request["method"] == "thread/resume" {
                     std::future::pending::<()>().await;
                 }
             }
@@ -1039,6 +1174,11 @@ mod tests {
                 };
                 let result = if request["method"] == "initialize" {
                     json!({ "payload": "x".repeat(PAYLOAD_SIZE) })
+                } else if request["method"] == "thread/resume" {
+                    json!({
+                        "thread": { "status": { "type": "idle" } },
+                        "initialTurnsPage": { "data": [] }
+                    })
                 } else {
                     json!({})
                 };
@@ -1048,7 +1188,7 @@ mod tests {
                     ))
                     .await
                     .unwrap();
-                if request["method"] == "thread/turns/list" {
+                if request["method"] == "thread/resume" {
                     break;
                 }
             }
@@ -1082,8 +1222,11 @@ mod tests {
                 let Some(id) = request.get("id").and_then(Value::as_u64) else {
                     continue;
                 };
-                let result = if request["method"] == "thread/turns/list" {
-                    json!({ "data": [] })
+                let result = if request["method"] == "thread/resume" {
+                    json!({
+                        "thread": { "status": { "type": "idle" }, "turns": [] },
+                        "initialTurnsPage": { "data": [] }
+                    })
                 } else {
                     json!({})
                 };
@@ -1124,12 +1267,7 @@ mod tests {
             .collect();
         assert_eq!(
             methods,
-            [
-                "initialize",
-                "initialized",
-                "thread/turns/list",
-                "turn/start"
-            ]
+            ["initialize", "initialized", "thread/resume", "turn/start"]
         );
         assert_eq!(received[3]["params"]["threadId"], "thread-123");
         assert_eq!(received[3]["params"]["clientUserMessageId"], "dione-7");
@@ -1137,10 +1275,20 @@ mod tests {
             received[0]["params"]["capabilities"]["experimentalApi"],
             true
         );
+        assert_eq!(received[2]["params"]["excludeTurns"], true);
+        assert_eq!(received[2]["params"]["initialTurnsPage"]["limit"], 1);
+        assert_eq!(
+            received[2]["params"]["initialTurnsPage"]["sortDirection"],
+            "desc"
+        );
+        assert_eq!(
+            received[2]["params"]["initialTurnsPage"]["itemsView"],
+            "notLoaded"
+        );
     }
 
     #[tokio::test]
-    async fn long_resumed_thread_steers_without_per_delivery_history_read() {
+    async fn cold_app_server_connect_resumes_before_steering_active_turn() {
         let dir = TempDir::new().unwrap();
         let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
         let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
@@ -1157,8 +1305,16 @@ mod tests {
                 let Some(id) = request.get("id").and_then(Value::as_u64) else {
                     continue;
                 };
-                let result = if request["method"] == "thread/turns/list" {
-                    json!({ "data": [{ "id": "active-turn", "status": "inProgress" }] })
+                let result = if request["method"] == "thread/resume" {
+                    json!({
+                        "thread": {
+                            "status": { "type": "active", "activeFlags": [] },
+                            "turns": []
+                        },
+                        "initialTurnsPage": {
+                            "data": [{ "id": "active-turn", "status": "inProgress" }]
+                        }
+                    })
                 } else {
                     json!({})
                 };
@@ -1199,12 +1355,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             methods,
-            [
-                "initialize",
-                "initialized",
-                "thread/turns/list",
-                "turn/steer"
-            ]
+            ["initialize", "initialized", "thread/resume", "turn/steer"]
         );
         assert_eq!(received[3]["params"]["expectedTurnId"], "active-turn");
     }
@@ -1228,8 +1379,11 @@ mod tests {
                     continue;
                 };
                 let result = match request["method"].as_str().unwrap() {
-                    "thread/turns/list" => {
-                        json!({ "data": [] })
+                    "thread/resume" => {
+                        json!({
+                            "thread": { "turns": [] },
+                            "initialTurnsPage": { "data": [] }
+                        })
                     }
                     "turn/start" => {
                         json!({ "turn": { "id": "new-turn", "status": "inProgress" } })
@@ -1279,7 +1433,7 @@ mod tests {
             [
                 "initialize",
                 "initialized",
-                "thread/turns/list",
+                "thread/resume",
                 "turn/start",
                 "turn/steer"
             ]
@@ -1305,8 +1459,16 @@ mod tests {
                 let Some(id) = request.get("id").and_then(Value::as_u64) else {
                     continue;
                 };
-                let result = if request["method"] == "thread/turns/list" {
-                    json!({ "data": [{ "id": "finishing-turn", "status": "inProgress" }] })
+                let result = if request["method"] == "thread/resume" {
+                    json!({
+                        "thread": {
+                            "status": { "type": "active", "activeFlags": [] },
+                            "turns": []
+                        },
+                        "initialTurnsPage": {
+                            "data": [{ "id": "finishing-turn", "status": "inProgress" }]
+                        }
+                    })
                 } else if request["method"] == "turn/start" {
                     json!({ "turn": { "id": "next-turn", "status": "inProgress" } })
                 } else {
@@ -1374,7 +1536,7 @@ mod tests {
             [
                 "initialize",
                 "initialized",
-                "thread/turns/list",
+                "thread/resume",
                 "turn/steer",
                 "turn/start"
             ]
@@ -1390,7 +1552,6 @@ mod tests {
             let (stream, _) = listener.accept().await.unwrap();
             let mut websocket = accept_async(stream).await.unwrap();
             let mut received = Vec::new();
-            let mut listed_once = false;
             while let Some(message) = websocket.next().await {
                 let Message::Text(text) = message.unwrap() else {
                     continue;
@@ -1401,14 +1562,20 @@ mod tests {
                     continue;
                 };
                 let response = match request["method"].as_str().unwrap() {
+                    "thread/resume" => json!({
+                        "id": id,
+                        "result": {
+                            "thread": {
+                                "status": { "type": "active", "activeFlags": [] },
+                                "turns": []
+                            },
+                            "initialTurnsPage": {
+                                "data": [{ "id": "just-finished", "status": "inProgress" }]
+                            }
+                        }
+                    }),
                     "thread/turns/list" => {
-                        let data = if listed_once {
-                            vec![]
-                        } else {
-                            listed_once = true;
-                            vec![json!({ "id": "just-finished", "status": "inProgress" })]
-                        };
-                        json!({ "id": id, "result": { "data": data } })
+                        json!({ "id": id, "result": { "data": [] } })
                     }
                     "turn/steer" => json!({
                         "id": id,
@@ -1454,7 +1621,7 @@ mod tests {
             [
                 "initialize",
                 "initialized",
-                "thread/turns/list",
+                "thread/resume",
                 "turn/steer",
                 "thread/turns/list",
                 "turn/start"
@@ -1503,8 +1670,18 @@ mod tests {
                         release_rx.await.unwrap();
                     }
                 }
+                let result = if request["method"] == "thread/resume" {
+                    json!({
+                        "thread": { "status": { "type": "idle" } },
+                        "initialTurnsPage": { "data": [] }
+                    })
+                } else {
+                    json!({})
+                };
                 websocket
-                    .send(Message::Text(json!({ "id": id, "result": {} }).to_string()))
+                    .send(Message::Text(
+                        json!({ "id": id, "result": result }).to_string(),
+                    ))
                     .await
                     .unwrap();
             }
@@ -1616,8 +1793,14 @@ mod tests {
                                 break;
                             }
                         }
-                        let response = if method == "thread/turns/list" {
-                            json!({ "id": id, "result": { "data": [] } })
+                        let response = if method == "thread/resume" {
+                            json!({
+                                "id": id,
+                                "result": {
+                                    "thread": { "turns": [] },
+                                    "initialTurnsPage": { "data": [] }
+                                }
+                            })
                         } else {
                             json!({ "id": id, "result": {} })
                         };
@@ -1710,8 +1893,14 @@ mod tests {
                             continue;
                         };
                         let method = request["method"].as_str().unwrap();
-                        let response = if method == "thread/turns/list" {
-                            json!({ "id": id, "result": { "data": [] } })
+                        let response = if method == "thread/resume" {
+                            json!({
+                                "id": id,
+                                "result": {
+                                    "thread": { "turns": [] },
+                                    "initialTurnsPage": { "data": [] }
+                                }
+                            })
                         } else if method == "turn/start" {
                             started_tx
                                 .send(
