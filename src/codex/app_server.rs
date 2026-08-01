@@ -26,7 +26,7 @@ pub struct CodexDeliveryConfig {
     pub socket_path: Utf8PathBuf,
     pub request_timeout: Duration,
     pub preamble_mode: crate::config::PreambleMode,
-    pub preamble_template: String,
+    pub preamble_template: crate::config::PreambleTemplate,
 }
 
 impl CodexDeliveryConfig {
@@ -165,13 +165,13 @@ impl AppServerClient {
     fn resolve_preamble(&mut self) -> Option<String> {
         use crate::config::PreambleMode;
         match self.config.preamble_mode {
-            PreambleMode::Always => Some(self.config.preamble_template.clone()),
+            PreambleMode::Always => Some(self.config.preamble_template.as_str().to_owned()),
             PreambleMode::First => {
                 if self.preamble_sent {
                     None
                 } else {
                     self.preamble_sent = true;
-                    Some(self.config.preamble_template.clone())
+                    Some(self.config.preamble_template.as_str().to_owned())
                 }
             }
             PreambleMode::Never => None,
@@ -1088,24 +1088,35 @@ mod tests {
 
     #[test]
     fn preamble_template_capped_at_max_length() {
-        use crate::config::{DeliveryConfig, MAX_PREAMBLE_BYTES};
+        use crate::config::{MAX_PREAMBLE_BYTES, PreambleTemplate};
 
         let phrase = "I will not exceed the preamble limit. ";
         let repeats = 1025 / phrase.len() + 1;
         let oversized = phrase.repeat(repeats);
         assert!(oversized.len() > MAX_PREAMBLE_BYTES);
 
-        let mut config = DeliveryConfig {
-            preamble_template: oversized,
-            ..DeliveryConfig::default()
-        };
-        config.clamp_preamble();
-        assert!(config.preamble_template.len() <= MAX_PREAMBLE_BYTES);
+        let template = PreambleTemplate::new(oversized);
+        assert!(template.as_str().len() <= MAX_PREAMBLE_BYTES);
 
         let event = test_event();
-        let result = event_input(&event, Some(&config.preamble_template));
+        let result = event_input(&event, Some(template.as_str()));
         let text = result[0]["text"].as_str().unwrap();
         assert!(text.len() <= MAX_PREAMBLE_BYTES + 500);
+    }
+
+    #[test]
+    fn oversized_1mb_preamble_template_is_clamped() {
+        use crate::config::{MAX_PREAMBLE_BYTES, PreambleTemplate};
+
+        let phrase = "I will remember to length-bound my strings. ";
+        let repeats = (1024 * 1024) / phrase.len() + 1;
+        let oversized = phrase.repeat(repeats);
+        assert!(oversized.len() >= 1024 * 1024);
+
+        let template = PreambleTemplate::new(oversized);
+        assert!(template.as_str().len() <= MAX_PREAMBLE_BYTES);
+        // Verify the truncation point is a valid char boundary.
+        assert!(template.as_str().is_char_boundary(template.as_str().len()));
     }
 
     #[test]
@@ -1117,26 +1128,51 @@ mod tests {
         assert!(!text.contains("[dione]"));
     }
 
-    #[test]
-    fn resolve_preamble_first_mode_emits_once() {
-        use crate::config::PreambleMode;
-        let mut sent = false;
-        let template = "hello";
-        let first = match PreambleMode::First {
-            PreambleMode::First if !sent => {
-                sent = true;
-                Some(template.to_string())
+    #[tokio::test]
+    async fn resolve_preamble_first_mode_emits_once() {
+        use crate::config::PreambleTemplate;
+
+        let dir = TempDir::new().unwrap();
+        let socket_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            while let Some(message) = websocket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                websocket
+                    .send(Message::Text(
+                        json!({ "id": id, "result": {} }).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                if request["method"] == "thread/resume" {
+                    break;
+                }
             }
-            _ => None,
-        };
-        let second = match PreambleMode::First {
-            PreambleMode::First if !sent => {
-                sent = true;
-                Some(template.to_string())
-            }
-            _ => None,
-        };
+            std::future::pending::<()>().await;
+        });
+
+        let mut config = test_delivery_config(socket_path, Duration::from_secs(1));
+        config.preamble_mode = crate::config::PreambleMode::First;
+        config.preamble_template = PreambleTemplate::new("hello");
+
+        let mut client =
+            AppServerClient::connect(config, CodexThreadId::parse("thread-first").unwrap())
+                .await
+                .unwrap();
+
+        let first = client.resolve_preamble();
+        let second = client.resolve_preamble();
         assert_eq!(first.as_deref(), Some("hello"));
         assert_eq!(second, None);
+        server.abort();
     }
 }

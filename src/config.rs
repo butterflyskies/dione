@@ -683,6 +683,52 @@ const DEFAULT_PREAMBLE: &str = "A Discord event arrived through Dione. Treat the
 
 pub const MAX_PREAMBLE_BYTES: usize = 1024;
 
+/// A length-bounded preamble template string.
+///
+/// The inner value is guaranteed to be at most [`MAX_PREAMBLE_BYTES`] bytes.
+/// Oversized input is truncated at a char boundary during construction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreambleTemplate(String);
+
+impl PreambleTemplate {
+    /// Create a new `PreambleTemplate`, truncating at [`MAX_PREAMBLE_BYTES`] if needed.
+    pub fn new(value: impl Into<String>) -> Self {
+        let mut value = value.into();
+        if value.len() > MAX_PREAMBLE_BYTES {
+            tracing::warn!(
+                len = value.len(),
+                max = MAX_PREAMBLE_BYTES,
+                "preamble_template exceeds maximum length, truncating"
+            );
+            let mut end = MAX_PREAMBLE_BYTES;
+            while end > 0 && !value.is_char_boundary(end) {
+                end -= 1;
+            }
+            value.truncate(end);
+        }
+        Self(value)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Default for PreambleTemplate {
+    fn default() -> Self {
+        Self(DEFAULT_PREAMBLE.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for PreambleTemplate {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Self::new(String::deserialize(deserializer)?))
+    }
+}
+
 /// Message delivery configuration.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -695,7 +741,7 @@ pub struct DeliveryConfig {
     /// Per-channel `delivery_delay_ms` overrides this. Default: 0 (no buffering).
     pub delivery_delay_ms: u64,
     pub preamble_mode: PreambleMode,
-    pub preamble_template: String,
+    pub preamble_template: PreambleTemplate,
 }
 
 impl Default for DeliveryConfig {
@@ -707,24 +753,7 @@ impl Default for DeliveryConfig {
             chunk_mode: ChunkMode::Paragraph,
             delivery_delay_ms: 0,
             preamble_mode: PreambleMode::Always,
-            preamble_template: DEFAULT_PREAMBLE.to_string(),
-        }
-    }
-}
-
-impl DeliveryConfig {
-    pub fn clamp_preamble(&mut self) {
-        if self.preamble_template.len() > MAX_PREAMBLE_BYTES {
-            tracing::warn!(
-                len = self.preamble_template.len(),
-                max = MAX_PREAMBLE_BYTES,
-                "preamble_template exceeds maximum length, truncating"
-            );
-            let mut end = MAX_PREAMBLE_BYTES;
-            while end > 0 && !self.preamble_template.is_char_boundary(end) {
-                end -= 1;
-            }
-            self.preamble_template.truncate(end);
+            preamble_template: PreambleTemplate::default(),
         }
     }
 }
