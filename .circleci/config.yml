@@ -1,0 +1,150 @@
+# CircleCI CI config — faithful port of .github/workflows/build.yml
+# Workaround: GitHub Actions disabled org-wide, support unresponsive.
+#
+# NOTE: Enable "Auto-cancel redundant builds" in CircleCI project settings
+# (Project Settings > Advanced) to replicate GHA's concurrency/cancel-in-progress.
+
+version: 2.1
+
+orbs:
+  rust: circleci/rust@1.6.1
+
+executors:
+  linux:
+    docker:
+      - image: cimg/rust:1.86.0
+    resource_class: medium
+  linux-msrv:
+    docker:
+      - image: cimg/rust:1.93.0
+    resource_class: medium
+  macos:
+    macos:
+      xcode: "16.2"
+    resource_class: macos.m1.medium.gen1
+
+commands:
+  restore-cargo-cache:
+    parameters:
+      key:
+        type: string
+        default: "default"
+    steps:
+      - restore_cache:
+          keys:
+            - cargo-v1-<< parameters.key >>-{{ checksum "Cargo.lock" }}
+            - cargo-v1-<< parameters.key >>-
+
+  save-cargo-cache:
+    parameters:
+      key:
+        type: string
+        default: "default"
+    steps:
+      - save_cache:
+          key: cargo-v1-<< parameters.key >>-{{ checksum "Cargo.lock" }}
+          paths:
+            - ~/.cargo/registry
+            - ~/.cargo/git
+            - target
+
+  install-nextest:
+    steps:
+      - run:
+          name: Install cargo-nextest
+          command: |
+            curl -fsSL "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.131/cargo-nextest-0.9.131-x86_64-unknown-linux-gnu.tar.gz" \
+              -o /tmp/cargo-nextest.tar.gz
+            echo "8e38b16299864c9f597c9a1e2caf25b7e8b598ffc659ec014c2c735a9befd8fa  /tmp/cargo-nextest.tar.gz" | sha256sum -c -
+            tar xzf /tmp/cargo-nextest.tar.gz -C /usr/local/bin
+
+jobs:
+  test:
+    executor: linux
+    steps:
+      - checkout
+      - restore-cargo-cache:
+          key: "build"
+      - install-nextest
+      - run:
+          name: cargo fmt --check
+          command: cargo fmt --check
+      - run:
+          name: cargo clippy
+          command: cargo clippy -- -D warnings
+      - run:
+          name: cargo nextest run
+          command: cargo nextest run --workspace --no-fail-fast
+      - save-cargo-cache:
+          key: "build"
+
+  cross-compile-linux:
+    executor: linux
+    steps:
+      - checkout
+      - restore-cargo-cache:
+          key: "x86_64-unknown-linux-gnu"
+      - run:
+          name: cargo build --release
+          command: cargo build --release
+      - save-cargo-cache:
+          key: "x86_64-unknown-linux-gnu"
+
+  cross-compile-macos:
+    executor: macos
+    steps:
+      - checkout
+      - run:
+          name: Install Rust
+          command: |
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$BASH_ENV"
+      - restore_cache:
+          keys:
+            - cargo-v1-macos-{{ checksum "Cargo.lock" }}
+            - cargo-v1-macos-
+      - run:
+          name: cargo build --release
+          command: cargo build --release
+      - save_cache:
+          key: cargo-v1-macos-{{ checksum "Cargo.lock" }}
+          paths:
+            - ~/.cargo/registry
+            - ~/.cargo/git
+            - target
+
+  msrv:
+    executor: linux-msrv
+    steps:
+      - checkout
+      - restore-cargo-cache:
+          key: "msrv-1.93"
+      - run:
+          name: cargo check (MSRV 1.93)
+          command: cargo check --locked --all-targets
+      - save-cargo-cache:
+          key: "msrv-1.93"
+
+  audit:
+    executor: linux
+    steps:
+      - checkout
+      - run:
+          name: Install cargo-deny
+          command: |
+            curl -fsSL "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.16.4/cargo-deny-0.16.4-x86_64-unknown-linux-musl.tar.gz" \
+              -o /tmp/cargo-deny.tar.gz
+            tar xzf /tmp/cargo-deny.tar.gz -C /tmp
+            cp /tmp/cargo-deny-0.16.4-x86_64-unknown-linux-musl/cargo-deny /usr/local/bin/
+      - run:
+          name: cargo deny check
+          command: cargo deny check
+
+workflows:
+  ci:
+    jobs:
+      - test
+      - cross-compile-linux
+      - cross-compile-macos
+      - msrv
+      - audit
