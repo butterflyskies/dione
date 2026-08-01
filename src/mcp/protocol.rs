@@ -80,6 +80,13 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                     "limit": { "type": "integer", "default": 20, "maximum": 100 }
                 }
             })),
+            tool("fetch_pins", "Fetch every pinned message visible in a channel, oldest-first. Pins are retrieved explicitly and are not injected into context automatically.", json!({
+                "type": "object",
+                "required": ["channel_id"],
+                "properties": {
+                    "channel_id": { "type": "string", "description": "Discord channel ID" }
+                }
+            })),
             tool("download_attachment", "Download all attachments from a message to the inbox", json!({
                 "type": "object",
                 "required": ["channel_id", "message_id"],

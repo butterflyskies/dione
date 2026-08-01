@@ -175,6 +175,10 @@ async fn test_tools_list_contains_expected_tools() {
         names.contains(&"fetch_new_since"),
         "tools/list must include fetch_new_since"
     );
+    assert!(
+        names.contains(&"fetch_pins"),
+        "tools/list must include fetch_pins"
+    );
 
     // Introspection tools.
     assert!(
@@ -425,6 +429,7 @@ async fn test_tools_call_zero_snowflake_returns_error_across_tools() {
             json!({ "channel_id": "999999", "message_id": "0" }),
         ),
         ("fetch_messages", json!({ "channel_id": "0" })),
+        ("fetch_pins", json!({ "channel_id": "0" })),
         (
             "fetch_new_since",
             json!({ "channel_id": "0", "after_message_id": "123456" }),
