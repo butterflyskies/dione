@@ -112,6 +112,18 @@ async fn main() -> Result<()> {
     let pre_send_pipeline = dione::pre_send::observe_pipeline(Vec::new())
         .wrap_err("failed to configure Observe pre-send pipeline")?;
     dione::pre_send::install_pipeline(Some(pre_send_pipeline));
+
+    // Initialize the guild mute store (persistent, lock-free reads).
+    let mute_store = dione::mute_store::MuteStore::load(&state_dir)
+        .await
+        .map_err(|e| color_eyre::eyre::eyre!("failed to load guild mute store: {e}"))?;
+    dione::mute_store::init_global(mute_store);
+
+    // Spawn the background expiry reconciliation task.
+    let expiry_handle = dione::mute_store::global()
+        .expect("mute store just initialized")
+        .spawn_expiry_task();
+
     tracing::info!(
         ?state_dir,
         dm_policy = ?config.access.dm_policy,
@@ -298,6 +310,7 @@ async fn main() -> Result<()> {
 
     // Allow up to 2 seconds for tasks to wind down.
     let _ = tokio::time::timeout(Duration::from_secs(2), async {
+        expiry_handle.abort();
         discord_handle.abort();
         let _ = mcp_handle.await;
         if let Some(codex_handle) = codex_handle {

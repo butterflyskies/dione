@@ -46,12 +46,29 @@ impl InboundGate {
     }
 
     /// Decides what to do with an inbound guild message. O(1) channel + sender lookup.
+    ///
+    /// When `guild_id` is `Some`, checks the guild mute store first — a muted
+    /// guild drops all push delivery regardless of channel or sender policy.
     pub fn check_guild(
         config: &LoadedConfig,
         channel_id: u64,
         sender_id: u64,
         is_mentioned: bool,
+        guild_id: Option<u64>,
     ) -> GateDecision {
+        if let Some(gid) = guild_id {
+            if let Some(store) = crate::mute_store::global() {
+                if store.is_guild_muted(gid) {
+                    tracing::debug!(
+                        guild_id = gid,
+                        channel_id,
+                        "guild message dropped: guild muted"
+                    );
+                    return GateDecision::Drop;
+                }
+            }
+        }
+
         let Some(policy) = config.channel_policy(channel_id) else {
             tracing::debug!(channel_id, "guild message dropped: channel not opted in");
             return GateDecision::Drop;
@@ -81,11 +98,27 @@ impl InboundGate {
     /// Decides what to do with a passive guild event (edit, delete) that lacks
     /// mention context. Enforces channel opt-in and `allow_from` but not
     /// `require_mention`.
+    ///
+    /// When `guild_id` is `Some`, checks the guild mute store first.
     pub fn check_guild_passive(
         config: &LoadedConfig,
         channel_id: u64,
         sender_id: u64,
+        guild_id: Option<u64>,
     ) -> GateDecision {
+        if let Some(gid) = guild_id {
+            if let Some(store) = crate::mute_store::global() {
+                if store.is_guild_muted(gid) {
+                    tracing::debug!(
+                        guild_id = gid,
+                        channel_id,
+                        "guild event dropped: guild muted"
+                    );
+                    return GateDecision::Drop;
+                }
+            }
+        }
+
         let Some(policy) = config.channel_policy(channel_id) else {
             tracing::debug!(channel_id, "guild event dropped: channel not opted in");
             return GateDecision::Drop;
@@ -361,7 +394,7 @@ mod tests {
     fn test_guild_opted_in_with_mention_delivers() {
         let config = loaded(base_config());
         assert_eq!(
-            InboundGate::check_guild(&config, 500, 999, true),
+            InboundGate::check_guild(&config, 500, 999, true, None),
             GateDecision::Deliver
         );
     }
@@ -370,7 +403,7 @@ mod tests {
     fn test_guild_not_opted_drops() {
         let config = loaded(base_config());
         assert_eq!(
-            InboundGate::check_guild(&config, 9999, 100, true),
+            InboundGate::check_guild(&config, 9999, 100, true, None),
             GateDecision::Drop
         );
     }
@@ -379,7 +412,7 @@ mod tests {
     fn test_guild_no_mention_in_require_mention_drops() {
         let config = loaded(base_config());
         assert_eq!(
-            InboundGate::check_guild(&config, 500, 100, false),
+            InboundGate::check_guild(&config, 500, 100, false, None),
             GateDecision::Drop
         );
     }
@@ -393,12 +426,12 @@ mod tests {
 
         // Allowed user delivers.
         assert_eq!(
-            InboundGate::check_guild(&config, 500, 200, false),
+            InboundGate::check_guild(&config, 500, 200, false, None),
             GateDecision::Deliver
         );
         // Non-allowed user drops.
         assert_eq!(
-            InboundGate::check_guild(&config, 500, 999, false),
+            InboundGate::check_guild(&config, 500, 999, false, None),
             GateDecision::Drop
         );
     }
@@ -409,7 +442,7 @@ mod tests {
     fn test_guild_passive_delivers_in_require_mention_channel() {
         let config = loaded(base_config());
         assert_eq!(
-            InboundGate::check_guild_passive(&config, 500, 999),
+            InboundGate::check_guild_passive(&config, 500, 999, None),
             GateDecision::Deliver
         );
     }
@@ -420,7 +453,7 @@ mod tests {
         raw.channels[0].require_mention = false;
         let config = loaded(raw);
         assert_eq!(
-            InboundGate::check_guild_passive(&config, 500, 999),
+            InboundGate::check_guild_passive(&config, 500, 999, None),
             GateDecision::Deliver
         );
     }
@@ -429,7 +462,7 @@ mod tests {
     fn test_guild_passive_drops_unknown_channel() {
         let config = loaded(base_config());
         assert_eq!(
-            InboundGate::check_guild_passive(&config, 9999, 100),
+            InboundGate::check_guild_passive(&config, 9999, 100, None),
             GateDecision::Drop
         );
     }
@@ -442,11 +475,11 @@ mod tests {
         let config = loaded(raw);
 
         assert_eq!(
-            InboundGate::check_guild_passive(&config, 500, 200),
+            InboundGate::check_guild_passive(&config, 500, 200, None),
             GateDecision::Deliver
         );
         assert_eq!(
-            InboundGate::check_guild_passive(&config, 500, 999),
+            InboundGate::check_guild_passive(&config, 500, 999, None),
             GateDecision::Drop
         );
     }
