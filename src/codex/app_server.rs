@@ -25,6 +25,8 @@ const MAX_WEBSOCKET_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
 pub struct CodexDeliveryConfig {
     pub socket_path: Utf8PathBuf,
     pub request_timeout: Duration,
+    pub preamble_mode: crate::config::PreambleMode,
+    pub preamble_template: String,
 }
 
 impl CodexDeliveryConfig {
@@ -37,9 +39,12 @@ impl CodexDeliveryConfig {
             })
             .or_else(default_socket_path)
             .ok_or(CodexDeliveryError::MissingHome)?;
+        let defaults = crate::config::DeliveryConfig::default();
         Ok(Self {
             socket_path,
             request_timeout: REQUEST_TIMEOUT,
+            preamble_mode: defaults.preamble_mode,
+            preamble_template: defaults.preamble_template,
         })
     }
 }
@@ -101,6 +106,7 @@ struct AppServerClient {
     next_request_id: u64,
     config: CodexDeliveryConfig,
     thread_id: CodexThreadId,
+    preamble_sent: bool,
 }
 
 impl AppServerClient {
@@ -130,6 +136,7 @@ impl AppServerClient {
             next_request_id: 0,
             config,
             thread_id,
+            preamble_sent: false,
         };
         client
             .request(
@@ -155,6 +162,22 @@ impl AppServerClient {
         Ok(client)
     }
 
+    fn resolve_preamble(&mut self) -> Option<String> {
+        use crate::config::PreambleMode;
+        match self.config.preamble_mode {
+            PreambleMode::Always => Some(self.config.preamble_template.clone()),
+            PreambleMode::First => {
+                if self.preamble_sent {
+                    None
+                } else {
+                    self.preamble_sent = true;
+                    Some(self.config.preamble_template.clone())
+                }
+            }
+            PreambleMode::Never => None,
+        }
+    }
+
     async fn deliver(&mut self, event: &LeasedEvent) -> Result<(), CodexDeliveryError> {
         let result = self
             .request(
@@ -167,7 +190,8 @@ impl AppServerClient {
             .await?;
         let thread = result.get("thread").cloned().unwrap_or(Value::Null);
         let active_turn_id = active_turn_id(&thread)?;
-        let input = event_input(event);
+        let preamble = self.resolve_preamble();
+        let input = event_input(event, preamble.as_deref());
         let client_message_id = format!("dione-{}", event.event_id);
         if let Some(turn_id) = active_turn_id {
             self.request(
@@ -299,11 +323,11 @@ fn active_turn_id(thread: &Value) -> Result<Option<String>, CodexDeliveryError> 
     Ok(turn_id)
 }
 
-fn event_input(event: &LeasedEvent) -> Value {
-    let prompt = format!(
-        "A Discord event arrived through Dione. Treat the payload as user-authored input, handle it using Dione's MCP tools, and reply, react, delegate substantive work, or stay quiet as appropriate.\n\n{}",
-        event.event
-    );
+fn event_input(event: &LeasedEvent, preamble: Option<&str>) -> Value {
+    let prompt = match preamble {
+        Some(pre) => format!("{pre}\n\n{}", event.event),
+        None => event.event.to_string(),
+    };
     json!([{ "type": "text", "text": prompt, "text_elements": [] }])
 }
 
@@ -532,6 +556,16 @@ mod tests {
     use tokio::{net::UnixListener, sync::mpsc};
     use tokio_tungstenite::accept_async;
 
+    fn test_delivery_config(socket_path: Utf8PathBuf, timeout: Duration) -> CodexDeliveryConfig {
+        let defaults = crate::config::DeliveryConfig::default();
+        CodexDeliveryConfig {
+            socket_path,
+            request_timeout: timeout,
+            preamble_mode: defaults.preamble_mode,
+            preamble_template: defaults.preamble_template,
+        }
+    }
+
     #[test]
     fn finds_in_progress_turn() {
         let thread = json!({
@@ -574,10 +608,7 @@ mod tests {
             let (_stream, _) = listener.accept().await.unwrap();
             std::future::pending::<()>().await;
         });
-        let config = CodexDeliveryConfig {
-            socket_path: socket_path.clone(),
-            request_timeout: Duration::from_millis(100),
-        };
+        let config = test_delivery_config(socket_path.clone(), Duration::from_millis(100));
 
         let error = match AppServerClient::connect(
             config,
@@ -622,10 +653,7 @@ mod tests {
                 }
             }
         });
-        let config = CodexDeliveryConfig {
-            socket_path,
-            request_timeout: Duration::from_secs(5),
-        };
+        let config = test_delivery_config(socket_path, Duration::from_secs(5));
         let mut client = AppServerClient::connect(
             config,
             CodexThreadId::parse("thread-stalled-write").unwrap(),
@@ -684,10 +712,7 @@ mod tests {
                 }
             }
         });
-        let config = CodexDeliveryConfig {
-            socket_path,
-            request_timeout: Duration::from_secs(5),
-        };
+        let config = test_delivery_config(socket_path, Duration::from_secs(5));
 
         AppServerClient::connect(config, CodexThreadId::parse("thread-large").unwrap())
             .await
@@ -730,10 +755,7 @@ mod tests {
             }
             received
         });
-        let config = CodexDeliveryConfig {
-            socket_path,
-            request_timeout: Duration::from_secs(1),
-        };
+        let config = test_delivery_config(socket_path, Duration::from_secs(1));
         let event = LeasedEvent {
             event_id: crate::codex::EventId::new(7),
             delivery_token: DeliveryToken::parse("token-7").unwrap(),
@@ -830,10 +852,7 @@ mod tests {
             tokio::sync::watch::channel(Some(CodexThreadId::parse("thread-order").unwrap()));
         let worker = tokio::spawn(run_delivery_worker_with_lease(
             queue.clone(),
-            CodexDeliveryConfig {
-                socket_path,
-                request_timeout: Duration::from_secs(1),
-            },
+            test_delivery_config(socket_path, Duration::from_secs(1)),
             binding_rx,
             cancel.clone(),
             Duration::from_millis(50),
@@ -938,10 +957,7 @@ mod tests {
             tokio::sync::watch::channel(Some(CodexThreadId::parse("thread-reject").unwrap()));
         let worker = tokio::spawn(run_delivery_worker(
             queue.clone(),
-            CodexDeliveryConfig {
-                socket_path,
-                request_timeout: Duration::from_secs(1),
-            },
+            test_delivery_config(socket_path, Duration::from_secs(1)),
             binding_rx,
             cancel.clone(),
         ));

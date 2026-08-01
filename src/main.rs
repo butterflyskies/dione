@@ -156,8 +156,10 @@ async fn main() -> Result<()> {
     let (codex_queue, codex_handle, codex_thread_binding) = if cli.mode == TransportMode::Codex {
         let codex_queue =
             CodexEventQueue::load(&state_dir).wrap_err("failed to open Codex event queue")?;
-        let delivery_config = CodexDeliveryConfig::resolve(cli.codex_app_server_socket)
+        let mut delivery_config = CodexDeliveryConfig::resolve(cli.codex_app_server_socket)
             .wrap_err("failed to configure Codex live delivery")?;
+        delivery_config.preamble_mode = config.delivery.preamble_mode;
+        delivery_config.preamble_template = config.delivery.preamble_template.clone();
         let initial_thread = match cli.codex_thread_id {
             Some(thread_id) => Some(thread_id),
             None => env::var("CODEX_THREAD_ID")
