@@ -66,9 +66,17 @@ pub(crate) async fn call_tool(
                 .bind_live_thread(Some(thread_id.clone()))
                 .await
                 .map_err(|error| error.to_string())?;
-            binding
-                .send(Some(thread_id.clone()))
-                .map_err(|_| "Codex live delivery worker is unavailable".to_string())?;
+            if binding.receiver_count() == 0 {
+                return Err("Codex live delivery worker is unavailable".to_string());
+            }
+            binding.send_if_modified(|current| {
+                if current.as_ref() == Some(&thread_id) {
+                    false
+                } else {
+                    *current = Some(thread_id.clone());
+                    true
+                }
+            });
             json!({ "bound": true, "thread_id": thread_id })
         }
         "next_event" => {

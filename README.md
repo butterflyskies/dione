@@ -126,6 +126,8 @@ ack_reaction = ""             # empty = no auto-reaction
 reply_to_mode = "first"       # "first" | "all" | "off"
 text_chunk_limit = 2000
 chunk_mode = "paragraph"      # "paragraph" | "length"
+preamble_mode = "always"      # "always" | "first" | "never"
+# preamble_template = "..."   # custom text, max 1024 bytes
 
 [access_requests]
 expiry_seconds = 86400
