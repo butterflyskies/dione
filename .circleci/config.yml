@@ -14,6 +14,8 @@ executors:
     docker:
       - image: cimg/rust:1.93.0
     resource_class: medium
+    # NOTE: Jobs that need current stable run `rustup update stable`
+    # as their first step. The image pins MSRV; stable floats.
   linux-msrv:
     docker:
       - image: cimg/rust:1.93.0
@@ -63,6 +65,9 @@ jobs:
     executor: linux
     steps:
       - checkout
+      - run:
+          name: Update to current stable
+          command: rustup update stable && rustup default stable
       - restore-cargo-cache:
           key: "build"
       - install-nextest
@@ -82,6 +87,9 @@ jobs:
     executor: linux
     steps:
       - checkout
+      - run:
+          name: Update to current stable
+          command: rustup update stable && rustup default stable
       - restore-cargo-cache:
           key: "x86_64-unknown-linux-gnu"
       - run:
@@ -129,6 +137,9 @@ jobs:
     executor: linux
     steps:
       - checkout
+      - run:
+          name: Update to current stable
+          command: rustup update stable && rustup default stable
       - run:
           name: Install cargo-deny
           command: |
