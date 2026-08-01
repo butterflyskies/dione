@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-07-31
+
+### Added
+- **Guild-level push mute with persistent TTL.** Per-guild mute that suppresses
+  outbound pushes for a configurable duration, surviving reconnects. (#278, #279)
+
 ## [0.26.0] - 2026-07-29
 
 ### Added
