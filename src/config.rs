@@ -749,8 +749,8 @@ pub struct DeliveryConfig {
     pub preamble_mode: PreambleMode,
     /// Template text prepended to event payloads (subject to `preamble_mode`).
     ///
-    /// Capped at [`MAX_PREAMBLE_BYTES`] (1024) bytes; oversized values are
-    /// silently truncated at a character boundary during deserialization.
+    /// Capped at [`MAX_PREAMBLE_BYTES`] (1024) bytes; oversized values emit a
+    /// warning and are truncated at a character boundary during deserialization.
     pub preamble_template: PreambleTemplate,
 }
 

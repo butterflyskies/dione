@@ -689,7 +689,7 @@ async fn test_tools_call_list_access_requests_empty() {
 async fn test_bind_codex_thread_updates_live_binding() {
     let (_dir, state_dir) = temp_state_dir();
     let mut server = make_server(&state_dir);
-    let (binding_tx, binding_rx) = tokio::sync::watch::channel(None);
+    let (binding_tx, mut binding_rx) = tokio::sync::watch::channel(None);
     server.mode = TransportMode::Codex;
     server.codex_queue = Some(dione::codex::CodexEventQueue::load(&state_dir).unwrap());
     server.codex_thread_binding = Some(binding_tx);
@@ -704,17 +704,29 @@ async fn test_bind_codex_thread_updates_live_binding() {
         }
     });
 
-    let response = test_helpers::dispatch_request(&server, request)
+    let response = test_helpers::dispatch_request(&server, request.clone())
         .await
         .unwrap();
 
     assert!(response.get("error").is_none());
     assert_eq!(
         binding_rx
-            .borrow()
+            .borrow_and_update()
             .as_ref()
             .map(dione::codex::CodexThreadId::as_str),
         Some(thread_id)
+    );
+
+    let response = test_helpers::dispatch_request(&server, request)
+        .await
+        .unwrap();
+
+    assert!(response.get("error").is_none());
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), binding_rx.changed())
+            .await
+            .is_err(),
+        "binding the current thread again must not notify the delivery worker"
     );
 }
 
