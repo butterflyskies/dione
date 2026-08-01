@@ -28,7 +28,7 @@
 //! (no coalescing overhead). Coalescing only activates for 2+ events.
 
 use crate::batch::{BatchContext, serialize_batch};
-use crate::discord::events::{MessageEvent, NotificationEvent};
+use crate::discord::events::{DeliveryPriority, MessageEvent, NotificationEvent};
 use crate::timestamp::{Timestamp, format_compact};
 use chrono_tz::Tz;
 use serde_json::{Value, json};
@@ -107,6 +107,21 @@ pub fn coalesce(events: Vec<NotificationEvent>, tz: Option<Tz>) -> Option<Coales
         .first()
         .and_then(|n| n["params"]["meta"]["chat_id"].as_str())
         .unwrap_or("0");
+    let priority = notifications
+        .iter()
+        .map(notification_priority)
+        .max()
+        .unwrap_or_default();
+    let message_ids = notifications
+        .iter()
+        .filter_map(|notification| {
+            notification
+                .pointer("/params/meta/message_ids")
+                .and_then(Value::as_array)
+        })
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
 
     let combined = json!({
         "jsonrpc": "2.0",
@@ -117,6 +132,8 @@ pub fn coalesce(events: Vec<NotificationEvent>, tz: Option<Tz>) -> Option<Coales
                 "chat_id": first_channel_id,
                 "type": "batch",
                 "format": "multi_channel",
+                "priority": priority.as_str(),
+                "message_ids": message_ids,
             },
         }
     });
@@ -134,6 +151,47 @@ fn event_channel_id(event: &NotificationEvent) -> u64 {
         // Non-channel events get grouped under sentinel 0.
         _ => 0,
     }
+}
+
+fn event_priority(event: &NotificationEvent) -> DeliveryPriority {
+    match event {
+        NotificationEvent::PermissionResponse { .. } | NotificationEvent::ConfigError { .. } => {
+            DeliveryPriority::Critical
+        }
+        NotificationEvent::Message(message) => message.targeting.delivery_priority(),
+        _ => DeliveryPriority::Ambient,
+    }
+}
+
+fn event_message_ids(events: &[NotificationEvent]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            NotificationEvent::Message(message) => Some(message.message_id.get()),
+            NotificationEvent::MessageEdit { message_id, .. }
+            | NotificationEvent::MessageDelete { message_id, .. }
+            | NotificationEvent::Reaction { message_id, .. } => Some(message_id.get()),
+            _ => None,
+        })
+        .map(|message_id| message_id.to_string())
+        .collect()
+}
+
+fn notification_priority(notification: &Value) -> DeliveryPriority {
+    if notification.get("method").and_then(Value::as_str)
+        == Some("notifications/claude/channel/permission")
+        || notification
+            .pointer("/params/meta/type")
+            .and_then(Value::as_str)
+            == Some("config_error")
+    {
+        return DeliveryPriority::Critical;
+    }
+    DeliveryPriority::from_label(
+        notification
+            .pointer("/params/meta/priority")
+            .and_then(Value::as_str),
+    )
 }
 
 /// Group events by channel ID, preserving insertion order within each group.
@@ -184,6 +242,8 @@ fn coalesce_channel_group(events: Vec<NotificationEvent>, tz: Option<Tz>) -> Val
     debug_assert!(!events.is_empty());
 
     let channel_id = event_channel_id(&events[0]);
+    let priority = events.iter().map(event_priority).max().unwrap_or_default();
+    let message_ids = event_message_ids(&events);
 
     // Non-channel events (sentinel 0): serialize individually.
     if channel_id == 0 {
@@ -212,6 +272,8 @@ fn coalesce_channel_group(events: Vec<NotificationEvent>, tz: Option<Tz>) -> Val
                             "chat_id": channel_id.to_string(),
                             "type": "batch",
                             "format": "batch_v1",
+                            "priority": priority.as_str(),
+                            "message_ids": message_ids,
                         },
                     }
                 });
@@ -235,6 +297,8 @@ fn coalesce_channel_group(events: Vec<NotificationEvent>, tz: Option<Tz>) -> Val
                 "chat_id": channel_id.to_string(),
                 "type": "batch",
                 "format": "events_v1",
+                "priority": priority.as_str(),
+                "message_ids": message_ids,
             },
         }
     })
@@ -408,6 +472,7 @@ fn write_message_entry(out: &mut String, msg: &MessageEvent, roster: &Roster, tz
 fn coalesce_non_channel_events(events: Vec<NotificationEvent>) -> Value {
     use crate::mcp::notifications::IntoNotification;
 
+    let priority = events.iter().map(event_priority).max().unwrap_or_default();
     let notifications: Vec<Value> = events.into_iter().map(|e| e.into_notification()).collect();
 
     if notifications.len() == 1 {
@@ -441,6 +506,7 @@ fn coalesce_non_channel_events(events: Vec<NotificationEvent>) -> Value {
             "meta": {
                 "type": "batch",
                 "format": "multi",
+                "priority": priority.as_str(),
             },
         }
     })
@@ -483,6 +549,20 @@ mod tests {
             bells: None,
             bells_status: None,
         })
+    }
+
+    fn directed_msg_event(
+        channel: u64,
+        msg_id: u64,
+        user: &str,
+        content: &str,
+    ) -> NotificationEvent {
+        let NotificationEvent::Message(mut message) = msg_event(channel, msg_id, user, content)
+        else {
+            unreachable!("message helper always returns a message");
+        };
+        message.targeting = crate::discord::events::MessageTargeting::DirectMessage;
+        NotificationEvent::Message(message)
     }
 
     fn reaction_event(channel: u64, msg_id: u64) -> NotificationEvent {
@@ -541,6 +621,8 @@ mod tests {
                 assert_eq!(v["params"]["meta"]["chat_id"], "1");
                 assert_eq!(v["params"]["meta"]["format"], "batch_v1");
                 assert_eq!(v["params"]["meta"]["type"], "batch");
+                assert_eq!(v["params"]["meta"]["priority"], "ambient");
+                assert_eq!(v["params"]["meta"]["message_ids"], json!(["100", "101"]));
                 // Content should contain the batch format.
                 let content = v["params"]["content"].as_str().unwrap();
                 assert!(content.contains("[batch ch=1"));
@@ -550,6 +632,47 @@ mod tests {
             }
             other => panic!("expected Coalesced, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn directed_message_lifts_same_channel_batch_priority() {
+        let events = vec![
+            msg_event(1, 100, "alice", "ambient"),
+            directed_msg_event(1, 101, "bob", "directed"),
+        ];
+        let Some(CoalesceResult::Coalesced(value)) = coalesce(events, None) else {
+            panic!("expected coalesced batch");
+        };
+        assert_eq!(value["params"]["meta"]["priority"], "directed");
+    }
+
+    #[test]
+    fn permission_lifts_cross_channel_batch_priority_to_critical() {
+        let events = vec![
+            msg_event(1, 100, "alice", "ambient"),
+            NotificationEvent::PermissionResponse {
+                request_id: "permission-1".to_string(),
+                granted: true,
+            },
+        ];
+        let Some(CoalesceResult::Coalesced(value)) = coalesce(events, None) else {
+            panic!("expected coalesced batch");
+        };
+        assert_eq!(value["params"]["meta"]["priority"], "critical");
+    }
+
+    #[test]
+    fn config_error_lifts_cross_channel_batch_priority_to_critical() {
+        let events = vec![
+            msg_event(1, 100, "alice", "ambient"),
+            NotificationEvent::ConfigError {
+                error: "invalid config".to_string(),
+            },
+        ];
+        let Some(CoalesceResult::Coalesced(value)) = coalesce(events, None) else {
+            panic!("expected coalesced batch");
+        };
+        assert_eq!(value["params"]["meta"]["priority"], "critical");
     }
 
     #[test]

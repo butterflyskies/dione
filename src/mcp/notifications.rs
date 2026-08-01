@@ -36,7 +36,7 @@ impl IntoNotification for NotificationEvent {
                 reply_to_content_preview,
                 bells,
                 bells_status,
-                ..
+                targeting,
             }) => {
                 let mut meta = json!({
                     "chat_id": chat_id.get().to_string(),
@@ -44,6 +44,7 @@ impl IntoNotification for NotificationEvent {
                     "user": user,
                     "user_id": user_id.get().to_string(),
                     "ts": timestamp,
+                    "priority": targeting.delivery_priority().as_str(),
                 });
                 if is_voice_message {
                     meta["is_voice_message"] = json!(true);
@@ -228,6 +229,30 @@ mod tests {
     use crate::bell_rings::BellStatus;
     use crate::timestamp::Timestamp;
     use serenity::model::id::{ChannelId, MessageId, UserId};
+
+    #[test]
+    fn test_message_serializes_delivery_priority() {
+        let event = NotificationEvent::Message(MessageEvent {
+            chat_id: ChannelId::new(100),
+            message_id: MessageId::new(200),
+            user: "alice".into(),
+            user_id: UserId::new(300),
+            content: "directed".into(),
+            targeting: crate::discord::events::MessageTargeting::DirectMessage,
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            attachments: vec![],
+            is_voice_message: false,
+            thread_parent_id: None,
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            reply_to_user: None,
+            reply_to_content_preview: None,
+            bells: None,
+            bells_status: None,
+        });
+        let json = event.into_notification();
+        assert_eq!(json["params"]["meta"]["priority"], "directed");
+    }
 
     #[test]
     fn test_message_edit_includes_thread_parent_id() {

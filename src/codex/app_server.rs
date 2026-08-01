@@ -1,6 +1,9 @@
-use super::{CodexEventQueue, CodexQueueError, CodexThreadId, LeasedEvent};
+#[cfg(test)]
+use super::LeasedEvent;
+use super::{CodexEventQueue, CodexQueueError, CodexThreadId, LeasedEventBatch};
 use camino::Utf8PathBuf;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{FutureExt, SinkExt, StreamExt};
+use serde::{Deserialize, Deserializer, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{env, io, time::Duration};
 use thiserror::Error;
@@ -15,9 +18,9 @@ const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(1);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const EVENT_WAIT: Duration = Duration::from_secs(45);
-// One delivery can spend up to four request timeouts connecting/resuming,
-// reading the thread, and starting or steering a turn. Keep the lease well
-// beyond that bound so a successfully accepted turn can still be acknowledged.
+// Connection setup and one delivery retry can spend several request timeouts.
+// Keep the lease well beyond that bound so a successfully accepted turn can
+// still be acknowledged.
 const EVENT_LEASE: Duration = Duration::from_secs(5 * 60);
 const MAX_WEBSOCKET_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
 
@@ -92,8 +95,62 @@ pub enum CodexDeliveryError {
     },
     #[error("Codex thread is active but its current turn id is unavailable")]
     ActiveTurnUnknown,
+    #[error("Codex app-server returned an invalid `{method}` result")]
+    InvalidResult {
+        method: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
     #[error(transparent)]
     Queue(#[from] CodexQueueError),
+}
+
+#[derive(Debug)]
+enum AppServerRequestError {
+    Delivery(CodexDeliveryError),
+    Rejected {
+        method: &'static str,
+        code: Option<i64>,
+        message: String,
+        public_message: String,
+    },
+}
+
+impl From<CodexDeliveryError> for AppServerRequestError {
+    fn from(error: CodexDeliveryError) -> Self {
+        Self::Delivery(error)
+    }
+}
+
+impl From<AppServerRequestError> for CodexDeliveryError {
+    fn from(error: AppServerRequestError) -> Self {
+        match error {
+            AppServerRequestError::Delivery(error) => error,
+            AppServerRequestError::Rejected {
+                method,
+                public_message,
+                ..
+            } => Self::Rejected {
+                method,
+                message: public_message,
+            },
+        }
+    }
+}
+
+fn is_stale_steer_rejection(error: &AppServerRequestError) -> bool {
+    matches!(
+        error,
+        AppServerRequestError::Rejected {
+            method: "turn/steer",
+            code: Some(-32600),
+            message,
+            ..
+        } if message == "no active turn to steer"
+            || (message.starts_with("expected active turn id `")
+                && message.contains("` but found `")
+                && message.ends_with('`'))
+    )
 }
 
 struct AppServerClient {
@@ -101,6 +158,89 @@ struct AppServerClient {
     next_request_id: u64,
     config: CodexDeliveryConfig,
     thread_id: CodexThreadId,
+    active_turn_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ThreadResumeResult {
+    thread: ResumedThread,
+    #[serde(rename = "initialTurnsPage")]
+    initial_turns_page: TurnPage,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResumedThread {
+    status: Option<ThreadStatus>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ThreadStatus {
+    #[serde(rename = "type")]
+    kind: ThreadState,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum ThreadState {
+    Active,
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Deserialize)]
+struct TurnPage {
+    data: Vec<TurnSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TurnSummary {
+    id: TurnId,
+    status: TurnState,
+}
+
+#[derive(Debug, Clone)]
+struct TurnId(String);
+
+impl<'de> Deserialize<'de> for TurnId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if value.is_empty() {
+            return Err(serde::de::Error::custom("turn id must not be empty"));
+        }
+        Ok(Self(value))
+    }
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum TurnState {
+    InProgress,
+    #[serde(other)]
+    Other,
+}
+
+impl ThreadResumeResult {
+    fn active_turn_id(&self) -> Result<Option<String>, CodexDeliveryError> {
+        let active = self
+            .thread
+            .status
+            .as_ref()
+            .is_some_and(|status| status.kind == ThreadState::Active);
+        let turn_id = self
+            .initial_turns_page
+            .data
+            .iter()
+            .rev()
+            .find(|turn| turn.status == TurnState::InProgress)
+            .map(|turn| turn.id.0.clone());
+        if active && turn_id.is_none() {
+            return Err(CodexDeliveryError::ActiveTurnUnknown);
+        }
+        Ok(turn_id)
+    }
 }
 
 impl AppServerClient {
@@ -130,6 +270,7 @@ impl AppServerClient {
             next_request_id: 0,
             config,
             thread_id,
+            active_turn_id: None,
         };
         client
             .request(
@@ -139,6 +280,9 @@ impl AppServerClient {
                         "name": "dione",
                         "title": "Dione",
                         "version": env!("CARGO_PKG_VERSION")
+                    },
+                    "capabilities": {
+                        "experimentalApi": true
                     }
                 }),
             )
@@ -149,27 +293,82 @@ impl AppServerClient {
                 json!({ "method": "initialized", "params": {} }),
             )
             .await?;
-        client
-            .request("thread/resume", json!({ "threadId": client.thread_id }))
-            .await?;
-        Ok(client)
-    }
-
-    async fn deliver(&mut self, event: &LeasedEvent) -> Result<(), CodexDeliveryError> {
-        let result = self
-            .request(
-                "thread/read",
+        // Resume the exact durable thread in this app-server process. Keep the
+        // initial page bounded: a long-lived seat's full turn history can take
+        // longer than the request timeout merely to deserialize.
+        let resumed: ThreadResumeResult = client
+            .request_typed(
+                "thread/resume",
                 json!({
-                    "threadId": self.thread_id,
-                    "includeTurns": true
+                    "threadId": client.thread_id,
+                    "excludeTurns": true,
+                    "initialTurnsPage": {
+                        "limit": 1,
+                        "sortDirection": "desc",
+                        "itemsView": "notLoaded"
+                    }
                 }),
             )
             .await?;
-        let thread = result.get("thread").cloned().unwrap_or(Value::Null);
-        let active_turn_id = active_turn_id(&thread)?;
-        let input = event_input(event);
-        let client_message_id = format!("dione-{}", event.event_id);
-        if let Some(turn_id) = active_turn_id {
+        client.active_turn_id = resumed.active_turn_id()?;
+        Ok(client)
+    }
+
+    async fn deliver(&mut self, batch: &LeasedEventBatch) -> Result<(), CodexDeliveryError> {
+        self.drain_notifications().await?;
+        let input = event_input(batch);
+        let client_message_id = client_message_id(batch);
+        let active_turn_id = self.active_turn_id.clone();
+        let delivery = self
+            .deliver_to_current_turn(active_turn_id.as_deref(), &client_message_id, &input)
+            .await;
+        if !matches!(&delivery, Err(error) if is_stale_steer_rejection(error)) {
+            return delivery.map_err(Into::into);
+        }
+
+        // The turn changed after the last notification Dione observed. Refresh
+        // authoritative thread state once and route the same idempotent batch
+        // to the replacement turn (or start a turn if it became idle).
+        let refreshed = self
+            .request(
+                "thread/turns/list",
+                json!({
+                    "threadId": self.thread_id,
+                    "limit": 1,
+                    "sortDirection": "desc",
+                    "itemsView": "notLoaded"
+                }),
+            )
+            .await?;
+        self.set_active_turn_from_latest(refreshed.get("data").unwrap_or(&Value::Null))?;
+        let active_turn_id = self.active_turn_id.clone();
+        self.deliver_to_current_turn(active_turn_id.as_deref(), &client_message_id, &input)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn deliver_to_current_turn(
+        &mut self,
+        active_turn_id: Option<&str>,
+        client_message_id: &str,
+        input: &Value,
+    ) -> Result<(), AppServerRequestError> {
+        let method = if active_turn_id.is_some() {
+            "turn/steer"
+        } else {
+            "turn/start"
+        };
+        tracing::info!(
+            target: "dione::latency",
+            stage = "app_server_request_sent",
+            method,
+            client_message_id,
+            active_turn_id = active_turn_id.unwrap_or_default(),
+            sent_at = %chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "Dione submitted Discord input to Codex app-server"
+        );
+        let started = std::time::Instant::now();
+        let result = if let Some(turn_id) = active_turn_id {
             self.request(
                 "turn/steer",
                 json!({
@@ -179,7 +378,7 @@ impl AppServerClient {
                     "input": input
                 }),
             )
-            .await?;
+            .await
         } else {
             self.request(
                 "turn/start",
@@ -189,16 +388,120 @@ impl AppServerClient {
                     "input": input
                 }),
             )
-            .await?;
+            .await
+        };
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        match result {
+            Ok(result) => {
+                tracing::info!(
+                    target: "dione::latency",
+                    stage = "app_server_request_acked",
+                    method,
+                    client_message_id,
+                    elapsed_ms,
+                    acked_at = %chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                    "Codex app-server accepted Discord input"
+                );
+                if method == "turn/start" {
+                    self.active_turn_id = result
+                        .pointer("/turn/id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
+                }
+                Ok(())
+            }
+            Err(error) => {
+                tracing::info!(
+                    target: "dione::latency",
+                    stage = "app_server_request_failed",
+                    method,
+                    client_message_id,
+                    elapsed_ms,
+                    failed_at = %chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                    "Codex app-server rejected or failed Discord input"
+                );
+                Err(error)
+            }
         }
+    }
+
+    fn set_active_turn_from_thread(&mut self, thread: &Value) -> Result<(), CodexDeliveryError> {
+        self.active_turn_id = active_turn_id(thread)?;
         Ok(())
+    }
+
+    fn set_active_turn_from_latest(&mut self, turns: &Value) -> Result<(), CodexDeliveryError> {
+        let thread = json!({ "turns": turns });
+        self.set_active_turn_from_thread(&thread)
+    }
+
+    fn observe_notification(&mut self, message: &Value) {
+        let Some(method) = message.get("method").and_then(Value::as_str) else {
+            return;
+        };
+        let params = message.get("params").unwrap_or(&Value::Null);
+        if params.get("threadId").and_then(Value::as_str) != Some(self.thread_id.as_str()) {
+            return;
+        }
+        let turn_id = params.pointer("/turn/id").and_then(Value::as_str);
+        match method {
+            "turn/started" => {
+                self.active_turn_id = turn_id.map(str::to_owned);
+            }
+            "turn/completed" if self.active_turn_id.as_deref() == turn_id => {
+                self.active_turn_id = None;
+            }
+            _ => {}
+        }
+    }
+
+    async fn drain_notifications(&mut self) -> Result<(), CodexDeliveryError> {
+        loop {
+            let Some(message) = self.stream.next().now_or_never() else {
+                return Ok(());
+            };
+            let Some(message) = message else {
+                return Err(CodexDeliveryError::Disconnected {
+                    method: "notification/drain",
+                });
+            };
+            match message.map_err(|source| CodexDeliveryError::Protocol {
+                method: "notification/drain",
+                source: Box::new(source),
+            })? {
+                Message::Text(text) => {
+                    let message: Value = serde_json::from_str(&text).map_err(|source| {
+                        CodexDeliveryError::Rejected {
+                            method: "notification/drain",
+                            message: format!("invalid JSON notification: {source}"),
+                        }
+                    })?;
+                    self.observe_notification(&message);
+                }
+                Message::Ping(payload) => {
+                    self.stream
+                        .send(Message::Pong(payload))
+                        .await
+                        .map_err(|source| CodexDeliveryError::Protocol {
+                            method: "notification/drain",
+                            source: Box::new(source),
+                        })?
+                }
+                Message::Close(_) => {
+                    return Err(CodexDeliveryError::Disconnected {
+                        method: "notification/drain",
+                    });
+                }
+                Message::Binary(_) | Message::Pong(_) | Message::Frame(_) => {}
+            }
+        }
     }
 
     async fn request(
         &mut self,
         method: &'static str,
         params: Value,
-    ) -> Result<Value, CodexDeliveryError> {
+    ) -> Result<Value, AppServerRequestError> {
         let request_id = self.next_request_id;
         self.next_request_id = self.next_request_id.saturating_add(1);
         self.send(
@@ -210,26 +513,36 @@ impl AppServerClient {
         tokio::time::timeout(self.config.request_timeout, async {
             loop {
                 let Some(message) = self.stream.next().await else {
-                    return Err(CodexDeliveryError::Disconnected { method });
+                    return Err(CodexDeliveryError::Disconnected { method }.into());
                 };
-                match message.map_err(|source| CodexDeliveryError::Protocol {
-                    method,
-                    source: Box::new(source),
+                match message.map_err(|source| {
+                    AppServerRequestError::Delivery(CodexDeliveryError::Protocol {
+                        method,
+                        source: Box::new(source),
+                    })
                 })? {
                     Message::Text(text) => {
                         let message: Value = serde_json::from_str(&text).map_err(|source| {
-                            CodexDeliveryError::Rejected {
+                            AppServerRequestError::Delivery(CodexDeliveryError::Rejected {
                                 method,
                                 message: format!("invalid JSON response: {source}"),
-                            }
+                            })
                         })?;
                         if message.get("id").and_then(Value::as_u64) != Some(request_id) {
+                            self.observe_notification(&message);
                             continue;
                         }
                         if let Some(error) = message.get("error") {
-                            return Err(CodexDeliveryError::Rejected {
+                            let public_message = error.to_string();
+                            return Err(AppServerRequestError::Rejected {
                                 method,
-                                message: error.to_string(),
+                                code: error.get("code").and_then(Value::as_i64),
+                                message: error
+                                    .get("message")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_owned)
+                                    .unwrap_or_else(|| public_message.clone()),
+                                public_message,
                             });
                         }
                         return Ok(message.get("result").cloned().unwrap_or(Value::Null));
@@ -238,17 +551,32 @@ impl AppServerClient {
                         .stream
                         .send(Message::Pong(payload))
                         .await
-                        .map_err(|source| CodexDeliveryError::Protocol {
-                            method,
-                            source: Box::new(source),
+                        .map_err(|source| {
+                            AppServerRequestError::Delivery(CodexDeliveryError::Protocol {
+                                method,
+                                source: Box::new(source),
+                            })
                         })?,
-                    Message::Close(_) => return Err(CodexDeliveryError::Disconnected { method }),
+                    Message::Close(_) => {
+                        return Err(CodexDeliveryError::Disconnected { method }.into());
+                    }
                     Message::Binary(_) | Message::Pong(_) | Message::Frame(_) => {}
                 }
             }
         })
         .await
-        .map_err(|_| CodexDeliveryError::Timeout { method })?
+        .map_err(|_| AppServerRequestError::Delivery(CodexDeliveryError::Timeout { method }))?
+    }
+
+    async fn request_typed<T: DeserializeOwned>(
+        &mut self,
+        method: &'static str,
+        params: Value,
+    ) -> Result<T, AppServerRequestError> {
+        let result = self.request(method, params).await?;
+        serde_json::from_value(result).map_err(|source| {
+            AppServerRequestError::Delivery(CodexDeliveryError::InvalidResult { method, source })
+        })
     }
 
     async fn send(
@@ -271,7 +599,7 @@ impl AppServerClient {
 
 fn websocket_config() -> WebSocketConfig {
     WebSocketConfig {
-        // App-server responses such as `thread/resume` may contain an entire
+        // App-server responses may contain an entire
         // long-running thread in one frame. Tungstenite's default frame limit
         // is 16 MiB even though its message limit is 64 MiB.
         max_message_size: Some(MAX_WEBSOCKET_MESSAGE_SIZE),
@@ -299,11 +627,58 @@ fn active_turn_id(thread: &Value) -> Result<Option<String>, CodexDeliveryError> 
     Ok(turn_id)
 }
 
-fn event_input(event: &LeasedEvent) -> Value {
-    let prompt = format!(
-        "A Discord event arrived through Dione. Treat the payload as user-authored input, handle it using Dione's MCP tools, and reply, react, delegate substantive work, or stay quiet as appropriate.\n\n{}",
-        event.event
-    );
+fn client_message_id(batch: &LeasedEventBatch) -> String {
+    if batch.events.len() == 1 {
+        format!("dione-{}", batch.events[0].event_id)
+    } else {
+        format!("dione-batch-{}", batch.group_id)
+    }
+}
+
+fn batch_discord_message_ids(batch: &LeasedEventBatch) -> String {
+    batch
+        .events
+        .iter()
+        .flat_map(|event| {
+            let meta = event.event.pointer("/params/meta");
+            let mut message_ids = meta
+                .and_then(|meta| meta.get("message_ids"))
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>();
+            if message_ids.is_empty()
+                && let Some(message_id) = meta
+                    .and_then(|meta| meta.get("message_id"))
+                    .and_then(Value::as_str)
+            {
+                message_ids.push(message_id);
+            }
+            message_ids
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn event_input(batch: &LeasedEventBatch) -> Value {
+    let prompt = if batch.events.len() == 1 {
+        format!(
+            "A Discord event arrived through Dione. Treat the payload as user-authored input, handle it using Dione's MCP tools, and reply, react, delegate substantive work, or stay quiet as appropriate.\n\n{}",
+            batch.events[0].event
+        )
+    } else {
+        let events = Value::Array(
+            batch
+                .events
+                .iter()
+                .map(|event| event.event.clone())
+                .collect(),
+        );
+        format!(
+            "Discord events arrived through Dione as one ordered delivery batch. Each array element is a distinct user-authored input envelope. Handle them in order using Dione's MCP tools; reply, react, delegate substantive work, or stay quiet as appropriate for each.\n\n{events}"
+        )
+    };
     json!([{ "type": "text", "text": prompt, "text_elements": [] }])
 }
 
@@ -350,14 +725,28 @@ async fn run_delivery_worker_with_lease(
                 client = None;
                 continue;
             },
-            event = queue.next_live_event(&consumer_id, &thread_id, EVENT_WAIT, event_lease) => event?,
+            event = queue.next_live_batch(&consumer_id, &thread_id, EVENT_WAIT, event_lease) => event?,
         };
-        let Some(mut event) = event else { continue };
+        let Some(mut batch) = event else { continue };
+        tracing::info!(
+            target: "dione::latency",
+            stage = "durable_batch_leased",
+            group_id = %batch.group_id,
+            event_count = batch.events.len(),
+            client_message_id = %client_message_id(&batch),
+            discord_message_ids = %batch_discord_message_ids(&batch),
+            leased_at = %chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "Dione leased a durable Discord batch for Codex"
+        );
 
         loop {
-            if event.lease_expires_at <= chrono::Utc::now() {
+            if batch
+                .events
+                .first()
+                .is_some_and(|event| event.lease_expires_at <= chrono::Utc::now())
+            {
                 let replacement = queue
-                    .next_live_event(&consumer_id, &thread_id, Duration::ZERO, event_lease)
+                    .next_live_batch(&consumer_id, &thread_id, Duration::ZERO, event_lease)
                     .await?;
                 let Some(replacement) = replacement else {
                     // The event may have been acknowledged or rerouted while
@@ -366,10 +755,11 @@ async fn run_delivery_worker_with_lease(
                     break;
                 };
                 tracing::debug!(
-                    event_id = %replacement.event_id,
-                    "renewed expired Codex live-delivery lease"
+                    group_id = %replacement.group_id,
+                    event_count = replacement.events.len(),
+                    "renewed expired Codex live-delivery batch lease"
                 );
-                event = replacement;
+                batch = replacement;
             }
 
             if client.is_none() {
@@ -392,7 +782,7 @@ async fn run_delivery_worker_with_lease(
                         continue;
                     }
                     Err(error) => {
-                        tracing::warn!(event_id = %event.event_id, error = %error, "failed to connect Codex live delivery");
+                        tracing::warn!(group_id = %batch.group_id, error = %error, "failed to connect Codex live delivery");
                         match wait_to_retry_or_rebind(&cancel, &mut thread_binding, retry_delay)
                             .await
                         {
@@ -424,16 +814,16 @@ async fn run_delivery_worker_with_lease(
                     client = None;
                     break;
                 },
-                delivery = active_client.deliver(&event) => delivery,
+                delivery = active_client.deliver(&batch) => delivery,
             };
             match delivery {
                 Ok(()) => {
-                    acknowledge_with_retry(&queue, &consumer_id, &event, &cancel).await?;
+                    acknowledge_with_retry(&queue, &consumer_id, &batch, &cancel).await?;
                     retry_delay = INITIAL_RETRY_DELAY;
                     break;
                 }
                 Err(error) => {
-                    tracing::warn!(event_id = %event.event_id, error = %error, "failed to deliver live Codex event; retrying before later events");
+                    tracing::warn!(group_id = %batch.group_id, error = %error, "failed to deliver live Codex batch; retrying before later events");
                     client = None;
                     match wait_to_retry_or_rebind(&cancel, &mut thread_binding, retry_delay).await {
                         RetryWait::Elapsed => {
@@ -454,12 +844,17 @@ async fn run_delivery_worker_with_lease(
 async fn acknowledge_with_retry(
     queue: &CodexEventQueue,
     consumer_id: &super::ConsumerId,
-    event: &LeasedEvent,
+    batch: &LeasedEventBatch,
     cancel: &CancellationToken,
 ) -> Result<(), CodexDeliveryError> {
     let mut delay = INITIAL_RETRY_DELAY;
+    let tokens = batch
+        .events
+        .iter()
+        .map(|event| event.delivery_token.clone())
+        .collect::<Vec<_>>();
     loop {
-        match queue.acknowledge(consumer_id, &event.delivery_token).await {
+        match queue.acknowledge_batch(consumer_id, &tokens).await {
             Ok(()) => return Ok(()),
             Err(CodexQueueError::UnknownDeliveryToken) => {
                 // The durable event may already have been acknowledged, or a
@@ -467,8 +862,8 @@ async fn acknowledge_with_retry(
                 // succeed. Return to the queue; a still-pending event will be
                 // redelivered with the same clientUserMessageId.
                 tracing::warn!(
-                    event_id = %event.event_id,
-                    "Codex live-delivery acknowledgement token is no longer current"
+                    group_id = %batch.group_id,
+                    "Codex live-delivery batch acknowledgement tokens are no longer current"
                 );
                 return Ok(());
             }
@@ -476,7 +871,7 @@ async fn acknowledge_with_retry(
                 return Err(error.into());
             }
             Err(error) => {
-                tracing::error!(event_id = %event.event_id, error = %error, "failed to persist live Codex acknowledgement; retrying");
+                tracing::error!(group_id = %batch.group_id, error = %error, "failed to persist live Codex batch acknowledgement; retrying");
                 wait_to_retry(cancel, delay).await;
                 if cancel.is_cancelled() {
                     return Ok(());
@@ -529,8 +924,18 @@ mod tests {
         atomic::{AtomicBool, Ordering},
     };
     use tempfile::TempDir;
-    use tokio::{net::UnixListener, sync::mpsc};
+    use tokio::{
+        net::UnixListener,
+        sync::{mpsc, oneshot},
+    };
     use tokio_tungstenite::accept_async;
+
+    fn single_event_batch(event: LeasedEvent) -> LeasedEventBatch {
+        LeasedEventBatch {
+            group_id: event.event_id,
+            events: vec![event],
+        }
+    }
 
     #[test]
     fn finds_in_progress_turn() {
@@ -554,6 +959,54 @@ mod tests {
     }
 
     #[test]
+    fn typed_resume_result_routes_active_turn() {
+        let resumed: ThreadResumeResult = serde_json::from_value(json!({
+            "thread": { "status": { "type": "active" } },
+            "initialTurnsPage": {
+                "data": [{ "id": "live", "status": "inProgress" }]
+            }
+        }))
+        .unwrap();
+        assert_eq!(resumed.active_turn_id().unwrap().as_deref(), Some("live"));
+    }
+
+    #[test]
+    fn typed_resume_result_rejects_empty_turn_id() {
+        let error = serde_json::from_value::<ThreadResumeResult>(json!({
+            "thread": { "status": { "type": "active" } },
+            "initialTurnsPage": {
+                "data": [{ "id": "", "status": "inProgress" }]
+            }
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("turn id must not be empty"));
+    }
+
+    #[test]
+    fn recognizes_both_codex_stale_steer_rejections() {
+        for message in [
+            "no active turn to steer",
+            "expected active turn id `old-turn` but found `replacement-turn`",
+        ] {
+            let error = AppServerRequestError::Rejected {
+                method: "turn/steer",
+                code: Some(-32600),
+                message: message.to_owned(),
+                public_message: message.to_owned(),
+            };
+            assert!(is_stale_steer_rejection(&error), "{message}");
+        }
+
+        let unrelated = AppServerRequestError::Rejected {
+            method: "turn/steer",
+            code: Some(-32600),
+            message: "expected active turn id without a replacement".to_owned(),
+            public_message: "unrelated".to_owned(),
+        };
+        assert!(!is_stale_steer_rejection(&unrelated));
+    }
+
+    #[test]
     fn websocket_limits_are_bounded_above_tungstenite_frame_default() {
         let config = websocket_config();
         assert_eq!(config.max_message_size, Some(MAX_WEBSOCKET_MESSAGE_SIZE));
@@ -562,7 +1015,48 @@ mod tests {
             config.max_write_buffer_size,
             MAX_WEBSOCKET_MESSAGE_SIZE + 128 * 1024
         );
-        assert!(MAX_WEBSOCKET_MESSAGE_SIZE > 16 * 1024 * 1024);
+        const { assert!(MAX_WEBSOCKET_MESSAGE_SIZE > 16 * 1024 * 1024) };
+    }
+
+    #[test]
+    fn batched_input_preserves_envelope_order_and_stable_group_identity() {
+        let first = LeasedEvent {
+            event_id: crate::codex::EventId::new(7),
+            delivery_token: DeliveryToken::parse("token-7").unwrap(),
+            lease_expires_at: chrono::Utc::now(),
+            consumer_id: ConsumerId::parse("consumer-7").unwrap(),
+            event: json!({
+                "params": {
+                    "content": "first",
+                    "meta": { "message_id": "101" }
+                }
+            }),
+        };
+        let second = LeasedEvent {
+            event_id: crate::codex::EventId::new(8),
+            delivery_token: DeliveryToken::parse("token-8").unwrap(),
+            lease_expires_at: chrono::Utc::now(),
+            consumer_id: ConsumerId::parse("consumer-7").unwrap(),
+            event: json!({
+                "params": {
+                    "content": "second",
+                    "meta": { "message_id": "102" }
+                }
+            }),
+        };
+        let batch = LeasedEventBatch {
+            group_id: first.event_id,
+            events: vec![first, second],
+        };
+
+        assert_eq!(client_message_id(&batch), "dione-batch-7");
+        assert_eq!(batch_discord_message_ids(&batch), "101,102");
+        let input = event_input(&batch);
+        let text = input[0]["text"].as_str().unwrap();
+        assert!(
+            text.find(r#""content":"first""#).unwrap()
+                < text.find(r#""content":"second""#).unwrap()
+        );
     }
 
     #[tokio::test]
@@ -613,8 +1107,18 @@ mod tests {
                 let Some(id) = request.get("id").and_then(Value::as_u64) else {
                     continue;
                 };
+                let result = if request["method"] == "thread/resume" {
+                    json!({
+                        "thread": { "status": { "type": "idle" } },
+                        "initialTurnsPage": { "data": [] }
+                    })
+                } else {
+                    json!({})
+                };
                 websocket
-                    .send(Message::Text(json!({ "id": id, "result": {} }).to_string()))
+                    .send(Message::Text(
+                        json!({ "id": id, "result": result }).to_string(),
+                    ))
                     .await
                     .unwrap();
                 if request["method"] == "thread/resume" {
@@ -670,6 +1174,11 @@ mod tests {
                 };
                 let result = if request["method"] == "initialize" {
                     json!({ "payload": "x".repeat(PAYLOAD_SIZE) })
+                } else if request["method"] == "thread/resume" {
+                    json!({
+                        "thread": { "status": { "type": "idle" } },
+                        "initialTurnsPage": { "data": [] }
+                    })
                 } else {
                     json!({})
                 };
@@ -713,8 +1222,11 @@ mod tests {
                 let Some(id) = request.get("id").and_then(Value::as_u64) else {
                     continue;
                 };
-                let result = if request["method"] == "thread/read" {
-                    json!({ "thread": { "status": { "type": "idle" }, "turns": [] } })
+                let result = if request["method"] == "thread/resume" {
+                    json!({
+                        "thread": { "status": { "type": "idle" }, "turns": [] },
+                        "initialTurnsPage": { "data": [] }
+                    })
                 } else {
                     json!({})
                 };
@@ -746,7 +1258,7 @@ mod tests {
             AppServerClient::connect(config, CodexThreadId::parse("thread-123").unwrap())
                 .await
                 .unwrap();
-        client.deliver(&event).await.unwrap();
+        client.deliver(&single_event_batch(event)).await.unwrap();
 
         let received = server.await.unwrap();
         let methods: Vec<_> = received
@@ -755,16 +1267,491 @@ mod tests {
             .collect();
         assert_eq!(
             methods,
+            ["initialize", "initialized", "thread/resume", "turn/start"]
+        );
+        assert_eq!(received[3]["params"]["threadId"], "thread-123");
+        assert_eq!(received[3]["params"]["clientUserMessageId"], "dione-7");
+        assert_eq!(
+            received[0]["params"]["capabilities"]["experimentalApi"],
+            true
+        );
+        assert_eq!(received[2]["params"]["excludeTurns"], true);
+        assert_eq!(received[2]["params"]["initialTurnsPage"]["limit"], 1);
+        assert_eq!(
+            received[2]["params"]["initialTurnsPage"]["sortDirection"],
+            "desc"
+        );
+        assert_eq!(
+            received[2]["params"]["initialTurnsPage"]["itemsView"],
+            "notLoaded"
+        );
+    }
+
+    #[tokio::test]
+    async fn cold_app_server_connect_resumes_before_steering_active_turn() {
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            let mut received = Vec::new();
+            while let Some(message) = websocket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                received.push(request.clone());
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                let result = if request["method"] == "thread/resume" {
+                    json!({
+                        "thread": {
+                            "status": { "type": "active", "activeFlags": [] },
+                            "turns": []
+                        },
+                        "initialTurnsPage": {
+                            "data": [{ "id": "active-turn", "status": "inProgress" }]
+                        }
+                    })
+                } else {
+                    json!({})
+                };
+                websocket
+                    .send(Message::Text(
+                        json!({ "id": id, "result": result }).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                if request["method"] == "turn/steer" {
+                    return received;
+                }
+            }
+            received
+        });
+        let config = CodexDeliveryConfig {
+            socket_path,
+            request_timeout: Duration::from_secs(1),
+        };
+        let event = LeasedEvent {
+            event_id: crate::codex::EventId::new(9),
+            delivery_token: DeliveryToken::parse("token-9").unwrap(),
+            lease_expires_at: chrono::Utc::now(),
+            consumer_id: ConsumerId::parse("consumer-9").unwrap(),
+            event: json!({ "params": { "content": "ping" } }),
+        };
+
+        let mut client =
+            AppServerClient::connect(config, CodexThreadId::parse("thread-active").unwrap())
+                .await
+                .unwrap();
+        client.deliver(&single_event_batch(event)).await.unwrap();
+
+        let received = server.await.unwrap();
+        let methods = received
+            .iter()
+            .filter_map(|request| request.get("method").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            methods,
+            ["initialize", "initialized", "thread/resume", "turn/steer"]
+        );
+        assert_eq!(received[3]["params"]["expectedTurnId"], "active-turn");
+    }
+
+    #[tokio::test]
+    async fn started_turn_response_seeds_next_delivery_without_thread_read() {
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            let mut received = Vec::new();
+            while let Some(message) = websocket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                received.push(request.clone());
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                let result = match request["method"].as_str().unwrap() {
+                    "thread/resume" => {
+                        json!({
+                            "thread": { "turns": [] },
+                            "initialTurnsPage": { "data": [] }
+                        })
+                    }
+                    "turn/start" => {
+                        json!({ "turn": { "id": "new-turn", "status": "inProgress" } })
+                    }
+                    _ => json!({}),
+                };
+                websocket
+                    .send(Message::Text(
+                        json!({ "id": id, "result": result }).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                if request["method"] == "turn/steer" {
+                    return received;
+                }
+            }
+            received
+        });
+        let config = CodexDeliveryConfig {
+            socket_path,
+            request_timeout: Duration::from_secs(1),
+        };
+        let mut client =
+            AppServerClient::connect(config, CodexThreadId::parse("thread-start-cache").unwrap())
+                .await
+                .unwrap();
+        let event = |id| {
+            single_event_batch(LeasedEvent {
+                event_id: crate::codex::EventId::new(id),
+                delivery_token: DeliveryToken::parse(&format!("token-{id}")).unwrap(),
+                lease_expires_at: chrono::Utc::now(),
+                consumer_id: ConsumerId::parse("consumer-cache").unwrap(),
+                event: json!({ "params": { "content": format!("event-{id}") } }),
+            })
+        };
+
+        client.deliver(&event(10)).await.unwrap();
+        client.deliver(&event(11)).await.unwrap();
+
+        let received = server.await.unwrap();
+        let methods = received
+            .iter()
+            .filter_map(|request| request.get("method").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            methods,
             [
                 "initialize",
                 "initialized",
                 "thread/resume",
-                "thread/read",
+                "turn/start",
+                "turn/steer"
+            ]
+        );
+        assert_eq!(received[4]["params"]["expectedTurnId"], "new-turn");
+    }
+
+    #[tokio::test]
+    async fn completed_notification_routes_next_delivery_to_new_turn() {
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            let mut received = Vec::new();
+            while let Some(message) = websocket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                received.push(request.clone());
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                let result = if request["method"] == "thread/resume" {
+                    json!({
+                        "thread": {
+                            "status": { "type": "active", "activeFlags": [] },
+                            "turns": []
+                        },
+                        "initialTurnsPage": {
+                            "data": [{ "id": "finishing-turn", "status": "inProgress" }]
+                        }
+                    })
+                } else if request["method"] == "turn/start" {
+                    json!({ "turn": { "id": "next-turn", "status": "inProgress" } })
+                } else {
+                    json!({})
+                };
+                websocket
+                    .send(Message::Text(
+                        json!({ "id": id, "result": result }).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                if request["method"] == "turn/steer" {
+                    websocket
+                        .send(Message::Text(
+                            json!({
+                                "method": "turn/completed",
+                                "params": {
+                                    "threadId": "thread-completed",
+                                    "turn": {
+                                        "id": "finishing-turn",
+                                        "status": "completed"
+                                    }
+                                }
+                            })
+                            .to_string(),
+                        ))
+                        .await
+                        .unwrap();
+                }
+                if request["method"] == "turn/start" {
+                    return received;
+                }
+            }
+            received
+        });
+        let config = CodexDeliveryConfig {
+            socket_path,
+            request_timeout: Duration::from_secs(1),
+        };
+        let event = |id| {
+            single_event_batch(LeasedEvent {
+                event_id: crate::codex::EventId::new(id),
+                delivery_token: DeliveryToken::parse(&format!("token-{id}")).unwrap(),
+                lease_expires_at: chrono::Utc::now(),
+                consumer_id: ConsumerId::parse("consumer-completed").unwrap(),
+                event: json!({ "params": { "content": format!("event-{id}") } }),
+            })
+        };
+        let mut client =
+            AppServerClient::connect(config, CodexThreadId::parse("thread-completed").unwrap())
+                .await
+                .unwrap();
+
+        client.deliver(&event(20)).await.unwrap();
+        tokio::task::yield_now().await;
+        client.deliver(&event(21)).await.unwrap();
+
+        let received = server.await.unwrap();
+        let methods = received
+            .iter()
+            .filter_map(|request| request.get("method").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            methods,
+            [
+                "initialize",
+                "initialized",
+                "thread/resume",
+                "turn/steer",
                 "turn/start"
             ]
         );
-        assert_eq!(received[4]["params"]["threadId"], "thread-123");
-        assert_eq!(received[4]["params"]["clientUserMessageId"], "dione-7");
+    }
+
+    #[tokio::test]
+    async fn stale_cached_turn_recovers_once_without_thread_history_read() {
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            let mut received = Vec::new();
+            while let Some(message) = websocket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                received.push(request.clone());
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                let response = match request["method"].as_str().unwrap() {
+                    "thread/resume" => json!({
+                        "id": id,
+                        "result": {
+                            "thread": {
+                                "status": { "type": "active", "activeFlags": [] },
+                                "turns": []
+                            },
+                            "initialTurnsPage": {
+                                "data": [{ "id": "just-finished", "status": "inProgress" }]
+                            }
+                        }
+                    }),
+                    "thread/turns/list" => {
+                        json!({ "id": id, "result": { "data": [] } })
+                    }
+                    "turn/steer" => json!({
+                        "id": id,
+                        "error": { "code": -32600, "message": "no active turn to steer" }
+                    }),
+                    _ => json!({ "id": id, "result": {} }),
+                };
+                websocket
+                    .send(Message::Text(response.to_string()))
+                    .await
+                    .unwrap();
+                if request["method"] == "turn/start" {
+                    return received;
+                }
+            }
+            received
+        });
+        let config = CodexDeliveryConfig {
+            socket_path,
+            request_timeout: Duration::from_secs(1),
+        };
+        let event = LeasedEvent {
+            event_id: crate::codex::EventId::new(12),
+            delivery_token: DeliveryToken::parse("token-12").unwrap(),
+            lease_expires_at: chrono::Utc::now(),
+            consumer_id: ConsumerId::parse("consumer-12").unwrap(),
+            event: json!({ "params": { "content": "ping" } }),
+        };
+
+        let mut client =
+            AppServerClient::connect(config, CodexThreadId::parse("thread-stale").unwrap())
+                .await
+                .unwrap();
+        client.deliver(&single_event_batch(event)).await.unwrap();
+
+        let received = server.await.unwrap();
+        let methods = received
+            .iter()
+            .filter_map(|request| request.get("method").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            methods,
+            [
+                "initialize",
+                "initialized",
+                "thread/resume",
+                "turn/steer",
+                "thread/turns/list",
+                "turn/start"
+            ]
+        );
+        assert_eq!(
+            received[3]["params"]["clientUserMessageId"],
+            received[5]["params"]["clientUserMessageId"]
+        );
+    }
+
+    #[tokio::test]
+    async fn worker_coalesces_every_compatible_envelope_pending_during_active_delivery() {
+        let dir = TempDir::new().unwrap();
+        let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            let mut release_rx = Some(release_rx);
+            while let Some(message) = websocket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                if request["method"] == "turn/start" {
+                    started_tx
+                        .send((
+                            request["params"]["clientUserMessageId"]
+                                .as_str()
+                                .unwrap()
+                                .to_owned(),
+                            request["params"]["input"][0]["text"]
+                                .as_str()
+                                .unwrap()
+                                .to_owned(),
+                        ))
+                        .unwrap();
+                    if let Some(release_rx) = release_rx.take() {
+                        release_rx.await.unwrap();
+                    }
+                }
+                let result = if request["method"] == "thread/resume" {
+                    json!({
+                        "thread": { "status": { "type": "idle" } },
+                        "initialTurnsPage": { "data": [] }
+                    })
+                } else {
+                    json!({})
+                };
+                websocket
+                    .send(Message::Text(
+                        json!({ "id": id, "result": result }).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        });
+
+        let queue = CodexEventQueue::load(&state_path).unwrap();
+        let thread_id = CodexThreadId::parse("thread-pending-batch").unwrap();
+        queue
+            .bind_live_thread(Some(thread_id.clone()))
+            .await
+            .unwrap();
+        let cancel = CancellationToken::new();
+        let (_binding_tx, binding_rx) = tokio::sync::watch::channel(Some(thread_id));
+        let worker = tokio::spawn(run_delivery_worker(
+            queue.clone(),
+            CodexDeliveryConfig {
+                socket_path,
+                request_timeout: Duration::from_secs(2),
+            },
+            binding_rx,
+            cancel.clone(),
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while queue.status().await.primary_consumer.is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        queue
+            .enqueue(json!({ "params": { "content": "first", "meta": { "message_id": "1" } } }))
+            .await
+            .unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.0, "dione-0");
+
+        queue
+            .enqueue(json!({ "params": { "content": "second", "meta": { "message_id": "2" } } }))
+            .await
+            .unwrap();
+        queue
+            .enqueue(json!({ "params": { "content": "third", "meta": { "message_id": "3" } } }))
+            .await
+            .unwrap();
+        release_tx.send(()).unwrap();
+
+        let second = tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.0, "dione-batch-1");
+        assert!(
+            second.1.find(r#""content":"second""#).unwrap()
+                < second.1.find(r#""content":"third""#).unwrap()
+        );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while queue.status().await.queued != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        cancel.cancel();
+        worker.await.unwrap().unwrap();
+        server.abort();
     }
 
     #[tokio::test]
@@ -806,8 +1793,14 @@ mod tests {
                                 break;
                             }
                         }
-                        let response = if method == "thread/read" {
-                            json!({ "id": id, "result": { "thread": { "status": { "type": "idle" }, "turns": [] } } })
+                        let response = if method == "thread/resume" {
+                            json!({
+                                "id": id,
+                                "result": {
+                                    "thread": { "turns": [] },
+                                    "initialTurnsPage": { "data": [] }
+                                }
+                            })
                         } else {
                             json!({ "id": id, "result": {} })
                         };
@@ -855,7 +1848,7 @@ mod tests {
             .unwrap();
 
         let mut starts = Vec::new();
-        for _ in 0..3 {
+        for _ in 0..2 {
             starts.push(
                 tokio::time::timeout(Duration::from_secs(5), started_rx.recv())
                     .await
@@ -863,7 +1856,7 @@ mod tests {
                     .unwrap(),
             );
         }
-        assert_eq!(starts, ["dione-0", "dione-0", "dione-1"]);
+        assert_eq!(starts, ["dione-batch-0", "dione-batch-0"]);
         tokio::time::timeout(Duration::from_secs(1), async {
             while queue.status().await.queued != 0 {
                 tokio::task::yield_now().await;
@@ -900,8 +1893,14 @@ mod tests {
                             continue;
                         };
                         let method = request["method"].as_str().unwrap();
-                        let response = if method == "thread/read" {
-                            json!({ "id": id, "result": { "thread": { "status": { "type": "idle" }, "turns": [] } } })
+                        let response = if method == "thread/resume" {
+                            json!({
+                                "id": id,
+                                "result": {
+                                    "thread": { "turns": [] },
+                                    "initialTurnsPage": { "data": [] }
+                                }
+                            })
                         } else if method == "turn/start" {
                             started_tx
                                 .send(
@@ -962,7 +1961,7 @@ mod tests {
             .unwrap();
 
         let mut starts = Vec::new();
-        for _ in 0..3 {
+        for _ in 0..2 {
             starts.push(
                 tokio::time::timeout(Duration::from_secs(5), started_rx.recv())
                     .await
@@ -970,7 +1969,7 @@ mod tests {
                     .unwrap(),
             );
         }
-        assert_eq!(starts, ["dione-0", "dione-0", "dione-1"]);
+        assert_eq!(starts, ["dione-batch-0", "dione-batch-0"]);
 
         cancel.cancel();
         worker.await.unwrap().unwrap();
@@ -1011,7 +2010,12 @@ mod tests {
 
         tokio::time::timeout(
             Duration::from_millis(100),
-            acknowledge_with_retry(&queue, &consumer_id, &stale, &CancellationToken::new()),
+            acknowledge_with_retry(
+                &queue,
+                &consumer_id,
+                &single_event_batch(stale),
+                &CancellationToken::new(),
+            ),
         )
         .await
         .unwrap()

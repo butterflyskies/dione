@@ -10,6 +10,7 @@ mod app_server;
 
 pub use app_server::{CodexDeliveryConfig, CodexDeliveryError, run_delivery_worker};
 
+use crate::discord::events::DeliveryPriority;
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::{DateTime, TimeDelta, Utc};
 use clap::ValueEnum;
@@ -36,6 +37,7 @@ const DEFAULT_LEASE: Duration = Duration::from_secs(2 * 60);
 const MAX_CONSUMER_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const DEFAULT_CONSUMER_TTL: Duration = Duration::from_secs(15 * 60);
 const MAX_PROCESSED_MESSAGE_IDS: usize = 10_000;
+const MAX_LIVE_BATCH_EVENTS: usize = 128;
 const LIVE_CONSUMER_LABEL: &str = "dione-live-app-server";
 
 /// Determines how inbound Discord events are delivered to an agent harness.
@@ -208,6 +210,11 @@ struct QueuedEvent {
     /// Exact live thread binding at ingress. Pull consumers leave this unset.
     #[serde(default)]
     live_thread_id: Option<CodexThreadId>,
+    /// Stable live-delivery batch membership across lease expiry and restart.
+    #[serde(default)]
+    delivery_group_id: Option<EventId>,
+    #[serde(default)]
+    delivery_priority: DeliveryPriority,
     #[serde(default)]
     lease: Option<Lease>,
 }
@@ -255,6 +262,13 @@ pub struct LeasedEvent {
     pub consumer_id: ConsumerId,
     /// Structured MCP notification. User-authored content remains data.
     pub event: Value,
+}
+
+/// A stable group of live events delivered through one Codex turn input.
+#[derive(Debug, Clone)]
+pub(crate) struct LeasedEventBatch {
+    pub group_id: EventId,
+    pub events: Vec<LeasedEvent>,
 }
 
 /// Queue status for diagnostics and operational checks.
@@ -371,6 +385,7 @@ impl DurableInbox {
             if event.discord_message_id.is_none() {
                 event.discord_message_id = discord_message_id(&event.payload);
             }
+            event.delivery_priority = delivery_priority(&event.payload);
         }
         let message_ids = state
             .entries
@@ -392,6 +407,7 @@ impl DurableInbox {
         let now = Utc::now();
         self.expire_consumers(now);
         let discord_message_id = discord_message_id(&payload);
+        let delivery_priority = delivery_priority(&payload);
         if discord_message_id.as_ref().is_some_and(|id| {
             self.message_ids.contains(id) || self.processed_message_ids.contains(id)
         }) {
@@ -410,6 +426,8 @@ impl DurableInbox {
                 discord_message_id,
                 consumer_id: inbox.state.primary_consumer.clone(),
                 live_thread_id: inbox.live_event_thread_id(),
+                delivery_group_id: None,
+                delivery_priority,
                 lease: None,
             });
             Ok(true)
@@ -464,6 +482,96 @@ impl DurableInbox {
         })
     }
 
+    fn lease_live_batch(
+        &mut self,
+        consumer_id: &ConsumerId,
+        now: DateTime<Utc>,
+        lease_duration: Duration,
+        live_thread_id: &CodexThreadId,
+    ) -> Result<Option<LeasedEventBatch>, CodexQueueError> {
+        self.transaction(|inbox| {
+            inbox.touch_consumer(consumer_id, now, DEFAULT_CONSUMER_TTL)?;
+            for event in &mut inbox.state.entries {
+                if event
+                    .lease
+                    .as_ref()
+                    .is_some_and(|lease| lease.expires_at <= now)
+                {
+                    event.lease = None;
+                }
+            }
+
+            let eligible = |event: &QueuedEvent| {
+                event.lease.is_none()
+                    && event.consumer_id.as_ref() == Some(consumer_id)
+                    && event.live_thread_id.as_ref() == Some(live_thread_id)
+            };
+            let first_index =
+                inbox
+                    .state
+                    .entries
+                    .iter()
+                    .position(|event| eligible(event) && event.delivery_group_id.is_some())
+                    .or_else(|| {
+                        let priority = inbox
+                            .state
+                            .entries
+                            .iter()
+                            .filter(|event| eligible(event))
+                            .map(|event| event.delivery_priority)
+                            .max()?;
+                        inbox.state.entries.iter().position(|event| {
+                            eligible(event) && event.delivery_priority == priority
+                        })
+                    });
+            let Some(first_index) = first_index else {
+                return Ok(None);
+            };
+            let group_id = inbox.state.entries[first_index]
+                .delivery_group_id
+                .unwrap_or(inbox.state.entries[first_index].id);
+            let group_priority = inbox.state.entries[first_index].delivery_priority;
+
+            if inbox.state.entries[first_index].delivery_group_id.is_none() {
+                for event in inbox
+                    .state
+                    .entries
+                    .iter_mut()
+                    .filter(|event| eligible(event) && event.delivery_priority == group_priority)
+                    .take(MAX_LIVE_BATCH_EVENTS)
+                {
+                    event.delivery_group_id = Some(group_id);
+                }
+            }
+
+            let generation = inbox.state.next_lease_generation;
+            inbox.state.next_lease_generation = generation.saturating_add(1);
+            let expires_at = now + duration_delta(lease_duration);
+            let mut events = Vec::new();
+            for event in inbox
+                .state
+                .entries
+                .iter_mut()
+                .filter(|event| eligible(event) && event.delivery_group_id == Some(group_id))
+            {
+                let token = DeliveryToken::new(event.id, generation);
+                event.lease = Some(Lease {
+                    token: token.clone(),
+                    consumer_id: Some(consumer_id.clone()),
+                    expires_at,
+                });
+                events.push(LeasedEvent {
+                    event_id: event.id,
+                    delivery_token: token,
+                    lease_expires_at: expires_at,
+                    consumer_id: consumer_id.clone(),
+                    event: event.payload.clone(),
+                });
+            }
+            Ok(Some(LeasedEventBatch { group_id, events }))
+        })
+    }
+
     fn bind_live_thread(
         &mut self,
         thread_id: Option<CodexThreadId>,
@@ -503,6 +611,42 @@ impl DurableInbox {
             if let Some(message_id) = removed.discord_message_id {
                 inbox.message_ids.remove(&message_id);
                 inbox.remember_processed_message(message_id);
+            }
+            Ok(())
+        })
+    }
+
+    fn acknowledge_batch(
+        &mut self,
+        consumer_id: &ConsumerId,
+        tokens: &[DeliveryToken],
+    ) -> Result<(), CodexQueueError> {
+        self.transaction(|inbox| {
+            inbox.touch_consumer(consumer_id, Utc::now(), DEFAULT_CONSUMER_TTL)?;
+            let mut indices = Vec::with_capacity(tokens.len());
+            for token in tokens {
+                let Some(index) = inbox.state.entries.iter().position(|event| {
+                    event.lease.as_ref().is_some_and(|lease| {
+                        lease.token == *token && lease.consumer_id.as_ref() == Some(consumer_id)
+                    })
+                }) else {
+                    return Err(CodexQueueError::UnknownDeliveryToken);
+                };
+                indices.push(index);
+            }
+            indices.sort_unstable();
+            indices.dedup();
+            if indices.len() != tokens.len() {
+                return Err(CodexQueueError::UnknownDeliveryToken);
+            }
+            for index in indices.into_iter().rev() {
+                let Some(removed) = inbox.state.entries.remove(index) else {
+                    return Err(CodexQueueError::UnknownDeliveryToken);
+                };
+                if let Some(message_id) = removed.discord_message_id {
+                    inbox.message_ids.remove(&message_id);
+                    inbox.remember_processed_message(message_id);
+                }
             }
             Ok(())
         })
@@ -867,13 +1011,13 @@ impl CodexEventQueue {
         }
     }
 
-    pub(crate) async fn next_live_event(
+    pub(crate) async fn next_live_batch(
         &self,
         consumer_id: &ConsumerId,
         thread_id: &CodexThreadId,
         wait: Duration,
         lease: Duration,
-    ) -> Result<Option<LeasedEvent>, CodexQueueError> {
+    ) -> Result<Option<LeasedEventBatch>, CodexQueueError> {
         let wait = wait.min(MAX_WAIT);
         let lease = lease.min(MAX_LEASE);
         let deadline = tokio::time::Instant::now() + wait;
@@ -881,19 +1025,41 @@ impl CodexEventQueue {
             let notified = self.changed.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if let Some(event) = self.inbox.lock().await.lease_next(
+            if let Some(batch) = self.inbox.lock().await.lease_live_batch(
                 consumer_id,
                 Utc::now(),
                 lease,
-                Some(thread_id),
+                thread_id,
             )? {
-                return Ok(Some(event));
+                return Ok(Some(batch));
             }
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if remaining.is_zero() || tokio::time::timeout(remaining, notified).await.is_err() {
                 return Ok(None);
             }
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn next_live_event(
+        &self,
+        consumer_id: &ConsumerId,
+        thread_id: &CodexThreadId,
+        wait: Duration,
+        lease: Duration,
+    ) -> Result<Option<LeasedEvent>, CodexQueueError> {
+        let Some(batch) = self
+            .next_live_batch(consumer_id, thread_id, wait, lease)
+            .await?
+        else {
+            return Ok(None);
+        };
+        assert_eq!(
+            batch.events.len(),
+            1,
+            "single-event test helper leased an event batch"
+        );
+        Ok(batch.events.into_iter().next())
     }
 
     pub async fn bind_live_thread(
@@ -911,6 +1077,19 @@ impl CodexEventQueue {
         token: &DeliveryToken,
     ) -> Result<(), CodexQueueError> {
         self.inbox.lock().await.acknowledge(consumer_id, token)?;
+        self.changed.notify_waiters();
+        Ok(())
+    }
+
+    pub(crate) async fn acknowledge_batch(
+        &self,
+        consumer_id: &ConsumerId,
+        tokens: &[DeliveryToken],
+    ) -> Result<(), CodexQueueError> {
+        self.inbox
+            .lock()
+            .await
+            .acknowledge_batch(consumer_id, tokens)?;
         self.changed.notify_waiters();
         Ok(())
     }
@@ -1008,6 +1187,20 @@ fn discord_message_id(payload: &Value) -> Option<DiscordMessageId> {
         .map(DiscordMessageId)
 }
 
+fn delivery_priority(payload: &Value) -> DeliveryPriority {
+    if payload.get("method").and_then(Value::as_str)
+        == Some("notifications/claude/channel/permission")
+        || payload.pointer("/params/meta/type").and_then(Value::as_str) == Some("config_error")
+    {
+        return DeliveryPriority::Critical;
+    }
+    DeliveryPriority::from_label(
+        payload
+            .pointer("/params/meta/priority")
+            .and_then(Value::as_str),
+    )
+}
+
 pub fn timeout_response() -> Value {
     json!({ "event": null, "timed_out": true })
 }
@@ -1030,6 +1223,281 @@ mod tests {
                 "meta": { "message_id": id, "chat_id": "123" }
             }
         })
+    }
+
+    fn prioritized_message(id: &str, content: &str, priority: &str) -> Value {
+        let mut event = message(id, content);
+        event["params"]["meta"]["priority"] = json!(priority);
+        event
+    }
+
+    #[tokio::test]
+    async fn live_batches_select_highest_pending_priority_without_mixing_lanes() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        let thread_id = CodexThreadId::parse("thread-priority").unwrap();
+        queue
+            .bind_live_thread(Some(thread_id.clone()))
+            .await
+            .unwrap();
+        let consumer = queue.register_live_consumer().await.unwrap();
+        queue.enqueue(message("1", "ambient")).await.unwrap();
+        queue
+            .enqueue(prioritized_message("2", "directed", "directed"))
+            .await
+            .unwrap();
+        queue
+            .enqueue(json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/claude/channel/permission",
+                "params": { "request_id": "permission-1", "behavior": "allow" }
+            }))
+            .await
+            .unwrap();
+
+        let critical = queue
+            .next_live_batch(
+                &consumer,
+                &thread_id,
+                Duration::ZERO,
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(critical.events.len(), 1);
+        assert_eq!(
+            critical.events[0].event["method"],
+            "notifications/claude/channel/permission"
+        );
+        let tokens = critical
+            .events
+            .iter()
+            .map(|event| event.delivery_token.clone())
+            .collect::<Vec<_>>();
+        queue.acknowledge_batch(&consumer, &tokens).await.unwrap();
+
+        let directed = queue
+            .next_live_batch(
+                &consumer,
+                &thread_id,
+                Duration::ZERO,
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(directed.events.len(), 1);
+        assert_eq!(directed.events[0].event["params"]["content"], "directed");
+        let tokens = directed
+            .events
+            .iter()
+            .map(|event| event.delivery_token.clone())
+            .collect::<Vec<_>>();
+        queue.acknowledge_batch(&consumer, &tokens).await.unwrap();
+
+        let ambient = queue
+            .next_live_batch(
+                &consumer,
+                &thread_id,
+                Duration::ZERO,
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ambient.events.len(), 1);
+        assert_eq!(ambient.events[0].event["params"]["content"], "ambient");
+    }
+
+    #[tokio::test]
+    async fn live_batch_membership_survives_lease_expiry_without_absorbing_new_events() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        let thread_id = CodexThreadId::parse("thread-batch").unwrap();
+        queue
+            .bind_live_thread(Some(thread_id.clone()))
+            .await
+            .unwrap();
+        let consumer = queue.register_live_consumer().await.unwrap();
+        queue.enqueue(message("1", "first")).await.unwrap();
+        queue.enqueue(message("2", "second")).await.unwrap();
+
+        let first_lease = queue
+            .next_live_batch(&consumer, &thread_id, Duration::ZERO, Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first_lease.events.len(), 2);
+        assert_eq!(first_lease.events[0].event["params"]["content"], "first");
+        assert_eq!(first_lease.events[1].event["params"]["content"], "second");
+
+        queue
+            .enqueue(prioritized_message("3", "later", "critical"))
+            .await
+            .unwrap();
+        let retried = queue
+            .next_live_batch(
+                &consumer,
+                &thread_id,
+                Duration::ZERO,
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(retried.group_id, first_lease.group_id);
+        assert_eq!(retried.events.len(), 2);
+        assert_eq!(retried.events[0].event["params"]["content"], "first");
+        assert_eq!(retried.events[1].event["params"]["content"], "second");
+
+        let tokens = retried
+            .events
+            .iter()
+            .map(|event| event.delivery_token.clone())
+            .collect::<Vec<_>>();
+        queue.acknowledge_batch(&consumer, &tokens).await.unwrap();
+        let later = queue
+            .next_live_batch(
+                &consumer,
+                &thread_id,
+                Duration::ZERO,
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(later.events.len(), 1);
+        assert_eq!(later.events[0].event["params"]["content"], "later");
+    }
+
+    #[tokio::test]
+    async fn live_batch_identity_survives_process_restart() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let thread_id = CodexThreadId::parse("thread-batch-restart").unwrap();
+        let queue = CodexEventQueue::load(&path).unwrap();
+        queue
+            .bind_live_thread(Some(thread_id.clone()))
+            .await
+            .unwrap();
+        let consumer = queue.register_live_consumer().await.unwrap();
+        queue.enqueue(message("1", "first")).await.unwrap();
+        queue.enqueue(message("2", "second")).await.unwrap();
+        let first = queue
+            .next_live_batch(&consumer, &thread_id, Duration::ZERO, Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+        drop(queue);
+
+        let restarted = CodexEventQueue::load(&path).unwrap();
+        let restarted_consumer = restarted.register_live_consumer().await.unwrap();
+        assert_eq!(restarted_consumer, consumer);
+        let retried = restarted
+            .next_live_batch(
+                &restarted_consumer,
+                &thread_id,
+                Duration::ZERO,
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(retried.group_id, first.group_id);
+        assert_eq!(retried.events.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn batch_acknowledgement_is_atomic() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        let thread_id = CodexThreadId::parse("thread-atomic-ack").unwrap();
+        queue
+            .bind_live_thread(Some(thread_id.clone()))
+            .await
+            .unwrap();
+        let consumer = queue.register_live_consumer().await.unwrap();
+        queue.enqueue(message("1", "first")).await.unwrap();
+        queue.enqueue(message("2", "second")).await.unwrap();
+        let batch = queue
+            .next_live_batch(
+                &consumer,
+                &thread_id,
+                Duration::ZERO,
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let valid = batch
+            .events
+            .iter()
+            .map(|event| event.delivery_token.clone())
+            .collect::<Vec<_>>();
+        let mut invalid = valid.clone();
+        invalid[1] = DeliveryToken::parse("invalid-token").unwrap();
+
+        assert!(matches!(
+            queue.acknowledge_batch(&consumer, &invalid).await,
+            Err(CodexQueueError::UnknownDeliveryToken)
+        ));
+        assert_eq!(queue.status().await.queued, 2);
+
+        queue.acknowledge_batch(&consumer, &valid).await.unwrap();
+        assert_eq!(queue.status().await.queued, 0);
+    }
+
+    #[tokio::test]
+    async fn live_batch_size_is_bounded_without_dropping_overflow() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        let thread_id = CodexThreadId::parse("thread-batch-bound").unwrap();
+        queue
+            .bind_live_thread(Some(thread_id.clone()))
+            .await
+            .unwrap();
+        let consumer = queue.register_live_consumer().await.unwrap();
+        for index in 0..=MAX_LIVE_BATCH_EVENTS {
+            queue
+                .enqueue(message(&index.to_string(), &format!("event-{index}")))
+                .await
+                .unwrap();
+        }
+
+        let first = queue
+            .next_live_batch(
+                &consumer,
+                &thread_id,
+                Duration::ZERO,
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.events.len(), MAX_LIVE_BATCH_EVENTS);
+        let tokens = first
+            .events
+            .iter()
+            .map(|event| event.delivery_token.clone())
+            .collect::<Vec<_>>();
+        queue.acknowledge_batch(&consumer, &tokens).await.unwrap();
+
+        let second = queue
+            .next_live_batch(
+                &consumer,
+                &thread_id,
+                Duration::ZERO,
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.events.len(), 1);
+        assert_eq!(
+            second.events[0].event["params"]["content"],
+            format!("event-{MAX_LIVE_BATCH_EVENTS}")
+        );
     }
 
     async fn primary_consumer(queue: &CodexEventQueue) -> ConsumerId {

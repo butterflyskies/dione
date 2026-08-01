@@ -482,13 +482,49 @@ impl NotificationSink {
                 write_line(stdout, value).await;
                 Ok(())
             }
-            Self::Codex(queue) => queue
-                .enqueue(value.clone())
-                .await
-                .map(|_| ())
-                .map_err(|error| error.to_string()),
+            Self::Codex(queue) => {
+                let started = std::time::Instant::now();
+                let inserted = queue
+                    .enqueue(value.clone())
+                    .await
+                    .map_err(|error| error.to_string())?;
+                tracing::info!(
+                    target: "dione::latency",
+                    stage = "durable_enqueue",
+                    message_ids = %notification_message_ids(value),
+                    channel_id = notification_channel_id(value).unwrap_or_default(),
+                    inserted,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    recorded_at = %chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                    "Discord notification persisted for Codex delivery"
+                );
+                Ok(())
+            }
         }
     }
+}
+
+fn notification_message_ids(value: &Value) -> String {
+    if let Some(message_id) = value
+        .pointer("/params/meta/message_id")
+        .and_then(Value::as_str)
+    {
+        return message_id.to_owned();
+    }
+    value
+        .pointer("/params/meta/message_ids")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn notification_channel_id(value: &Value) -> Option<&str> {
+    value
+        .pointer("/params/meta/chat_id")
+        .and_then(Value::as_str)
 }
 
 async fn write_line(stdout: &Arc<Mutex<tokio::io::Stdout>>, value: &Value) {
@@ -681,6 +717,49 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(sink, NotificationSink::Codex(_)));
+    }
+
+    #[test]
+    fn latency_correlation_reads_message_and_channel_ids() {
+        let notification = json!({
+            "params": {
+                "meta": {
+                    "message_id": "1532488703908380846",
+                    "chat_id": "1513061867713593424"
+                }
+            }
+        });
+        assert_eq!(
+            notification_message_ids(&notification),
+            "1532488703908380846"
+        );
+        assert_eq!(
+            notification_channel_id(&notification),
+            Some("1513061867713593424")
+        );
+    }
+
+    #[test]
+    fn latency_correlation_tolerates_non_message_notifications() {
+        let notification = json!({"params": {"type": "trace"}});
+        assert_eq!(notification_message_ids(&notification), "");
+        assert_eq!(notification_channel_id(&notification), None);
+    }
+
+    #[test]
+    fn latency_correlation_reads_coalesced_message_ids() {
+        let notification = json!({
+            "params": {
+                "meta": {
+                    "message_ids": ["1532501273851465808", "1532501280331796623"],
+                    "chat_id": "1513061867713593424"
+                }
+            }
+        });
+        assert_eq!(
+            notification_message_ids(&notification),
+            "1532501273851465808,1532501280331796623"
+        );
     }
 
     fn config_with_global_delay(delay_ms: u64) -> LoadedConfig {

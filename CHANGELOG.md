@@ -56,6 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   in parentheses format. `PronounDisplayName` newtype, `Vec<u64>` for Discord
   IDs. (#214)
 
+### Fixed
+- **Codex delivery latency and burst handling.** Track active app-server turns
+  from resume/start/lifecycle receipts instead of reading the complete thread
+  history for every Discord envelope. Pending compatible envelopes are leased,
+  delivered, retried, and acknowledged as durable priority-aware batches with
+  stable identities, preserving source order and exact thread binding.
+
 ## [0.23.0] - 2026-07-21
 
 ### Changed

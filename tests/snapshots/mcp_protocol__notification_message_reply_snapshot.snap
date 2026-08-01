@@ -10,6 +10,7 @@ expression: notif
     "meta": {
       "chat_id": "1000",
       "message_id": "2000",
+      "priority": "ambient",
       "reply_to_content_preview": "the original message",
       "reply_to_message_id": "9999",
       "reply_to_user": "parentuser",
