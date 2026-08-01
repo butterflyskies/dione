@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-08-01
+
 ### Added
 - **Configurable Codex delivery preambles.** Delivery events can prepend a
   configurable template either once per bound thread or on every event, with an
