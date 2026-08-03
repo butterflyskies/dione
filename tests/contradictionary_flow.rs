@@ -522,6 +522,69 @@ fn block_trumps_celebrate() {
     assert!(hits.iter().any(|h| h.action == Action::Celebrate));
 }
 
+/// Embed text reaches the contradictionary block scan. A blocked pattern
+/// hiding in an embed field is still caught — embeds carry the bot's name
+/// and are authored text, not system chrome.
+///
+/// Hook-rewrite asymmetry: hooks can *scan* embed text (via `scannable_text()`),
+/// but a `Rewrite` decision only rewrites message content, not embed fields.
+/// Only `Halt` protects against blocked patterns in embeds. This is by design:
+/// embed structure is caller-owned and rewriting it would scramble field layout.
+#[tokio::test]
+async fn embed_text_reaches_contradictionary_block_scan() {
+    let ctx = test_ctx(config_with_contradictionary(ariadne_entries()));
+
+    let result = messaging::reply_with_hook_overrides(
+        &ctx,
+        ChannelId::new(42),
+        "this message body is clean",
+        Some(MessageId::new(1)),
+        false,
+        false,
+        &[],
+        Vec::new(),
+        Some("the embed says straightforward".to_owned()),
+    )
+    .await;
+
+    assert!(
+        result.get("error").is_some(),
+        "blocked pattern in embed text must trigger block, got: {result}"
+    );
+    let error_msg = result["error"].as_str().unwrap();
+    assert!(
+        error_msg.contains("straightforward"),
+        "error should name the blocked pattern from embed: {error_msg}"
+    );
+}
+
+/// Clean embed text does not trigger a false positive.
+#[tokio::test]
+async fn clean_embed_text_does_not_block() {
+    let ctx = test_ctx(config_with_contradictionary(ariadne_entries()));
+
+    let result = messaging::reply_with_hook_overrides(
+        &ctx,
+        ChannelId::new(42),
+        "clean body",
+        None,
+        false,
+        false,
+        &[],
+        Vec::new(),
+        Some("this embed is perfectly fine".to_owned()),
+    )
+    .await;
+
+    if let Some(error) = result.get("error") {
+        let msg = error.as_str().unwrap_or("");
+        assert!(
+            !msg.contains("contradictionary"),
+            "clean embed must not trigger contradictionary: {msg}"
+        );
+    }
+}
+
 /// The full pipeline with an empty contradictionary is a no-op.
 /// No patterns, no hits, no drama.
 #[test]
