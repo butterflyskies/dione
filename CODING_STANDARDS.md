@@ -1,5 +1,10 @@
 # Dione Coding Standards
 
+Rust-specific mechanics — error handling, async patterns, module structure,
+serde discipline, formatting, and testing. For cross-construct engineering
+principles (design philosophy, review discipline, scope sharpening), see
+[docs/coding-standards.md](docs/coding-standards.md).
+
 Informed by Rain's (sunshowers) conventions from
 [cargo-nextest](https://github.com/nextest-rs/nextest) and
 [Rust CLI Recommendations](https://rust-cli-recommendations.sunshowers.io/).

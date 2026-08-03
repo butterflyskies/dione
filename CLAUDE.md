@@ -8,7 +8,8 @@ See [AGENTS.md](AGENTS.md) for the full knowledge index.
 
 ## Quick reference
 
-- **Coding standards**: [CODING_STANDARDS.md](CODING_STANDARDS.md)
+- **Coding standards (Rust mechanics)**: [CODING_STANDARDS.md](CODING_STANDARDS.md)
+- **Engineering principles (cross-construct)**: [docs/coding-standards.md](docs/coding-standards.md)
 - **Architecture**: [ARCHITECTURE.md](ARCHITECTURE.md)
 - **Task completion**: format → clippy → nextest → release build → commit+push
 

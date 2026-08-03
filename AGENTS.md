@@ -15,7 +15,8 @@ through interaction.
 
 | Document | Purpose |
 |----------|---------|
-| [CODING_STANDARDS.md](CODING_STANDARDS.md) | Rust coding conventions, error handling, async patterns, testing, linting, serde discipline, commit rules. The authoritative reference. |
+| [CODING_STANDARDS.md](CODING_STANDARDS.md) | Rust coding conventions, error handling, async patterns, testing, linting, serde discipline, commit rules. The authoritative reference for mechanics. |
+| [docs/coding-standards.md](docs/coding-standards.md) | Cross-construct engineering principles — design philosophy, review discipline, scope sharpening. |
 
 ### Architecture & design
 
