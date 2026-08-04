@@ -137,9 +137,9 @@ mod tests {
             },
             Entry {
                 pattern: "honestly".into(),
-                action: Action::Warn,
+                action: Action::Log,
                 match_mode: MatchMode::Word,
-                reason: Some("warn tier must not bounce".into()),
+                reason: Some("log tier must not bounce".into()),
             },
             Entry {
                 pattern: "prejection".into(),
@@ -207,10 +207,7 @@ mod tests {
 
     #[test]
     fn always_clear_never_bounces() {
-        assert_eq!(
-            AlwaysClear.judge("straightforward trivial"),
-            Verdict::Clear
-        );
+        assert_eq!(AlwaysClear.judge("straightforward trivial"), Verdict::Clear);
     }
 
     #[test]

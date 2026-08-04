@@ -38,8 +38,7 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                     "content": { "type": "string", "description": "Message content" },
                     "reply_to_message_id": { "type": "string", "description": "Optional message ID to reply to" },
                     "suppress_ping": { "type": "boolean", "description": "When true, the reply will not ping the user being replied to (default: false)" },
-                    "no_rly": { "type": "boolean", "description": "Consent-gate override for the contradictionary block action. A blocked send returns an error naming the matched pattern (⚠️ blocked: <pattern>); resend the identical message with no_rly=true to bypass the block, send anyway, and record a durable diary entry. No effect on non-blocked messages (default: false)." },
-                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for this send. Every bypass is audited. This does not bypass the contradictionary; use no_rly for that legacy gate." }
+                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for this send. Every bypass is audited. This does not bypass the contradictionary; use the no_rly(handle) tool for that." }
                 }
             })),
             tool("no_rly", "Release a message held by the contradictionary: sends the byte-identical held text with its original addressing. Handles are single-use — they die on release, rephrase, or expiry (default 3 minutes) and cannot be replayed; only a failed send leaves the handle live for a retry. Ordering: the message lands when released, not at its original position in the conversation.", json!({

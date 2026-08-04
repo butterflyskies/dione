@@ -660,8 +660,8 @@ mod tests {
     };
     use serenity::model::id::{ChannelId, MessageId, UserId};
 
-    #[test]
-    fn messaging_context_uses_process_installed_pipeline() {
+    #[tokio::test]
+    async fn messaging_context_uses_process_installed_pipeline() {
         let pipeline = crate::pre_send::configured_pipeline(true, Vec::new())
             .expect("configured pipeline")
             .expect("enabled pipeline");
@@ -674,6 +674,7 @@ mod tests {
             state: crate::state::new_state(),
             queue: Arc::new(Mutex::new(crate::queue::AccessQueue::load(&state_dir))),
             http: Arc::new(serenity::http::Http::new("fake")),
+            no_rly: Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
             state_dir,
             notification_tx,
             discord_cmd_tx: None,

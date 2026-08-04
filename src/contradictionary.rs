@@ -572,24 +572,6 @@ reason = "the practice that keeps us awake"
         );
     }
 
-    #[test]
-    fn no_rly_on_clean_message_is_clear_no_diary() {
-        let c = Contradictionary::new(test_entries());
-        let content = "the keystone component is well designed";
-        let hits = c.check(content);
-        assert_eq!(c.evaluate_block(&hits, content, true), BlockOutcome::Clear);
-    }
-
-    #[test]
-    fn no_rly_does_not_affect_log_celebrate() {
-        let c = Contradictionary::new(test_entries());
-        let content = "honestly, I find myself admiring prejection";
-        let hits = c.check(content);
-        assert!(!c.has_block(&hits));
-        assert_eq!(c.evaluate_block(&hits, content, true), BlockOutcome::Clear);
-        assert_eq!(c.evaluate_block(&hits, content, false), BlockOutcome::Clear);
-    }
-
     /// The default action is `block`, per `contradictionary-action-tiers-v2`
     /// (2026-07-05): the substrate defaults to send, so the prosthetic defaults
     /// to stop. An entry that names no action must gate, not decorate.

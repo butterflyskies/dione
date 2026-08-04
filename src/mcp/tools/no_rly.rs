@@ -67,8 +67,9 @@ pub async fn no_rly_stats(
 /// The `no_rly_condense` tool: fold raw bounce records older than the cutoff
 /// (default: the configured raw retention window) into daily summaries.
 pub async fn no_rly_condense(ctx: &NoRlyCtx, older_than_days: Option<u64>) -> Value {
-    let days = older_than_days
-        .unwrap_or(u64::from(ctx.config.raw.contradictionary.journal_raw_retention_days));
+    let days = older_than_days.unwrap_or(u64::from(
+        ctx.config.raw.contradictionary.journal_raw_retention_days,
+    ));
     let Some(cutoff) = days_ago(days) else {
         return json!({ "error": "older_than_days is out of range" });
     };
@@ -84,7 +85,10 @@ pub async fn no_rly_condense(ctx: &NoRlyCtx, older_than_days: Option<u64>) -> Va
 /// compact the journal file.
 pub async fn no_rly_vacuum(ctx: &NoRlyCtx, older_than_days: Option<u64>) -> Value {
     let days = older_than_days.unwrap_or(u64::from(
-        ctx.config.raw.contradictionary.journal_summary_retention_days,
+        ctx.config
+            .raw
+            .contradictionary
+            .journal_summary_retention_days,
     ));
     let Some(cutoff) = days_ago(days) else {
         return json!({ "error": "older_than_days is out of range" });

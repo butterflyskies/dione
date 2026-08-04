@@ -224,7 +224,11 @@ async fn reply_warn_does_not_block() {
             "warn hits must not trigger the bounce path, got: {msg}"
         );
     }
-    assert_eq!(ctx.no_rly.pending().await, 0, "warn must not queue anything");
+    assert_eq!(
+        ctx.no_rly.pending().await,
+        0,
+        "warn must not queue anything"
+    );
 }
 
 /// Channel not in config gets rejected before the judge even runs — a message
@@ -368,8 +372,14 @@ async fn rephrase_rebounce_chains_and_journals() {
     assert_eq!(record["kind"], "bounce");
     assert_eq!(record["handle"], old_handle);
     assert_eq!(record["outcome"], "rephrased");
-    assert_eq!(record["message"], "this is a straightforward implementation");
-    assert_eq!(record["replacement"], "fine, it is a trivial implementation");
+    assert_eq!(
+        record["message"],
+        "this is a straightforward implementation"
+    );
+    assert_eq!(
+        record["replacement"],
+        "fine, it is a trivial implementation"
+    );
     assert_eq!(record["reason"]["matches"][0]["pattern"], "straightforward");
     assert!(record["latency_ms"].is_u64());
 }
@@ -386,13 +396,13 @@ async fn release_into_a_revoked_channel_is_refused_and_keeps_the_handle() {
     let gate = Arc::new(ConsentGate::new(&state_dir));
 
     // First context: channel 42 is permitted; the message bounces and is held.
-    let ctx_allowed = MessagingCtx {
-        http: Arc::new(serenity::http::Http::new("fake-token-for-testing")),
-        state: new_state(),
-        config: Arc::new(config_with_contradictionary(ariadne_entries())),
-        state_dir: state_dir.clone(),
-        no_rly: gate.clone(),
-    };
+    let ctx_allowed = MessagingCtx::new(
+        Arc::new(serenity::http::Http::new("fake-token-for-testing")),
+        new_state(),
+        Arc::new(config_with_contradictionary(ariadne_entries())),
+        state_dir.clone(),
+        gate.clone(),
+    );
     let bounce = messaging::reply(
         &ctx_allowed,
         ChannelId::new(42),
@@ -406,13 +416,13 @@ async fn release_into_a_revoked_channel_is_refused_and_keeps_the_handle() {
 
     // Second context: same gate, but a config where 42 is no longer a
     // permitted outbound target (no channels configured).
-    let ctx_revoked = MessagingCtx {
-        http: Arc::new(serenity::http::Http::new("fake-token-for-testing")),
-        state: new_state(),
-        config: Arc::new(LoadedConfig::from_raw(Config::default())),
-        state_dir: state_dir.clone(),
-        no_rly: gate.clone(),
-    };
+    let ctx_revoked = MessagingCtx::new(
+        Arc::new(serenity::http::Http::new("fake-token-for-testing")),
+        new_state(),
+        Arc::new(LoadedConfig::from_raw(Config::default())),
+        state_dir.clone(),
+        gate.clone(),
+    );
     let result = messaging::release_held(&ctx_revoked, &handle).await;
     assert!(
         result["error"]
@@ -550,8 +560,7 @@ action = "block"
     assert_eq!(cfg.no_rly_hold_ttl(), std::time::Duration::from_secs(240));
     assert_eq!(cfg.raw.contradictionary.journal_raw_retention_days, 30);
     assert_eq!(
-        cfg.raw.contradictionary.journal_summary_retention_days,
-        730,
+        cfg.raw.contradictionary.journal_summary_retention_days, 730,
         "unset knobs keep their documented defaults"
     );
 }

@@ -366,7 +366,9 @@ impl Journal {
         let mut by_outcome: BTreeMap<String, u64> = BTreeMap::new();
         let mut by_pattern: BTreeMap<String, u64> = BTreeMap::new();
         for b in &matched {
-            *by_outcome.entry(b.outcome.as_str().to_string()).or_default() += 1;
+            *by_outcome
+                .entry(b.outcome.as_str().to_string())
+                .or_default() += 1;
             for m in &b.reason.matches {
                 *by_pattern.entry(m.pattern.clone()).or_default() += 1;
             }
@@ -801,7 +803,12 @@ mod tests {
     #[test]
     fn append_then_load_round_trips() {
         let (_dir, journal) = temp_journal();
-        let rec = record("nr-0001-1", Outcome::Released, "2026-07-07T10:00:05+00:00", 5000);
+        let rec = record(
+            "nr-0001-1",
+            Outcome::Released,
+            "2026-07-07T10:00:05+00:00",
+            5000,
+        );
         journal.append(&rec).unwrap();
         let scan = journal.load().unwrap();
         assert_eq!(scan.records, vec![rec]);
@@ -820,7 +827,12 @@ mod tests {
     fn malformed_lines_are_kept_and_counted() {
         let (_dir, journal) = temp_journal();
         journal
-            .append(&record("nr-0001-1", Outcome::Expired, "2026-07-07T10:03:00+00:00", 180_000))
+            .append(&record(
+                "nr-0001-1",
+                Outcome::Expired,
+                "2026-07-07T10:03:00+00:00",
+                180_000,
+            ))
             .unwrap();
         fs::OpenOptions::new()
             .append(true)
@@ -889,9 +901,17 @@ mod tests {
 
     #[test]
     fn optional_fields_absent_when_none() {
-        let rec = record("nr-0001-1", Outcome::Released, "2026-07-07T10:00:05+00:00", 5000);
+        let rec = record(
+            "nr-0001-1",
+            Outcome::Released,
+            "2026-07-07T10:00:05+00:00",
+            5000,
+        );
         let value = serde_json::to_value(&rec).unwrap();
-        assert!(value.get("parent").is_none(), "parent: None must not serialize");
+        assert!(
+            value.get("parent").is_none(),
+            "parent: None must not serialize"
+        );
         assert!(
             value.get("replacement").is_none(),
             "replacement: None must not serialize"
@@ -923,13 +943,28 @@ mod tests {
     fn stats_aggregates_counts_and_latency() {
         let (_dir, journal) = temp_journal();
         journal
-            .append(&record("nr-0001-1", Outcome::Released, "2026-07-07T10:00:02+00:00", 2000))
+            .append(&record(
+                "nr-0001-1",
+                Outcome::Released,
+                "2026-07-07T10:00:02+00:00",
+                2000,
+            ))
             .unwrap();
         journal
-            .append(&record("nr-0001-2", Outcome::Released, "2026-07-07T11:00:04+00:00", 4000))
+            .append(&record(
+                "nr-0001-2",
+                Outcome::Released,
+                "2026-07-07T11:00:04+00:00",
+                4000,
+            ))
             .unwrap();
         journal
-            .append(&record("nr-0001-3", Outcome::Expired, "2026-07-07T12:03:00+00:00", 180_000))
+            .append(&record(
+                "nr-0001-3",
+                Outcome::Expired,
+                "2026-07-07T12:03:00+00:00",
+                180_000,
+            ))
             .unwrap();
 
         let stats = journal.stats(&StatsFilter::default()).unwrap();
@@ -949,10 +984,20 @@ mod tests {
     fn stats_filters_by_outcome_and_since() {
         let (_dir, journal) = temp_journal();
         journal
-            .append(&record("nr-0001-1", Outcome::Released, "2026-07-01T10:00:00+00:00", 1000))
+            .append(&record(
+                "nr-0001-1",
+                Outcome::Released,
+                "2026-07-01T10:00:00+00:00",
+                1000,
+            ))
             .unwrap();
         journal
-            .append(&record("nr-0001-2", Outcome::Expired, "2026-07-07T10:00:00+00:00", 2000))
+            .append(&record(
+                "nr-0001-2",
+                Outcome::Expired,
+                "2026-07-07T10:00:00+00:00",
+                2000,
+            ))
             .unwrap();
 
         let by_outcome = journal
@@ -976,14 +1021,29 @@ mod tests {
     fn stats_reports_chains_and_dangling_parents() {
         let (_dir, journal) = temp_journal();
         journal
-            .append(&record("nr-0001-1", Outcome::Rephrased, "2026-07-07T10:00:00+00:00", 1000))
+            .append(&record(
+                "nr-0001-1",
+                Outcome::Rephrased,
+                "2026-07-07T10:00:00+00:00",
+                1000,
+            ))
             .unwrap();
-        let mut child = record("nr-0001-2", Outcome::Released, "2026-07-07T10:01:00+00:00", 500);
+        let mut child = record(
+            "nr-0001-2",
+            Outcome::Released,
+            "2026-07-07T10:01:00+00:00",
+            500,
+        );
         if let JournalRecord::Bounce(ref mut b) = child {
             b.parent = Some("nr-0001-1".into());
         }
         journal.append(&child).unwrap();
-        let mut orphan = record("nr-0001-9", Outcome::Released, "2026-07-07T10:02:00+00:00", 500);
+        let mut orphan = record(
+            "nr-0001-9",
+            Outcome::Released,
+            "2026-07-07T10:02:00+00:00",
+            500,
+        );
         if let JournalRecord::Bounce(ref mut b) = orphan {
             b.parent = Some("nr-dead-1".into());
         }
@@ -1000,13 +1060,28 @@ mod tests {
     fn condense_folds_old_bounces_and_keeps_new() {
         let (_dir, journal) = temp_journal();
         journal
-            .append(&record("nr-0001-1", Outcome::Released, "2026-01-01T10:00:00+00:00", 2000))
+            .append(&record(
+                "nr-0001-1",
+                Outcome::Released,
+                "2026-01-01T10:00:00+00:00",
+                2000,
+            ))
             .unwrap();
         journal
-            .append(&record("nr-0001-2", Outcome::Released, "2026-01-01T11:00:00+00:00", 4000))
+            .append(&record(
+                "nr-0001-2",
+                Outcome::Released,
+                "2026-01-01T11:00:00+00:00",
+                4000,
+            ))
             .unwrap();
         journal
-            .append(&record("nr-0001-3", Outcome::Released, "2026-07-07T10:00:00+00:00", 1000))
+            .append(&record(
+                "nr-0001-3",
+                Outcome::Released,
+                "2026-07-07T10:00:00+00:00",
+                1000,
+            ))
             .unwrap();
 
         let cutoff = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
@@ -1025,7 +1100,10 @@ mod tests {
             })
             .collect();
         assert_eq!(summaries.len(), 1);
-        assert_eq!(summaries[0].date, NaiveDate::from_ymd_opt(2026, 1, 1).unwrap());
+        assert_eq!(
+            summaries[0].date,
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()
+        );
         assert_eq!(summaries[0].count, 2);
         assert_eq!(summaries[0].latency_ms_total, 6000);
         assert_eq!(summaries[0].latency_ms_max, 4000);
@@ -1036,16 +1114,29 @@ mod tests {
     fn condense_merges_into_existing_summaries() {
         let (_dir, journal) = temp_journal();
         journal
-            .append(&record("nr-0001-1", Outcome::Released, "2026-01-01T10:00:00+00:00", 2000))
+            .append(&record(
+                "nr-0001-1",
+                Outcome::Released,
+                "2026-01-01T10:00:00+00:00",
+                2000,
+            ))
             .unwrap();
         let cutoff = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
         journal.condense(cutoff).unwrap();
 
         journal
-            .append(&record("nr-0001-2", Outcome::Released, "2026-01-01T12:00:00+00:00", 6000))
+            .append(&record(
+                "nr-0001-2",
+                Outcome::Released,
+                "2026-01-01T12:00:00+00:00",
+                6000,
+            ))
             .unwrap();
         let report = journal.condense(cutoff).unwrap();
-        assert_eq!(report.summaries, 1, "same-key summaries must merge, not duplicate");
+        assert_eq!(
+            report.summaries, 1,
+            "same-key summaries must merge, not duplicate"
+        );
 
         let scan = journal.load().unwrap();
         match &scan.records[0] {
@@ -1062,10 +1153,20 @@ mod tests {
     fn condense_recovers_from_stale_tmp_of_a_crashed_rewrite() {
         let (_dir, journal) = temp_journal();
         journal
-            .append(&record("nr-0001-1", Outcome::Released, "2026-01-01T10:00:00+00:00", 2000))
+            .append(&record(
+                "nr-0001-1",
+                Outcome::Released,
+                "2026-01-01T10:00:00+00:00",
+                2000,
+            ))
             .unwrap();
         journal
-            .append(&record("nr-0001-2", Outcome::Released, "2026-07-07T10:00:00+00:00", 1000))
+            .append(&record(
+                "nr-0001-2",
+                Outcome::Released,
+                "2026-07-07T10:00:00+00:00",
+                1000,
+            ))
             .unwrap();
 
         // A crash mid-rewrite leaves a stale temp file behind; the journal
@@ -1075,13 +1176,18 @@ mod tests {
         fs::write(&stale_tmp, "half-written garbage from a dead process\n").unwrap();
 
         let cutoff = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
-        let report = journal.condense(cutoff).expect("stale tmp must not break condense");
+        let report = journal
+            .condense(cutoff)
+            .expect("stale tmp must not break condense");
         assert_eq!(report.condensed_bounces, 1);
         assert_eq!(report.kept_bounces, 1);
 
         let scan = journal.load().unwrap();
         assert_eq!(scan.records.len(), 2, "one summary plus one kept bounce");
-        assert!(scan.malformed.is_empty(), "no stale bytes may leak into the journal");
+        assert!(
+            scan.malformed.is_empty(),
+            "no stale bytes may leak into the journal"
+        );
         assert!(!stale_tmp.exists(), "the rewrite consumes the tmp path");
     }
 
@@ -1089,7 +1195,12 @@ mod tests {
     fn condense_preserves_malformed_lines() {
         let (_dir, journal) = temp_journal();
         journal
-            .append(&record("nr-0001-1", Outcome::Released, "2026-01-01T10:00:00+00:00", 2000))
+            .append(&record(
+                "nr-0001-1",
+                Outcome::Released,
+                "2026-01-01T10:00:00+00:00",
+                2000,
+            ))
             .unwrap();
         fs::OpenOptions::new()
             .append(true)
@@ -1125,7 +1236,12 @@ mod tests {
             }))
             .unwrap();
         journal
-            .append(&record("nr-0001-1", Outcome::Released, "2026-07-07T10:00:00+00:00", 1000))
+            .append(&record(
+                "nr-0001-1",
+                Outcome::Released,
+                "2026-07-07T10:00:00+00:00",
+                1000,
+            ))
             .unwrap();
         fs::OpenOptions::new()
             .append(true)
@@ -1151,11 +1267,19 @@ mod tests {
     fn vacuum_never_drops_raw_bounces() {
         let (_dir, journal) = temp_journal();
         journal
-            .append(&record("nr-0001-1", Outcome::Expired, "2020-01-01T10:00:00+00:00", 1000))
+            .append(&record(
+                "nr-0001-1",
+                Outcome::Expired,
+                "2020-01-01T10:00:00+00:00",
+                1000,
+            ))
             .unwrap();
         let cutoff = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
         let report = journal.vacuum(cutoff).unwrap();
-        assert_eq!(report.kept, 1, "raw retention is condense's job, not vacuum's");
+        assert_eq!(
+            report.kept, 1,
+            "raw retention is condense's job, not vacuum's"
+        );
     }
 
     #[test]
@@ -1216,7 +1340,10 @@ mod tests {
         }
         let stats = journal.stats(&StatsFilter::default()).unwrap();
         let latency = stats.latency.unwrap();
-        assert_eq!(latency.p50_ms, 1500, "median of [500,1000,2000,4000] is 1500");
+        assert_eq!(
+            latency.p50_ms, 1500,
+            "median of [500,1000,2000,4000] is 1500"
+        );
         assert_eq!(latency.min_ms, 500);
         assert_eq!(latency.max_ms, 4000);
     }
@@ -1231,9 +1358,19 @@ mod tests {
         // maintenance. The parent must be kept raw to preserve the chain.
         let (_dir, journal) = temp_journal();
         journal
-            .append(&record("nr-0001-1", Outcome::Rephrased, "2026-05-31T10:00:00+00:00", 1000))
+            .append(&record(
+                "nr-0001-1",
+                Outcome::Rephrased,
+                "2026-05-31T10:00:00+00:00",
+                1000,
+            ))
             .unwrap();
-        let mut child = record("nr-0001-2", Outcome::Released, "2026-06-02T10:00:00+00:00", 500);
+        let mut child = record(
+            "nr-0001-2",
+            Outcome::Released,
+            "2026-06-02T10:00:00+00:00",
+            500,
+        );
         if let JournalRecord::Bounce(ref mut b) = child {
             b.parent = Some("nr-0001-1".into());
         }
@@ -1260,14 +1397,29 @@ mod tests {
         // Keeping the child pulls in the parent, which pulls in the grandparent.
         let (_dir, journal) = temp_journal();
         journal
-            .append(&record("nr-0001-1", Outcome::Rephrased, "2026-01-01T10:00:00+00:00", 1000))
+            .append(&record(
+                "nr-0001-1",
+                Outcome::Rephrased,
+                "2026-01-01T10:00:00+00:00",
+                1000,
+            ))
             .unwrap();
-        let mut parent = record("nr-0001-2", Outcome::Rephrased, "2026-01-02T10:00:00+00:00", 1000);
+        let mut parent = record(
+            "nr-0001-2",
+            Outcome::Rephrased,
+            "2026-01-02T10:00:00+00:00",
+            1000,
+        );
         if let JournalRecord::Bounce(ref mut b) = parent {
             b.parent = Some("nr-0001-1".into());
         }
         journal.append(&parent).unwrap();
-        let mut child = record("nr-0001-3", Outcome::Released, "2026-07-07T10:00:00+00:00", 500);
+        let mut child = record(
+            "nr-0001-3",
+            Outcome::Released,
+            "2026-07-07T10:00:00+00:00",
+            500,
+        );
         if let JournalRecord::Bounce(ref mut b) = child {
             b.parent = Some("nr-0001-2".into());
         }
@@ -1275,9 +1427,18 @@ mod tests {
 
         let cutoff = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
         let report = journal.condense(cutoff).unwrap();
-        assert_eq!(report.condensed_bounces, 0, "the whole live chain is preserved");
+        assert_eq!(
+            report.condensed_bounces, 0,
+            "the whole live chain is preserved"
+        );
         assert_eq!(report.kept_bounces, 3);
-        assert_eq!(journal.stats(&StatsFilter::default()).unwrap().dangling_parents, 0);
+        assert_eq!(
+            journal
+                .stats(&StatsFilter::default())
+                .unwrap()
+                .dangling_parents,
+            0
+        );
     }
 
     // ── Unknown-schema tolerance ─────────────────────────────────────────
@@ -1290,18 +1451,27 @@ mod tests {
         // Genuine non-JSON garbage is still dropped by vacuum.
         let (_dir, journal) = temp_journal();
         journal
-            .append(&record("nr-0001-1", Outcome::Released, "2020-01-01T10:00:00+00:00", 1000))
+            .append(&record(
+                "nr-0001-1",
+                Outcome::Released,
+                "2020-01-01T10:00:00+00:00",
+                1000,
+            ))
             .unwrap();
         let mut file = fs::OpenOptions::new()
             .append(true)
             .open(journal.path())
             .unwrap();
-        file.write_all(b"{\"kind\":\"future_thing\",\"data\":42}\n").unwrap();
+        file.write_all(b"{\"kind\":\"future_thing\",\"data\":42}\n")
+            .unwrap();
         file.write_all(b"not json at all\n").unwrap();
         drop(file);
 
         let scan = journal.load().unwrap();
-        assert_eq!(scan.unknown, vec!["{\"kind\":\"future_thing\",\"data\":42}".to_string()]);
+        assert_eq!(
+            scan.unknown,
+            vec!["{\"kind\":\"future_thing\",\"data\":42}".to_string()]
+        );
         assert_eq!(scan.malformed, vec!["not json at all".to_string()]);
 
         let stats = journal.stats(&StatsFilter::default()).unwrap();

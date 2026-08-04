@@ -652,7 +652,9 @@ mod tests {
         let now = Instant::now();
 
         let original = request("a straightforward plan");
-        let ticket = gate.bounce(original.clone(), reason(), TTL, MAX_PENDING, now).await;
+        let ticket = gate
+            .bounce(original.clone(), reason(), TTL, MAX_PENDING, now)
+            .await;
         assert_eq!(ticket.expires_in, TTL);
         assert_eq!(ticket.parent, None);
 
@@ -682,7 +684,9 @@ mod tests {
         let (_dir, gate) = gate();
         let deliver = MockDeliver::scripted(vec![Ok(vec![1]), Ok(vec![2])]);
         let now = Instant::now();
-        let ticket = gate.bounce(request("msg"), reason(), TTL, MAX_PENDING, now).await;
+        let ticket = gate
+            .bounce(request("msg"), reason(), TTL, MAX_PENDING, now)
+            .await;
 
         gate.release(&deliver, &ticket.handle, now).await.unwrap();
         match gate.release(&deliver, &ticket.handle, now).await {
@@ -697,7 +701,9 @@ mod tests {
         let (_dir, gate) = gate();
         let deliver = MockDeliver::ok();
         let now = Instant::now();
-        let ticket = gate.bounce(request("msg"), reason(), TTL, MAX_PENDING, now).await;
+        let ticket = gate
+            .bounce(request("msg"), reason(), TTL, MAX_PENDING, now)
+            .await;
 
         let late = now + TTL + Duration::from_secs(1);
         match gate.release(&deliver, &ticket.handle, late).await {
@@ -706,7 +712,10 @@ mod tests {
             }
             other => panic!("expected Expired, got {other:?}"),
         }
-        assert!(deliver.requests().is_empty(), "nothing may send past expiry");
+        assert!(
+            deliver.requests().is_empty(),
+            "nothing may send past expiry"
+        );
 
         let bounces = journal_bounces(&gate).await;
         assert_eq!(bounces.len(), 1);
@@ -716,10 +725,11 @@ mod tests {
     #[tokio::test]
     async fn failed_send_leaves_handle_live_for_retry() {
         let (_dir, gate) = gate();
-        let deliver =
-            MockDeliver::scripted(vec![Err("discord hiccup".into()), Ok(vec![1002])]);
+        let deliver = MockDeliver::scripted(vec![Err("discord hiccup".into()), Ok(vec![1002])]);
         let now = Instant::now();
-        let ticket = gate.bounce(request("msg"), reason(), TTL, MAX_PENDING, now).await;
+        let ticket = gate
+            .bounce(request("msg"), reason(), TTL, MAX_PENDING, now)
+            .await;
 
         match gate.release(&deliver, &ticket.handle, now).await {
             Err(RejectedHandle::SendFailed { error, .. }) => {
@@ -746,11 +756,16 @@ mod tests {
     #[tokio::test]
     async fn failed_rephrase_delivery_retry_sends_replacement_not_original() {
         let (_dir, gate) = gate();
-        let deliver =
-            MockDeliver::scripted(vec![Err("discord hiccup".into()), Ok(vec![1003])]);
+        let deliver = MockDeliver::scripted(vec![Err("discord hiccup".into()), Ok(vec![1003])]);
         let now = Instant::now();
         let ticket = gate
-            .bounce(request("a straightforward plan"), reason(), TTL, MAX_PENDING, now)
+            .bounce(
+                request("a straightforward plan"),
+                reason(),
+                TTL,
+                MAX_PENDING,
+                now,
+            )
             .await;
 
         match gate
@@ -795,11 +810,16 @@ mod tests {
     #[tokio::test]
     async fn failed_rephrase_delivery_second_rephrase_operates_on_replacement() {
         let (_dir, gate) = gate();
-        let deliver =
-            MockDeliver::scripted(vec![Err("discord hiccup".into()), Ok(vec![1004])]);
+        let deliver = MockDeliver::scripted(vec![Err("discord hiccup".into()), Ok(vec![1004])]);
         let now = Instant::now();
         let ticket = gate
-            .bounce(request("a straightforward plan"), reason(), TTL, MAX_PENDING, now)
+            .bounce(
+                request("a straightforward plan"),
+                reason(),
+                TTL,
+                MAX_PENDING,
+                now,
+            )
             .await;
 
         gate.rephrase(&deliver, &judge(), &ticket.handle, "a solid plan", TTL, now)
@@ -807,7 +827,14 @@ mod tests {
             .expect_err("first delivery is scripted to fail");
 
         let result = gate
-            .rephrase(&deliver, &judge(), &ticket.handle, "a revised plan", TTL, now)
+            .rephrase(
+                &deliver,
+                &judge(),
+                &ticket.handle,
+                "a revised plan",
+                TTL,
+                now,
+            )
             .await
             .expect("second rephrase must succeed");
         assert!(matches!(result, Rephrased::Sent { .. }));
@@ -829,7 +856,9 @@ mod tests {
         let deliver = MockDeliver::ok();
         let now = Instant::now();
         let original = request("a straightforward plan");
-        let ticket = gate.bounce(original.clone(), reason(), TTL, MAX_PENDING, now).await;
+        let ticket = gate
+            .bounce(original.clone(), reason(), TTL, MAX_PENDING, now)
+            .await;
 
         let result = gate
             .rephrase(
@@ -869,7 +898,13 @@ mod tests {
         let deliver = MockDeliver::ok();
         let now = Instant::now();
         let ticket = gate
-            .bounce(request("a straightforward plan"), reason(), TTL, MAX_PENDING, now)
+            .bounce(
+                request("a straightforward plan"),
+                reason(),
+                TTL,
+                MAX_PENDING,
+                now,
+            )
             .await;
 
         let result = gate
@@ -926,7 +961,13 @@ mod tests {
         let deliver = MockDeliver::ok();
         let now = Instant::now();
         let ticket = gate
-            .bounce(request("a straightforward plan"), reason(), TTL, MAX_PENDING, now)
+            .bounce(
+                request("a straightforward plan"),
+                reason(),
+                TTL,
+                MAX_PENDING,
+                now,
+            )
             .await;
         let result = gate
             .rephrase(
@@ -982,15 +1023,21 @@ mod tests {
         let now = Instant::now();
         gate.bounce(request("one"), reason(), TTL, 0, now).await;
         gate.bounce(request("two"), reason(), TTL, 0, now).await;
-        assert_eq!(gate.pending().await, 1, "a zero cap must not strand or loop");
+        assert_eq!(
+            gate.pending().await,
+            1,
+            "a zero cap must not strand or loop"
+        );
     }
 
     #[tokio::test]
     async fn expire_due_journals_and_empties() {
         let (_dir, gate) = gate();
         let now = Instant::now();
-        gate.bounce(request("one"), reason(), TTL, MAX_PENDING, now).await;
-        gate.bounce(request("two"), reason(), TTL, MAX_PENDING, now).await;
+        gate.bounce(request("one"), reason(), TTL, MAX_PENDING, now)
+            .await;
+        gate.bounce(request("two"), reason(), TTL, MAX_PENDING, now)
+            .await;
 
         assert_eq!(gate.expire_due(now + Duration::from_secs(60)).await, 0);
         assert_eq!(gate.pending().await, 2);
@@ -1007,7 +1054,8 @@ mod tests {
     async fn drain_shutdown_journals_pending_as_expired() {
         let (_dir, gate) = gate();
         let now = Instant::now();
-        gate.bounce(request("in flight"), reason(), TTL, MAX_PENDING, now).await;
+        gate.bounce(request("in flight"), reason(), TTL, MAX_PENDING, now)
+            .await;
 
         assert_eq!(gate.drain_shutdown().await, 1);
         assert_eq!(gate.pending().await, 0);
@@ -1039,7 +1087,6 @@ mod tests {
     /// the loser sees a dead handle, and exactly one send reaches the wire.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_releases_on_one_handle_yield_exactly_one_send() {
-
         let dir = TempDir::new().unwrap();
         let path = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
         let gate = Arc::new(ConsentGate::new(&path));
@@ -1120,7 +1167,13 @@ mod tests {
         };
         let now = Instant::now();
         let ticket = gate
-            .bounce(request("the first half the second half"), reason(), TTL, MAX_PENDING, now)
+            .bounce(
+                request("the first half the second half"),
+                reason(),
+                TTL,
+                MAX_PENDING,
+                now,
+            )
             .await;
 
         // First attempt: chunk 0 lands, chunk 1 fails — the handle stays live.
@@ -1166,7 +1219,13 @@ mod tests {
         let now = Instant::now();
         let ttl = Duration::from_secs(100);
         let ticket = gate
-            .bounce(request("a straightforward plan"), reason(), ttl, MAX_PENDING, now)
+            .bounce(
+                request("a straightforward plan"),
+                reason(),
+                ttl,
+                MAX_PENDING,
+                now,
+            )
             .await;
 
         gate.rephrase(&deliver, &judge(), &ticket.handle, "a solid plan", ttl, now)
@@ -1195,7 +1254,13 @@ mod tests {
         let now = Instant::now();
         let ttl = Duration::from_secs(100);
         let ticket = gate
-            .bounce(request("a straightforward plan"), reason(), ttl, MAX_PENDING, now)
+            .bounce(
+                request("a straightforward plan"),
+                reason(),
+                ttl,
+                MAX_PENDING,
+                now,
+            )
             .await;
 
         // Rephrase near the very end of the original window; delivery fails.
@@ -1245,14 +1310,17 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn drain_shutdown_skips_an_in_flight_send_and_never_double_journals() {
-
         let dir = TempDir::new().unwrap();
         let path = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
         let gate = Arc::new(ConsentGate::new(&path));
         let now = Instant::now();
 
-        let in_flight = gate.bounce(request("in flight"), reason(), TTL, MAX_PENDING, now).await;
-        let _abandoned = gate.bounce(request("abandoned"), reason(), TTL, MAX_PENDING, now).await;
+        let in_flight = gate
+            .bounce(request("in flight"), reason(), TTL, MAX_PENDING, now)
+            .await;
+        let _abandoned = gate
+            .bounce(request("abandoned"), reason(), TTL, MAX_PENDING, now)
+            .await;
 
         let entered = Arc::new(tokio::sync::Notify::new());
         let (proceed_tx, proceed_rx) = tokio::sync::oneshot::channel();
@@ -1282,13 +1350,23 @@ mod tests {
         assert!(released.is_ok(), "the in-flight send completes and settles");
 
         let bounces = journal_bounces(&gate).await;
-        assert_eq!(bounces.len(), 2, "exactly one outcome per bounce, no double-journal");
         assert_eq!(
-            bounces.iter().filter(|b| b.outcome == Outcome::Released).count(),
+            bounces.len(),
+            2,
+            "exactly one outcome per bounce, no double-journal"
+        );
+        assert_eq!(
+            bounces
+                .iter()
+                .filter(|b| b.outcome == Outcome::Released)
+                .count(),
             1
         );
         assert_eq!(
-            bounces.iter().filter(|b| b.outcome == Outcome::Expired).count(),
+            bounces
+                .iter()
+                .filter(|b| b.outcome == Outcome::Expired)
+                .count(),
             1
         );
     }
@@ -1318,7 +1396,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn racing_releases_never_deliver_a_handle_twice_over_many_rounds() {
-
         let (_dir, gate) = gate();
         let gate = Arc::new(gate);
         let witness = Arc::new(ConcurrencyWitness {
@@ -1328,7 +1405,9 @@ mod tests {
         let now = Instant::now();
 
         for _ in 0..64 {
-            let ticket = gate.bounce(request("msg"), reason(), TTL, MAX_PENDING, now).await;
+            let ticket = gate
+                .bounce(request("msg"), reason(), TTL, MAX_PENDING, now)
+                .await;
             let spawn = || {
                 let gate = gate.clone();
                 let witness = witness.clone();

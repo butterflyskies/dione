@@ -169,6 +169,9 @@ mod tests {
             new_state(),
             Arc::new(LoadedConfig::from_raw(Config::default())),
             Utf8PathBuf::from("/tmp"),
+            Arc::new(crate::no_rly::consent::ConsentGate::new(
+                camino::Utf8Path::new("/tmp"),
+            )),
         );
         let hook = HookName::parse("tier-1").unwrap();
 

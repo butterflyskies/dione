@@ -1032,7 +1032,12 @@ impl LoadedConfig {
     /// saturates the deadline defensively, so this is the primary guard.
     pub fn no_rly_hold_ttl(&self) -> std::time::Duration {
         const MAX_HOLD_TTL_SECS: u64 = 24 * 60 * 60;
-        std::time::Duration::from_secs(self.raw.contradictionary.hold_ttl_secs.min(MAX_HOLD_TTL_SECS))
+        std::time::Duration::from_secs(
+            self.raw
+                .contradictionary
+                .hold_ttl_secs
+                .min(MAX_HOLD_TTL_SECS),
+        )
     }
 
     /// Cap on simultaneously held bounced messages (never below 1).

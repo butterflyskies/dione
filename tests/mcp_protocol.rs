@@ -1309,7 +1309,12 @@ async fn test_no_rly_stats_rejects_invalid_outcome() {
     let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
     let text = resp["result"]["content"][0]["text"].as_str().unwrap();
     let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
-    assert!(parsed["error"].as_str().unwrap().contains("invalid outcome"));
+    assert!(
+        parsed["error"]
+            .as_str()
+            .unwrap()
+            .contains("invalid outcome")
+    );
 }
 
 #[tokio::test]
@@ -1551,7 +1556,11 @@ async fn test_reply_blocked_returns_parseable_held_handle() {
         }
     });
     let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
-    assert_eq!(resp["result"]["isError"], json!(true), "a bounce is an error result");
+    assert_eq!(
+        resp["result"]["isError"],
+        json!(true),
+        "a bounce is an error result"
+    );
 
     let text = resp["result"]["content"][0]["text"].as_str().unwrap();
     let parsed: serde_json::Value = serde_json::from_str(text).unwrap();

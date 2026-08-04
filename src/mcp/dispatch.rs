@@ -20,8 +20,8 @@ use crate::{
             management::{create_thread, delete_message, pin_message, unpin_message},
             messaging::{
                 download_attachment, edit_message_with_hook_overrides, fetch_messages,
-                fetch_new_since, get_message, react as discord_react, release_held,
-                rephrase_held, reply_with_hook_overrides, send_dm_with_hook_overrides,
+                fetch_new_since, get_message, react as discord_react, release_held, rephrase_held,
+                reply_with_hook_overrides, send_dm_with_hook_overrides,
                 send_file_with_hook_overrides,
             },
             no_rly::{no_rly_condense, no_rly_stats, no_rly_vacuum},
@@ -199,7 +199,6 @@ pub(crate) async fn call_tool(
                 .get("suppress_ping")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            let no_rly = args.get("no_rly").and_then(Value::as_bool).unwrap_or(false);
             let no_rly_hooks = parse_hook_overrides(&args)?;
             reply_with_hook_overrides(
                 &ctx,
@@ -207,7 +206,6 @@ pub(crate) async fn call_tool(
                 content,
                 reply_to,
                 suppress_ping,
-                no_rly,
                 &no_rly_hooks,
             )
             .await

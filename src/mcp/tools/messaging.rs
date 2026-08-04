@@ -373,7 +373,6 @@ pub async fn reply(
         content,
         reply_to_message_id,
         suppress_ping,
-        no_rly,
         &[],
     )
     .await
@@ -385,7 +384,6 @@ pub async fn reply_with_hook_overrides(
     content: &str,
     reply_to_message_id: Option<MessageId>,
     suppress_ping: bool,
-    no_rly: bool,
     no_rly_hooks: &[HookName],
 ) -> Value {
     let prepared = match prepare_outbound(
@@ -405,20 +403,11 @@ pub async fn reply_with_hook_overrides(
         Ok(prepared) => prepared,
         Err(error) => return error,
     };
-    deliver_prepared_reply(
-        ctx,
-        prepared,
-        ReplyTransportOptions {
-            suppress_ping,
-            no_rly,
-        },
-    )
-    .await
+    deliver_prepared_reply(ctx, prepared, ReplyTransportOptions { suppress_ping }).await
 }
 
 struct ReplyTransportOptions {
     suppress_ping: bool,
-    no_rly: bool,
 }
 
 async fn deliver_prepared_reply(
@@ -440,14 +429,11 @@ async fn deliver_prepared_reply(
         channel_id,
         content: content.to_string(),
         reply_to_message_id,
-        suppress_ping,
+        suppress_ping: options.suppress_ping,
     };
 
-    // The judge sees the message before Discord does. A bounce parks the
-    // request under a single-use handle instead of sending it — the handle
-    // (not a resend flag) is the only way to get this exact text out.
     if let Some(ref judge) = ctx.config.contradictionary
-        && let Verdict::Bounce(reason) = judge.judge(content)
+        && let Verdict::Bounce(reason) = judge.judge(&content)
     {
         let ticket = ctx
             .no_rly
@@ -525,41 +511,16 @@ async fn deliver_reply(
         .map(|c| c.check(&content))
         .unwrap_or_default();
 
-    if let Some(ref contradictionary) = ctx.config.contradictionary {
-        match contradictionary.evaluate_block(&contradictionary_hits, &content, options.no_rly) {
-            BlockOutcome::Clear => {}
-            BlockOutcome::Rejected(error) => {
-                tracing::info!(
-                    channel = %channel_id,
-                    "contradictionary blocked outbound message"
-                );
-                return json!({ "error": error });
-            }
-            BlockOutcome::Overridden(record) => {
-                tracing::info!(
-                    channel = %channel_id,
-                    pattern = %record.pattern,
-                    "contradictionary block overridden via no_rly"
-                );
-                if let Err(e) = append_diary_record(ctx.state_dir.as_std_path(), &record) {
-                    tracing::warn!(
-                        error = %e,
-                        "failed to append contradictionary override to diary"
-                    );
-                }
-            }
-        }
-        if !contradictionary_hits.is_empty() {
-            let patterns: Vec<&str> = contradictionary_hits
-                .iter()
-                .map(|h| h.pattern.as_str())
-                .collect();
-            tracing::info!(
-                channel = %channel_id,
-                patterns = ?patterns,
-                "contradictionary flagged outbound message"
-            );
-        }
+    if !contradictionary_hits.is_empty() {
+        let patterns: Vec<&str> = contradictionary_hits
+            .iter()
+            .map(|h| h.pattern.as_str())
+            .collect();
+        tracing::info!(
+            channel = %ch,
+            patterns = ?patterns,
+            "contradictionary flagged outbound message"
+        );
     }
 
     // Fire typing indicator now that we've committed to sending a reply.
@@ -601,7 +562,7 @@ async fn deliver_reply(
             }
         }
 
-        if options.suppress_ping {
+        if request.suppress_ping {
             builder = builder.allowed_mentions(CreateAllowedMentions::new().replied_user(false));
         }
 
@@ -720,7 +681,10 @@ pub async fn rephrase_held(ctx: &MessagingCtx, handle: &str, content: &str) -> V
         Some(ref judge) => judge.as_ref(),
         None => &AlwaysClear,
     };
-    let result = ctx.no_rly.rephrase(ctx, judge, &handle, content, ttl, now).await;
+    let result = ctx
+        .no_rly
+        .rephrase(ctx, judge, &handle, content, ttl, now)
+        .await;
 
     match result {
         Ok(Rephrased::Sent { message_ids }) => {
@@ -1182,7 +1146,6 @@ pub async fn send_dm_with_hook_overrides(
             prepared,
             ReplyTransportOptions {
                 suppress_ping: false,
-                no_rly: false,
             },
         )
         .await;
@@ -1205,7 +1168,6 @@ pub async fn send_dm_with_hook_overrides(
         prepared.resolve_dm_channel(channel_id),
         ReplyTransportOptions {
             suppress_ping: false,
-            no_rly: false,
         },
     )
     .await;
@@ -1488,7 +1450,10 @@ mod tests {
             held["held"]["reason"], journal,
             "held.reason must serialize identically to the journal's reason field"
         );
-        assert_eq!(held["held"]["reason"]["matches"][0]["pattern"], "straightforward");
+        assert_eq!(
+            held["held"]["reason"]["matches"][0]["pattern"],
+            "straightforward"
+        );
     }
 
     fn test_config() -> LoadedConfig {
@@ -1547,8 +1512,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn pre_send_hot_reload_enabled_to_disabled_applies_to_next_context() {
+    #[tokio::test]
+    async fn pre_send_hot_reload_enabled_to_disabled_applies_to_next_context() {
         let installed = crate::pre_send::observe_pipeline(Vec::new()).expect("pipeline");
         crate::pre_send::install_pipeline(Some(installed));
         let enabled = messaging_ctx(LoadedConfig::from_raw(Config::default()));
@@ -1560,8 +1525,8 @@ mod tests {
         assert!(!disabled.has_pre_send_pipeline());
     }
 
-    #[test]
-    fn pre_send_hot_reload_disabled_to_enabled_applies_to_next_context() {
+    #[tokio::test]
+    async fn pre_send_hot_reload_disabled_to_enabled_applies_to_next_context() {
         let installed = crate::pre_send::observe_pipeline(Vec::new()).expect("pipeline");
         crate::pre_send::install_pipeline(Some(installed));
         let mut disabled_config = Config::default();
@@ -1582,7 +1547,7 @@ mod tests {
         });
         let (ctx, surfaces) = messaging_ctx_with_halt_pipeline(LoadedConfig::from_raw(raw));
 
-        let result = reply(&ctx, ChannelId::new(42), "text", None, false, false).await;
+        let result = reply(&ctx, ChannelId::new(42), "text", None, false).await;
 
         assert_eq!(result["error"], "blocked by test hook");
         assert_eq!(*surfaces.lock().expect("surface lock"), vec!["reply"]);
@@ -1780,7 +1745,7 @@ mod tests {
         let ctx =
             messaging_ctx(LoadedConfig::from_raw(raw)).with_pre_send_pipeline(Arc::new(pipeline));
 
-        let result = reply(&ctx, ChannelId::new(42), "text", None, false, false).await;
+        let result = reply(&ctx, ChannelId::new(42), "text", None, false).await;
 
         assert_eq!(result["error"], "captured");
         let captured = captured
