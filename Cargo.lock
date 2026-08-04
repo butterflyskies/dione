@@ -449,6 +449,7 @@ dependencies = [
 [[package]]
 name = "cingulate"
 version = "0.1.0"
+source = "git+https://github.com/butterflyskies/cingulate.git?branch=main#ccfaeced3c7cc8681180047292f3d7c587ffddcb"
 dependencies = [
  "regex",
  "serde",
@@ -784,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.29.1"
+version = "0.30.0"
 dependencies = [
  "aho-corasick",
  "arc-swap",
