@@ -82,6 +82,7 @@ fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
         codex_queue: None,
         codex_thread_binding: None,
         no_rly: Arc::new(ConsentGate::new(state_dir)),
+        event_tx: None,
     }
 }
 
@@ -915,6 +916,24 @@ fn test_notification_reaction_snapshot() {
         user: "reactor".to_string(),
         user_id: UserId::new(3001),
         emoji: "🎉".to_string(),
+        self_react: false,
+    };
+    let notif = test_helpers::make_notification(event);
+    insta::assert_json_snapshot!(notif);
+}
+
+/// Tool-initiated self-reacts (contradictionary celebrate/warn) must carry
+/// `self_react: true` in the notification meta so the construct can tell its
+/// own reinforcement signal apart from other users' reactions.
+#[test]
+fn test_notification_self_react_snapshot() {
+    let event = NotificationEvent::Reaction {
+        chat_id: ChannelId::new(1001),
+        message_id: MessageId::new(2001),
+        user: "construct".to_string(),
+        user_id: UserId::new(3001),
+        emoji: "✨".to_string(),
+        self_react: true,
     };
     let notif = test_helpers::make_notification(event);
     insta::assert_json_snapshot!(notif);

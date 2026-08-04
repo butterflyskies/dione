@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.29.1] - 2026-08-04
+
+### Fixed
+- **Self-reaction notifications for contradictionary celebrate hits.** The gateway
+  filters bot self-reactions, which silently dropped the positive-reinforcement
+  signal. Celebrate self-reacts now emit a synthetic `Reaction` notification so
+  constructs see their own vocabulary wins. Bot author is properly attributed
+  via `BotDisplayName` (bounded to 32 bytes).
+
 ## [0.29.0] - 2026-08-04
 
 ### Changed

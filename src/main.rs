@@ -252,6 +252,7 @@ async fn main() -> Result<()> {
         codex_queue,
         codex_thread_binding,
         no_rly: Arc::new(dione::no_rly::consent::ConsentGate::new(&state_dir)),
+        event_tx: Some(event_tx.clone()),
     };
 
     // Spawn the tracing-channel forwarder: converts tracing events into NotificationEvents.

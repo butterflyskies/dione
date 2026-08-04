@@ -89,6 +89,9 @@ pub enum NotificationEvent {
         user: String,
         user_id: UserId,
         emoji: String,
+        /// When true, this reaction was added by the bot itself (e.g. contradictionary celebrate).
+        /// Gateway self-reactions are filtered, so this is only set for tool-initiated reacts.
+        self_react: bool,
     },
     PermissionResponse {
         request_id: String,
@@ -361,12 +364,9 @@ impl EventHandler for Handler {
 
         // Discard reactions with no user attribution or from the bot itself
         // before the potentially-expensive message authorship lookup.
-        let Some(user_id) = reaction.user_id else {
+        let Some(user_id) = gateway_reactor(reaction.user_id, bot_id) else {
             return;
         };
-        if user_id.get() == bot_id {
-            return;
-        }
 
         let cached = {
             let state = self.state.read().await;
@@ -437,6 +437,7 @@ impl EventHandler for Handler {
             user: user_name,
             user_id,
             emoji,
+            self_react: false,
         };
 
         if let Err(e) = self.tx.send(event).await {
@@ -1047,6 +1048,18 @@ async fn notify_admin_dm(
     }
 }
 
+/// Returns the attributed reactor for a gateway reaction, or `None` when the
+/// reaction should be dropped: no user attribution, or the bot reacting to
+/// itself (which would otherwise feed back into the notification stream).
+///
+/// Intentional bot self-reactions (e.g. contradictionary celebrate) never
+/// arrive through this path — they are emitted by the tool layer with
+/// `self_react: true` at the point where they are initiated. See
+/// `crate::mcp::tools::messaging`.
+fn gateway_reactor(user_id: Option<UserId>, bot_id: u64) -> Option<UserId> {
+    user_id.filter(|id| id.get() != bot_id)
+}
+
 /// Returns `true` if the message should be dropped because the author is a bot
 /// whose user ID is **not** in the `allow_from` list.
 ///
@@ -1190,6 +1203,31 @@ mod tests {
             should_drop_bot_message(true, 42, &config),
             "bot must be dropped when allow_from is empty"
         );
+    }
+
+    // ── Gateway reaction filter tests ────────────────────────────────────────
+
+    /// The bot's own gateway reactions are dropped — intentional self-reacts
+    /// (e.g. contradictionary celebrate) reach the construct via the tool
+    /// layer instead, marked `self_react: true`.
+    #[test]
+    fn test_gateway_drops_bot_self_reactions() {
+        assert_eq!(gateway_reactor(Some(UserId::new(42)), 42), None);
+    }
+
+    /// Other users' reactions pass through with attribution intact.
+    #[test]
+    fn test_gateway_keeps_other_users_reactions() {
+        assert_eq!(
+            gateway_reactor(Some(UserId::new(7)), 42),
+            Some(UserId::new(7))
+        );
+    }
+
+    /// Reactions with no user attribution are dropped.
+    #[test]
+    fn test_gateway_drops_unattributed_reactions() {
+        assert_eq!(gateway_reactor(None, 42), None);
     }
 
     // ── proxy bot constant tests ───────────────────────────────────────────────

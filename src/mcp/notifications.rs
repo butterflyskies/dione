@@ -96,20 +96,25 @@ impl IntoNotification for NotificationEvent {
                 user,
                 user_id,
                 emoji,
+                self_react,
             } => {
+                let mut meta = json!({
+                    "chat_id": chat_id.get().to_string(),
+                    "message_id": message_id.get().to_string(),
+                    "user": user,
+                    "user_id": user_id.get().to_string(),
+                    "type": "reaction",
+                    "emoji": emoji,
+                });
+                if self_react {
+                    meta["self_react"] = json!(true);
+                }
                 json!({
                     "jsonrpc": "2.0",
                     "method": "notifications/claude/channel",
                     "params": {
                         "content": format!("reacted with {emoji}"),
-                        "meta": {
-                            "chat_id": chat_id.get().to_string(),
-                            "message_id": message_id.get().to_string(),
-                            "user": user,
-                            "user_id": user_id.get().to_string(),
-                            "type": "reaction",
-                            "emoji": emoji,
-                        },
+                        "meta": meta,
                     }
                 })
             }

@@ -8,9 +8,12 @@ use serenity::model::Timestamp;
 use serenity::model::channel::Message;
 use serenity::model::id::{ChannelId, MessageId, UserId};
 
+use tokio::sync::mpsc;
+
 use crate::config::{ChunkMode, DmPolicy, LoadedConfig};
 use crate::contradictionary::Action;
 use crate::discord::chunk;
+use crate::discord::events::NotificationEvent;
 use crate::gate::OutboundGate;
 use crate::no_rly::consent::{
     BounceTicket, ConsentGate, DeliverError, DeliverReply, RejectedHandle, Rephrased, ReplyRequest,
@@ -26,6 +29,27 @@ use crate::state::State;
 /// Self-react emoji for contradictionary celebrate hits (✨ — sparkles).
 const CONTRADICTIONARY_CELEBRATE_REACT: &str = "\u{2728}";
 
+/// Bounded display name for bot author attribution (Discord caps usernames at 32 chars).
+#[derive(Debug, Clone)]
+struct BotDisplayName(String);
+
+impl BotDisplayName {
+    const MAX_BYTES: usize = 32;
+
+    fn from_discord(name: &str) -> Self {
+        let truncated = if name.len() > Self::MAX_BYTES {
+            &name[..name.floor_char_boundary(Self::MAX_BYTES)]
+        } else {
+            name
+        };
+        Self(truncated.to_owned())
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Context available to all messaging tools.
 pub struct MessagingCtx {
     pub http: Arc<serenity::http::Http>,
@@ -36,6 +60,7 @@ pub struct MessagingCtx {
     author_id: Option<UserId>,
     construct_id: ConstructId,
     pub no_rly: Arc<ConsentGate>,
+    pub event_tx: Option<mpsc::Sender<NotificationEvent>>,
 }
 
 impl MessagingCtx {
@@ -60,6 +85,7 @@ impl MessagingCtx {
             state_dir,
             pre_send_pipeline,
             no_rly,
+            event_tx: None,
         }
     }
 
@@ -541,6 +567,7 @@ async fn deliver_reply(
     let chunks = chunk(content, effective_limit, effective_mode);
     let mut sent_ids: Vec<u64> = Vec::new();
     let mut first_msg_id: Option<MessageId> = None;
+    let mut bot_author: Option<(UserId, BotDisplayName)> = None;
 
     for (i, chunk_text) in chunks.iter().enumerate() {
         let mut builder = CreateMessage::new().content(*chunk_text);
@@ -572,6 +599,10 @@ async fn deliver_reply(
                 sent_ids.push(mid);
                 if i == 0 {
                     first_msg_id = Some(msg.id);
+                    bot_author = Some((
+                        msg.author.id,
+                        BotDisplayName::from_discord(&msg.author.name),
+                    ));
                 }
                 // Record sent IDs in state.
                 let mut state = ctx.state.write().await;
@@ -601,18 +632,12 @@ async fn deliver_reply(
     // ── Contradictionary post-send: self-react on celebrate hits ───
     if !contradictionary_hits.is_empty()
         && let Some(&first_id) = sent_ids.first()
+        && let Some((author_id, author_name)) = bot_author
     {
         let has_celebrates = contradictionary_hits
             .iter()
             .any(|h| h.action == Action::Celebrate);
         if has_celebrates {
-            let reaction = serenity::model::channel::ReactionType::Unicode(
-                CONTRADICTIONARY_CELEBRATE_REACT.into(),
-            );
-            let _ = ctx
-                .http
-                .create_reaction(ch, MessageId::new(first_id), &reaction)
-                .await;
             let patterns: Vec<&str> = contradictionary_hits
                 .iter()
                 .filter(|h| h.action == Action::Celebrate)
@@ -623,6 +648,15 @@ async fn deliver_reply(
                 patterns = ?patterns,
                 "contradictionary celebrated outbound vocabulary"
             );
+            self_react_and_notify(
+                ctx,
+                ch,
+                MessageId::new(first_id),
+                author_id,
+                author_name.as_str(),
+                CONTRADICTIONARY_CELEBRATE_REACT,
+            )
+            .await;
         }
     }
 
@@ -724,6 +758,56 @@ fn rejected_handle_json(error: RejectedHandle) -> Value {
         }),
         RejectedHandle::Unknown(_) | RejectedHandle::Expired { .. } => {
             json!({ "error": error.to_string() })
+        }
+    }
+}
+
+/// Self-reacts to a just-sent message with `emoji` and emits the matching
+/// `Reaction { self_react: true }` notification so the construct sees it.
+///
+/// The gateway `reaction_add` handler drops bot self-reactions to prevent
+/// feedback loops, so intentional contradictionary self-reacts must be
+/// surfaced here, at the point where they are initiated. The notification is
+/// deliberately not gated on the `create_reaction` result: a transient
+/// Discord failure shouldn't also drop the reinforcement signal. Failures on
+/// either side are logged so a broken loop stays diagnosable.
+async fn self_react_and_notify(
+    ctx: &MessagingCtx,
+    channel_id: ChannelId,
+    message_id: MessageId,
+    author_id: UserId,
+    author_name: &str,
+    emoji: &'static str,
+) {
+    let reaction = serenity::model::channel::ReactionType::Unicode(emoji.into());
+    if let Err(e) = ctx
+        .http
+        .create_reaction(channel_id, message_id, &reaction)
+        .await
+    {
+        tracing::warn!(
+            channel_id = channel_id.get(),
+            message_id = message_id.get(),
+            error = %e,
+            "contradictionary self-react failed"
+        );
+    }
+    if let Some(ref tx) = ctx.event_tx {
+        let event = NotificationEvent::Reaction {
+            chat_id: channel_id,
+            message_id,
+            user: author_name.to_owned(),
+            user_id: author_id,
+            emoji: emoji.to_owned(),
+            self_react: true,
+        };
+        if let Err(e) = tx.send(event).await {
+            tracing::warn!(
+                channel_id = channel_id.get(),
+                message_id = message_id.get(),
+                error = %e,
+                "failed to emit contradictionary self-react notification"
+            );
         }
     }
 }
@@ -1482,6 +1566,75 @@ mod tests {
         let ctx = messaging_ctx(config);
         let ctx = ctx.with_pre_send_pipeline(Arc::new(pipeline));
         (ctx, surfaces)
+    }
+
+    // ── Contradictionary self-react notifications ─────────────────────────
+
+    /// The core of the celebrate-visibility fix: a tool-initiated self-react
+    /// must land on the construct event stream marked `self_react: true`.
+    /// The gateway drops bot self-reactions, so this synthetic emit is the
+    /// only way the construct ever sees the reinforcement signal.
+    #[tokio::test]
+    async fn celebrate_self_react_notification_reaches_event_stream() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut ctx = messaging_ctx(test_config());
+        ctx.event_tx = Some(tx);
+
+        self_react_and_notify(
+            &ctx,
+            ChannelId::new(42),
+            MessageId::new(7),
+            UserId::new(99),
+            "ariadne",
+            CONTRADICTIONARY_CELEBRATE_REACT,
+        )
+        .await;
+
+        let event = rx
+            .try_recv()
+            .expect("celebrate self-react must emit a notification");
+        let NotificationEvent::Reaction {
+            chat_id,
+            message_id,
+            user,
+            user_id,
+            emoji,
+            self_react,
+        } = event
+        else {
+            panic!("expected a reaction event");
+        };
+        assert_eq!(chat_id, ChannelId::new(42));
+        assert_eq!(message_id, MessageId::new(7));
+        assert_eq!(user, "ariadne");
+        assert_eq!(user_id, UserId::new(99));
+        assert_eq!(emoji, CONTRADICTIONARY_CELEBRATE_REACT);
+        assert!(
+            self_react,
+            "tool-initiated self-reacts must carry self_react"
+        );
+    }
+
+    /// The ordinary `react` tool must NOT synthesize notifications — only
+    /// contradictionary-initiated self-reacts are surfaced, so the gateway's
+    /// self-reaction filter isn't quietly bypassed for everything else.
+    #[tokio::test]
+    async fn ordinary_react_does_not_emit_synthetic_notifications() {
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".to_owned(),
+            ..Default::default()
+        });
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut ctx = messaging_ctx(LoadedConfig::from_raw(raw));
+        ctx.event_tx = Some(tx);
+
+        let _ = react(&ctx, ChannelId::new(42), MessageId::new(7), "👍").await;
+
+        assert!(
+            rx.try_recv().is_err(),
+            "ordinary reacts must not synthesize notification events"
+        );
     }
 
     #[tokio::test]

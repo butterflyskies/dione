@@ -181,6 +181,7 @@ mod tests {
             user: "bob".to_string(),
             user_id: UserId::new(200),
             emoji: "👍".to_string(),
+            self_react: false,
         }
     }
 
