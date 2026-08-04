@@ -64,6 +64,7 @@ pub struct DioneServer {
     pub codex_thread_binding: Option<watch::Sender<Option<crate::codex::CodexThreadId>>>,
     pub no_rly: Arc<ConsentGate>,
     pub event_tx: Option<mpsc::Sender<NotificationEvent>>,
+    pub ingress_ledger: Arc<crate::ingress_ledger::IngressLedger>,
 }
 
 // ── Context factory methods ───────────────────────────────────────────────────
@@ -76,6 +77,7 @@ impl DioneServer {
             config,
             self.state_dir.clone(),
             self.no_rly.clone(),
+            self.ingress_ledger.clone(),
         );
         ctx.event_tx = self.event_tx.clone();
         ctx
@@ -686,6 +688,7 @@ mod tests {
             codex_queue: None,
             codex_thread_binding: None,
             event_tx: None,
+            ingress_ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
         };
 
         let context = server.messaging_ctx(Arc::new(LoadedConfig::from_raw(Config::default())));

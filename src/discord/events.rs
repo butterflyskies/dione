@@ -142,6 +142,8 @@ pub struct Handler {
     pub pronoun_service: Option<Arc<crate::pronouns::PronounService>>,
     /// Construct nameplate service (construct-nameplates repo adapter with cache).
     pub nameplate_service: Option<Arc<crate::nameplates::NameplateService>>,
+    /// Ingress ledger — records messages admitted by the gateway for egress verification.
+    pub ingress_ledger: Arc<crate::ingress_ledger::IngressLedger>,
 }
 
 impl Handler {
@@ -247,6 +249,12 @@ impl EventHandler for Handler {
                         MessageTargeting::DirectMessage,
                         pronoun_name,
                     );
+                    self.ingress_ledger.note_admitted(
+                        msg.id,
+                        msg.channel_id,
+                        msg.author.id,
+                        &msg.content,
+                    );
                     if let Err(e) = self.tx.send(event).await {
                         tracing::warn!(error = %e, "failed to send DM notification event");
                     }
@@ -328,6 +336,12 @@ impl EventHandler for Handler {
                         resolved.thread_parent_id,
                         targeting,
                         pronoun_name,
+                    );
+                    self.ingress_ledger.note_admitted(
+                        msg.id,
+                        msg.channel_id,
+                        msg.author.id,
+                        &msg.content,
                     );
                     if let Err(e) = self.tx.send(event).await {
                         tracing::warn!(error = %e, "failed to send guild notification event");

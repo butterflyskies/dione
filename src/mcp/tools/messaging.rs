@@ -15,6 +15,7 @@ use crate::contradictionary::Action;
 use crate::discord::chunk;
 use crate::discord::events::NotificationEvent;
 use crate::gate::OutboundGate;
+use crate::ingress_ledger::IngressLedger;
 use crate::no_rly::consent::{
     BounceTicket, ConsentGate, DeliverError, DeliverReply, RejectedHandle, Rephrased, ReplyRequest,
 };
@@ -61,6 +62,7 @@ pub struct MessagingCtx {
     construct_id: ConstructId,
     pub no_rly: Arc<ConsentGate>,
     pub event_tx: Option<mpsc::Sender<NotificationEvent>>,
+    pub ingress_ledger: Arc<IngressLedger>,
 }
 
 impl MessagingCtx {
@@ -70,6 +72,7 @@ impl MessagingCtx {
         config: Arc<LoadedConfig>,
         state_dir: Utf8PathBuf,
         no_rly: Arc<ConsentGate>,
+        ingress_ledger: Arc<IngressLedger>,
     ) -> Self {
         let pre_send_pipeline = config
             .pre_send
@@ -86,6 +89,7 @@ impl MessagingCtx {
             pre_send_pipeline,
             no_rly,
             event_tx: None,
+            ingress_ledger,
         }
     }
 
@@ -412,6 +416,30 @@ pub async fn reply_with_hook_overrides(
     suppress_ping: bool,
     no_rly_hooks: &[HookName],
 ) -> Value {
+    if let Some(ref_id) = reply_to_message_id {
+        match ctx.ingress_ledger.verify(ref_id, channel_id) {
+            crate::ingress_ledger::VerifyResult::Admitted { .. } => {}
+            crate::ingress_ledger::VerifyResult::Unknown => {
+                tracing::warn!(
+                    message_id = ref_id.get(),
+                    channel_id = channel_id.get(),
+                    "egress: reply_to_message_id not in ingress ledger"
+                );
+            }
+            crate::ingress_ledger::VerifyResult::ChannelMismatch {
+                admitted_channel,
+                claimed_channel,
+            } => {
+                tracing::warn!(
+                    message_id = ref_id.get(),
+                    admitted_channel = admitted_channel.get(),
+                    claimed_channel = claimed_channel.get(),
+                    "egress: reply_to_message_id channel mismatch"
+                );
+            }
+        }
+    }
+
     let prepared = match prepare_outbound(
         ctx,
         OutboundDraft::channel(
@@ -1551,6 +1579,7 @@ mod tests {
             Arc::new(config),
             "/tmp".into(),
             Arc::new(ConsentGate::new(camino::Utf8Path::new("/tmp"))),
+            Arc::new(crate::ingress_ledger::IngressLedger::new()),
         )
     }
 
@@ -2219,6 +2248,7 @@ mod tests {
             Arc::new(LoadedConfig::from_raw(raw)),
             state_dir.clone(),
             Arc::new(ConsentGate::new(&state_dir)),
+            Arc::new(crate::ingress_ledger::IngressLedger::new()),
         );
 
         let resp = fetch_new_since(&ctx, channel_id, after_message_id, 20).await;
