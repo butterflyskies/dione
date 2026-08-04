@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-08-04
+
+### Added
+- **Tier-1 Cingulate adapter.** Wires `cingulate::PatternSet` into the outbound
+  message pipeline via `PreSendHook`. The classifier runs in observe mode by
+  default; enforce mode is configurable. Extracted from #184 (butterflysky-syne).
+
 ## [0.29.1] - 2026-08-04
 
 ### Fixed

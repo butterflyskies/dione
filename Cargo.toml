@@ -1,6 +1,6 @@
 [package]
 name = "dione"
-version = "0.29.1"
+version = "0.30.0"
 edition = "2024"
 rust-version = "1.93"
 license = "MIT OR Apache-2.0"
@@ -45,6 +45,7 @@ typst-assets = { version = "0.14.2", features = ["fonts"] }
 typst-as-lib = "0.15.4"
 mitex = "0.2.4"
 tempfile = "3"
+cingulate = { git = "https://github.com/butterflyskies/cingulate.git", branch = "main" }
 
 [dev-dependencies]
 insta = { version = "1", features = ["json", "redactions"] }
