@@ -1422,11 +1422,12 @@ mod tests {
         let NotificationEvent::Message(delivered) = delivered else {
             panic!("expected message event");
         };
-        let admitted = ledger
-            .get(delivered.message_id)
-            .expect("delivery must observe an admitted record");
-        assert_eq!(admitted.channel_id, delivered.chat_id);
-        assert_eq!(admitted.user_id, delivered.user_id);
+        assert_eq!(
+            ledger.verify(delivered.message_id, delivered.chat_id),
+            crate::ingress_ledger::VerifyResult::Admitted {
+                channel: auspex_core::ChannelRef(delivered.chat_id.get()),
+            }
+        );
         assert_eq!(delivered.content, "gateway payload");
     }
 

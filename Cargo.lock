@@ -162,6 +162,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "auspex-core"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -789,6 +796,7 @@ version = "0.31.1"
 dependencies = [
  "aho-corasick",
  "arc-swap",
+ "auspex-core",
  "camino",
  "chrono",
  "chrono-tz",

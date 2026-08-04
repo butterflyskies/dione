@@ -52,7 +52,7 @@ pub struct IngressLedger {
     ttl: Duration,
     max_entries: usize,
     epoch: Instant,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     observed_verifications: Mutex<Vec<VerifyResult>>,
 }
 
@@ -63,7 +63,7 @@ impl Default for IngressLedger {
             ttl: DEFAULT_TTL,
             max_entries: DEFAULT_MAX_ENTRIES,
             epoch: Instant::now(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             observed_verifications: Mutex::new(Vec::new()),
         }
     }
@@ -80,7 +80,7 @@ impl IngressLedger {
         self.epoch
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn with_capacity(max_entries: usize) -> Self {
         Self {
             max_entries,
@@ -88,7 +88,7 @@ impl IngressLedger {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn with_ttl(ttl: Duration) -> Self {
         Self {
             ttl,
@@ -166,7 +166,7 @@ impl IngressLedger {
             },
             Err(_) => VerifyResult::Unavailable,
         };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if let Ok(mut observations) = self.observed_verifications.lock() {
             observations.push(result.clone());
         }
@@ -181,7 +181,7 @@ impl IngressLedger {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn take_observed_verifications(&self) -> Vec<VerifyResult> {
         self.observed_verifications
             .lock()
@@ -189,13 +189,13 @@ impl IngressLedger {
             .unwrap_or_default()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn len(&self) -> usize {
         self.entries.lock().map(|e| e.len()).unwrap_or(0)
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 mod tests {
     use super::*;
 
@@ -223,10 +223,7 @@ mod tests {
     #[test]
     fn unknown_message_returns_unknown() {
         let ledger = IngressLedger::new();
-        assert_eq!(
-            ledger.verify(MessageRef(9999), CH_A),
-            VerifyResult::Unknown
-        );
+        assert_eq!(ledger.verify(MessageRef(9999), CH_A), VerifyResult::Unknown);
     }
 
     #[test]
@@ -316,7 +313,10 @@ mod tests {
         })
         .join();
 
-        assert_eq!(ledger.verify(MessageRef(1), CH_A), VerifyResult::Unavailable);
+        assert_eq!(
+            ledger.verify(MessageRef(1), CH_A),
+            VerifyResult::Unavailable
+        );
     }
 
     #[test]

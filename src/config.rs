@@ -64,19 +64,11 @@ pub struct Config {
 }
 
 /// Configuration for the ingress ledger phantom canary alerts.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct PhantomCanaryConfig {
     /// Channel ID to post phantom canary alerts to. Disabled if empty.
     pub alert_channel_id: String,
-}
-
-impl Default for PhantomCanaryConfig {
-    fn default() -> Self {
-        Self {
-            alert_channel_id: String::new(),
-        }
-    }
 }
 
 /// Configuration for the opt-in GAIE one-shot archive commands.
