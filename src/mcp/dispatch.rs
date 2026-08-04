@@ -20,9 +20,11 @@ use crate::{
             management::{create_thread, delete_message, pin_message, unpin_message},
             messaging::{
                 download_attachment, edit_message_with_hook_overrides, fetch_messages,
-                fetch_new_since, get_message, react as discord_react, reply_with_hook_overrides,
-                send_dm_with_hook_overrides, send_file_with_hook_overrides,
+                fetch_new_since, get_message, react as discord_react, release_held, rephrase_held,
+                reply_with_hook_overrides, send_dm_with_hook_overrides,
+                send_file_with_hook_overrides,
             },
+            no_rly::{no_rly_condense, no_rly_stats, no_rly_vacuum},
             render::{render_latex, render_latex_to_channel_with_hook_overrides},
             search::{SearchParams, search_messages},
         },
@@ -197,7 +199,6 @@ pub(crate) async fn call_tool(
                 .get("suppress_ping")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            let no_rly = args.get("no_rly").and_then(Value::as_bool).unwrap_or(false);
             let no_rly_hooks = parse_hook_overrides(&args)?;
             reply_with_hook_overrides(
                 &ctx,
@@ -205,10 +206,43 @@ pub(crate) async fn call_tool(
                 content,
                 reply_to,
                 suppress_ping,
-                no_rly,
                 &no_rly_hooks,
             )
             .await
+        }
+        "no_rly" => {
+            let ctx = server.messaging_ctx(config.clone());
+            let handle = parse_str(&args, "handle")?;
+            release_held(&ctx, handle).await
+        }
+        "rephrase" => {
+            let ctx = server.messaging_ctx(config.clone());
+            let handle = parse_str(&args, "handle")?;
+            let content = args
+                .get("content")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing content".to_string())?;
+            rephrase_held(&ctx, handle, content).await
+        }
+        "no_rly_stats" => {
+            let ctx = server.no_rly_ctx(config.clone());
+            // A present-but-wrong-type filter arg is a caller error, not a
+            // silent "no filter" — otherwise `since_days: "7"` returns all-time
+            // stats presented as if filtered.
+            let since_days = optional_u64(&args, "since_days")?;
+            let outcome = optional_str(&args, "outcome")?;
+            let pattern = optional_str(&args, "pattern")?;
+            no_rly_stats(&ctx, since_days, outcome, pattern).await
+        }
+        "no_rly_condense" => {
+            let ctx = server.no_rly_ctx(config.clone());
+            let older_than_days = args.get("older_than_days").and_then(Value::as_u64);
+            no_rly_condense(&ctx, older_than_days).await
+        }
+        "no_rly_vacuum" => {
+            let ctx = server.no_rly_ctx(config.clone());
+            let older_than_days = args.get("older_than_days").and_then(Value::as_u64);
+            no_rly_vacuum(&ctx, older_than_days).await
         }
         "react" => {
             let ctx = server.messaging_ctx(config.clone());
@@ -767,6 +801,30 @@ fn parse_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     args.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| format!("missing {key}"))
+}
+
+/// An optional integer argument: absent or null yields `None`, a present value
+/// of the wrong type is an error (rather than silently dropped).
+fn optional_u64(args: &Value, key: &str) -> Result<Option<u64>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| format!("invalid {key}: expected an integer")),
+    }
+}
+
+/// An optional string argument: absent or null yields `None`, a present value
+/// of the wrong type is an error (rather than silently dropped).
+fn optional_str<'a>(args: &'a Value, key: &str) -> Result<Option<&'a str>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_str()
+            .map(Some)
+            .ok_or_else(|| format!("invalid {key}: expected a string")),
+    }
 }
 
 fn parse_string_array(args: &Value, key: &str) -> Option<Vec<String>> {

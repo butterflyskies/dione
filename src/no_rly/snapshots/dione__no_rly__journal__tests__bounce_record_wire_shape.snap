@@ -1,0 +1,23 @@
+---
+source: src/no_rly/journal.rs
+expression: rec
+---
+{
+  "kind": "bounce",
+  "handle": "nr-3f92-7",
+  "parent": "nr-3f92-6",
+  "message": "a straightforward plan",
+  "reason": {
+    "matches": [
+      {
+        "pattern": "straightforward",
+        "reason": "test reason"
+      }
+    ]
+  },
+  "outcome": "rephrased",
+  "replacement": "a plan",
+  "bounced_at": "2026-07-07T10:00:00+00:00",
+  "resolved_at": "2026-07-07T10:00:42+00:00",
+  "latency_ms": 42000
+}

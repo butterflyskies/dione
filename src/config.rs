@@ -1024,6 +1024,27 @@ impl LoadedConfig {
         &self.rate_limit_runtime
     }
 
+    /// How long a message bounced by the contradictionary stays claimable.
+    ///
+    /// Clamped to a sane ceiling (24h): a hold queue is a short decision
+    /// window, and an absurd `hold_ttl_secs` (billions of years) would
+    /// otherwise overflow `Instant + ttl` at the first bounce. The queue also
+    /// saturates the deadline defensively, so this is the primary guard.
+    pub fn no_rly_hold_ttl(&self) -> std::time::Duration {
+        const MAX_HOLD_TTL_SECS: u64 = 24 * 60 * 60;
+        std::time::Duration::from_secs(
+            self.raw
+                .contradictionary
+                .hold_ttl_secs
+                .min(MAX_HOLD_TTL_SECS),
+        )
+    }
+
+    /// Cap on simultaneously held bounced messages (never below 1).
+    pub fn no_rly_max_pending(&self) -> usize {
+        self.raw.contradictionary.max_pending.max(1)
+    }
+
     /// Returns the delivery delay (ms) for a channel.
     ///
     /// Resolution order: per-channel override → global `[delivery]` default → 0.
@@ -1153,7 +1174,7 @@ pub fn load_config(_state_dir: &Utf8Path) -> Arc<LoadedConfig> {
 
 /// Reads config from disk, updates the in-memory cache, and returns the result.
 ///
-/// Called by the file watcher on changes, by [`ConfigStore::save`] after writes,
+/// Called by the file watcher on changes, by [`crate::config_store::ConfigStore::save`] after writes,
 /// and as a fallback when the cache is empty.
 pub fn reload_config(state_dir: &Utf8Path) -> (LoadedConfig, Option<String>) {
     let config_path = config_path(state_dir);

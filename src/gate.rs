@@ -56,17 +56,16 @@ impl InboundGate {
         is_mentioned: bool,
         guild_id: Option<u64>,
     ) -> GateDecision {
-        if let Some(gid) = guild_id {
-            if let Some(store) = crate::mute_store::global() {
-                if store.is_guild_muted(gid) {
-                    tracing::debug!(
-                        guild_id = gid,
-                        channel_id,
-                        "guild message dropped: guild muted"
-                    );
-                    return GateDecision::Drop;
-                }
-            }
+        if let Some(gid) = guild_id
+            && let Some(store) = crate::mute_store::global()
+            && store.is_guild_muted(gid)
+        {
+            tracing::debug!(
+                guild_id = gid,
+                channel_id,
+                "guild message dropped: guild muted"
+            );
+            return GateDecision::Drop;
         }
 
         let Some(policy) = config.channel_policy(channel_id) else {
@@ -106,17 +105,16 @@ impl InboundGate {
         sender_id: u64,
         guild_id: Option<u64>,
     ) -> GateDecision {
-        if let Some(gid) = guild_id {
-            if let Some(store) = crate::mute_store::global() {
-                if store.is_guild_muted(gid) {
-                    tracing::debug!(
-                        guild_id = gid,
-                        channel_id,
-                        "guild event dropped: guild muted"
-                    );
-                    return GateDecision::Drop;
-                }
-            }
+        if let Some(gid) = guild_id
+            && let Some(store) = crate::mute_store::global()
+            && store.is_guild_muted(gid)
+        {
+            tracing::debug!(
+                guild_id = gid,
+                channel_id,
+                "guild event dropped: guild muted"
+            );
+            return GateDecision::Drop;
         }
 
         let Some(policy) = config.channel_policy(channel_id) else {

@@ -4,5 +4,6 @@ pub mod diagnostics;
 pub mod introspection;
 pub mod management;
 pub mod messaging;
+pub mod no_rly;
 pub mod render;
 pub mod search;

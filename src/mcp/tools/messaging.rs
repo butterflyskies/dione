@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use camino::Utf8PathBuf;
 use serde_json::{Value, json};
@@ -9,9 +9,14 @@ use serenity::model::channel::Message;
 use serenity::model::id::{ChannelId, MessageId, UserId};
 
 use crate::config::{ChunkMode, DmPolicy, LoadedConfig};
-use crate::contradictionary::{Action, BlockOutcome, append_diary_record};
+use crate::contradictionary::Action;
 use crate::discord::chunk;
 use crate::gate::OutboundGate;
+use crate::no_rly::consent::{
+    BounceTicket, ConsentGate, DeliverError, DeliverReply, RejectedHandle, Rephrased, ReplyRequest,
+};
+use crate::no_rly::judge::{AlwaysClear, OutboundJudge, Verdict};
+use crate::no_rly::queue::HoldHandle;
 use crate::pre_send::{
     ChannelType as HookChannelType, ConstructId, HookContext, HookDecision, HookName,
     OutboundDestination, PreSendPipeline,
@@ -27,19 +32,19 @@ pub struct MessagingCtx {
     pub state: State,
     pub config: Arc<LoadedConfig>,
     pub state_dir: Utf8PathBuf,
-    /// Optional outbound text pipeline shared by all messaging surfaces.
     pre_send_pipeline: Option<Arc<PreSendPipeline>>,
     author_id: Option<UserId>,
     construct_id: ConstructId,
+    pub no_rly: Arc<ConsentGate>,
 }
 
 impl MessagingCtx {
-    /// Creates messaging context using the process-installed pre-send pipeline.
     pub fn new(
         http: Arc<serenity::http::Http>,
         state: State,
         config: Arc<LoadedConfig>,
         state_dir: Utf8PathBuf,
+        no_rly: Arc<ConsentGate>,
     ) -> Self {
         let pre_send_pipeline = config
             .pre_send
@@ -54,6 +59,7 @@ impl MessagingCtx {
             config,
             state_dir,
             pre_send_pipeline,
+            no_rly,
         }
     }
 
@@ -71,20 +77,28 @@ impl MessagingCtx {
 
 // ── Gate helper ───────────────────────────────────────────────────────────────
 
-/// Returns `Ok(())` if the channel is permitted, or `Err(json_error)` if not.
-pub(crate) async fn check_outbound(ctx: &MessagingCtx, channel_id: ChannelId) -> Result<(), Value> {
+/// Returns `Ok(())` if the channel is permitted, or an error message if not.
+async fn ensure_outbound(ctx: &MessagingCtx, channel_id: ChannelId) -> Result<(), String> {
     let state = ctx.state.read().await;
-    if !OutboundGate::check_channel_with_threads(
+    if OutboundGate::check_channel_with_threads(
         &ctx.config,
         channel_id.get(),
         &state.dm_channel_ids,
         &state.thread_parents,
     ) {
-        return Err(
-            json!({ "error": format!("channel {channel_id} is not a permitted outbound target") }),
-        );
+        Ok(())
+    } else {
+        Err(format!(
+            "channel {channel_id} is not a permitted outbound target"
+        ))
     }
-    Ok(())
+}
+
+/// Returns `Ok(())` if the channel is permitted, or `Err(json_error)` if not.
+pub(crate) async fn check_outbound(ctx: &MessagingCtx, channel_id: ChannelId) -> Result<(), Value> {
+    ensure_outbound(ctx, channel_id)
+        .await
+        .map_err(|e| json!({ "error": e }))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -352,7 +366,6 @@ pub async fn reply(
     content: &str,
     reply_to_message_id: Option<MessageId>,
     suppress_ping: bool,
-    no_rly: bool,
 ) -> Value {
     reply_with_hook_overrides(
         ctx,
@@ -360,7 +373,6 @@ pub async fn reply(
         content,
         reply_to_message_id,
         suppress_ping,
-        no_rly,
         &[],
     )
     .await
@@ -372,7 +384,6 @@ pub async fn reply_with_hook_overrides(
     content: &str,
     reply_to_message_id: Option<MessageId>,
     suppress_ping: bool,
-    no_rly: bool,
     no_rly_hooks: &[HookName],
 ) -> Value {
     let prepared = match prepare_outbound(
@@ -392,20 +403,11 @@ pub async fn reply_with_hook_overrides(
         Ok(prepared) => prepared,
         Err(error) => return error,
     };
-    deliver_prepared_reply(
-        ctx,
-        prepared,
-        ReplyTransportOptions {
-            suppress_ping,
-            no_rly,
-        },
-    )
-    .await
+    deliver_prepared_reply(ctx, prepared, ReplyTransportOptions { suppress_ping }).await
 }
 
 struct ReplyTransportOptions {
     suppress_ping: bool,
-    no_rly: bool,
 }
 
 async fn deliver_prepared_reply(
@@ -423,57 +425,102 @@ async fn deliver_prepared_reply(
     let reply_to_message_id = prepared.reply_to;
     let content = prepared.text;
 
-    let ch = channel_id;
+    let request = ReplyRequest {
+        channel_id,
+        content: content.to_string(),
+        reply_to_message_id,
+        suppress_ping: options.suppress_ping,
+    };
 
-    // ── Contradictionary check (scan once, reuse post-send) ─────────────
+    if let Some(ref judge) = ctx.config.contradictionary
+        && let Verdict::Bounce(reason) = judge.judge(&content)
+    {
+        let ticket = ctx
+            .no_rly
+            .bounce(
+                request,
+                reason,
+                ctx.config.no_rly_hold_ttl(),
+                ctx.config.no_rly_max_pending(),
+                Instant::now(),
+            )
+            .await;
+        tracing::info!(
+            channel = %channel_id,
+            handle = %ticket.handle,
+            reason = %ticket.reason,
+            "contradictionary held outbound message"
+        );
+        return bounce_json(&ticket);
+    }
+
+    match deliver_reply(ctx, &request).await {
+        Ok(sent_ids) => json!({ "ok": true, "message_ids": sent_ids }),
+        Err(e) => json!({ "error": e.message }),
+    }
+}
+
+/// The construct-facing shape of a bounce: the error names the reason, and
+/// the `held` block carries the handle plus the three verbs.
+fn bounce_json(ticket: &BounceTicket) -> Value {
+    let mut held = json!({
+        "handle": ticket.handle,
+        // Canonical structured reason: the same `{ "matches": [...] }` shape
+        // the journal serializes, so a client sees one reason shape everywhere
+        // rather than a flat array here and a nested object in the audit log.
+        "reason": ticket.reason,
+        "expires_in_secs": ticket.expires_in.as_secs(),
+        "next": "no_rly(handle) sends it verbatim; rephrase(handle, content) sends a replacement (re-checked); ignoring it lets it expire",
+    });
+    if let Some(ref parent) = ticket.parent {
+        held["chained_from"] = json!(parent);
+    }
+    json!({
+        "error": format!("\u{26a0}\u{fe0f} held by contradictionary: {}", ticket.reason),
+        "held": held,
+    })
+}
+
+/// Send one [`ReplyRequest`] to Discord: typing indicator, chunking, reply
+/// threading, and post-send warn/celebrate self-reacts. This is the path
+/// shared by judged sends and by release/rephrase — the outbound channel
+/// gate is re-checked here so a held message cannot outlive a config change
+/// that revoked its channel.
+async fn deliver_reply(
+    ctx: &MessagingCtx,
+    request: &ReplyRequest,
+) -> Result<Vec<u64>, DeliverError> {
+    ensure_outbound(ctx, request.channel_id)
+        .await
+        .map_err(DeliverError::total)?;
+
+    let ch = request.channel_id;
+    let content = request.content.as_str();
+
+    // Seam cost: a clean send scans the contradictionary twice — once as the
+    // judge in `reply` (for block-tier bounces) and again here for the
+    // warn/celebrate self-reacts. The two are deliberately separate concerns
+    // (the judge gates delivery; these reactions ride along after it), and a
+    // bounce path never reaches here, so the second scan only runs on sends
+    // that were already going out. Block hits are irrelevant here (the judge
+    // already ruled); warn/log/celebrate ride along on every path out.
     let contradictionary_hits = ctx
         .config
         .contradictionary
         .as_ref()
-        .map(|c| c.check(&content))
+        .map(|c| c.check(content))
         .unwrap_or_default();
 
-    if let Some(ref contradictionary) = ctx.config.contradictionary {
-        // A block hit either rejects the send outright, or — when the construct
-        // resends the same message with `no_rly: true` — is overridden via the
-        // consent gate and recorded in the durable diary.
-        match contradictionary.evaluate_block(&contradictionary_hits, &content, options.no_rly) {
-            BlockOutcome::Clear => {}
-            BlockOutcome::Rejected(error) => {
-                tracing::info!(
-                    channel = %channel_id,
-                    "contradictionary blocked outbound message"
-                );
-                return json!({ "error": error });
-            }
-            BlockOutcome::Overridden(record) => {
-                tracing::info!(
-                    channel = %channel_id,
-                    pattern = %record.pattern,
-                    "contradictionary block overridden via no_rly"
-                );
-                // Durable append; failure to log the override must not stop the
-                // send the construct explicitly consented to.
-                if let Err(e) = append_diary_record(ctx.state_dir.as_std_path(), &record) {
-                    tracing::warn!(
-                        error = %e,
-                        "failed to append contradictionary override to diary"
-                    );
-                }
-            }
-        }
-        // Log and warn hits are handled post-send (warn self-reacts).
-        if !contradictionary_hits.is_empty() {
-            let patterns: Vec<&str> = contradictionary_hits
-                .iter()
-                .map(|h| h.pattern.as_str())
-                .collect();
-            tracing::info!(
-                channel = %channel_id,
-                patterns = ?patterns,
-                "contradictionary flagged outbound message"
-            );
-        }
+    if !contradictionary_hits.is_empty() {
+        let patterns: Vec<&str> = contradictionary_hits
+            .iter()
+            .map(|h| h.pattern.as_str())
+            .collect();
+        tracing::info!(
+            channel = %ch,
+            patterns = ?patterns,
+            "contradictionary flagged outbound message"
+        );
     }
 
     // Fire typing indicator now that we've committed to sending a reply.
@@ -491,7 +538,7 @@ async fn deliver_prepared_reply(
     };
     let effective_limit = if limit == 0 { 2000 } else { limit };
 
-    let chunks = chunk(&content, effective_limit, effective_mode);
+    let chunks = chunk(content, effective_limit, effective_mode);
     let mut sent_ids: Vec<u64> = Vec::new();
     let mut first_msg_id: Option<MessageId> = None;
 
@@ -507,7 +554,7 @@ async fn deliver_prepared_reply(
 
         if should_reply {
             if i == 0 {
-                if let Some(mid) = reply_to_message_id {
+                if let Some(mid) = request.reply_to_message_id {
                     builder = builder.reference_message((ch, mid));
                 }
             } else if let Some(prev_id) = first_msg_id {
@@ -515,7 +562,7 @@ async fn deliver_prepared_reply(
             }
         }
 
-        if options.suppress_ping {
+        if request.suppress_ping {
             builder = builder.allowed_mentions(CreateAllowedMentions::new().replied_user(false));
         }
 
@@ -531,8 +578,22 @@ async fn deliver_prepared_reply(
                 state.note_sent(mid);
             }
             Err(e) => {
-                tracing::warn!(channel_id = channel_id.get(), chunk = i, error = %e, "failed to send chunk");
-                return json!({ "error": format!("failed to send chunk {i}: {e}") });
+                tracing::warn!(channel_id = ch.get(), chunk = i, error = %e, "failed to send chunk");
+                // Report partial progress: the chunks already posted (so a
+                // retry does not double-post them) and the undelivered
+                // remainder (so a retry resumes from there). When nothing has
+                // landed yet the remainder is left `None` — a retry re-sends
+                // the whole payload.
+                let undelivered = if sent_ids.is_empty() {
+                    None
+                } else {
+                    Some(chunks[i..].join("\n\n"))
+                };
+                return Err(DeliverError {
+                    message: format!("failed to send chunk {i}: {e}"),
+                    sent_ids,
+                    undelivered,
+                });
             }
         }
     }
@@ -558,17 +619,113 @@ async fn deliver_prepared_reply(
                 .map(|h| h.pattern.as_str())
                 .collect();
             tracing::info!(
-                channel = %channel_id,
+                channel = %ch,
                 patterns = ?patterns,
                 "contradictionary celebrated outbound vocabulary"
             );
         }
     }
 
-    json!({
-        "ok": true,
-        "message_ids": sent_ids,
-    })
+    Ok(sent_ids)
+}
+
+impl DeliverReply for MessagingCtx {
+    async fn deliver(&self, request: &ReplyRequest) -> Result<Vec<u64>, DeliverError> {
+        deliver_reply(self, request).await
+    }
+}
+
+// ── no_rly (release) and rephrase ────────────────────────────────────────────
+
+/// The `no_rly` tool: release a held message, sending the byte-identical
+/// queued text. The handle dies on success; a failed send leaves it live
+/// until expiry.
+pub async fn release_held(ctx: &MessagingCtx, handle: &str) -> Value {
+    let handle = HoldHandle::new(handle);
+    match ctx.no_rly.release(ctx, &handle, Instant::now()).await {
+        Ok(released) => {
+            tracing::info!(
+                handle = %handle,
+                latency_ms = released.latency_ms,
+                "no_rly released held message"
+            );
+            json!({
+                "ok": true,
+                "message_ids": released.message_ids,
+                "released": handle,
+                "latency_ms": released.latency_ms,
+            })
+        }
+        Err(e) => rejected_handle_json(e),
+    }
+}
+
+/// The `rephrase` tool: replace a held message's text. The replacement is
+/// re-judged — a clean verdict sends it (and journals the original, reason,
+/// and replacement as a triple); a re-bounce mints a new handle chained to
+/// the dead one.
+pub async fn rephrase_held(ctx: &MessagingCtx, handle: &str, content: &str) -> Value {
+    // Reject an empty/whitespace replacement up front with a clear message —
+    // it would otherwise pass the judge and 400 at Discord with a confusing
+    // "cannot send an empty message" error, stranding the handle.
+    if content.trim().is_empty() {
+        return json!({ "error": "rephrase content must not be empty" });
+    }
+    let handle = HoldHandle::new(handle);
+    let ttl = ctx.config.no_rly_hold_ttl();
+    let now = Instant::now();
+
+    // A config reload can disable the contradictionary while a handle is in
+    // flight; the replacement then goes out unjudged rather than stranding.
+    let judge: &dyn OutboundJudge = match ctx.config.contradictionary {
+        Some(ref judge) => judge.as_ref(),
+        None => &AlwaysClear,
+    };
+    let result = ctx
+        .no_rly
+        .rephrase(ctx, judge, &handle, content, ttl, now)
+        .await;
+
+    match result {
+        Ok(Rephrased::Sent { message_ids }) => {
+            tracing::info!(handle = %handle, "rephrase sent replacement for held message");
+            json!({
+                "ok": true,
+                "message_ids": message_ids,
+                "rephrased": handle,
+            })
+        }
+        Ok(Rephrased::ReBounced(ticket)) => {
+            tracing::info!(
+                old_handle = %handle,
+                new_handle = %ticket.handle,
+                reason = %ticket.reason,
+                "rephrase bounced again; chained new handle"
+            );
+            bounce_json(&ticket)
+        }
+        Err(e) => rejected_handle_json(e),
+    }
+}
+
+/// Map a handle rejection to the construct-facing error shape. A still-live
+/// handle (failed send) says so explicitly, so the construct knows a retry
+/// is possible.
+fn rejected_handle_json(error: RejectedHandle) -> Value {
+    match error {
+        RejectedHandle::SendFailed {
+            ref handle,
+            ref expires_in,
+            ..
+        } => json!({
+            "error": error.to_string(),
+            "handle_still_live": handle,
+            "expires_in_secs": expires_in.as_secs(),
+        }),
+        RejectedHandle::Unknown(_) | RejectedHandle::Expired { .. } => {
+            json!({ "error": error.to_string() })
+        }
+    }
 }
 
 // ── react ─────────────────────────────────────────────────────────────────────
@@ -945,6 +1102,13 @@ pub(crate) async fn create_dm_channel(
 
 // ── send_dm ──────────────────────────────────────────────────────────────────
 
+/// Open (or reuse) a DM channel and send through the shared [`reply`] path.
+///
+/// DMs are judged like every other outbound message — this is deliberate and
+/// carries over from v1, where the contradictionary block check also ran on
+/// the shared reply path. The judge polices the construct's own speech, not
+/// the audience, so a block-tier tic bounces in a DM exactly as it would in
+/// a channel: held under a handle, releasable, rephrasable.
 pub async fn send_dm(ctx: &MessagingCtx, user_id: UserId, content: &str) -> Value {
     send_dm_with_hook_overrides(ctx, user_id, content, &[]).await
 }
@@ -982,7 +1146,6 @@ pub async fn send_dm_with_hook_overrides(
             prepared,
             ReplyTransportOptions {
                 suppress_ping: false,
-                no_rly: false,
             },
         )
         .await;
@@ -1005,7 +1168,6 @@ pub async fn send_dm_with_hook_overrides(
         prepared.resolve_dm_channel(channel_id),
         ReplyTransportOptions {
             suppress_ping: false,
-            no_rly: false,
         },
     )
     .await;
@@ -1140,6 +1302,7 @@ mod tests {
     use super::*;
     use crate::{
         config::{ChannelConfig, Config},
+        no_rly::judge::{ReasonEntry, RejectReason},
         pre_send::{
             Assessment, AuditTrail, ConstructFeedback, HookContext, HookDecision, HookOutput,
             PipelineMode, PreSendHook, PreSendPipeline,
@@ -1229,6 +1392,70 @@ mod tests {
         }
     }
 
+    // ── bounce_json wire contract ────────────────────────────────────────
+    //
+    // The `held` bounce error is the PR's central new wire contract: the
+    // shape a client parses to extract the handle and act on a bounce. These
+    // snapshots pin it so a field rename can't silently break every consumer.
+
+    fn bounce_reason() -> RejectReason {
+        RejectReason {
+            matches: vec![ReasonEntry {
+                pattern: "straightforward".into(),
+                reason: Some("nothing is ever straightforward".into()),
+            }],
+        }
+    }
+
+    #[test]
+    fn bounce_json_wire_shape_plain() {
+        let ticket = BounceTicket {
+            handle: HoldHandle::new("nr-3f92-7"),
+            reason: bounce_reason(),
+            expires_in: std::time::Duration::from_secs(180),
+            parent: None,
+        };
+        insta::assert_json_snapshot!(bounce_json(&ticket));
+    }
+
+    #[test]
+    fn bounce_json_wire_shape_chained() {
+        let ticket = BounceTicket {
+            handle: HoldHandle::new("nr-3f92-8"),
+            reason: RejectReason {
+                matches: vec![ReasonEntry {
+                    pattern: "trivial".into(),
+                    reason: Some("nothing worth building is trivial".into()),
+                }],
+            },
+            expires_in: std::time::Duration::from_secs(180),
+            parent: Some(HoldHandle::new("nr-3f92-7")),
+        };
+        insta::assert_json_snapshot!(bounce_json(&ticket));
+    }
+
+    /// The construct-facing `held.reason` and the journal `reason` must be the
+    /// same structured shape, so a client sees one reason contract everywhere.
+    #[test]
+    fn bounce_reason_matches_journal_reason_shape() {
+        let ticket = BounceTicket {
+            handle: HoldHandle::new("nr-3f92-7"),
+            reason: bounce_reason(),
+            expires_in: std::time::Duration::from_secs(180),
+            parent: None,
+        };
+        let held = bounce_json(&ticket);
+        let journal = serde_json::to_value(&ticket.reason).unwrap();
+        assert_eq!(
+            held["held"]["reason"], journal,
+            "held.reason must serialize identically to the journal's reason field"
+        );
+        assert_eq!(
+            held["held"]["reason"]["matches"][0]["pattern"],
+            "straightforward"
+        );
+    }
+
     fn test_config() -> LoadedConfig {
         LoadedConfig::from_raw(Config::default())
     }
@@ -1239,6 +1466,7 @@ mod tests {
             new_state(),
             Arc::new(config),
             "/tmp".into(),
+            Arc::new(ConsentGate::new(camino::Utf8Path::new("/tmp"))),
         )
     }
 
@@ -1284,8 +1512,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn pre_send_hot_reload_enabled_to_disabled_applies_to_next_context() {
+    #[tokio::test]
+    async fn pre_send_hot_reload_enabled_to_disabled_applies_to_next_context() {
         let installed = crate::pre_send::observe_pipeline(Vec::new()).expect("pipeline");
         crate::pre_send::install_pipeline(Some(installed));
         let enabled = messaging_ctx(LoadedConfig::from_raw(Config::default()));
@@ -1297,8 +1525,8 @@ mod tests {
         assert!(!disabled.has_pre_send_pipeline());
     }
 
-    #[test]
-    fn pre_send_hot_reload_disabled_to_enabled_applies_to_next_context() {
+    #[tokio::test]
+    async fn pre_send_hot_reload_disabled_to_enabled_applies_to_next_context() {
         let installed = crate::pre_send::observe_pipeline(Vec::new()).expect("pipeline");
         crate::pre_send::install_pipeline(Some(installed));
         let mut disabled_config = Config::default();
@@ -1319,7 +1547,7 @@ mod tests {
         });
         let (ctx, surfaces) = messaging_ctx_with_halt_pipeline(LoadedConfig::from_raw(raw));
 
-        let result = reply(&ctx, ChannelId::new(42), "text", None, false, false).await;
+        let result = reply(&ctx, ChannelId::new(42), "text", None, false).await;
 
         assert_eq!(result["error"], "blocked by test hook");
         assert_eq!(*surfaces.lock().expect("surface lock"), vec!["reply"]);
@@ -1517,7 +1745,7 @@ mod tests {
         let ctx =
             messaging_ctx(LoadedConfig::from_raw(raw)).with_pre_send_pipeline(Arc::new(pipeline));
 
-        let result = reply(&ctx, ChannelId::new(42), "text", None, false, false).await;
+        let result = reply(&ctx, ChannelId::new(42), "text", None, false).await;
 
         assert_eq!(result["error"], "captured");
         let captured = captured
@@ -1836,7 +2064,8 @@ mod tests {
             Arc::new(serenity::http::Http::new(&token)),
             crate::state::new_state(),
             Arc::new(LoadedConfig::from_raw(raw)),
-            state_dir,
+            state_dir.clone(),
+            Arc::new(ConsentGate::new(&state_dir)),
         );
 
         let resp = fetch_new_since(&ctx, channel_id, after_message_id, 20).await;

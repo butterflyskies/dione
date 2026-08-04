@@ -251,6 +251,7 @@ async fn main() -> Result<()> {
         mode: cli.mode,
         codex_queue,
         codex_thread_binding,
+        no_rly: Arc::new(dione::no_rly::consent::ConsentGate::new(&state_dir)),
     };
 
     // Spawn the tracing-channel forwarder: converts tracing events into NotificationEvents.
@@ -298,10 +299,17 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Wait for a shutdown signal.
+    // Wait for a shutdown signal. SIGTERM (service managers, container stop)
+    // must trigger the same graceful path as SIGINT so the no_rly sweeper
+    // drains pending handles into the journal before exit.
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("install SIGTERM handler");
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             tracing::info!("SIGINT received, shutting down");
+        }
+        _ = sigterm.recv() => {
+            tracing::info!("SIGTERM received, shutting down");
         }
         _ = cancel.cancelled() => {
             tracing::info!("shutdown requested by internal cancellation");
