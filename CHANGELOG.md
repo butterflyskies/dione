@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.31.1] - 2026-08-04
+
+### Added
+- **Phantom canary alerts to #decontamination-shower.** When the ingress
+  ledger egress check detects an Unknown or ChannelMismatch reply target,
+  a fire-and-forget alert is posted to the decontamination shower channel.
+  Expired and Unavailable results do not alert.
+
 ## [0.31.0] - 2026-08-04
 
 ### Added
