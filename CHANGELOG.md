@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-08-04
+
+### Added
+- **Ingress-ledger tracer for phantom reply references.** Gateway-admitted
+  Discord messages are recorded in a bounded, in-memory ledger before
+  notification delivery is attempted. Reply proposals check referenced
+  message IDs against that ledger and distinguish admitted, unknown, expired,
+  channel-mismatched, and unavailable evidence. Verification is warning-only
+  in this tracer release; it proves gateway admission and channel binding, not
+  authorization, LLM delivery, or durable provenance across restarts.
+
 ## [0.30.0] - 2026-08-04
 
 ### Added

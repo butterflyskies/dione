@@ -1,8 +1,8 @@
 [package]
 name = "dione"
-version = "0.30.0"
+version = "0.31.0"
 edition = "2024"
-rust-version = "1.93"
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 description = "Discord MCP channel server for Claude Code and Codex"
 repository = "https://github.com/butterflyskies/dione"

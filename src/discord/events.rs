@@ -142,6 +142,8 @@ pub struct Handler {
     pub pronoun_service: Option<Arc<crate::pronouns::PronounService>>,
     /// Construct nameplate service (construct-nameplates repo adapter with cache).
     pub nameplate_service: Option<Arc<crate::nameplates::NameplateService>>,
+    /// Ingress ledger — records messages admitted by the gateway for egress verification.
+    pub ingress_ledger: Arc<crate::ingress_ledger::IngressLedger>,
 }
 
 impl Handler {
@@ -178,6 +180,28 @@ impl Handler {
         } else {
             Some(PronounDisplayName(resolved))
         }
+    }
+}
+
+/// Record a gateway-admitted message before attempting notification delivery.
+///
+/// Admission is durable only for this process. A failed channel send remains
+/// warning-only and does not retract the evidence that the gateway admitted the
+/// message.
+async fn send_gateway_admitted_message(
+    ingress_ledger: &crate::ingress_ledger::IngressLedger,
+    tx: &tokio::sync::mpsc::Sender<NotificationEvent>,
+    msg: &Message,
+    event: NotificationEvent,
+    delivery_kind: &'static str,
+) {
+    ingress_ledger.note_admitted(msg.id, msg.channel_id, msg.author.id, &msg.content);
+    if let Err(error) = tx.send(event).await {
+        tracing::warn!(
+            %error,
+            delivery_kind,
+            "failed to send gateway-admitted notification event"
+        );
     }
 }
 
@@ -247,9 +271,14 @@ impl EventHandler for Handler {
                         MessageTargeting::DirectMessage,
                         pronoun_name,
                     );
-                    if let Err(e) = self.tx.send(event).await {
-                        tracing::warn!(error = %e, "failed to send DM notification event");
-                    }
+                    send_gateway_admitted_message(
+                        &self.ingress_ledger,
+                        &self.tx,
+                        &msg,
+                        event,
+                        "dm",
+                    )
+                    .await;
                 }
                 GateDecision::Queue => {
                     let max_pending = config.access_requests.max_pending;
@@ -329,9 +358,14 @@ impl EventHandler for Handler {
                         targeting,
                         pronoun_name,
                     );
-                    if let Err(e) = self.tx.send(event).await {
-                        tracing::warn!(error = %e, "failed to send guild notification event");
-                    }
+                    send_gateway_admitted_message(
+                        &self.ingress_ledger,
+                        &self.tx,
+                        &msg,
+                        event,
+                        "guild",
+                    )
+                    .await;
                 }
                 GateDecision::Queue => {
                     // Guild messages don't queue — this case shouldn't occur from check_guild.
@@ -1368,6 +1402,32 @@ mod tests {
             payload["referenced_message"] = parent;
         }
         message_from_wire(payload)
+    }
+
+    #[tokio::test]
+    async fn admitted_message_is_recorded_before_notification_delivery() {
+        let config = LoadedConfig::from_raw(Config::default());
+        let msg = message_from_wire(wire_message_body(
+            123,
+            wire_author(456, "alice"),
+            "gateway payload",
+        ));
+        let ledger = crate::ingress_ledger::IngressLedger::new();
+        let event = build_message_event(&msg, &config, None, MessageTargeting::DirectMessage, None);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+        send_gateway_admitted_message(&ledger, &tx, &msg, event, "test").await;
+
+        let delivered = rx.recv().await.expect("notification event");
+        let NotificationEvent::Message(delivered) = delivered else {
+            panic!("expected message event");
+        };
+        let admitted = ledger
+            .get(delivered.message_id)
+            .expect("delivery must observe an admitted record");
+        assert_eq!(admitted.channel_id, delivered.chat_id);
+        assert_eq!(admitted.user_id, delivered.user_id);
+        assert_eq!(delivered.content, "gateway payload");
     }
 
     #[test]

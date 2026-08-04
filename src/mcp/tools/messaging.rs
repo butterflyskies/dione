@@ -15,6 +15,7 @@ use crate::contradictionary::Action;
 use crate::discord::chunk;
 use crate::discord::events::NotificationEvent;
 use crate::gate::OutboundGate;
+use crate::ingress_ledger::IngressLedger;
 use crate::no_rly::consent::{
     BounceTicket, ConsentGate, DeliverError, DeliverReply, RejectedHandle, Rephrased, ReplyRequest,
 };
@@ -61,6 +62,7 @@ pub struct MessagingCtx {
     construct_id: ConstructId,
     pub no_rly: Arc<ConsentGate>,
     pub event_tx: Option<mpsc::Sender<NotificationEvent>>,
+    pub ingress_ledger: Arc<IngressLedger>,
 }
 
 impl MessagingCtx {
@@ -70,6 +72,7 @@ impl MessagingCtx {
         config: Arc<LoadedConfig>,
         state_dir: Utf8PathBuf,
         no_rly: Arc<ConsentGate>,
+        ingress_ledger: Arc<IngressLedger>,
     ) -> Self {
         let pre_send_pipeline = config
             .pre_send
@@ -86,6 +89,7 @@ impl MessagingCtx {
             pre_send_pipeline,
             no_rly,
             event_tx: None,
+            ingress_ledger,
         }
     }
 
@@ -412,6 +416,43 @@ pub async fn reply_with_hook_overrides(
     suppress_ping: bool,
     no_rly_hooks: &[HookName],
 ) -> Value {
+    if let Some(ref_id) = reply_to_message_id {
+        match ctx.ingress_ledger.verify(ref_id, channel_id) {
+            crate::ingress_ledger::VerifyResult::Admitted { .. } => {}
+            crate::ingress_ledger::VerifyResult::Unknown => {
+                tracing::warn!(
+                    message_id = ref_id.get(),
+                    channel_id = channel_id.get(),
+                    "egress: reply_to_message_id not in ingress ledger"
+                );
+            }
+            crate::ingress_ledger::VerifyResult::ChannelMismatch {
+                admitted_channel,
+                claimed_channel,
+            } => {
+                tracing::warn!(
+                    message_id = ref_id.get(),
+                    admitted_channel = admitted_channel.get(),
+                    claimed_channel = claimed_channel.get(),
+                    "egress: reply_to_message_id channel mismatch"
+                );
+            }
+            crate::ingress_ledger::VerifyResult::Expired => {
+                tracing::info!(
+                    message_id = ref_id.get(),
+                    channel_id = channel_id.get(),
+                    "egress: reply_to_message_id expired from ingress ledger"
+                );
+            }
+            crate::ingress_ledger::VerifyResult::Unavailable => {
+                tracing::warn!(
+                    message_id = ref_id.get(),
+                    "egress: ingress ledger unavailable; cannot verify reply_to_message_id"
+                );
+            }
+        }
+    }
+
     let prepared = match prepare_outbound(
         ctx,
         OutboundDraft::channel(
@@ -1551,6 +1592,7 @@ mod tests {
             Arc::new(config),
             "/tmp".into(),
             Arc::new(ConsentGate::new(camino::Utf8Path::new("/tmp"))),
+            Arc::new(crate::ingress_ledger::IngressLedger::new()),
         )
     }
 
@@ -1704,6 +1746,57 @@ mod tests {
 
         assert_eq!(result["error"], "blocked by test hook");
         assert_eq!(*surfaces.lock().expect("surface lock"), vec!["reply"]);
+    }
+
+    #[tokio::test]
+    async fn live_reply_path_verifies_ingress_classifications() {
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".to_owned(),
+            ..Default::default()
+        });
+        let ledger = Arc::new(crate::ingress_ledger::IngressLedger::new());
+        ledger.note_admitted(
+            MessageId::new(7),
+            ChannelId::new(42),
+            UserId::new(99),
+            "admitted",
+        );
+        ledger.note_admitted(
+            MessageId::new(8),
+            ChannelId::new(41),
+            UserId::new(99),
+            "wrong channel",
+        );
+        let (mut ctx, _) = messaging_ctx_with_halt_pipeline(LoadedConfig::from_raw(raw));
+        ctx.ingress_ledger = Arc::clone(&ledger);
+
+        for message_id in [7, 9, 8] {
+            let result = reply_with_hook_overrides(
+                &ctx,
+                ChannelId::new(42),
+                "text",
+                Some(MessageId::new(message_id)),
+                false,
+                &[],
+            )
+            .await;
+            assert_eq!(result["error"], "blocked by test hook");
+        }
+
+        assert_eq!(
+            ledger.take_observed_verifications(),
+            vec![
+                crate::ingress_ledger::VerifyResult::Admitted {
+                    channel_id: ChannelId::new(42),
+                },
+                crate::ingress_ledger::VerifyResult::Unknown,
+                crate::ingress_ledger::VerifyResult::ChannelMismatch {
+                    admitted_channel: ChannelId::new(41),
+                    claimed_channel: ChannelId::new(42),
+                },
+            ]
+        );
     }
 
     #[tokio::test]
@@ -2219,6 +2312,7 @@ mod tests {
             Arc::new(LoadedConfig::from_raw(raw)),
             state_dir.clone(),
             Arc::new(ConsentGate::new(&state_dir)),
+            Arc::new(crate::ingress_ledger::IngressLedger::new()),
         );
 
         let resp = fetch_new_since(&ctx, channel_id, after_message_id, 20).await;

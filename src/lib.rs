@@ -11,6 +11,7 @@ pub mod delivery_buffer;
 pub mod discord;
 pub mod gaie;
 pub mod gate;
+pub mod ingress_ledger;
 pub mod mcp;
 pub mod mute_store;
 pub mod nameplates;

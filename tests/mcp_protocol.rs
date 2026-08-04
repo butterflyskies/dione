@@ -83,6 +83,7 @@ fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
         codex_thread_binding: None,
         no_rly: Arc::new(ConsentGate::new(state_dir)),
         event_tx: None,
+        ingress_ledger: Arc::new(dione::ingress_ledger::IngressLedger::new()),
     }
 }
 

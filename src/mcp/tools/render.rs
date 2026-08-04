@@ -172,6 +172,7 @@ mod tests {
             Arc::new(crate::no_rly::consent::ConsentGate::new(
                 camino::Utf8Path::new("/tmp"),
             )),
+            Arc::new(crate::ingress_ledger::IngressLedger::new()),
         );
         let hook = HookName::parse("tier-1").unwrap();
 
