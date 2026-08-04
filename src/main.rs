@@ -111,9 +111,8 @@ async fn main() -> Result<()> {
     // `pre_send.enabled` hot reloads in both directions without a restart.
     let tier1_hook = dione::cingulate::Tier1Hook::from_embedded()
         .wrap_err("failed to load tier-1 cingulate hook")?;
-    let pre_send_pipeline =
-        dione::pre_send::observe_pipeline(vec![Box::new(tier1_hook)])
-            .wrap_err("failed to configure Observe pre-send pipeline")?;
+    let pre_send_pipeline = dione::pre_send::observe_pipeline(vec![Box::new(tier1_hook)])
+        .wrap_err("failed to configure Observe pre-send pipeline")?;
     dione::pre_send::install_pipeline(Some(pre_send_pipeline));
 
     // Initialize the guild mute store (persistent, lock-free reads).

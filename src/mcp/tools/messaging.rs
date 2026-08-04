@@ -1749,6 +1749,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn live_reply_path_verifies_ingress_classifications() {
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".to_owned(),
+            ..Default::default()
+        });
+        let ledger = Arc::new(crate::ingress_ledger::IngressLedger::new());
+        ledger.note_admitted(
+            MessageId::new(7),
+            ChannelId::new(42),
+            UserId::new(99),
+            "admitted",
+        );
+        ledger.note_admitted(
+            MessageId::new(8),
+            ChannelId::new(41),
+            UserId::new(99),
+            "wrong channel",
+        );
+        let (mut ctx, _) = messaging_ctx_with_halt_pipeline(LoadedConfig::from_raw(raw));
+        ctx.ingress_ledger = Arc::clone(&ledger);
+
+        for message_id in [7, 9, 8] {
+            let result = reply_with_hook_overrides(
+                &ctx,
+                ChannelId::new(42),
+                "text",
+                Some(MessageId::new(message_id)),
+                false,
+                &[],
+            )
+            .await;
+            assert_eq!(result["error"], "blocked by test hook");
+        }
+
+        assert_eq!(
+            ledger.take_observed_verifications(),
+            vec![
+                crate::ingress_ledger::VerifyResult::Admitted {
+                    channel_id: ChannelId::new(42),
+                },
+                crate::ingress_ledger::VerifyResult::Unknown,
+                crate::ingress_ledger::VerifyResult::ChannelMismatch {
+                    admitted_channel: ChannelId::new(41),
+                    claimed_channel: ChannelId::new(42),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn live_edit_path_runs_pre_send_pipeline() {
         let mut raw = Config::default();
         raw.channels.push(ChannelConfig {
