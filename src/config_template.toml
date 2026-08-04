@@ -52,6 +52,11 @@ deadline_ms = 300       # total evaluation deadline in ms (max 2000)
 # channel_id = "1234567890"
 # trigger = "all"         # override the global trigger for this channel
 
+# Phantom canary: alert channel for ingress ledger verification failures.
+# Set to a Discord channel ID to enable alerts. Empty = disabled.
+# [phantom_canary]
+# alert_channel_id = "1530112900818145300"
+
 [access]
 dm_policy = "queue"     # "queue", "drop", or "disabled"
 allow_from = []         # Discord user IDs that can DM the bot

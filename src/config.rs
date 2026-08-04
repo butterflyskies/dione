@@ -7,7 +7,7 @@ use arc_swap::ArcSwap;
 use camino::{Utf8Path, Utf8PathBuf};
 use regex::RegexSet;
 use serde::{Deserialize, Deserializer, de::Error as _};
-use serenity::model::id::UserId;
+use serenity::model::id::{ChannelId, UserId};
 use thiserror::Error;
 
 use crate::contradictionary::{Contradictionary, ContradictionaryConfig, load_sidecar_entries};
@@ -59,6 +59,24 @@ pub struct Config {
     pub pronouns: PronounConfig,
     /// Construct nameplate enrichment from construct-nameplates repo.
     pub nameplates: NameplateConfig,
+    /// Ingress ledger phantom canary configuration.
+    pub phantom_canary: PhantomCanaryConfig,
+}
+
+/// Configuration for the ingress ledger phantom canary alerts.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct PhantomCanaryConfig {
+    /// Channel ID to post phantom canary alerts to. Disabled if empty.
+    pub alert_channel_id: String,
+}
+
+impl Default for PhantomCanaryConfig {
+    fn default() -> Self {
+        Self {
+            alert_channel_id: String::new(),
+        }
+    }
 }
 
 /// Configuration for the opt-in GAIE one-shot archive commands.
@@ -912,6 +930,8 @@ pub struct LoadedConfig {
     pub pre_send_construct_id: ConstructId,
     /// User IDs excluded from pronoun display (opt-out).
     pub pronoun_excluded: HashSet<u64>,
+    /// Parsed phantom canary alert channel ID. None = alerts disabled.
+    pub phantom_canary_channel: Option<ChannelId>,
 }
 
 /// Pre-parsed per-channel access policy.
@@ -989,6 +1009,13 @@ impl LoadedConfig {
         } else {
             HashSet::new()
         };
+        let phantom_canary_channel = raw
+            .phantom_canary
+            .alert_channel_id
+            .parse::<u64>()
+            .ok()
+            .filter(|&id| id != 0)
+            .map(ChannelId::new);
         Self {
             raw,
             allowed_ids,
@@ -1001,6 +1028,7 @@ impl LoadedConfig {
             pre_send_author_id,
             pre_send_construct_id,
             pronoun_excluded,
+            phantom_canary_channel,
         }
     }
 

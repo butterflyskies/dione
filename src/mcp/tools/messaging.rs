@@ -30,19 +30,13 @@ use crate::state::State;
 /// Self-react emoji for contradictionary celebrate hits (✨ — sparkles).
 const CONTRADICTIONARY_CELEBRATE_REACT: &str = "\u{2728}";
 
-/// Channel ID for #decontamination-shower where phantom canary alerts are posted.
-const DECONTAMINATION_SHOWER_CHANNEL: ChannelId = ChannelId::new(1530112900818145300);
-
-/// Fire-and-forget phantom canary alert to #decontamination-shower.
-fn phantom_canary_alert(http: &Arc<serenity::http::Http>, message: &str) {
+/// Fire-and-forget phantom canary alert to the configured alert channel.
+fn phantom_canary_alert(http: &Arc<serenity::http::Http>, channel: ChannelId, message: &str) {
     let http = Arc::clone(http);
     let content = message.to_owned();
     tokio::spawn(async move {
         let msg = CreateMessage::new().content(content);
-        if let Err(e) = DECONTAMINATION_SHOWER_CHANNEL
-            .send_message(&http, msg)
-            .await
-        {
+        if let Err(e) = channel.send_message(&http, msg).await {
             tracing::warn!(error = %e, "failed to send phantom canary alert");
         }
     });
@@ -443,14 +437,17 @@ pub async fn reply_with_hook_overrides(
                     channel_id = channel_id.get(),
                     "egress: reply_to_message_id not in ingress ledger"
                 );
-                phantom_canary_alert(
-                    &ctx.http,
-                    &format!(
-                        "⚠️ PHANTOM CANARY: reply_to_message_id {} in channel {} not in ingress ledger (Unknown)",
-                        ref_id.get(),
-                        channel_id.get()
-                    ),
-                );
+                if let Some(alert_ch) = ctx.config.phantom_canary_channel {
+                    phantom_canary_alert(
+                        &ctx.http,
+                        alert_ch,
+                        &format!(
+                            "⚠️ PHANTOM CANARY: reply_to_message_id {} in channel {} not in ingress ledger (Unknown)",
+                            ref_id.get(),
+                            channel_id.get()
+                        ),
+                    );
+                }
             }
             crate::ingress_ledger::VerifyResult::ChannelMismatch {
                 admitted_channel,
@@ -462,15 +459,18 @@ pub async fn reply_with_hook_overrides(
                     claimed_channel = claimed_channel.get(),
                     "egress: reply_to_message_id channel mismatch"
                 );
-                phantom_canary_alert(
-                    &ctx.http,
-                    &format!(
-                        "⚠️ PHANTOM CANARY: reply_to_message_id {} channel mismatch — admitted from {}, claimed {} (ChannelMismatch)",
-                        ref_id.get(),
-                        admitted_channel.get(),
-                        claimed_channel.get()
-                    ),
-                );
+                if let Some(alert_ch) = ctx.config.phantom_canary_channel {
+                    phantom_canary_alert(
+                        &ctx.http,
+                        alert_ch,
+                        &format!(
+                            "⚠️ PHANTOM CANARY: reply_to_message_id {} channel mismatch — admitted from {}, claimed {} (ChannelMismatch)",
+                            ref_id.get(),
+                            admitted_channel.get(),
+                            claimed_channel.get()
+                        ),
+                    );
+                }
             }
             crate::ingress_ledger::VerifyResult::Expired => {
                 tracing::info!(
