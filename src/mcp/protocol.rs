@@ -51,6 +51,15 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                     "emoji": { "type": "string", "description": "Unicode emoji or emoji name" }
                 }
             })),
+            tool("remove_reaction", "Remove the bot's own reaction from a message", json!({
+                "type": "object",
+                "required": ["channel_id", "message_id", "emoji"],
+                "properties": {
+                    "channel_id": { "type": "string" },
+                    "message_id": { "type": "string" },
+                    "emoji": { "type": "string", "description": "Unicode emoji or emoji name" }
+                }
+            })),
             tool("edit_message", "Edit a bot message", json!({
                 "type": "object",
                 "required": ["channel_id", "message_id", "content"],

@@ -597,6 +597,32 @@ pub async fn react(
     }
 }
 
+// ── remove_reaction ───────────────────────────────────────────────────────────
+
+pub async fn remove_reaction(
+    ctx: &MessagingCtx,
+    channel_id: ChannelId,
+    message_id: MessageId,
+    emoji: &str,
+) -> Value {
+    if let Err(e) = check_outbound(ctx, channel_id).await {
+        return e;
+    }
+
+    let reaction = match parse_reaction_type(emoji) {
+        Ok(r) => r,
+        Err(e) => return json!({ "error": e }),
+    };
+    match ctx
+        .http
+        .delete_reaction_me(channel_id, message_id, &reaction)
+        .await
+    {
+        Ok(()) => json!({ "ok": true }),
+        Err(e) => json!({ "error": e.to_string() }),
+    }
+}
+
 // ── edit_message ──────────────────────────────────────────────────────────────
 
 pub async fn edit_message(
