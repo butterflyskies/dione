@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-08-04
+
 ### Changed
 - **no_rly v2 — handle-queue consent gate.** A contradictionary `block` match
   no longer rejects with a resend flag: the message is **held** under a
