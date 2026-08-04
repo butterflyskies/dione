@@ -1052,7 +1052,7 @@ async fn notify_admin_dm(
 /// reaction should be dropped: no user attribution, or the bot reacting to
 /// itself (which would otherwise feed back into the notification stream).
 ///
-/// Intentional bot self-reactions (contradictionary celebrate/warn) never
+/// Intentional bot self-reactions (e.g. contradictionary celebrate) never
 /// arrive through this path — they are emitted by the tool layer with
 /// `self_react: true` at the point where they are initiated. See
 /// `crate::mcp::tools::messaging`.
@@ -1208,7 +1208,7 @@ mod tests {
     // ── Gateway reaction filter tests ────────────────────────────────────────
 
     /// The bot's own gateway reactions are dropped — intentional self-reacts
-    /// (contradictionary celebrate/warn) reach the construct via the tool
+    /// (e.g. contradictionary celebrate) reach the construct via the tool
     /// layer instead, marked `self_react: true`.
     #[test]
     fn test_gateway_drops_bot_self_reactions() {
