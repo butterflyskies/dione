@@ -6,7 +6,17 @@ use std::fmt;
 /// supply their own opaque IDs. The inner value has no Discord semantics
 /// inside auspex-core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct MessageRef(pub u64);
+pub struct MessageRef(u64);
+
+impl MessageRef {
+    pub const fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
 
 impl fmt::Display for MessageRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -16,7 +26,17 @@ impl fmt::Display for MessageRef {
 
 /// Transport-agnostic channel/destination identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ChannelRef(pub u64);
+pub struct ChannelRef(u64);
+
+impl ChannelRef {
+    pub const fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
 
 impl fmt::Display for ChannelRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -26,7 +46,17 @@ impl fmt::Display for ChannelRef {
 
 /// Transport-agnostic principal (user/bot) identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PrincipalRef(pub u64);
+pub struct PrincipalRef(u64);
+
+impl PrincipalRef {
+    pub const fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
 
 impl fmt::Display for PrincipalRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -36,4 +66,4 @@ impl fmt::Display for PrincipalRef {
 
 /// SHA-256 hash of message content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ContentHash(pub [u8; 32]);
+pub struct ContentHash(pub(crate) [u8; 32]);

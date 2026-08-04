@@ -455,8 +455,8 @@ pub async fn reply_with_hook_overrides(
             } => {
                 tracing::warn!(
                     message_id = ref_id.get(),
-                    admitted_channel = admitted_channel.0,
-                    claimed_channel = claimed_channel.0,
+                    admitted_channel = admitted_channel.get(),
+                    claimed_channel = claimed_channel.get(),
                     "egress: reply_to_message_id channel mismatch"
                 );
                 if let Some(alert_ch) = ctx.config.phantom_canary_channel {
@@ -1823,12 +1823,12 @@ mod tests {
             ledger.take_observed_verifications(),
             vec![
                 crate::ingress_ledger::VerifyResult::Admitted {
-                    channel: auspex_core::ChannelRef(42),
+                    channel: auspex_core::ChannelRef::new(42),
                 },
                 crate::ingress_ledger::VerifyResult::Unknown,
                 crate::ingress_ledger::VerifyResult::ChannelMismatch {
-                    admitted_channel: auspex_core::ChannelRef(41),
-                    claimed_channel: auspex_core::ChannelRef(42),
+                    admitted_channel: auspex_core::ChannelRef::new(41),
+                    claimed_channel: auspex_core::ChannelRef::new(42),
                 },
             ]
         );

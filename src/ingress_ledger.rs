@@ -45,9 +45,9 @@ impl IngressLedger {
     ) {
         let content_hash = core::IngressLedger::hash_content(content);
         self.inner.note_admitted(
-            MessageRef(message_id.get()),
-            ChannelRef(channel_id.get()),
-            PrincipalRef(user_id.get()),
+            MessageRef::new(message_id.get()),
+            ChannelRef::new(channel_id.get()),
+            PrincipalRef::new(user_id.get()),
             content_hash,
         );
     }
@@ -55,8 +55,8 @@ impl IngressLedger {
     /// Verify a Discord message was admitted, with channel binding.
     pub fn verify(&self, message_id: MessageId, claimed_channel: ChannelId) -> VerifyResult {
         self.inner.verify(
-            MessageRef(message_id.get()),
-            ChannelRef(claimed_channel.get()),
+            MessageRef::new(message_id.get()),
+            ChannelRef::new(claimed_channel.get()),
         )
     }
 
@@ -95,14 +95,14 @@ mod tests {
         assert_eq!(
             ledger.verify(MessageId::new(42), ChannelId::new(100)),
             VerifyResult::Admitted {
-                channel: ChannelRef(100),
+                channel: ChannelRef::new(100),
             }
         );
         assert_eq!(
             ledger.verify(MessageId::new(42), ChannelId::new(200)),
             VerifyResult::ChannelMismatch {
-                admitted_channel: ChannelRef(100),
-                claimed_channel: ChannelRef(200),
+                admitted_channel: ChannelRef::new(100),
+                claimed_channel: ChannelRef::new(200),
             }
         );
         assert_eq!(
