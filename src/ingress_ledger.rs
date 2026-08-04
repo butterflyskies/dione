@@ -28,13 +28,17 @@ pub struct AdmittedRecord {
 pub enum VerifyResult {
     /// The message was admitted by the gateway from this channel.
     Admitted { channel_id: ChannelId },
-    /// The message ID is not in the ledger (unknown or expired).
+    /// The message ID was never admitted by the gateway.
     Unknown,
+    /// The message was admitted but the ledger entry has expired.
+    Expired,
     /// The message was admitted, but from a different channel than claimed.
     ChannelMismatch {
         admitted_channel: ChannelId,
         claimed_channel: ChannelId,
     },
+    /// The ledger store is unavailable (poisoned mutex).
+    Unavailable,
 }
 
 /// In-memory ledger of messages admitted by the dione gateway.
@@ -84,6 +88,10 @@ impl IngressLedger {
     /// Called in the discord event handler when a real message is about to be
     /// sent to the notification stream. The content hash is computed from the
     /// raw message content for tamper detection.
+    ///
+    /// Identical replays (same message_id, channel, user) are idempotent.
+    /// Conflicting evidence (same message_id, different channel) preserves the
+    /// first record and logs a warning.
     pub fn note_admitted(
         &self,
         message_id: MessageId,
@@ -92,18 +100,25 @@ impl IngressLedger {
         content: &str,
     ) {
         let now = Instant::now();
-        let record = AdmittedRecord {
-            channel_id,
-            user_id,
-            content_sha256: Sha256::digest(content.as_bytes()).into(),
-            admitted_at: now,
-            expires: now + self.ttl,
-        };
+        let content_sha256 = Sha256::digest(content.as_bytes()).into();
 
         let Ok(mut entries) = self.entries.lock() else {
             tracing::warn!("ingress ledger unavailable (poisoned)");
             return;
         };
+
+        if let Some(existing) = entries.get(&message_id) {
+            if existing.channel_id == channel_id && existing.user_id == user_id {
+                return;
+            }
+            tracing::warn!(
+                message_id = message_id.get(),
+                existing_channel = existing.channel_id.get(),
+                new_channel = channel_id.get(),
+                "ingress ledger: conflicting evidence for message_id; preserving first"
+            );
+            return;
+        }
 
         if entries.len() >= self.max_entries {
             let cleanup_now = Instant::now();
@@ -111,12 +126,19 @@ impl IngressLedger {
             if entries.len() >= self.max_entries {
                 tracing::warn!(
                     capacity = self.max_entries,
-                    "ingress ledger at capacity after cleanup; dropping oldest"
+                    "ingress ledger at capacity after cleanup; dropping new entry"
                 );
                 return;
             }
         }
 
+        let record = AdmittedRecord {
+            channel_id,
+            user_id,
+            content_sha256,
+            admitted_at: now,
+            expires: now + self.ttl,
+        };
         entries.insert(message_id, record);
     }
 
@@ -138,15 +160,25 @@ impl IngressLedger {
     /// in a particular channel, verify both that the message was real AND that
     /// it came from the expected channel.
     pub fn verify(&self, message_id: MessageId, claimed_channel: ChannelId) -> VerifyResult {
-        match self.get(message_id) {
-            None => VerifyResult::Unknown,
-            Some(record) if record.channel_id == claimed_channel => VerifyResult::Admitted {
+        let entries = match self.entries.lock() {
+            Ok(e) => e,
+            Err(_) => return VerifyResult::Unavailable,
+        };
+        let Some(record) = entries.get(&message_id) else {
+            return VerifyResult::Unknown;
+        };
+        if Instant::now() >= record.expires {
+            return VerifyResult::Expired;
+        }
+        if record.channel_id == claimed_channel {
+            VerifyResult::Admitted {
                 channel_id: record.channel_id,
-            },
-            Some(record) => VerifyResult::ChannelMismatch {
+            }
+        } else {
+            VerifyResult::ChannelMismatch {
                 admitted_channel: record.channel_id,
                 claimed_channel,
-            },
+            }
         }
     }
 
@@ -230,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn expired_entry_returns_unknown() {
+    fn expired_entry_returns_expired() {
         let ledger = IngressLedger::with_ttl(Duration::from_millis(0));
         let msg_id = MessageId::new(1000);
 
@@ -238,7 +270,7 @@ mod tests {
 
         // TTL is 0ms, so it expires immediately.
         std::thread::sleep(Duration::from_millis(1));
-        assert_eq!(ledger.verify(msg_id, CHANNEL_A), VerifyResult::Unknown);
+        assert_eq!(ledger.verify(msg_id, CHANNEL_A), VerifyResult::Expired);
     }
 
     #[test]
@@ -266,7 +298,24 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_message_id_overwrites() {
+    fn identical_replay_is_idempotent() {
+        let ledger = IngressLedger::new();
+        let msg_id = MessageId::new(1000);
+
+        ledger.note_admitted(msg_id, CHANNEL_A, USER, "hello");
+        ledger.note_admitted(msg_id, CHANNEL_A, USER, "hello");
+
+        assert_eq!(
+            ledger.verify(msg_id, CHANNEL_A),
+            VerifyResult::Admitted {
+                channel_id: CHANNEL_A
+            }
+        );
+        assert_eq!(ledger.len(), 1);
+    }
+
+    #[test]
+    fn conflicting_evidence_preserves_first() {
         let ledger = IngressLedger::new();
         let msg_id = MessageId::new(1000);
 
@@ -274,17 +323,60 @@ mod tests {
         ledger.note_admitted(msg_id, CHANNEL_B, USER, "second");
 
         assert_eq!(
-            ledger.verify(msg_id, CHANNEL_B),
+            ledger.verify(msg_id, CHANNEL_A),
             VerifyResult::Admitted {
-                channel_id: CHANNEL_B
+                channel_id: CHANNEL_A
             }
         );
         assert_eq!(
-            ledger.verify(msg_id, CHANNEL_A),
+            ledger.verify(msg_id, CHANNEL_B),
             VerifyResult::ChannelMismatch {
-                admitted_channel: CHANNEL_B,
-                claimed_channel: CHANNEL_A,
+                admitted_channel: CHANNEL_A,
+                claimed_channel: CHANNEL_B,
             }
+        );
+    }
+
+    #[test]
+    fn poisoned_lock_returns_unavailable() {
+        let ledger = std::sync::Arc::new(IngressLedger::new());
+        ledger.note_admitted(MessageId::new(1), CHANNEL_A, USER, "hello");
+
+        let poison_target = std::sync::Arc::clone(&ledger);
+        let _ = std::thread::spawn(move || {
+            let _guard = poison_target.entries.lock().unwrap();
+            panic!("poison the mutex");
+        })
+        .join();
+
+        assert_eq!(
+            ledger.verify(MessageId::new(1), CHANNEL_A),
+            VerifyResult::Unavailable
+        );
+    }
+
+    #[test]
+    fn egress_verifies_through_shared_ledger() {
+        let ledger = std::sync::Arc::new(IngressLedger::new());
+
+        ledger.note_admitted(MessageId::new(42), CHANNEL_A, USER, "real message");
+
+        assert_eq!(
+            ledger.verify(MessageId::new(42), CHANNEL_A),
+            VerifyResult::Admitted {
+                channel_id: CHANNEL_A
+            }
+        );
+        assert_eq!(
+            ledger.verify(MessageId::new(42), CHANNEL_B),
+            VerifyResult::ChannelMismatch {
+                admitted_channel: CHANNEL_A,
+                claimed_channel: CHANNEL_B,
+            }
+        );
+        assert_eq!(
+            ledger.verify(MessageId::new(9999), CHANNEL_A),
+            VerifyResult::Unknown
         );
     }
 

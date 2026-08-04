@@ -437,6 +437,19 @@ pub async fn reply_with_hook_overrides(
                     "egress: reply_to_message_id channel mismatch"
                 );
             }
+            crate::ingress_ledger::VerifyResult::Expired => {
+                tracing::info!(
+                    message_id = ref_id.get(),
+                    channel_id = channel_id.get(),
+                    "egress: reply_to_message_id expired from ingress ledger"
+                );
+            }
+            crate::ingress_ledger::VerifyResult::Unavailable => {
+                tracing::warn!(
+                    message_id = ref_id.get(),
+                    "egress: ingress ledger unavailable; cannot verify reply_to_message_id"
+                );
+            }
         }
     }
 
