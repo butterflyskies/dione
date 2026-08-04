@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.29.1] - 2026-08-04
+
 ### Fixed
 - **Self-reaction notifications for contradictionary celebrate hits.** The gateway
   filters bot self-reactions, which silently dropped the positive-reinforcement
