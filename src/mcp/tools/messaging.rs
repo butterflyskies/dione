@@ -29,6 +29,27 @@ use crate::state::State;
 /// Self-react emoji for contradictionary celebrate hits (✨ — sparkles).
 const CONTRADICTIONARY_CELEBRATE_REACT: &str = "\u{2728}";
 
+/// Bounded display name for bot author attribution (Discord caps usernames at 32 chars).
+#[derive(Debug, Clone)]
+struct BotDisplayName(String);
+
+impl BotDisplayName {
+    const MAX_BYTES: usize = 32;
+
+    fn from_discord(name: &str) -> Self {
+        let truncated = if name.len() > Self::MAX_BYTES {
+            &name[..name.floor_char_boundary(Self::MAX_BYTES)]
+        } else {
+            name
+        };
+        Self(truncated.to_owned())
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Context available to all messaging tools.
 pub struct MessagingCtx {
     pub http: Arc<serenity::http::Http>,
@@ -546,7 +567,7 @@ async fn deliver_reply(
     let chunks = chunk(content, effective_limit, effective_mode);
     let mut sent_ids: Vec<u64> = Vec::new();
     let mut first_msg_id: Option<MessageId> = None;
-    let mut bot_author: Option<(UserId, String)> = None;
+    let mut bot_author: Option<(UserId, BotDisplayName)> = None;
 
     for (i, chunk_text) in chunks.iter().enumerate() {
         let mut builder = CreateMessage::new().content(*chunk_text);
@@ -578,7 +599,10 @@ async fn deliver_reply(
                 sent_ids.push(mid);
                 if i == 0 {
                     first_msg_id = Some(msg.id);
-                    bot_author = Some((msg.author.id, msg.author.name.clone()));
+                    bot_author = Some((
+                        msg.author.id,
+                        BotDisplayName::from_discord(&msg.author.name),
+                    ));
                 }
                 // Record sent IDs in state.
                 let mut state = ctx.state.write().await;
@@ -629,7 +653,7 @@ async fn deliver_reply(
                 ch,
                 MessageId::new(first_id),
                 author_id,
-                &author_name,
+                author_name.as_str(),
                 CONTRADICTIONARY_CELEBRATE_REACT,
             )
             .await;
