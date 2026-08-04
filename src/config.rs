@@ -1174,7 +1174,7 @@ pub fn load_config(_state_dir: &Utf8Path) -> Arc<LoadedConfig> {
 
 /// Reads config from disk, updates the in-memory cache, and returns the result.
 ///
-/// Called by the file watcher on changes, by [`ConfigStore::save`] after writes,
+/// Called by the file watcher on changes, by [`crate::config_store::ConfigStore::save`] after writes,
 /// and as a fallback when the cache is empty.
 pub fn reload_config(state_dir: &Utf8Path) -> (LoadedConfig, Option<String>) {
     let config_path = config_path(state_dir);

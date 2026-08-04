@@ -618,7 +618,7 @@ fn extract_delay_ms(event: &NotificationEvent, config: &crate::config::LoadedCon
 pub mod test_helpers {
     use super::*;
 
-    /// Exposes [`IntoNotification::into_notification`] for unit testing notification format.
+    /// Exposes `IntoNotification::into_notification` for unit testing notification format.
     pub fn make_notification(event: NotificationEvent) -> Value {
         use crate::mcp::notifications::IntoNotification;
         event.into_notification()

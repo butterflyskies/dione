@@ -1,6 +1,6 @@
 //! Conversion from Discord [`NotificationEvent`]s to MCP JSON-RPC notifications.
 //!
-//! The [`IntoNotification`] trait defines how a single event becomes a
+//! The `IntoNotification` trait defines how a single event becomes a
 //! full JSON-RPC notification. Each event is emitted as its own notification
 //! line — no batch wrapping.
 

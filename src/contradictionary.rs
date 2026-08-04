@@ -133,7 +133,7 @@ struct SidecarFile {
 ///
 /// Note that an unparseable entry fails the *whole file* — callers get `Err`
 /// and no entries at all, not a partial load. That is why retired action names
-/// keep deserializing (see [`RETIRED_ACTIONS`]) rather than being deleted.
+/// keep deserializing (see `RETIRED_ACTIONS`) rather than being deleted.
 pub fn load_sidecar_entries(path: &Path) -> Result<Vec<Entry>, String> {
     if !path.exists() {
         return Ok(Vec::new());

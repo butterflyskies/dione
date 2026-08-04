@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   journals it as expired, so a runaway tool loop cannot grow the queue
   without bound between sweeps.
 
+### Fixed
+- **Clippy `collapsible_if` cleanups.** Collapsed 8 nested `if let` chains in
+  `events.rs` and `gate.rs` (guild mute checks) into `let`-chains, fixing
+  `-D clippy::collapsible_if` under Rust 1.95.
+- **Doc link errors.** Fixed 3 broken intra-doc links (`DeliveryBuffer`,
+  `ConfigStore::save`, `JournalWriter`) and 3 private intra-doc links
+  (`RETIRED_ACTIONS`, `IntoNotification`, `IntoNotification::into_notification`).
+
 ## [0.28.0] - 2026-08-01
 
 ### Added

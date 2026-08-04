@@ -261,7 +261,7 @@ pub struct VacuumReport {
 ///
 /// This is the *file owner*: `append`, `condense`, and `vacuum` mutate the
 /// file; `load` and `stats` read it. It is deliberately not shared across
-/// writers — at runtime a single [`JournalWriter`] task owns the one instance
+/// writers — at runtime a single [`JournalHandle`] task owns the one instance
 /// that writes, so there is never a second concurrent writer to race. Reads
 /// go straight to the path and are safe against the atomic temp-file rename
 /// (a reader sees the old or new file whole, never a splice).
@@ -567,7 +567,7 @@ impl Journal {
     }
 }
 
-/// A write request handed to the single [`JournalWriter`] task. Funnelling
+/// A write request handed to the single [`JournalHandle`] task. Funnelling
 /// every mutation through one owner makes the append-vs-rewrite race
 /// structurally impossible: the writer processes commands strictly in order,
 /// so an append can never land between a rewrite's load and rename.
