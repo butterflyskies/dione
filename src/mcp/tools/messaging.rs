@@ -508,7 +508,7 @@ async fn deliver_reply(
         .config
         .contradictionary
         .as_ref()
-        .map(|c| c.check(&content))
+        .map(|c| c.check(content))
         .unwrap_or_default();
 
     if !contradictionary_hits.is_empty() {
@@ -538,7 +538,7 @@ async fn deliver_reply(
     };
     let effective_limit = if limit == 0 { 2000 } else { limit };
 
-    let chunks = chunk(&content, effective_limit, effective_mode);
+    let chunks = chunk(content, effective_limit, effective_mode);
     let mut sent_ids: Vec<u64> = Vec::new();
     let mut first_msg_id: Option<MessageId> = None;
 
