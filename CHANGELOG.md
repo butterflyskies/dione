@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.31.2] - 2026-08-04
+
+### Changed
+- **Extracted the provenance verification kernel into `auspex-core`.** The new
+  transport-agnostic workspace crate owns typed ingress references, ledger state,
+  and verification outcomes. Dione now delegates through a thin Discord adapter;
+  canary alerts, configuration, logging, and reply-path effects remain in Dione.
+
 ## [0.31.1] - 2026-08-04
 
 ### Added
