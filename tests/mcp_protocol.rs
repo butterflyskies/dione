@@ -2,8 +2,8 @@
 //!
 //! These tests exercise `handle_request` (via `test_helpers::dispatch_request`)
 //! and `event_to_notification` (via `test_helpers::make_notification`) without
-//! a real Discord connection.  Tool calls that require Discord HTTP are tested
-//! only up to the gate-rejection path.
+//! a real Discord connection. Tool calls that require Discord HTTP are tested
+//! either up to the gate-rejection path or against a local mock HTTP server.
 
 use dione::{
     codex::TransportMode,
@@ -16,10 +16,18 @@ use dione::{
     tracing_channel::TraceLevelController,
 };
 use serde_json::json;
-use serenity::model::id::{ChannelId, MessageId, UserId};
+use serenity::{
+    http::{Http, HttpBuilder},
+    model::id::{ChannelId, MessageId, UserId},
+};
 use std::sync::Arc;
 use tempfile::TempDir;
-use tokio::sync::{Mutex, mpsc};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+    sync::{Mutex, mpsc},
+    task::JoinHandle,
+};
 
 // ── Test fixture ──────────────────────────────────────────────────────────────
 
@@ -66,7 +74,16 @@ fn set_global_config(config: dione::config::Config) -> GlobalConfigGuard {
 }
 
 fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
-    let http = Arc::new(serenity::http::Http::new("fake-token-for-tests"));
+    make_server_with_http(
+        state_dir,
+        Arc::new(serenity::http::Http::new("fake-token-for-tests")),
+    )
+}
+
+fn make_server_with_http(
+    state_dir: &camino::Utf8PathBuf,
+    http: Arc<Http>,
+) -> DioneServer {
     let state = new_state();
     let queue = Arc::new(Mutex::new(AccessQueue::load(state_dir)));
     let (tx, _rx) = mpsc::channel(4);
@@ -85,6 +102,78 @@ fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
         event_tx: None,
         ingress_ledger: Arc::new(dione::ingress_ledger::IngressLedger::new()),
     }
+}
+
+async fn missing_access_http() -> (Arc<Http>, Arc<Mutex<Vec<String>>>, JoinHandle<()>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let captured_requests = Arc::clone(&requests);
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buffer[..read]);
+                if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let header_end = bytes
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .map(|position| position + 4)
+                .unwrap();
+            let headers = String::from_utf8_lossy(&bytes[..header_end]);
+            let content_length = headers.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().unwrap())
+            });
+            let chunked = headers.lines().any(|line| {
+                let Some((name, value)) = line.split_once(':') else {
+                    return false;
+                };
+                name.eq_ignore_ascii_case("transfer-encoding")
+                    && value.trim().eq_ignore_ascii_case("chunked")
+            });
+            while content_length.is_some_and(|length| bytes.len() < header_end + length)
+                || chunked
+                    && !bytes[header_end..]
+                        .windows(5)
+                        .any(|window| window == b"0\r\n\r\n")
+            {
+                let read = stream.read(&mut buffer).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buffer[..read]);
+            }
+
+            captured_requests
+                .lock()
+                .await
+                .push(String::from_utf8(bytes).unwrap());
+
+            let body = r#"{"message":"Missing Access","code":50001}"#;
+            let response = format!(
+                "HTTP/1.1 403 Forbidden\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            stream.shutdown().await.unwrap();
+        }
+    });
+    let http = HttpBuilder::new("fake-token-for-tests")
+        .proxy(format!("http://{address}"))
+        .ratelimiter_disabled(true)
+        .build();
+    (Arc::new(http), requests, server)
 }
 
 // ── Initialize handshake ──────────────────────────────────────────────────────
@@ -1657,5 +1746,108 @@ async fn test_no_rly_stats_rejects_wrong_type_filter() {
     assert!(
         msg.contains("since_days"),
         "the error must name the offending argument, got: {msg}"
+    );
+}
+
+// ── missing-access boundary tests ────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_fetch_messages_preserves_discord_missing_access_after_gate() {
+    let (_dir, state_dir) = temp_state_dir();
+    let channel_id = "100102";
+    let mut config = dione::config::Config::default();
+    config.channels.push(dione::config::ChannelConfig {
+        id: channel_id.to_string(),
+        require_mention: false,
+        allow_from: vec![],
+        ..Default::default()
+    });
+    let _config = set_global_config(config);
+    let (http, requests, mock_server) = missing_access_http().await;
+    let server = make_server_with_http(&state_dir, http);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 55,
+        "method": "tools/call",
+        "params": {
+            "name": "fetch_messages",
+            "arguments": {
+                "channel_id": channel_id,
+                "limit": 1
+            }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    mock_server.abort();
+    let requests = requests.lock().await.clone();
+
+    assert_eq!(resp["result"]["isError"], json!(true));
+    assert!(
+        text.contains("Missing Access"),
+        "Discord's permission error must survive the MCP boundary, got: {text}\nrequests:\n{requests:#?}"
+    );
+    assert!(
+        !text.contains("not a permitted outbound target"),
+        "configured channel should pass Dione's outbound gate, got: {text}"
+    );
+    assert!(
+        requests.iter().any(|request| {
+            request.starts_with("GET ")
+                && request.contains(&format!("/channels/{channel_id}/messages"))
+        }),
+        "expected a Discord history request, got: {requests:#?}"
+    );
+}
+
+#[tokio::test]
+async fn test_reply_preserves_discord_missing_access_after_gate() {
+    let (_dir, state_dir) = temp_state_dir();
+    let channel_id = "100103";
+    let mut config = dione::config::Config::default();
+    config.channels.push(dione::config::ChannelConfig {
+        id: channel_id.to_string(),
+        require_mention: false,
+        allow_from: vec![],
+        ..Default::default()
+    });
+    let _config = set_global_config(config);
+    let (http, requests, mock_server) = missing_access_http().await;
+    let server = make_server_with_http(&state_dir, http);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 56,
+        "method": "tools/call",
+        "params": {
+            "name": "reply",
+            "arguments": {
+                "channel_id": channel_id,
+                "content": "boundary test",
+                "suppress_ping": true
+            }
+        }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    mock_server.abort();
+    let requests = requests.lock().await.clone();
+
+    assert_eq!(resp["result"]["isError"], json!(true));
+    assert!(
+        text.contains("Missing Access"),
+        "Discord's permission error must survive the MCP boundary, got: {text}\nrequests:\n{requests:#?}"
+    );
+    assert!(
+        !text.contains("not a permitted outbound target"),
+        "configured channel should pass Dione's outbound gate, got: {text}"
+    );
+    assert!(
+        requests.iter().any(|request| {
+            request.starts_with("POST ")
+                && request.contains(&format!("/channels/{channel_id}/messages"))
+        }),
+        "expected a Discord send request, got: {requests:#?}"
     );
 }
