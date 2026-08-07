@@ -430,7 +430,7 @@ mod tests {
 
         assert!(RootVerdict::UnknownComplete.is_denial());
 
-        assert!(RootVerdict::Expired.is_degraded() == false);
-        assert!(RootVerdict::Evicted.is_degraded() == false);
+        assert!(!RootVerdict::Expired.is_degraded());
+        assert!(!RootVerdict::Evicted.is_degraded());
     }
 }

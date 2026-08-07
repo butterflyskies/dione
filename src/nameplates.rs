@@ -286,7 +286,7 @@ nameplates:
 
     #[test]
     fn test_sanitize_strips_bidi() {
-        let with_bidi = format!("she/\u{202E}her");
+        let with_bidi = "she/\u{202E}her".to_string();
         assert_eq!(sanitize_nameplate_string(&with_bidi, 32), "she/her");
     }
 

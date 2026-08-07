@@ -11,7 +11,7 @@ use serenity::model::id::{ChannelId, MessageId, UserId};
 use tokio::sync::mpsc;
 
 use crate::config::{ChunkMode, DmPolicy, LoadedConfig};
-use crate::contradictionary::Action;
+use crate::contradictionary::{Action, BlockOutcome, DiaryRecord, append_diary_record};
 use crate::discord::chunk;
 use crate::discord::events::NotificationEvent;
 use crate::gate::OutboundGate;
@@ -532,6 +532,7 @@ async fn deliver_prepared_reply(
         content: content.to_string(),
         reply_to_message_id,
         suppress_ping: options.suppress_ping,
+        pending_diary_records: Vec::new(),
     };
 
     if let Some(ref judge) = ctx.config.contradictionary
@@ -553,6 +554,10 @@ async fn deliver_prepared_reply(
             reason = %ticket.reason,
             "contradictionary held outbound message"
         );
+        // Record the hold in the durable diary — the gate firing is an
+        // evaluation, and every evaluation is recorded.
+        let pattern = ticket.reason.to_string();
+        append_diary_records(ctx, &[DiaryRecord::held_now(&pattern, &content)]);
         return bounce_json(&ticket);
     }
 
@@ -583,8 +588,20 @@ fn bounce_json(ticket: &BounceTicket) -> Value {
     })
 }
 
+fn append_diary_records(ctx: &MessagingCtx, records: &[DiaryRecord]) {
+    for record in records {
+        if let Err(e) = append_diary_record(ctx.state_dir.as_std_path(), record) {
+            tracing::warn!(
+                error = %e,
+                action = ?record.action,
+                "failed to append contradictionary record to diary"
+            );
+        }
+    }
+}
+
 /// Send one [`ReplyRequest`] to Discord: typing indicator, chunking, reply
-/// threading, and post-send warn/celebrate self-reacts. This is the path
+/// threading, and post-send celebrate self-reacts. This is the path
 /// shared by judged sends and by release/rephrase — the outbound channel
 /// gate is re-checked here so a held message cannot outlive a config change
 /// that revoked its channel.
@@ -601,17 +618,37 @@ async fn deliver_reply(
 
     // Seam cost: a clean send scans the contradictionary twice — once as the
     // judge in `reply` (for block-tier bounces) and again here for the
-    // warn/celebrate self-reacts. The two are deliberately separate concerns
+    // celebrate self-reacts. The two are deliberately separate concerns
     // (the judge gates delivery; these reactions ride along after it), and a
     // bounce path never reaches here, so the second scan only runs on sends
     // that were already going out. Block hits are irrelevant here (the judge
-    // already ruled); warn/log/celebrate ride along on every path out.
+    // already ruled); log/celebrate ride along on every path out.
     let contradictionary_hits = ctx
         .config
         .contradictionary
         .as_ref()
         .map(|c| c.check(content))
         .unwrap_or_default();
+
+    let pending_diary_records = if !request.pending_diary_records.is_empty() {
+        request.pending_diary_records.clone()
+    } else if let Some(ref contradictionary) = ctx.config.contradictionary {
+        // Hold send-side records until every chunk succeeds. Quiet tiers
+        // describe published text, and an override is only a crossing after
+        // publication. A partial delivery is intentionally not represented as
+        // a successful full-message record; a retry evaluates its remainder
+        // independently.
+        match contradictionary.evaluate_block(&contradictionary_hits, content, true) {
+            BlockOutcome::Clear => Vec::new(),
+            BlockOutcome::Overridden(records) | BlockOutcome::Recorded(records) => records,
+            BlockOutcome::Rejected { .. } => {
+                // Should not happen in deliver_reply — the judge already cleared.
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
 
     if !contradictionary_hits.is_empty() {
         let patterns: Vec<&str> = contradictionary_hits
@@ -696,13 +733,34 @@ async fn deliver_reply(
                 } else {
                     Some(chunks[i..].join("\n\n"))
                 };
+                let preserve_diary_records =
+                    !sent_ids.is_empty() || !request.pending_diary_records.is_empty();
                 return Err(DeliverError {
                     message: format!("failed to send chunk {i}: {e}"),
                     sent_ids,
                     undelivered,
+                    diary_records: if preserve_diary_records {
+                        pending_diary_records
+                    } else {
+                        Vec::new()
+                    },
                 });
             }
         }
+    }
+
+    if !pending_diary_records.is_empty() {
+        if let Some(first) = pending_diary_records
+            .iter()
+            .find(|record| record.action == Action::Block && record.overridden)
+        {
+            tracing::info!(
+                channel = %ch,
+                pattern = %first.pattern,
+                "contradictionary block override delivered"
+            );
+        }
+        append_diary_records(ctx, &pending_diary_records);
     }
 
     // ── Contradictionary post-send: self-react on celebrate hits ───
@@ -811,6 +869,10 @@ pub async fn rephrase_held(ctx: &MessagingCtx, handle: &str, content: &str) -> V
                 new_handle = %ticket.handle,
                 reason = %ticket.reason,
                 "rephrase bounced again; chained new handle"
+            );
+            append_diary_records(
+                ctx,
+                &[DiaryRecord::held_now(&ticket.reason.to_string(), content)],
             );
             bounce_json(&ticket)
         }

@@ -19,6 +19,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `DiscordIngressReceipt`, `RootVerdict`. Diagnostics only — does not gate egress
   (Slice B requires harness custody binding). 12 new tests (23 total in crate).
 
+## [0.33.0] - 2026-08-07
+
+### Added
+- **Durable diary sink for all four contradictionary tiers.** Every gate
+  evaluation -- block (held and crossed), log, and celebrate -- now appends
+  a JSONL record to `contradictionary.jsonl` under the channel state
+  directory. Each line self-identifies via an `action` field, so the single
+  sink stays partitionable (`jq 'select(.action == "celebrate")'`).
+  Within the block tier, `override` splits holds from crossings, making a
+  compliance rate readable off the file itself. Previously only overridden
+  blocks were recorded; held blocks, log hits, and celebrate hits were
+  invisible to the diary.
+- **`evaluate_block` method on `Contradictionary`.** Encapsulates the
+  block/log/celebrate/clear decision and diary record construction in one
+  call, returning a `BlockOutcome` enum.
+- **`DiaryRecord` and `append_diary_record` public API.** Typed diary
+  entries with `Serialize`, timestamped via `chrono::Utc`, with message
+  text truncated to 2000 characters.
+
+### Fixed
+- **Warnectomy.** Fixed all compiler and clippy warnings across the
+  workspace: dead-code guards in `auspex-core`, `needless_borrows` in
+  bell provider tests, `assertions_on_constants` in app server,
+  `await_holding_lock` in GAIE tests, and `useless_format` in nameplates.
+
 ## [0.31.3] - 2026-08-07
 
 ### Added

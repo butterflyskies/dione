@@ -1810,6 +1810,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_atom_1b_multirun_backfill_preserves_alias_relations_and_noop_bytes() {
         use crate::gaie::{
             Archive, ArchivePaths, BackfillOptions, CorpusId, EventKind, run_backfill,

@@ -78,8 +78,8 @@ pub trait OutboundJudge: Send + Sync {
     fn judge(&self, content: &str) -> Verdict;
 }
 
-/// The contradictionary judges by its `block`-tier entries. Warn, log, and
-/// celebrate hits are not the judge's concern — they ride along after the
+/// The contradictionary judges by its `block`-tier entries. Log and celebrate
+/// hits are not the judge's concern — they ride along after the
 /// send as before.
 impl OutboundJudge for Contradictionary {
     fn judge(&self, content: &str) -> Verdict {
@@ -191,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn warn_log_celebrate_do_not_bounce() {
+    fn log_and_celebrate_do_not_bounce() {
         let judge = Contradictionary::new(entries());
         assert_eq!(
             judge.judge("honestly, prejection is the word"),

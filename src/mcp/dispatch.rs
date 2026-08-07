@@ -19,9 +19,9 @@ use crate::{
             },
             management::{create_thread, delete_message, pin_message, unpin_message},
             messaging::{
-                download_attachment, edit_message_with_hook_overrides, fetch_messages,                
-                fetch_new_since, fetch_pins, get_message, react as discord_react, release_held, rephrase_held,
-                reply_with_hook_overrides, send_dm_with_hook_overrides,
+                download_attachment, edit_message_with_hook_overrides, fetch_messages,
+                fetch_new_since, fetch_pins, get_message, react as discord_react, release_held,
+                rephrase_held, reply_with_hook_overrides, send_dm_with_hook_overrides,
                 send_file_with_hook_overrides,
             },
             no_rly::{no_rly_condense, no_rly_stats, no_rly_vacuum},
