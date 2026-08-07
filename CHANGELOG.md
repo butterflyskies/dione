@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-08-07
+
+### Added
+- **Root registry with typed verdicts (Slice A).** Canonical root registry in
+  `auspex-core` mints opaque `RootId` on admission, tracks epochs, and returns
+  nine-variant typed verdicts (`Admitted`, `PreEpoch`, `Expired`, `Evicted`,
+  `RestartGap`, `TransportGap`, `ChannelMismatch`, `UnknownComplete`,
+  `Unavailable`) — no booleans, no null-as-unknown. New modules: `root_registry`,
+  `verdict`, `receipt`. New types: `RootId`, `EpochId`, `ActivationRoot`,
+  `DiscordIngressReceipt`, `RootVerdict`. Diagnostics only — does not gate egress
+  (Slice B requires harness custody binding). 12 new tests (23 total in crate).
+
 ## [0.31.3] - 2026-08-07
 
 ### Added
