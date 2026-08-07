@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.31.3] - 2026-08-07
+
+### Added
+- **Dedicated `fetch_pins` tool.** Retrieves pinned messages from a Discord
+  channel, returning them as structured JSON. Enables constructs to access
+  pinned reference material (character sheets, design docs, standing decisions)
+  without scrolling channel history.
+
 ## [0.31.2] - 2026-08-04
 
 ### Changed

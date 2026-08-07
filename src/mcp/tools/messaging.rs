@@ -1018,6 +1018,31 @@ pub async fn fetch_messages(
     }
 }
 
+/// Fetches every pinned message visible in a permitted channel.
+pub async fn fetch_pins(ctx: &MessagingCtx, channel_id: ChannelId) -> Value {
+    if let Err(e) = check_outbound(ctx, channel_id).await {
+        return e;
+    }
+
+    match ctx.http.get_pins(channel_id).await {
+        Ok(messages) => build_pins_response(&ctx.config, messages),
+        Err(e) => json!({ "error": e.to_string() }),
+    }
+}
+
+fn build_pins_response(config: &LoadedConfig, mut messages: Vec<Message>) -> Value {
+    messages.sort_unstable_by_key(|message| message.id);
+    let count = messages.len();
+    let messages = messages
+        .iter()
+        .map(|message| message_json(config, message))
+        .collect::<Vec<_>>();
+    json!({
+        "messages": messages,
+        "count": count,
+    })
+}
+
 /// Serializes one message into the wire shape shared by `fetch_messages`,
 /// `fetch_new_since`, and `search_messages`, so the tools cannot drift apart.
 pub(crate) fn message_json(config: &LoadedConfig, m: &Message) -> Value {
@@ -2491,6 +2516,28 @@ mod tests {
             .map(|m| m["id"].as_str().unwrap())
             .collect();
         assert_eq!(ids, ["3001", "3002", "3003"]);
+    }
+
+    #[test]
+    fn build_pins_response_sorts_oldest_first_and_counts_messages() {
+        let resp = build_pins_response(&test_config(), newest_first_batch());
+        let ids = resp["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|message| message["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, ["3001", "3002", "3003"]);
+        assert_eq!(resp["count"], 3);
+    }
+
+    #[test]
+    fn build_pins_response_handles_empty_channels() {
+        let resp = build_pins_response(&test_config(), Vec::new());
+
+        assert_eq!(resp["messages"], json!([]));
+        assert_eq!(resp["count"], 0);
     }
 
     #[test]

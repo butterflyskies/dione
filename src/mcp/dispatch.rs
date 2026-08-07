@@ -19,8 +19,8 @@ use crate::{
             },
             management::{create_thread, delete_message, pin_message, unpin_message},
             messaging::{
-                download_attachment, edit_message_with_hook_overrides, fetch_messages,
-                fetch_new_since, get_message, react as discord_react, release_held, rephrase_held,
+                download_attachment, edit_message_with_hook_overrides, fetch_messages,                
+                fetch_new_since, fetch_pins, get_message, react as discord_react, release_held, rephrase_held,
                 reply_with_hook_overrides, send_dm_with_hook_overrides,
                 send_file_with_hook_overrides,
             },
@@ -280,6 +280,11 @@ pub(crate) async fn call_tool(
             let after_message_id = parse_id(&args, "after_message_id")?.message();
             let limit = parse_limit(&args, 20);
             fetch_new_since(&ctx, channel_id, after_message_id, limit).await
+        }
+        "fetch_pins" => {
+            let ctx = server.messaging_ctx(config.clone());
+            let channel_id = parse_id(&args, "channel_id")?.channel();
+            fetch_pins(&ctx, channel_id).await
         }
         "download_attachment" => {
             let ctx = server.messaging_ctx(config.clone());
