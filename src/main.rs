@@ -109,7 +109,9 @@ async fn main() -> Result<()> {
     // Keep the Observe pipeline installed for the process lifetime. Each
     // message's freshly loaded config decides whether it participates, so
     // `pre_send.enabled` hot reloads in both directions without a restart.
-    let pre_send_pipeline = dione::pre_send::observe_pipeline(Vec::new())
+    let tier1_hook = dione::cingulate::Tier1Hook::from_embedded()
+        .wrap_err("failed to load tier-1 cingulate hook")?;
+    let pre_send_pipeline = dione::pre_send::observe_pipeline(vec![Box::new(tier1_hook)])
         .wrap_err("failed to configure Observe pre-send pipeline")?;
     dione::pre_send::install_pipeline(Some(pre_send_pipeline));
 
@@ -156,8 +158,10 @@ async fn main() -> Result<()> {
     let (codex_queue, codex_handle, codex_thread_binding) = if cli.mode == TransportMode::Codex {
         let codex_queue =
             CodexEventQueue::load(&state_dir).wrap_err("failed to open Codex event queue")?;
-        let delivery_config = CodexDeliveryConfig::resolve(cli.codex_app_server_socket)
+        let mut delivery_config = CodexDeliveryConfig::resolve(cli.codex_app_server_socket)
             .wrap_err("failed to configure Codex live delivery")?;
+        delivery_config.preamble_mode = config.delivery.preamble_mode;
+        delivery_config.preamble_template = config.delivery.preamble_template.clone();
         let initial_thread = match cli.codex_thread_id {
             Some(thread_id) => Some(thread_id),
             None => env::var("CODEX_THREAD_ID")
@@ -218,6 +222,9 @@ async fn main() -> Result<()> {
         None
     };
 
+    // Build ingress ledger (shared between gateway and MCP egress).
+    let ingress_ledger = std::sync::Arc::new(dione::ingress_ledger::IngressLedger::new());
+
     // Build Discord event handler.
     let handler = Handler {
         state: state.clone(),
@@ -228,6 +235,7 @@ async fn main() -> Result<()> {
         discord_cmd_rx: tokio::sync::Mutex::new(Some(discord_cmd_rx)),
         pronoun_service,
         nameplate_service,
+        ingress_ledger: ingress_ledger.clone(),
     };
 
     let mut discord_client = dione::discord::client::build_client(&token, handler)
@@ -249,6 +257,9 @@ async fn main() -> Result<()> {
         mode: cli.mode,
         codex_queue,
         codex_thread_binding,
+        no_rly: Arc::new(dione::no_rly::consent::ConsentGate::new(&state_dir)),
+        event_tx: Some(event_tx.clone()),
+        ingress_ledger,
     };
 
     // Spawn the tracing-channel forwarder: converts tracing events into NotificationEvents.
@@ -296,10 +307,17 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Wait for a shutdown signal.
+    // Wait for a shutdown signal. SIGTERM (service managers, container stop)
+    // must trigger the same graceful path as SIGINT so the no_rly sweeper
+    // drains pending handles into the journal before exit.
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("install SIGTERM handler");
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             tracing::info!("SIGINT received, shutting down");
+        }
+        _ = sigterm.recv() => {
+            tracing::info!("SIGTERM received, shutting down");
         }
         _ = cancel.cancelled() => {
             tracing::info!("shutdown requested by internal cancellation");

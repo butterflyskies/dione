@@ -1,0 +1,20 @@
+---
+source: src/mcp/tools/messaging.rs
+expression: bounce_json(&ticket)
+---
+{
+  "error": "⚠️ held by contradictionary: straightforward (nothing is ever straightforward)",
+  "held": {
+    "expires_in_secs": 180,
+    "handle": "nr-3f92-7",
+    "next": "no_rly(handle) sends it verbatim; rephrase(handle, content) sends a replacement (re-checked); ignoring it lets it expire",
+    "reason": {
+      "matches": [
+        {
+          "pattern": "straightforward",
+          "reason": "nothing is ever straightforward"
+        }
+      ]
+    }
+  }
+}

@@ -47,6 +47,11 @@ impl Timestamp {
         s.parse::<DateTime<FixedOffset>>().map(Timestamp)
     }
 
+    /// The current wall-clock time, in UTC.
+    pub fn now() -> Self {
+        Timestamp(Utc::now().fixed_offset())
+    }
+
     /// Returns the inner `DateTime<FixedOffset>`.
     pub fn as_datetime(&self) -> &DateTime<FixedOffset> {
         &self.0
@@ -67,6 +72,26 @@ impl std::fmt::Display for Timestamp {
 impl serde::Serialize for Timestamp {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.0.to_rfc3339())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Timestamp {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+
+        impl serde::de::Visitor<'_> for Visitor {
+            type Value = Timestamp;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an RFC 3339 timestamp string")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Timestamp, E> {
+                Timestamp::parse(v).map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_str(Visitor)
     }
 }
 

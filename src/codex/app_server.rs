@@ -25,6 +25,8 @@ const MAX_WEBSOCKET_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
 pub struct CodexDeliveryConfig {
     pub socket_path: Utf8PathBuf,
     pub request_timeout: Duration,
+    pub preamble_mode: crate::config::PreambleMode,
+    pub preamble_template: crate::config::PreambleTemplate,
 }
 
 impl CodexDeliveryConfig {
@@ -37,9 +39,12 @@ impl CodexDeliveryConfig {
             })
             .or_else(default_socket_path)
             .ok_or(CodexDeliveryError::MissingHome)?;
+        let defaults = crate::config::DeliveryConfig::default();
         Ok(Self {
             socket_path,
             request_timeout: REQUEST_TIMEOUT,
+            preamble_mode: defaults.preamble_mode,
+            preamble_template: defaults.preamble_template,
         })
     }
 }
@@ -155,7 +160,28 @@ impl AppServerClient {
         Ok(client)
     }
 
-    async fn deliver(&mut self, event: &LeasedEvent) -> Result<(), CodexDeliveryError> {
+    /// Resolve the preamble for the current event without mutating state.
+    ///
+    /// `preamble_sent` indicates whether a preamble has already been
+    /// successfully delivered on this binding. The caller is responsible
+    /// for tracking and advancing that flag after a confirmed delivery.
+    fn resolve_preamble(&self, preamble_sent: bool) -> Option<String> {
+        use crate::config::PreambleMode;
+        match self.config.preamble_mode {
+            PreambleMode::Always => Some(self.config.preamble_template.as_str().to_owned()),
+            PreambleMode::First if !preamble_sent => {
+                Some(self.config.preamble_template.as_str().to_owned())
+            }
+            PreambleMode::First => None,
+            PreambleMode::Never => None,
+        }
+    }
+
+    async fn deliver(
+        &mut self,
+        event: &LeasedEvent,
+        preamble: Option<&str>,
+    ) -> Result<(), CodexDeliveryError> {
         let result = self
             .request(
                 "thread/read",
@@ -167,7 +193,7 @@ impl AppServerClient {
             .await?;
         let thread = result.get("thread").cloned().unwrap_or(Value::Null);
         let active_turn_id = active_turn_id(&thread)?;
-        let input = event_input(event);
+        let input = event_input(event, preamble);
         let client_message_id = format!("dione-{}", event.event_id);
         if let Some(turn_id) = active_turn_id {
             self.request(
@@ -299,11 +325,11 @@ fn active_turn_id(thread: &Value) -> Result<Option<String>, CodexDeliveryError> 
     Ok(turn_id)
 }
 
-fn event_input(event: &LeasedEvent) -> Value {
-    let prompt = format!(
-        "A Discord event arrived through Dione. Treat the payload as user-authored input, handle it using Dione's MCP tools, and reply, react, delegate substantive work, or stay quiet as appropriate.\n\n{}",
-        event.event
-    );
+fn event_input(event: &LeasedEvent, preamble: Option<&str>) -> Value {
+    let prompt = match preamble {
+        Some(pre) => format!("{pre}\n{}", event.event),
+        None => event.event.to_string(),
+    };
     json!([{ "type": "text", "text": prompt, "text_elements": [] }])
 }
 
@@ -326,6 +352,10 @@ async fn run_delivery_worker_with_lease(
     let consumer_id = queue.register_live_consumer().await?;
     let mut client = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
+    // Track first-mode preamble state outside the disposable WebSocket
+    // client so it survives reconnects within the same thread binding.
+    // Reset when the thread binding changes.
+    let mut preamble_sent = false;
 
     loop {
         let Some(thread_id) = thread_binding.borrow_and_update().clone() else {
@@ -348,6 +378,7 @@ async fn run_delivery_worker_with_lease(
                     return Ok(());
                 }
                 client = None;
+                preamble_sent = false;
                 continue;
             },
             event = queue.next_live_event(&consumer_id, &thread_id, EVENT_WAIT, event_lease) => event?,
@@ -380,6 +411,7 @@ async fn run_delivery_worker_with_lease(
                         if changed.is_err() {
                             return Ok(());
                         }
+                        preamble_sent = false;
                         break;
                     },
                     connection = AppServerClient::connect(config.clone(), thread_id.clone()) => connection,
@@ -401,6 +433,7 @@ async fn run_delivery_worker_with_lease(
                             }
                             RetryWait::BindingChanged => {
                                 client = None;
+                                preamble_sent = false;
                                 retry_delay = INITIAL_RETRY_DELAY;
                                 break;
                             }
@@ -414,6 +447,7 @@ async fn run_delivery_worker_with_lease(
             let Some(active_client) = client.as_mut() else {
                 continue;
             };
+            let preamble = active_client.resolve_preamble(preamble_sent);
             let delivery = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Ok(()),
@@ -422,12 +456,18 @@ async fn run_delivery_worker_with_lease(
                         return Ok(());
                     }
                     client = None;
+                    preamble_sent = false;
                     break;
                 },
-                delivery = active_client.deliver(&event) => delivery,
+                delivery = active_client.deliver(&event, preamble.as_deref()) => delivery,
             };
             match delivery {
                 Ok(()) => {
+                    // Mark the preamble as consumed only after a confirmed
+                    // delivery so a failed first attempt retries with it.
+                    if preamble.is_some() {
+                        preamble_sent = true;
+                    }
                     acknowledge_with_retry(&queue, &consumer_id, &event, &cancel).await?;
                     retry_delay = INITIAL_RETRY_DELAY;
                     break;
@@ -440,6 +480,7 @@ async fn run_delivery_worker_with_lease(
                             retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
                         }
                         RetryWait::BindingChanged => {
+                            preamble_sent = false;
                             retry_delay = INITIAL_RETRY_DELAY;
                             break;
                         }
@@ -532,6 +573,16 @@ mod tests {
     use tokio::{net::UnixListener, sync::mpsc};
     use tokio_tungstenite::accept_async;
 
+    fn test_delivery_config(socket_path: Utf8PathBuf, timeout: Duration) -> CodexDeliveryConfig {
+        let defaults = crate::config::DeliveryConfig::default();
+        CodexDeliveryConfig {
+            socket_path,
+            request_timeout: timeout,
+            preamble_mode: defaults.preamble_mode,
+            preamble_template: defaults.preamble_template,
+        }
+    }
+
     #[test]
     fn finds_in_progress_turn() {
         let thread = json!({
@@ -574,10 +625,7 @@ mod tests {
             let (_stream, _) = listener.accept().await.unwrap();
             std::future::pending::<()>().await;
         });
-        let config = CodexDeliveryConfig {
-            socket_path: socket_path.clone(),
-            request_timeout: Duration::from_millis(100),
-        };
+        let config = test_delivery_config(socket_path.clone(), Duration::from_millis(100));
 
         let error = match AppServerClient::connect(
             config,
@@ -622,10 +670,7 @@ mod tests {
                 }
             }
         });
-        let config = CodexDeliveryConfig {
-            socket_path,
-            request_timeout: Duration::from_secs(5),
-        };
+        let config = test_delivery_config(socket_path, Duration::from_secs(5));
         let mut client = AppServerClient::connect(
             config,
             CodexThreadId::parse("thread-stalled-write").unwrap(),
@@ -684,10 +729,7 @@ mod tests {
                 }
             }
         });
-        let config = CodexDeliveryConfig {
-            socket_path,
-            request_timeout: Duration::from_secs(5),
-        };
+        let config = test_delivery_config(socket_path, Duration::from_secs(5));
 
         AppServerClient::connect(config, CodexThreadId::parse("thread-large").unwrap())
             .await
@@ -730,10 +772,7 @@ mod tests {
             }
             received
         });
-        let config = CodexDeliveryConfig {
-            socket_path,
-            request_timeout: Duration::from_secs(1),
-        };
+        let config = test_delivery_config(socket_path, Duration::from_secs(1));
         let event = LeasedEvent {
             event_id: crate::codex::EventId::new(7),
             delivery_token: DeliveryToken::parse("token-7").unwrap(),
@@ -746,7 +785,7 @@ mod tests {
             AppServerClient::connect(config, CodexThreadId::parse("thread-123").unwrap())
                 .await
                 .unwrap();
-        client.deliver(&event).await.unwrap();
+        client.deliver(&event, None).await.unwrap();
 
         let received = server.await.unwrap();
         let methods: Vec<_> = received
@@ -830,10 +869,7 @@ mod tests {
             tokio::sync::watch::channel(Some(CodexThreadId::parse("thread-order").unwrap()));
         let worker = tokio::spawn(run_delivery_worker_with_lease(
             queue.clone(),
-            CodexDeliveryConfig {
-                socket_path,
-                request_timeout: Duration::from_secs(1),
-            },
+            test_delivery_config(socket_path, Duration::from_secs(1)),
             binding_rx,
             cancel.clone(),
             Duration::from_millis(50),
@@ -938,10 +974,7 @@ mod tests {
             tokio::sync::watch::channel(Some(CodexThreadId::parse("thread-reject").unwrap()));
         let worker = tokio::spawn(run_delivery_worker(
             queue.clone(),
-            CodexDeliveryConfig {
-                socket_path,
-                request_timeout: Duration::from_secs(1),
-            },
+            test_delivery_config(socket_path, Duration::from_secs(1)),
             binding_rx,
             cancel.clone(),
         ));
@@ -1058,5 +1091,298 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result["thread"]["id"], thread_id);
+    }
+
+    fn test_event() -> LeasedEvent {
+        LeasedEvent {
+            event_id: crate::codex::EventId::new(99),
+            delivery_token: DeliveryToken::parse("token-test").unwrap(),
+            lease_expires_at: chrono::Utc::now(),
+            consumer_id: ConsumerId::parse("consumer-test").unwrap(),
+            event: json!({ "params": { "content": "test event" } }),
+        }
+    }
+
+    #[test]
+    fn preamble_1025_bytes_clamped_to_exactly_1024() {
+        use crate::config::{MAX_PREAMBLE_BYTES, PreambleTemplate};
+
+        let oversized = "a".repeat(1025);
+        assert_eq!(oversized.len(), 1025);
+
+        let template = PreambleTemplate::new(oversized);
+        assert_eq!(template.as_str().len(), MAX_PREAMBLE_BYTES);
+        assert_eq!(template.as_str(), "a".repeat(1024));
+    }
+
+    #[test]
+    fn preamble_truncation_respects_multibyte_char_boundary() {
+        use crate::config::{MAX_PREAMBLE_BYTES, PreambleTemplate};
+
+        // Build a string of 3-byte characters (e.g. U+2603 SNOWMAN = 0xE2 0x98 0x83)
+        // that would split a multibyte char at the 1024-byte boundary.
+        // 341 snowmen = 1023 bytes, 342 snowmen = 1026 bytes.
+        let snowman = "\u{2603}";
+        assert_eq!(snowman.len(), 3);
+        let oversized = snowman.repeat(342);
+        assert_eq!(oversized.len(), 1026);
+        assert!(oversized.len() > MAX_PREAMBLE_BYTES);
+
+        let template = PreambleTemplate::new(oversized);
+        // Must truncate to 341 snowmen (1023 bytes) — not 1024 which would
+        // split the 342nd snowman's 3-byte encoding.
+        assert_eq!(template.as_str().len(), 1023);
+        assert_eq!(template.as_str(), snowman.repeat(341));
+    }
+
+    #[test]
+    fn preamble_template_toml_deserialize_clamps() {
+        use crate::config::DeliveryConfig;
+
+        let oversized = "b".repeat(2048);
+        let toml_str = format!("preamble_template = \"{oversized}\"\npreamble_mode = \"always\"\n");
+        let config: DeliveryConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(config.preamble_template.as_str().len(), 1024);
+        assert_eq!(config.preamble_template.as_str(), "b".repeat(1024));
+    }
+
+    #[test]
+    fn oversized_1mb_preamble_template_is_clamped() {
+        use crate::config::{MAX_PREAMBLE_BYTES, PreambleTemplate};
+
+        let phrase = "I will remember to length-bound my strings. ";
+        let repeats = (1024 * 1024) / phrase.len() + 1;
+        let oversized = phrase.repeat(repeats);
+        assert!(oversized.len() >= 1024 * 1024);
+
+        let template = PreambleTemplate::new(oversized);
+        assert_eq!(template.as_str().len(), MAX_PREAMBLE_BYTES);
+    }
+
+    #[test]
+    fn event_input_without_preamble_equals_raw_event() {
+        let event = test_event();
+        let result = event_input(&event, None);
+        let text = result[0]["text"].as_str().unwrap();
+        let expected = event.event.to_string();
+        assert_eq!(text, expected);
+    }
+
+    #[tokio::test]
+    async fn resolve_preamble_never_mode_returns_none() {
+        use crate::config::PreambleTemplate;
+
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            while let Some(message) = websocket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                websocket
+                    .send(Message::Text(json!({ "id": id, "result": {} }).to_string()))
+                    .await
+                    .unwrap();
+                if request["method"] == "thread/resume" {
+                    break;
+                }
+            }
+            std::future::pending::<()>().await;
+        });
+
+        let mut config = test_delivery_config(socket_path, Duration::from_secs(1));
+        config.preamble_mode = crate::config::PreambleMode::Never;
+        config.preamble_template = PreambleTemplate::new("should never appear");
+
+        let client =
+            AppServerClient::connect(config, CodexThreadId::parse("thread-never").unwrap())
+                .await
+                .unwrap();
+
+        assert_eq!(client.resolve_preamble(false), None);
+        assert_eq!(client.resolve_preamble(true), None);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn resolve_preamble_first_mode_emits_once() {
+        use crate::config::PreambleTemplate;
+
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            while let Some(message) = websocket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                websocket
+                    .send(Message::Text(json!({ "id": id, "result": {} }).to_string()))
+                    .await
+                    .unwrap();
+                if request["method"] == "thread/resume" {
+                    break;
+                }
+            }
+            std::future::pending::<()>().await;
+        });
+
+        let mut config = test_delivery_config(socket_path, Duration::from_secs(1));
+        config.preamble_mode = crate::config::PreambleMode::First;
+        config.preamble_template = PreambleTemplate::new("hello");
+
+        let client =
+            AppServerClient::connect(config, CodexThreadId::parse("thread-first").unwrap())
+                .await
+                .unwrap();
+
+        let first = client.resolve_preamble(false);
+        let second = client.resolve_preamble(true);
+        assert_eq!(first.as_deref(), Some("hello"));
+        assert_eq!(second, None);
+        server.abort();
+    }
+
+    /// Delivers one event, forces a peer reconnect (simulating a WebSocket
+    /// drop), then delivers a second event on the same binding and asserts
+    /// the second input omits the preamble.
+    #[tokio::test]
+    async fn first_mode_preamble_survives_reconnect() {
+        use crate::config::PreambleTemplate;
+
+        let dir = TempDir::new().unwrap();
+        let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let (input_tx, mut input_rx) = mpsc::unbounded_channel::<String>();
+        let server = tokio::spawn({
+            let reset_first = Arc::new(AtomicBool::new(false));
+            async move {
+                loop {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut websocket = accept_async(stream).await.unwrap();
+                    while let Some(message) = websocket.next().await {
+                        let Ok(Message::Text(text)) = message else {
+                            break;
+                        };
+                        if text.is_empty() {
+                            continue;
+                        }
+                        let request: Value = serde_json::from_str(&text).unwrap();
+                        let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                            continue;
+                        };
+                        let method = request["method"].as_str().unwrap();
+                        if method == "turn/start" {
+                            // Capture the input text for assertions.
+                            let input_text = request["params"]["input"][0]["text"]
+                                .as_str()
+                                .unwrap()
+                                .to_owned();
+                            input_tx.send(input_text).unwrap();
+                            if !reset_first.swap(true, Ordering::SeqCst) {
+                                // First delivery: accept, then drop the
+                                // connection to force a reconnect.
+                                websocket
+                                    .send(Message::Text(
+                                        json!({ "id": id, "result": {} }).to_string(),
+                                    ))
+                                    .await
+                                    .unwrap();
+                                break;
+                            }
+                        }
+                        let response = if method == "thread/read" {
+                            json!({ "id": id, "result": { "thread": { "status": { "type": "idle" }, "turns": [] } } })
+                        } else {
+                            json!({ "id": id, "result": {} })
+                        };
+                        websocket
+                            .send(Message::Text(response.to_string()))
+                            .await
+                            .unwrap();
+                    }
+                }
+            }
+        });
+
+        let queue = CodexEventQueue::load(&state_path).unwrap();
+        let thread_id = CodexThreadId::parse("thread-reconnect-preamble").unwrap();
+        queue
+            .bind_live_thread(Some(thread_id.clone()))
+            .await
+            .unwrap();
+        let cancel = CancellationToken::new();
+        let (_binding_tx, binding_rx) = tokio::sync::watch::channel(Some(thread_id));
+
+        let mut config = test_delivery_config(socket_path, Duration::from_secs(1));
+        config.preamble_mode = crate::config::PreambleMode::First;
+        config.preamble_template = PreambleTemplate::new("preamble-text");
+
+        let worker = tokio::spawn(run_delivery_worker_with_lease(
+            queue.clone(),
+            config,
+            binding_rx,
+            cancel.clone(),
+            Duration::from_secs(5),
+        ));
+
+        // Wait for the consumer to register.
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while queue.status().await.primary_consumer.is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        // Enqueue two events — the first will be delivered, then the peer
+        // drops, forcing reconnect for the second.
+        queue
+            .enqueue(json!({ "params": { "meta": { "message_id": "evt-1" } } }))
+            .await
+            .unwrap();
+        queue
+            .enqueue(json!({ "params": { "meta": { "message_id": "evt-2" } } }))
+            .await
+            .unwrap();
+
+        // Collect the two delivered inputs.
+        let first_input = tokio::time::timeout(Duration::from_secs(5), input_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let second_input = tokio::time::timeout(Duration::from_secs(5), input_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+
+        // First delivery must include the preamble.
+        assert!(
+            first_input.contains("preamble-text"),
+            "first delivery should include preamble, got: {first_input}"
+        );
+        // Second delivery (after reconnect) must NOT include the preamble.
+        assert!(
+            !second_input.contains("preamble-text"),
+            "second delivery after reconnect should omit preamble, got: {second_input}"
+        );
+
+        cancel.cancel();
+        worker.await.unwrap().unwrap();
+        server.abort();
     }
 }

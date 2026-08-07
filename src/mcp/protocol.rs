@@ -30,7 +30,7 @@ pub(crate) fn initialize_response(mode: TransportMode) -> Value {
 pub(crate) fn tools_list(mode: TransportMode) -> Value {
     let mut response = json!({
         "tools": [
-            tool("reply", "Send a reply to a Discord channel or DM", json!({
+            tool("reply", "Send a reply to a Discord channel or DM. A contradictionary block-tier match does not send: the message is held under a single-use handle and the error names the matched pattern(s) plus the handle. Act on it with no_rly (send verbatim), rephrase (replacement, re-checked), or ignore it to let it expire.", json!({
                 "type": "object",
                 "required": ["channel_id", "content"],
                 "properties": {
@@ -38,8 +38,42 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                     "content": { "type": "string", "description": "Message content" },
                     "reply_to_message_id": { "type": "string", "description": "Optional message ID to reply to" },
                     "suppress_ping": { "type": "boolean", "description": "When true, the reply will not ping the user being replied to (default: false)" },
-                    "no_rly": { "type": "boolean", "description": "Consent-gate override for the contradictionary block action. A blocked send returns an error naming the matched pattern (⚠️ blocked: <pattern>); resend the identical message with no_rly=true to bypass the block, send anyway, and record a durable diary entry. No effect on non-blocked messages (default: false)." },
-                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for this send. Every bypass is audited. This does not bypass the contradictionary; use no_rly for that legacy gate." }
+                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for this send. Every bypass is audited. This does not bypass the contradictionary; use the no_rly(handle) tool for that." }
+                }
+            })),
+            tool("no_rly", "Release a message held by the contradictionary: sends the byte-identical held text with its original addressing. Handles are single-use — they die on release, rephrase, or expiry (default 3 minutes) and cannot be replayed; only a failed send leaves the handle live for a retry. Ordering: the message lands when released, not at its original position in the conversation.", json!({
+                "type": "object",
+                "required": ["handle"],
+                "properties": {
+                    "handle": { "type": "string", "description": "The hold handle returned by the bounced send (e.g. nr-3f92-7)" }
+                }
+            })),
+            tool("rephrase", "Replace a held message with new text. The replacement is re-checked by the contradictionary: a clean verdict sends it (original addressing preserved) and journals the (original, reason, replacement) triple; a re-bounce kills the old handle and returns a NEW handle chained to it. Like no_rly, the sent text lands when released, not at its original conversation position.", json!({
+                "type": "object",
+                "required": ["handle", "content"],
+                "properties": {
+                    "handle": { "type": "string", "description": "The hold handle returned by the bounced send" },
+                    "content": { "type": "string", "description": "Replacement message text" }
+                }
+            })),
+            tool("no_rly_stats", "Query the no_rly audit journal: bounce counts by outcome (released/rephrased/expired) and by pattern, bounce-to-action latency (min/p50/mean/max), rephrase chains, plus validation counters (dangling chain parents, malformed lines) and the live held-message count.", json!({
+                "type": "object",
+                "properties": {
+                    "since_days": { "type": "integer", "minimum": 0, "description": "Only bounces resolved within the last N days" },
+                    "outcome": { "type": "string", "enum": ["released", "rephrased", "expired"], "description": "Only bounces with this outcome" },
+                    "pattern": { "type": "string", "description": "Only bounces whose reason includes this pattern" }
+                }
+            })),
+            tool("no_rly_condense", "Fold raw no_rly journal records older than the cutoff into per-day/per-reason/per-outcome summaries (counts + latency aggregates). Message text and chain links are dropped for condensed records — that is the trade. Atomic rewrite; malformed lines are preserved (vacuum drops those).", json!({
+                "type": "object",
+                "properties": {
+                    "older_than_days": { "type": "integer", "minimum": 0, "description": "Condense records resolved more than N days ago (default: configured journal_raw_retention_days, 365)" }
+                }
+            })),
+            tool("no_rly_vacuum", "Compact the no_rly journal: drop summary records older than the cutoff and any malformed lines, then rewrite the file atomically. Raw bounce records are never dropped by vacuum — condense them first. Reports bytes before/after.", json!({
+                "type": "object",
+                "properties": {
+                    "older_than_days": { "type": "integer", "minimum": 0, "description": "Drop summaries older than N days (default: configured journal_summary_retention_days, 730)" }
                 }
             })),
             tool("react", "Add a reaction to a message", json!({

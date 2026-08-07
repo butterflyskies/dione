@@ -1,0 +1,14 @@
+---
+source: src/no_rly/journal.rs
+expression: rec
+---
+{
+  "kind": "summary",
+  "date": "2026-07-07",
+  "patterns": "straightforward",
+  "outcome": "released",
+  "count": 3,
+  "latency_ms_total": 12000,
+  "latency_ms_max": 8000,
+  "condensed_at": "2027-07-07T00:00:00+00:00"
+}

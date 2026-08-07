@@ -30,8 +30,10 @@ use crate::{
             introspection::IntrospectionCtx,
             management::ManagementCtx,
             messaging::MessagingCtx,
+            no_rly::NoRlyCtx,
         },
     },
+    no_rly::consent::ConsentGate,
     rate_limiter::{ChannelRef, ParticipantId, RateLimitDecision, RateLimiter},
 };
 use camino::Utf8PathBuf;
@@ -60,18 +62,32 @@ pub struct DioneServer {
     pub mode: TransportMode,
     pub codex_queue: Option<CodexEventQueue>,
     pub codex_thread_binding: Option<watch::Sender<Option<crate::codex::CodexThreadId>>>,
+    pub no_rly: Arc<ConsentGate>,
+    pub event_tx: Option<mpsc::Sender<NotificationEvent>>,
+    pub ingress_ledger: Arc<crate::ingress_ledger::IngressLedger>,
 }
 
 // ── Context factory methods ───────────────────────────────────────────────────
 
 impl DioneServer {
     pub(crate) fn messaging_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> MessagingCtx {
-        MessagingCtx::new(
+        let mut ctx = MessagingCtx::new(
             self.http.clone(),
             self.state.clone(),
             config,
             self.state_dir.clone(),
-        )
+            self.no_rly.clone(),
+            self.ingress_ledger.clone(),
+        );
+        ctx.event_tx = self.event_tx.clone();
+        ctx
+    }
+
+    pub(crate) fn no_rly_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> NoRlyCtx {
+        NoRlyCtx {
+            gate: self.no_rly.clone(),
+            config,
+        }
     }
 
     pub(crate) fn introspection_ctx(
@@ -146,6 +162,34 @@ pub async fn run(
     let initial_tz = config.tz;
 
     let state_dir_notif = server.state_dir.clone();
+
+    // Expiry sweeper for the no_rly hold queue. Expiry is enforced lazily at
+    // claim time too — this task just makes sure abandoned handles get their
+    // journal record promptly instead of at the next claim. On shutdown it
+    // drains everything still pending as expired, so the in-memory queue
+    // never swallows a bounce without an audit trail.
+    let no_rly_sweeper = server.no_rly.clone();
+    let cancel_sweep = cancel.clone();
+    let sweep_task = tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(15));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel_sweep.cancelled() => break,
+                _ = tick.tick() => {
+                    let expired = no_rly_sweeper.expire_due(Instant::now()).await;
+                    if expired > 0 {
+                        tracing::info!(expired, "no_rly: expired abandoned handles");
+                    }
+                }
+            }
+        }
+        let drained = no_rly_sweeper.drain_shutdown().await;
+        if drained > 0 {
+            tracing::info!(drained, "no_rly: drained pending handles at shutdown");
+        }
+    });
 
     // Notification forwarding task.
     // Exits on cancellation or when the event channel closes.
@@ -336,12 +380,20 @@ pub async fn run(
                         }
                     }
                     Ok(None) => {
-                        // EOF — client disconnected.
-                        tracing::info!("stdin EOF, MCP server exiting");
+                        // EOF — the MCP client closed the pipe. This is the
+                        // normal way the client dies, and it must trigger the
+                        // same graceful shutdown as Ctrl-C: fire the cancel so
+                        // the sweeper drains pending no_rly handles into the
+                        // journal instead of parking until the timeout.
+                        tracing::info!("stdin EOF, MCP server shutting down");
+                        cancel.cancel();
                         break;
                     }
                     Err(e) => {
-                        tracing::warn!(error = %e, "stdin read error");
+                        // A read error is also a terminal exit — cancel so the
+                        // background tasks run their drain paths.
+                        tracing::warn!(error = %e, "stdin read error, shutting down");
+                        cancel.cancel();
                         break;
                     }
                 }
@@ -349,10 +401,14 @@ pub async fn run(
         }
     }
 
-    // Cancellation signal already sent — notif_task will break out of its
-    // loop and flush_all() any buffered events. Give it a short window.
+    // Every exit from the loop above has fired `cancel` (the cancellation
+    // branch by definition, the EOF/read-error branches explicitly). So
+    // notif_task will break out of its loop and flush_all() any buffered
+    // events, and the sweeper will drain pending no_rly handles into the
+    // journal. Give them a short window.
     drop(server);
     let _ = tokio::time::timeout(Duration::from_millis(500), notif_task).await;
+    let _ = tokio::time::timeout(Duration::from_millis(500), sweep_task).await;
 
     Ok(())
 }
@@ -567,7 +623,7 @@ fn extract_delay_ms(event: &NotificationEvent, config: &crate::config::LoadedCon
 pub mod test_helpers {
     use super::*;
 
-    /// Exposes [`IntoNotification::into_notification`] for unit testing notification format.
+    /// Exposes `IntoNotification::into_notification` for unit testing notification format.
     pub fn make_notification(event: NotificationEvent) -> Value {
         use crate::mcp::notifications::IntoNotification;
         event.into_notification()
@@ -609,8 +665,8 @@ mod tests {
     };
     use serenity::model::id::{ChannelId, MessageId, UserId};
 
-    #[test]
-    fn messaging_context_uses_process_installed_pipeline() {
+    #[tokio::test]
+    async fn messaging_context_uses_process_installed_pipeline() {
         let pipeline = crate::pre_send::configured_pipeline(true, Vec::new())
             .expect("configured pipeline")
             .expect("enabled pipeline");
@@ -623,6 +679,7 @@ mod tests {
             state: crate::state::new_state(),
             queue: Arc::new(Mutex::new(crate::queue::AccessQueue::load(&state_dir))),
             http: Arc::new(serenity::http::Http::new("fake")),
+            no_rly: Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
             state_dir,
             notification_tx,
             discord_cmd_tx: None,
@@ -630,6 +687,8 @@ mod tests {
             mode: TransportMode::ClaudeCode,
             codex_queue: None,
             codex_thread_binding: None,
+            event_tx: None,
+            ingress_ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
         };
 
         let context = server.messaging_ctx(Arc::new(LoadedConfig::from_raw(Config::default())));
@@ -725,6 +784,7 @@ mod tests {
             user: "u".into(),
             user_id: UserId::new(1),
             emoji: "👍".into(),
+            self_react: false,
         };
         assert_eq!(extract_delay_ms(&event, &config), 200);
     }

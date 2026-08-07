@@ -15,8 +15,10 @@ use tempfile::TempDir;
 
 use dione::{
     config::{ChannelConfig, Config, LoadedConfig, reload_config},
-    contradictionary::{Action, Contradictionary, DIARY_FILE_NAME, Entry, MatchMode},
+    contradictionary::{Action, Contradictionary, Entry, MatchMode},
     mcp::tools::messaging::{self, MessagingCtx},
+    no_rly::consent::ConsentGate,
+    no_rly::journal::JOURNAL_FILE_NAME,
     state::new_state,
 };
 
@@ -67,6 +69,12 @@ fn ariadne_entries() -> Vec<Entry> {
             ),
         },
         Entry {
+            pattern: "trivial".into(),
+            match_mode: MatchMode::Word,
+            action: Action::Block,
+            reason: Some("nothing worth building is trivial".into()),
+        },
+        Entry {
             pattern: "prejection".into(),
             match_mode: MatchMode::Word,
             action: Action::Celebrate,
@@ -94,77 +102,88 @@ fn config_with_contradictionary(entries: Vec<Entry>) -> LoadedConfig {
 }
 
 /// Build a MessagingCtx with a fake HTTP client and the given state dir. The
-/// state dir is where the durable contradictionary diary is written, so
-/// override tests inject a temp dir to avoid touching the real home dir.
+/// state dir is where the durable no_rly journal is written, so tests inject
+/// a temp dir to avoid touching the real home dir.
 fn test_ctx_with_state_dir(config: LoadedConfig, state_dir: Utf8PathBuf) -> MessagingCtx {
     MessagingCtx::new(
         Arc::new(serenity::http::Http::new("fake-token-for-testing")),
         new_state(),
         Arc::new(config),
-        state_dir,
+        state_dir.clone(),
+        Arc::new(ConsentGate::new(&state_dir)),
+        Arc::new(dione::ingress_ledger::IngressLedger::new()),
     )
 }
 
-/// Build a MessagingCtx with a fake HTTP client. Good enough for testing paths
-/// that return before actually calling Discord (block path, outbound gate).
-fn test_ctx(config: LoadedConfig) -> MessagingCtx {
-    test_ctx_with_state_dir(config, "/tmp".into())
+/// Build a MessagingCtx over a fresh temp state dir. Good enough for testing
+/// paths that return before actually calling Discord (bounce path, outbound
+/// gate). Returns the TempDir so it outlives the ctx.
+fn test_ctx(config: LoadedConfig) -> (TempDir, MessagingCtx) {
+    let dir = TempDir::new().unwrap();
+    let state_dir = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
+    let ctx = test_ctx_with_state_dir(config, state_dir);
+    (dir, ctx)
 }
 
-// ── Integration: messaging::reply() block path ──────────────────────────────
+/// Pull the hold handle out of a bounced reply's JSON.
+fn held_handle(result: &serde_json::Value) -> &str {
+    result["held"]["handle"]
+        .as_str()
+        .expect("bounced reply must carry held.handle")
+}
 
-/// Block action stops the message dead. No Discord call, just an error JSON
-/// with the matched patterns. The construct sees its own reflection and flinches.
+// ── Integration: messaging::reply() bounce path ──────────────────────────────
+
+/// A block-tier hit doesn't send: the message is held under a single-use
+/// handle and the error names the pattern, the reason, and the verbs. The
+/// construct sees its own reflection and gets a claim ticket instead of a wall.
 #[tokio::test]
-async fn reply_block_prevents_send() {
-    let ctx = test_ctx(config_with_contradictionary(ariadne_entries()));
+async fn reply_block_holds_message_with_handle() {
+    let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
 
-    // Try to send a message containing a blocked pattern.
     let result = messaging::reply(
         &ctx,
         ChannelId::new(42),
         "this is a straightforward implementation",
         Some(MessageId::new(1)),
         false,
-        false,
     )
     .await;
 
-    // Should get an error, not an ok.
+    let error_msg = result["error"].as_str().expect("bounce must be an error");
     assert!(
-        result.get("error").is_some(),
-        "blocked message must return error, got: {result}"
+        error_msg.contains("held by contradictionary"),
+        "bounce error must say the message is held: {error_msg}"
     );
-    let error_msg = result["error"].as_str().unwrap();
     assert!(
         error_msg.contains("straightforward"),
-        "error should name the blocked pattern: {error_msg}"
+        "error should name the matched pattern: {error_msg}"
+    );
+
+    // The held block carries everything the construct needs to act.
+    let handle = held_handle(&result);
+    assert!(handle.starts_with("nr-"), "handle format: {handle}");
+    assert_eq!(
+        result["held"]["reason"]["matches"][0]["pattern"], "straightforward",
+        "structured reason must name the pattern"
     );
     assert!(
-        error_msg.contains("contradictionary"),
-        "error should mention contradictionary: {error_msg}"
+        result["held"]["reason"]["matches"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("nothing is ever straightforward"),
+        "structured reason must carry the configured explanation"
     );
+    assert_eq!(result["held"]["expires_in_secs"], 180, "default TTL is 3m");
+
+    // And the message really is queued, not lost.
+    assert_eq!(ctx.no_rly.pending().await, 1);
 }
 
 /// Multiple blocked patterns in one message — all get reported.
 #[tokio::test]
 async fn reply_block_reports_all_blocked_patterns() {
-    // Two block-level entries for this test.
-    let entries = vec![
-        Entry {
-            pattern: "straightforward".into(),
-            match_mode: MatchMode::Word,
-            action: Action::Block,
-            reason: Some("see above".into()),
-        },
-        Entry {
-            pattern: "trivial".into(),
-            match_mode: MatchMode::Word,
-            action: Action::Block,
-            reason: Some("nothing worth building is trivial".into()),
-        },
-    ];
-    let ctx = test_ctx(config_with_contradictionary(entries));
+    let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
 
     let result = messaging::reply(
         &ctx,
@@ -172,20 +191,21 @@ async fn reply_block_reports_all_blocked_patterns() {
         "this is a straightforward and trivial change",
         None,
         false,
-        false,
     )
     .await;
 
     let error_msg = result["error"].as_str().unwrap();
     assert!(error_msg.contains("straightforward"));
     assert!(error_msg.contains("trivial"));
+    let reasons = result["held"]["reason"]["matches"].as_array().unwrap();
+    assert_eq!(reasons.len(), 2);
 }
 
-/// Warn hits don't block. The message would send (fails here because fake HTTP),
-/// but crucially it does NOT return the contradictionary error.
+/// Warn hits don't bounce. The message would send (fails here because fake
+/// HTTP), but crucially it does NOT return the contradictionary hold.
 #[tokio::test]
 async fn reply_warn_does_not_block() {
-    let ctx = test_ctx(config_with_contradictionary(ariadne_entries()));
+    let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
 
     let result = messaging::reply(
         &ctx,
@@ -193,38 +213,36 @@ async fn reply_warn_does_not_block() {
         "I find myself honestly appreciating the load-bearing work here",
         None,
         false,
-        false,
     )
     .await;
 
     // With a fake HTTP client, the send will fail — but it should fail at the
-    // Discord layer, not at the contradictionary gate. The error should NOT
-    // mention "contradictionary" or "blocked".
+    // Discord layer, not at the judge. The error should NOT mention a hold.
     if let Some(error) = result.get("error") {
         let msg = error.as_str().unwrap_or("");
         assert!(
             !msg.contains("contradictionary"),
-            "warn hits must not trigger block path, got: {msg}"
-        );
-        assert!(
-            !msg.contains("blocked"),
-            "warn hits must not say 'blocked', got: {msg}"
+            "warn hits must not trigger the bounce path, got: {msg}"
         );
     }
-    // If it somehow succeeded (unlikely with fake HTTP), that's fine too.
+    assert_eq!(
+        ctx.no_rly.pending().await,
+        0,
+        "warn must not queue anything"
+    );
 }
 
-/// Channel not in config gets rejected before contradictionary even runs.
+/// Channel not in config gets rejected before the judge even runs — a message
+/// to a forbidden channel must not be queued for a later release.
 #[tokio::test]
-async fn reply_gate_rejects_unknown_channel() {
-    let ctx = test_ctx(config_with_contradictionary(ariadne_entries()));
+async fn reply_gate_rejects_unknown_channel_without_holding() {
+    let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
 
     let result = messaging::reply(
         &ctx,
         ChannelId::new(999), // not in config
         "straightforward message to wrong channel",
         None,
-        false,
         false,
     )
     .await;
@@ -234,21 +252,77 @@ async fn reply_gate_rejects_unknown_channel() {
         error_msg.contains("not a permitted"),
         "gate should reject unknown channel: {error_msg}"
     );
-    // Should NOT mention contradictionary — gate fires first.
     assert!(
         !error_msg.contains("contradictionary"),
         "gate error should not mention contradictionary: {error_msg}"
     );
+    assert_eq!(ctx.no_rly.pending().await, 0);
 }
 
-// ── Integration: no_rly override + durable diary ─────────────────────────────
+// ── Integration: the three verbs through the messaging layer ─────────────────
 
-/// The consent gate: resending a blocked message with `no_rly: true` bypasses
-/// the block and records the override to the durable JSONL diary. The fake HTTP
-/// send still fails at the Discord layer — but that happens *after* the bypass
-/// decision and the diary append, so the record is written regardless.
+/// Releasing with a bogus handle is an error, and nothing sends.
 #[tokio::test]
-async fn reply_no_rly_overrides_block_and_appends_diary() {
+async fn release_unknown_handle_errors() {
+    let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
+    let result = messaging::release_held(&ctx, "nr-0000-99").await;
+    assert!(
+        result["error"]
+            .as_str()
+            .unwrap()
+            .contains("unknown or already-used handle")
+    );
+}
+
+/// Release with a fake HTTP layer: the claim succeeds, the Discord send
+/// fails, and the handle stays live for a retry — a failed send must not
+/// burn the construct's one shot at the message.
+#[tokio::test]
+async fn release_send_failure_keeps_handle_alive() {
+    let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
+
+    let bounce = messaging::reply(
+        &ctx,
+        ChannelId::new(42),
+        "a straightforward take",
+        None,
+        false,
+    )
+    .await;
+    let handle = held_handle(&bounce).to_string();
+
+    let result = messaging::release_held(&ctx, &handle).await;
+    assert!(
+        result["error"].as_str().unwrap().contains("send failed"),
+        "fake HTTP must fail at the Discord layer: {result}"
+    );
+    assert_eq!(
+        result["handle_still_live"], handle,
+        "failed send must leave the handle claimable"
+    );
+    assert_eq!(ctx.no_rly.pending().await, 1);
+}
+
+/// An empty or whitespace-only rephrase is rejected up front with a clear
+/// message rather than passing the judge and 400-ing at Discord.
+#[tokio::test]
+async fn rephrase_empty_content_is_rejected_early() {
+    let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
+    let result = messaging::rephrase_held(&ctx, "nr-0000-1", "   ").await;
+    assert!(
+        result["error"]
+            .as_str()
+            .unwrap()
+            .contains("must not be empty"),
+        "empty rephrase must be rejected with a clear message: {result}"
+    );
+}
+
+/// Rephrase whose replacement bounces again: the old handle dies, a new
+/// chained handle comes back, and the journal records the rephrased triple.
+/// No Discord call happens, so this exercises the full chain with fake HTTP.
+#[tokio::test]
+async fn rephrase_rebounce_chains_and_journals() {
     let dir = TempDir::new().unwrap();
     let state_dir = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
     let ctx = test_ctx_with_state_dir(
@@ -256,65 +330,123 @@ async fn reply_no_rly_overrides_block_and_appends_diary() {
         state_dir.clone(),
     );
 
-    let result = messaging::reply(
+    let bounce = messaging::reply(
         &ctx,
         ChannelId::new(42),
         "this is a straightforward implementation",
         None,
         false,
-        true, // no_rly: consent-gated override
     )
     .await;
+    let old_handle = held_handle(&bounce).to_string();
 
-    // Whatever the outcome, it must not be the contradictionary block rejection.
-    if let Some(err) = result.get("error").and_then(|e| e.as_str()) {
-        assert!(
-            !err.contains("blocked by contradictionary"),
-            "no_rly must bypass the block, got: {err}"
-        );
-    }
+    let result =
+        messaging::rephrase_held(&ctx, &old_handle, "fine, it is a trivial implementation").await;
+    let new_handle = held_handle(&result).to_string();
+    assert_ne!(new_handle, old_handle, "re-bounce must mint a NEW handle");
+    assert_eq!(
+        result["held"]["chained_from"], old_handle,
+        "the new ticket must chain to the dead handle"
+    );
+    assert_eq!(
+        result["held"]["reason"]["matches"][0]["pattern"], "trivial",
+        "the new reason reflects the replacement's own match"
+    );
 
-    // The override is durably recorded: one JSONL line naming the pattern.
-    let contents = fs::read_to_string(state_dir.join(DIARY_FILE_NAME).as_std_path())
-        .expect("override must append a durable diary line");
-    let lines: Vec<&str> = contents.lines().collect();
-    assert_eq!(lines.len(), 1, "exactly one override recorded");
-    let parsed: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
-    assert_eq!(parsed["pattern"], "straightforward");
-    assert_eq!(parsed["override"], true);
+    // Old handle is dead — no replay, no second rephrase.
+    let dead = messaging::release_held(&ctx, &old_handle).await;
     assert!(
-        parsed["message"]
+        dead["error"]
             .as_str()
             .unwrap()
-            .contains("straightforward"),
-        "diary must record the outgoing message text"
+            .contains("unknown or already-used handle")
     );
-    assert!(parsed["timestamp"].as_str().is_some_and(|t| !t.is_empty()));
+
+    // The journal writer is asynchronous; flush before reading the file back.
+    ctx.no_rly.journal().flush().await;
+    // The journal recorded the (original, reason, replacement) triple.
+    let journal = fs::read_to_string(state_dir.join(JOURNAL_FILE_NAME).as_std_path())
+        .expect("rephrase must journal the resolved bounce");
+    let lines: Vec<&str> = journal.lines().collect();
+    assert_eq!(lines.len(), 1, "one resolved bounce so far");
+    let record: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(record["kind"], "bounce");
+    assert_eq!(record["handle"], old_handle);
+    assert_eq!(record["outcome"], "rephrased");
+    assert_eq!(
+        record["message"],
+        "this is a straightforward implementation"
+    );
+    assert_eq!(
+        record["replacement"],
+        "fine, it is a trivial implementation"
+    );
+    assert_eq!(record["reason"]["matches"][0]["pattern"], "straightforward");
+    assert!(record["latency_ms"].is_u64());
 }
 
-/// `no_rly: true` on a message with no block hit is a no-op — no diary entry.
+/// Containment invariant: a held message cannot outlive a config change that
+/// revoked its channel. Bounce on channel 42, then release through a context
+/// whose config no longer permits 42 (sharing the same gate) — the outbound
+/// re-check in `deliver_reply` must refuse the send, leave the handle live, and
+/// journal nothing.
 #[tokio::test]
-async fn reply_no_rly_on_clean_message_writes_no_diary() {
+async fn release_into_a_revoked_channel_is_refused_and_keeps_the_handle() {
     let dir = TempDir::new().unwrap();
     let state_dir = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
-    let ctx = test_ctx_with_state_dir(
-        config_with_contradictionary(ariadne_entries()),
-        state_dir.clone(),
-    );
+    let gate = Arc::new(ConsentGate::new(&state_dir));
 
-    let _ = messaging::reply(
-        &ctx,
+    // First context: channel 42 is permitted; the message bounces and is held.
+    let ctx_allowed = MessagingCtx::new(
+        Arc::new(serenity::http::Http::new("fake-token-for-testing")),
+        new_state(),
+        Arc::new(config_with_contradictionary(ariadne_entries())),
+        state_dir.clone(),
+        gate.clone(),
+        Arc::new(dione::ingress_ledger::IngressLedger::new()),
+    );
+    let bounce = messaging::reply(
+        &ctx_allowed,
         ChannelId::new(42),
-        "the architecture is elegant and the tests pass",
+        "a straightforward take",
         None,
         false,
-        true,
     )
     .await;
+    let handle = held_handle(&bounce).to_string();
+    assert_eq!(gate.pending().await, 1);
 
+    // Second context: same gate, but a config where 42 is no longer a
+    // permitted outbound target (no channels configured).
+    let ctx_revoked = MessagingCtx::new(
+        Arc::new(serenity::http::Http::new("fake-token-for-testing")),
+        new_state(),
+        Arc::new(LoadedConfig::from_raw(Config::default())),
+        state_dir.clone(),
+        gate.clone(),
+        Arc::new(dione::ingress_ledger::IngressLedger::new()),
+    );
+    let result = messaging::release_held(&ctx_revoked, &handle).await;
     assert!(
-        !state_dir.join(DIARY_FILE_NAME).as_std_path().exists(),
-        "no_rly on a non-blocked message must not write a diary entry"
+        result["error"]
+            .as_str()
+            .unwrap()
+            .contains("not a permitted outbound target"),
+        "release into a revoked channel must be refused: {result}"
+    );
+    assert_eq!(
+        result["handle_still_live"], handle,
+        "a refused release must not burn the handle"
+    );
+    assert_eq!(gate.pending().await, 1, "the held message stays claimable");
+
+    // Nothing resolved, so the journal recorded no outcome.
+    gate.journal().flush().await;
+    let journal_path = state_dir.join(JOURNAL_FILE_NAME);
+    let journalled = fs::read_to_string(journal_path.as_std_path()).unwrap_or_default();
+    assert!(
+        journalled.trim().is_empty(),
+        "a refused release must journal nothing, got: {journalled}"
     );
 }
 
@@ -382,7 +514,7 @@ reason = "the practice that keeps us awake"
     // Log does not block.
     assert!(!concordance.has_block(&hits));
 
-    // ── Block: the message dies in the throat ───────────────────────────
+    // ── Block: the message is held, not sent ────────────────────────────
     let block_msg = "this is a straightforward refactor";
     let hits = concordance.check(block_msg);
     assert!(concordance.has_block(&hits));
@@ -406,6 +538,34 @@ reason = "the practice that keeps us awake"
     let clean_msg = "the architecture is elegant and the tests pass";
     let hits = concordance.check(clean_msg);
     assert!(hits.is_empty());
+}
+
+/// The new retention knobs load from TOML and default sensibly.
+#[test]
+fn hold_ttl_and_retention_load_from_config() {
+    let dir = TempDir::new().unwrap();
+    let state_dir = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
+
+    let config_toml = r#"
+[contradictionary]
+enabled = true
+hold_ttl_secs = 240
+journal_raw_retention_days = 30
+
+[[contradictionary.entries]]
+pattern = "straightforward"
+action = "block"
+"#;
+    fs::write(state_dir.join("config.toml").as_std_path(), config_toml).unwrap();
+
+    let (cfg, error) = reload_config(&state_dir);
+    assert!(error.is_none(), "config load failed: {error:?}");
+    assert_eq!(cfg.no_rly_hold_ttl(), std::time::Duration::from_secs(240));
+    assert_eq!(cfg.raw.contradictionary.journal_raw_retention_days, 30);
+    assert_eq!(
+        cfg.raw.contradictionary.journal_summary_retention_days, 730,
+        "unset knobs keep their documented defaults"
+    );
 }
 
 /// Case-insensitive matching through the full config path. Substrate tells
@@ -507,7 +667,7 @@ action = "celebrate"
     );
 }
 
-/// Celebrate next to a block: block wins, message dies, no sparkles for you.
+/// Celebrate next to a block: block wins, message is held, no sparkles yet.
 #[test]
 fn block_trumps_celebrate() {
     let concordance = Contradictionary::new(ariadne_entries());

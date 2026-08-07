@@ -8,6 +8,12 @@ an agent to interact with Discord — replying, reacting, fetching history,
 managing channels, and more. The agent provides inference; Dione provides the
 Discord bridge.
 
+**Architecture note:** Dione is a Discord transport adapter. It does not
+mediate LLM inference calls — those flow directly between the harness
+(Claude Code, Codex, Hermes, etc.) and the model provider. Session telemetry,
+token usage, and context-window metrics are harness-side concerns, not
+Dione's.
+
 ## Quick start
 
 ```bash
@@ -126,6 +132,8 @@ ack_reaction = ""             # empty = no auto-reaction
 reply_to_mode = "first"       # "first" | "all" | "off"
 text_chunk_limit = 2000
 chunk_mode = "paragraph"      # "paragraph" | "length"
+preamble_mode = "always"      # "always" | "first" | "never"
+# preamble_template = "..."   # custom text, max 1024 bytes
 
 [access_requests]
 expiry_seconds = 86400

@@ -1,6 +1,6 @@
 //! Event coalescing: merge buffered events into a single delivery envelope.
 //!
-//! When [`DeliveryBuffer`] flushes multiple events at once (because the
+//! When [`crate::delivery_buffer::DeliveryBuffer`] flushes multiple events at once (because the
 //! delivery delay window expired), this module combines them into a single
 //! MCP notification. This means the LLM receives one prompt injection per
 //! batch window instead of N separate injections for N events.
@@ -492,6 +492,7 @@ mod tests {
             user: "bob".to_string(),
             user_id: UserId::new(200),
             emoji: "\u{1f44d}".to_string(),
+            self_react: false,
         }
     }
 
@@ -708,6 +709,7 @@ mod tests {
                 user: "ros".to_string(),
                 user_id: UserId::new(20),
                 emoji: "\u{2764}\u{fe0f}".to_string(),
+                self_react: false,
             },
             NotificationEvent::MessageEdit {
                 chat_id: ChannelId::new(555),

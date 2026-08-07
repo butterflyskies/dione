@@ -7,6 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.31.2] - 2026-08-04
+
+### Changed
+- **Extracted the provenance verification kernel into `auspex-core`.** The new
+  transport-agnostic workspace crate owns typed ingress references, ledger state,
+  and verification outcomes. Dione now delegates through a thin Discord adapter;
+  canary alerts, configuration, logging, and reply-path effects remain in Dione.
+
+## [0.31.1] - 2026-08-04
+
+### Added
+- **Phantom canary alerts to #decontamination-shower.** When the ingress
+  ledger egress check detects an Unknown or ChannelMismatch reply target,
+  a fire-and-forget alert is posted to the decontamination shower channel.
+  Expired and Unavailable results do not alert.
+
+## [0.31.0] - 2026-08-04
+
+### Added
+- **Ingress-ledger tracer for phantom reply references.** Gateway-admitted
+  Discord messages are recorded in a bounded, in-memory ledger before
+  notification delivery is attempted. Reply proposals check referenced
+  message IDs against that ledger and distinguish admitted, unknown, expired,
+  channel-mismatched, and unavailable evidence. Verification is warning-only
+  in this tracer release; it proves gateway admission and channel binding, not
+  authorization, LLM delivery, or durable provenance across restarts.
+
+## [0.30.0] - 2026-08-04
+
+### Added
+- **Tier-1 Cingulate adapter.** Wires `cingulate::PatternSet` into the outbound
+  message pipeline via `PreSendHook`. The classifier runs in observe mode by
+  default; enforce mode is configurable. Extracted from #184 (butterflysky-syne).
+
+## [0.29.1] - 2026-08-04
+
+### Fixed
+- **Self-reaction notifications for contradictionary celebrate hits.** The gateway
+  filters bot self-reactions, which silently dropped the positive-reinforcement
+  signal. Celebrate self-reacts now emit a synthetic `Reaction` notification so
+  constructs see their own vocabulary wins. Bot author is properly attributed
+  via `BotDisplayName` (bounded to 32 bytes).
+
+## [0.29.0] - 2026-08-04
+
+### Changed
+- **no_rly v2 — handle-queue consent gate.** A contradictionary `block` match
+  no longer rejects with a resend flag: the message is **held** under a
+  single-use handle (`nr-xxxx-N`) and the error names the matched pattern(s),
+  the configured reason, the handle, and the expiry window. Three verbs act on
+  the handle: `no_rly(handle)` releases the byte-identical text, `rephrase(handle,
+  content)` sends a re-judged replacement (a re-bounce mints a NEW handle
+  chained to the old one), and ignoring it lets it expire (default 3 minutes,
+  `contradictionary.hold_ttl_secs`).
+
+### Added
+- **no_rly audit journal** (`no_rly_journal.jsonl`): every bounce is journaled
+  once, at resolution, with message, structured reason, outcome
+  (released/rephrased/expired), bounce + resolution timestamps,
+  bounce-to-action latency, and chain links for rephrase re-bounces. New tools:
+  `no_rly_stats`, `no_rly_condense`, and `no_rly_vacuum`.
+- **Judge seam**: the queue/handle/expiry machinery is behind an
+  `OutboundJudge` trait so a future classifier ("cingulate") can replace the
+  word-matcher without touching the queue.
+- **Hold queue capacity** (`contradictionary.max_pending`, default 32): a
+  bounce arriving at capacity evicts the held entry closest to expiry and
+  journals it as expired, so a runaway tool loop cannot grow the queue
+  without bound between sweeps.
+
+### Fixed
+- **Clippy `collapsible_if` cleanups.** Collapsed 8 nested `if let` chains in
+  `events.rs` and `gate.rs` (guild mute checks) into `let`-chains, fixing
+  `-D clippy::collapsible_if` under Rust 1.95.
+- **Doc link errors.** Fixed 3 broken intra-doc links (`DeliveryBuffer`,
+  `ConfigStore::save`, `JournalWriter`) and 3 private intra-doc links
+  (`RETIRED_ACTIONS`, `IntoNotification`, `IntoNotification::into_notification`).
+
+## [0.28.0] - 2026-08-01
+
+### Added
+- **Configurable Codex delivery preambles.** Delivery events can prepend a
+  configurable template either once per bound thread or on every event, with an
+  advanced no-preamble mode for seats that install the delivery affordance at
+  boot.
+
 ## [0.27.0] - 2026-07-31
 
 ### Added

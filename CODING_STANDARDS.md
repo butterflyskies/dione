@@ -80,7 +80,6 @@ pub struct ConfigError {
 }
 
 #[derive(Debug, Error)]
-#[non_exhaustive]
 pub enum ConfigErrorKind {
     #[error(transparent)]
     Io(std::io::Error),
@@ -102,7 +101,9 @@ pub enum ConfigErrorKind {
   `"Config parsing error"`.
 - Graceful degradation: a failed API call or DB query logs and responds to the
   user with a friendly error. Never crash the bot.
-- Use `#[non_exhaustive]` on public error enums.
+- No `#[non_exhaustive]` — public error enums stay exhaustive (banned across all
+  projects, 2026-06-27). Adding a variant is an honest breaking change, caught by
+  `cargo-semver-checks` in CI and exhaustiveness lints, and versioned deliberately.
 
 ---
 
@@ -311,7 +312,9 @@ path handling.
   `UserId` or `GuildId` is meant. (Discord IDs are already typed via
   serenity/poise.)
 - **Builder patterns** for complex construction.
-- **`#[non_exhaustive]`** on public enums and error types.
+- **Exhaustive public enums** — `#[non_exhaustive]` is banned (all projects,
+  2026-06-27). Breaking changes are managed via `cargo-semver-checks` in CI and
+  exhaustiveness lints, not hedged with the attribute.
 - **Lifetimes** used to avoid cloning when data has natural tree structure.
   But don't add lifetime annotations where they aren't needed.
 

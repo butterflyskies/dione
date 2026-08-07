@@ -56,6 +56,7 @@ fn reaction_event(chat_id: u64, user_id: u64) -> NotificationEvent {
         user: format!("user-{user_id}"),
         user_id: UserId::new(user_id),
         emoji: "👍".to_string(),
+        self_react: false,
     }
 }
 

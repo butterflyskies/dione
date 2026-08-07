@@ -1,5 +1,6 @@
 pub mod batch;
 pub mod bell_rings;
+pub mod cingulate;
 pub mod coalesce;
 pub mod codex;
 pub mod config;
@@ -10,9 +11,11 @@ pub mod delivery_buffer;
 pub mod discord;
 pub mod gaie;
 pub mod gate;
+pub mod ingress_ledger;
 pub mod mcp;
 pub mod mute_store;
 pub mod nameplates;
+pub mod no_rly;
 pub mod permissions;
 pub mod pre_send;
 pub mod pronouns;

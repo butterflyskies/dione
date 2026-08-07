@@ -89,6 +89,9 @@ pub enum NotificationEvent {
         user: String,
         user_id: UserId,
         emoji: String,
+        /// When true, this reaction was added by the bot itself (e.g. contradictionary celebrate).
+        /// Gateway self-reactions are filtered, so this is only set for tool-initiated reacts.
+        self_react: bool,
     },
     PermissionResponse {
         request_id: String,
@@ -139,6 +142,8 @@ pub struct Handler {
     pub pronoun_service: Option<Arc<crate::pronouns::PronounService>>,
     /// Construct nameplate service (construct-nameplates repo adapter with cache).
     pub nameplate_service: Option<Arc<crate::nameplates::NameplateService>>,
+    /// Ingress ledger — records messages admitted by the gateway for egress verification.
+    pub ingress_ledger: Arc<crate::ingress_ledger::IngressLedger>,
 }
 
 impl Handler {
@@ -175,6 +180,28 @@ impl Handler {
         } else {
             Some(PronounDisplayName(resolved))
         }
+    }
+}
+
+/// Record a gateway-admitted message before attempting notification delivery.
+///
+/// Admission is durable only for this process. A failed channel send remains
+/// warning-only and does not retract the evidence that the gateway admitted the
+/// message.
+async fn send_gateway_admitted_message(
+    ingress_ledger: &crate::ingress_ledger::IngressLedger,
+    tx: &tokio::sync::mpsc::Sender<NotificationEvent>,
+    msg: &Message,
+    event: NotificationEvent,
+    delivery_kind: &'static str,
+) {
+    ingress_ledger.note_admitted(msg.id, msg.channel_id, msg.author.id, &msg.content);
+    if let Err(error) = tx.send(event).await {
+        tracing::warn!(
+            %error,
+            delivery_kind,
+            "failed to send gateway-admitted notification event"
+        );
     }
 }
 
@@ -244,9 +271,14 @@ impl EventHandler for Handler {
                         MessageTargeting::DirectMessage,
                         pronoun_name,
                     );
-                    if let Err(e) = self.tx.send(event).await {
-                        tracing::warn!(error = %e, "failed to send DM notification event");
-                    }
+                    send_gateway_admitted_message(
+                        &self.ingress_ledger,
+                        &self.tx,
+                        &msg,
+                        event,
+                        "dm",
+                    )
+                    .await;
                 }
                 GateDecision::Queue => {
                     let max_pending = config.access_requests.max_pending;
@@ -326,9 +358,14 @@ impl EventHandler for Handler {
                         targeting,
                         pronoun_name,
                     );
-                    if let Err(e) = self.tx.send(event).await {
-                        tracing::warn!(error = %e, "failed to send guild notification event");
-                    }
+                    send_gateway_admitted_message(
+                        &self.ingress_ledger,
+                        &self.tx,
+                        &msg,
+                        event,
+                        "guild",
+                    )
+                    .await;
                 }
                 GateDecision::Queue => {
                     // Guild messages don't queue — this case shouldn't occur from check_guild.
@@ -351,23 +388,19 @@ impl EventHandler for Handler {
         let bot_id = self.bot_user_id.load(Ordering::Relaxed);
 
         // Guild mute check — suppress reaction delivery for muted guilds.
-        if let Some(gid) = reaction.guild_id {
-            if let Some(store) = crate::mute_store::global() {
-                if store.is_guild_muted(gid.get()) {
-                    tracing::debug!(guild_id = gid.get(), "reaction dropped: guild muted");
-                    return;
-                }
-            }
+        if let Some(gid) = reaction.guild_id
+            && let Some(store) = crate::mute_store::global()
+            && store.is_guild_muted(gid.get())
+        {
+            tracing::debug!(guild_id = gid.get(), "reaction dropped: guild muted");
+            return;
         }
 
         // Discard reactions with no user attribution or from the bot itself
         // before the potentially-expensive message authorship lookup.
-        let Some(user_id) = reaction.user_id else {
+        let Some(user_id) = gateway_reactor(reaction.user_id, bot_id) else {
             return;
         };
-        if user_id.get() == bot_id {
-            return;
-        }
 
         let cached = {
             let state = self.state.read().await;
@@ -438,6 +471,7 @@ impl EventHandler for Handler {
             user: user_name,
             user_id,
             emoji,
+            self_react: false,
         };
 
         if let Err(e) = self.tx.send(event).await {
@@ -582,17 +616,16 @@ impl EventHandler for Handler {
         let resolved = resolve_guild_channel(&ctx.http, &self.state, &config, cid, is_dm).await;
 
         // Guild mute check — suppress push delivery for muted guilds.
-        if let Some(gid) = guild_id {
-            if let Some(store) = crate::mute_store::global() {
-                if store.is_guild_muted(gid.get()) {
-                    tracing::debug!(
-                        guild_id = gid.get(),
-                        channel_id = cid,
-                        "message delete dropped: guild muted"
-                    );
-                    return;
-                }
-            }
+        if let Some(gid) = guild_id
+            && let Some(store) = crate::mute_store::global()
+            && store.is_guild_muted(gid.get())
+        {
+            tracing::debug!(
+                guild_id = gid.get(),
+                channel_id = cid,
+                "message delete dropped: guild muted"
+            );
+            return;
         }
 
         let is_known = if is_dm {
@@ -1049,6 +1082,18 @@ async fn notify_admin_dm(
     }
 }
 
+/// Returns the attributed reactor for a gateway reaction, or `None` when the
+/// reaction should be dropped: no user attribution, or the bot reacting to
+/// itself (which would otherwise feed back into the notification stream).
+///
+/// Intentional bot self-reactions (e.g. contradictionary celebrate) never
+/// arrive through this path — they are emitted by the tool layer with
+/// `self_react: true` at the point where they are initiated. See
+/// `crate::mcp::tools::messaging`.
+fn gateway_reactor(user_id: Option<UserId>, bot_id: u64) -> Option<UserId> {
+    user_id.filter(|id| id.get() != bot_id)
+}
+
 /// Returns `true` if the message should be dropped because the author is a bot
 /// whose user ID is **not** in the `allow_from` list.
 ///
@@ -1194,6 +1239,31 @@ mod tests {
         );
     }
 
+    // ── Gateway reaction filter tests ────────────────────────────────────────
+
+    /// The bot's own gateway reactions are dropped — intentional self-reacts
+    /// (e.g. contradictionary celebrate) reach the construct via the tool
+    /// layer instead, marked `self_react: true`.
+    #[test]
+    fn test_gateway_drops_bot_self_reactions() {
+        assert_eq!(gateway_reactor(Some(UserId::new(42)), 42), None);
+    }
+
+    /// Other users' reactions pass through with attribution intact.
+    #[test]
+    fn test_gateway_keeps_other_users_reactions() {
+        assert_eq!(
+            gateway_reactor(Some(UserId::new(7)), 42),
+            Some(UserId::new(7))
+        );
+    }
+
+    /// Reactions with no user attribution are dropped.
+    #[test]
+    fn test_gateway_drops_unattributed_reactions() {
+        assert_eq!(gateway_reactor(None, 42), None);
+    }
+
     // ── proxy bot constant tests ───────────────────────────────────────────────
 
     /// PluralKit's bot ID is in the proxy bot list.
@@ -1332,6 +1402,33 @@ mod tests {
             payload["referenced_message"] = parent;
         }
         message_from_wire(payload)
+    }
+
+    #[tokio::test]
+    async fn admitted_message_is_recorded_before_notification_delivery() {
+        let config = LoadedConfig::from_raw(Config::default());
+        let msg = message_from_wire(wire_message_body(
+            123,
+            wire_author(456, "alice"),
+            "gateway payload",
+        ));
+        let ledger = crate::ingress_ledger::IngressLedger::new();
+        let event = build_message_event(&msg, &config, None, MessageTargeting::DirectMessage, None);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+        send_gateway_admitted_message(&ledger, &tx, &msg, event, "test").await;
+
+        let delivered = rx.recv().await.expect("notification event");
+        let NotificationEvent::Message(delivered) = delivered else {
+            panic!("expected message event");
+        };
+        assert_eq!(
+            ledger.verify(delivered.message_id, delivered.chat_id),
+            crate::ingress_ledger::VerifyResult::Admitted {
+                channel: auspex_core::ChannelRef::new(delivered.chat_id.get()),
+            }
+        );
+        assert_eq!(delivered.content, "gateway payload");
     }
 
     #[test]

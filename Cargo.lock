@@ -162,6 +162,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "auspex-core"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -444,6 +451,17 @@ checksum = "57663b653d948a338bfb3eeba9bb2fd5fcfaecb9e199e87e1eda4d9e8b240fd9"
 dependencies = [
  "ciborium-io",
  "half",
+]
+
+[[package]]
+name = "cingulate"
+version = "0.1.0"
+source = "git+https://github.com/butterflyskies/cingulate.git?branch=main#ccfaeced3c7cc8681180047292f3d7c587ffddcb"
+dependencies = [
+ "regex",
+ "serde",
+ "thiserror 2.0.19",
+ "toml 1.1.3+spec-1.1.0",
 ]
 
 [[package]]
@@ -774,13 +792,15 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.27.0"
+version = "0.31.1"
 dependencies = [
  "aho-corasick",
  "arc-swap",
+ "auspex-core",
  "camino",
  "chrono",
  "chrono-tz",
+ "cingulate",
  "clap",
  "color-eyre",
  "fs2",
