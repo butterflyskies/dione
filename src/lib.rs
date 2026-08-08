@@ -8,6 +8,7 @@ pub mod config_store;
 pub mod config_watcher;
 pub mod contradictionary;
 pub mod delivery_buffer;
+pub mod dice;
 pub mod discord;
 pub mod gaie;
 pub mod gate;
@@ -26,6 +27,7 @@ pub mod rate_limiter;
     reason = "standalone receipt-gate fixture is runtime-wired in a follow-up PR"
 )]
 pub(crate) mod receipt_gate;
+pub mod roll_receipts;
 pub mod state;
 pub mod timestamp;
 pub mod tracing_channel;

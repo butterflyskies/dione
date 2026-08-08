@@ -59,11 +59,22 @@ API actions.
   guild/channel/user introspection
 - Message chunking and delivery configuration
 - Permission relay routed to admins only
+- A transport-native `/roll` application command that completes without LLM
+  inference or construct notification delivery
 - TOML config with hot-reload (re-read per inbound message)
+
+`/roll` keeps up to 4,096 full local receipts for retry and crash recovery.
+Deleting the Discord response does not immediately delete its local receipt.
+At capacity, Dione replaces the oldest fully published receipt with an exact
+interaction-ID tombstone retained for 24 hours, comfortably beyond Discord's
+interaction-token lifetime. This prevents a replay from sampling again without
+retaining its expression, faces, actor, or channel. Tombstones are exact rather
+than a scalar snowflake watermark, so delayed out-of-order interactions are not
+mistaken for previously handled ones.
 
 ### Out of scope (future phases)
 
-- Slash commands / application commands — acknowledged as future work
+- General-purpose slash commands / application commands beyond `/roll`
 - Voice channel interaction
 - Scheduled messages / reminders (handled by Claude Code scheduling)
 

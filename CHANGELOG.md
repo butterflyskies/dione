@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Transport-native `/roll` reflex.** Dione registers a typed `dice` slash
+  command, enforces the existing DM/channel/user gates, samples each accepted
+  interaction exactly once from the operating-system CSPRNG, optionally mixes
+  bounded temperature/voltage observations from Linux `hwmon`, applies
+  unbiased rejection sampling, and publishes a canonical result without
+  emitting a construct notification. Interprocess-locked receipts prevent a
+  restart or retry from resampling and bind the committed roll to its Discord
+  message ID. The store retains at most 4,096 full receipts: at capacity it
+  replaces the oldest published receipt with an exact, 24-hour durable
+  tombstone, while never evicting unfinished work or permitting a retired
+  interaction to sample again during Discord's replayable lifetime.
+
 ## [0.32.0] - 2026-08-07
 
 ### Added
