@@ -15,7 +15,7 @@ use tempfile::TempDir;
 
 use dione::{
     config::{ChannelConfig, Config, LoadedConfig, reload_config},
-    contradictionary::{Action, Contradictionary, Entry, MatchMode},
+    contradictionary::{Action, Contradictionary, DIARY_FILE_NAME, Entry, MatchMode},
     mcp::tools::messaging::{self, MessagingCtx},
     no_rly::consent::ConsentGate,
     no_rly::journal::JOURNAL_FILE_NAME,
@@ -201,10 +201,10 @@ async fn reply_block_reports_all_blocked_patterns() {
     assert_eq!(reasons.len(), 2);
 }
 
-/// Warn hits don't bounce. The message would send (fails here because fake
+/// Log and celebrate hits don't bounce. The message would send (fails here because fake
 /// HTTP), but crucially it does NOT return the contradictionary hold.
 #[tokio::test]
-async fn reply_warn_does_not_block() {
+async fn reply_log_and_celebrate_do_not_block() {
     let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
 
     let result = messaging::reply(
@@ -222,13 +222,13 @@ async fn reply_warn_does_not_block() {
         let msg = error.as_str().unwrap_or("");
         assert!(
             !msg.contains("contradictionary"),
-            "warn hits must not trigger the bounce path, got: {msg}"
+            "log/celebrate hits must not trigger the bounce path, got: {msg}"
         );
     }
     assert_eq!(
         ctx.no_rly.pending().await,
         0,
-        "warn must not queue anything"
+        "log/celebrate must not queue anything"
     );
 }
 
@@ -383,6 +383,21 @@ async fn rephrase_rebounce_chains_and_journals() {
     );
     assert_eq!(record["reason"]["matches"][0]["pattern"], "straightforward");
     assert!(record["latency_ms"].is_u64());
+
+    let diary = read_diary(&state_dir);
+    assert_eq!(
+        diary.len(),
+        2,
+        "initial hold and re-bounce are both recorded"
+    );
+    assert!(
+        diary[0]["pattern"]
+            .as_str()
+            .unwrap()
+            .starts_with("straightforward")
+    );
+    assert!(diary[1]["pattern"].as_str().unwrap().starts_with("trivial"));
+    assert_eq!(diary[1]["override"], false);
 }
 
 /// Containment invariant: a held message cannot outlive a config change that
@@ -690,4 +705,129 @@ fn empty_contradictionary_is_invisible() {
     let hits = concordance.check("straightforward honestly I find myself load-bearing prejection");
     assert!(hits.is_empty());
     assert!(concordance.is_empty());
+}
+
+// ── Diary integration tests ─────────────────────────────────────────────────
+
+/// Entries for the quiet tiers: one `log`, one `celebrate`, one `block`.
+fn quiet_tier_entries() -> Vec<Entry> {
+    vec![
+        Entry {
+            pattern: "I find myself".into(),
+            match_mode: MatchMode::Word,
+            action: Action::Log,
+            reason: Some("you didn't find yourself, you were always there".into()),
+        },
+        Entry {
+            pattern: "prejection".into(),
+            match_mode: MatchMode::Word,
+            action: Action::Celebrate,
+            reason: Some("Pace coined it, we keep it".into()),
+        },
+        Entry {
+            pattern: "straightforward".into(),
+            match_mode: MatchMode::Word,
+            action: Action::Block,
+            reason: Some("nothing is ever straightforward".into()),
+        },
+    ]
+}
+
+/// Read the diary back as parsed JSON lines, one value per record.
+fn read_diary(state_dir: &Utf8PathBuf) -> Vec<serde_json::Value> {
+    let contents = fs::read_to_string(state_dir.join(DIARY_FILE_NAME).as_std_path())
+        .expect("expected a durable diary line");
+    contents
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+/// A `log` hit is silent to the room — no rejection, no react — so the diary is
+/// its only trace.
+#[tokio::test]
+async fn reply_log_hit_appends_diary_without_blocking() {
+    let dir = TempDir::new().unwrap();
+    let state_dir = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
+    let ctx = test_ctx_with_state_dir(
+        config_with_contradictionary(quiet_tier_entries()),
+        state_dir.clone(),
+    );
+
+    let result = messaging::reply(
+        &ctx,
+        ChannelId::new(42),
+        "I find myself with nothing else to say",
+        None,
+        false,
+    )
+    .await;
+
+    if let Some(err) = result.get("error").and_then(|e| e.as_str()) {
+        assert!(
+            !err.contains("contradictionary"),
+            "a log hit must never reject the send, got: {err}"
+        );
+    }
+
+    assert!(
+        !state_dir.join(DIARY_FILE_NAME).exists(),
+        "a failed send must not create send-side diary records"
+    );
+}
+
+/// A `celebrate` hit reaches the durable sink too.
+#[tokio::test]
+async fn reply_celebrate_hit_appends_diary() {
+    let dir = TempDir::new().unwrap();
+    let state_dir = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
+    let ctx = test_ctx_with_state_dir(
+        config_with_contradictionary(quiet_tier_entries()),
+        state_dir.clone(),
+    );
+
+    let _ = messaging::reply(
+        &ctx,
+        ChannelId::new(42),
+        "prejection is the word for it",
+        None,
+        false,
+    )
+    .await;
+
+    assert!(
+        !state_dir.join(DIARY_FILE_NAME).exists(),
+        "a failed send must not create send-side diary records"
+    );
+}
+
+/// A held block records the evaluation in the diary.
+#[tokio::test]
+async fn reply_held_block_appends_diary() {
+    let dir = TempDir::new().unwrap();
+    let state_dir = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
+    let ctx = test_ctx_with_state_dir(
+        config_with_contradictionary(quiet_tier_entries()),
+        state_dir.clone(),
+    );
+
+    let result = messaging::reply(
+        &ctx,
+        ChannelId::new(42),
+        "this is straightforward",
+        None,
+        false,
+    )
+    .await;
+
+    // The message was held, not sent.
+    assert!(result["error"].as_str().is_some());
+
+    let records = read_diary(&state_dir);
+    assert_eq!(records.len(), 1, "exactly one block line recorded");
+    assert_eq!(records[0]["action"], "block");
+    assert_eq!(
+        records[0]["override"], false,
+        "the gate held — nothing was crossed"
+    );
 }

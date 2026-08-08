@@ -613,7 +613,7 @@ mod tests {
             config.max_write_buffer_size,
             MAX_WEBSOCKET_MESSAGE_SIZE + 128 * 1024
         );
-        assert!(MAX_WEBSOCKET_MESSAGE_SIZE > 16 * 1024 * 1024);
+        const { assert!(MAX_WEBSOCKET_MESSAGE_SIZE > 16 * 1024 * 1024) };
     }
 
     #[tokio::test]

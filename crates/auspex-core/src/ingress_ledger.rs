@@ -81,6 +81,7 @@ impl IngressLedger {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    #[allow(dead_code)]
     fn with_capacity(max_entries: usize) -> Self {
         Self {
             max_entries,
@@ -89,6 +90,7 @@ impl IngressLedger {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    #[allow(dead_code)]
     fn with_ttl(ttl: Duration) -> Self {
         Self {
             ttl,
@@ -190,12 +192,13 @@ impl IngressLedger {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    #[allow(dead_code)]
     fn len(&self) -> usize {
         self.entries.lock().map(|e| e.len()).unwrap_or(0)
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -80,10 +80,7 @@ fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
     )
 }
 
-fn make_server_with_http(
-    state_dir: &camino::Utf8PathBuf,
-    http: Arc<Http>,
-) -> DioneServer {
+fn make_server_with_http(state_dir: &camino::Utf8PathBuf, http: Arc<Http>) -> DioneServer {
     let state = new_state();
     let queue = Arc::new(Mutex::new(AccessQueue::load(state_dir)));
     let (tx, _rx) = mpsc::channel(4);
@@ -1017,7 +1014,7 @@ fn test_notification_reaction_snapshot() {
     insta::assert_json_snapshot!(notif);
 }
 
-/// Tool-initiated self-reacts (contradictionary celebrate/warn) must carry
+/// Tool-initiated self-reacts (contradictionary celebrate) must carry
 /// `self_react: true` in the notification meta so the construct can tell its
 /// own reinforcement signal apart from other users' reactions.
 #[test]

@@ -1278,7 +1278,7 @@ mod tests {
             enabled: true,
             mode: crate::config::BellMode::Live,
             providers: vec![BellProviderConfig {
-                url: BellProviderUrl::parse(&format!("http://{addr}/mcp")).unwrap(),
+                url: BellProviderUrl::parse(format!("http://{addr}/mcp")).unwrap(),
                 scope: BellScope::parse("test").unwrap(),
                 alias: None,
             }],

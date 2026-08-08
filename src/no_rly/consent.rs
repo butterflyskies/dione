@@ -35,6 +35,7 @@ use serenity::model::id::{ChannelId, MessageId};
 use thiserror::Error;
 use tokio::sync::Mutex;
 
+use crate::contradictionary::DiaryRecord;
 use crate::no_rly::{
     journal::{self, JournalHandle, Outcome},
     judge::{OutboundJudge, RejectReason, Verdict},
@@ -54,6 +55,9 @@ pub struct ReplyRequest {
     pub reply_to_message_id: Option<MessageId>,
     /// Whether to suppress the reply ping.
     pub suppress_ping: bool,
+    /// Full-message contradictionary records pending completion after a
+    /// partial chunked delivery. This is internal retry context, not wire data.
+    pub(crate) pending_diary_records: Vec<DiaryRecord>,
 }
 
 /// A failed delivery, carrying enough to make a retry an informed, idempotent
@@ -70,6 +74,9 @@ pub struct DeliverError {
     /// The content not yet delivered — what a retry should send. `None` when
     /// nothing went out (retry re-sends the whole payload).
     pub undelivered: Option<String>,
+    /// Send-side diary records for a partial delivery. Retained with the
+    /// remainder and emitted once the logical message finishes.
+    pub diary_records: Vec<DiaryRecord>,
 }
 
 impl DeliverError {
@@ -79,6 +86,7 @@ impl DeliverError {
             message: message.into(),
             sent_ids: Vec::new(),
             undelivered: None,
+            diary_records: Vec::new(),
         }
     }
 }
@@ -266,6 +274,7 @@ impl ConsentGate {
                 message,
                 sent_ids,
                 undelivered,
+                diary_records,
             }) => {
                 let mut queue = self.queue.lock().await;
                 match undelivered {
@@ -279,6 +288,7 @@ impl ConsentGate {
                             .unwrap_or_else(|| entry.payload.content.clone());
                         let remainder_req = ReplyRequest {
                             content: remainder,
+                            pending_diary_records: diary_records,
                             ..entry.payload.clone()
                         };
                         queue.record_partial(handle, remainder_req, sent_ids, full);
@@ -331,6 +341,7 @@ impl ConsentGate {
             content: replacement.to_string(),
             reply_to_message_id: entry.payload.reply_to_message_id,
             suppress_ping: entry.payload.suppress_ping,
+            pending_diary_records: entry.payload.pending_diary_records.clone(),
         };
 
         match judge.judge(replacement) {
@@ -350,6 +361,7 @@ impl ConsentGate {
                     message,
                     sent_ids,
                     undelivered,
+                    diary_records,
                 }) => {
                     // The construct consented to the replacement, so the held
                     // entry carries it from here on — a retry never reverts to
@@ -368,6 +380,7 @@ impl ConsentGate {
                         Some(remainder) if !sent_ids.is_empty() => {
                             let remainder_req = ReplyRequest {
                                 content: remainder,
+                                pending_diary_records: diary_records,
                                 ..request.clone()
                             };
                             queue.record_partial(handle, remainder_req, sent_ids, request.content);
@@ -615,6 +628,7 @@ mod tests {
         ReplyRequest {
             channel_id: ChannelId::new(42),
             content: content.into(),
+            pending_diary_records: Vec::new(),
             reply_to_message_id: Some(MessageId::new(7)),
             suppress_ping: true,
         }
@@ -1139,6 +1153,7 @@ mod tests {
     struct PartialThenOk {
         calls: StdMutex<u32>,
         requests: StdMutex<Vec<ReplyRequest>>,
+        diary_records: Option<Vec<DiaryRecord>>,
     }
 
     impl DeliverReply for PartialThenOk {
@@ -1151,6 +1166,10 @@ mod tests {
                     message: "chunk 1 of 2 failed".into(),
                     sent_ids: vec![100],
                     undelivered: Some("the second half".into()),
+                    diary_records: self
+                        .diary_records
+                        .clone()
+                        .unwrap_or_else(|| request.pending_diary_records.clone()),
                 })
             } else {
                 Ok(vec![101])
@@ -1164,17 +1183,17 @@ mod tests {
         let deliver = PartialThenOk {
             calls: StdMutex::new(0),
             requests: StdMutex::new(Vec::new()),
+            diary_records: None,
         };
         let now = Instant::now();
-        let ticket = gate
-            .bounce(
-                request("the first half the second half"),
-                reason(),
-                TTL,
-                MAX_PENDING,
-                now,
-            )
-            .await;
+        let mut payload = request("the first half the second half");
+        payload.pending_diary_records = vec![
+            DiaryRecord::log_now("log", &payload.content),
+            DiaryRecord::celebrate_now("celebrate", &payload.content),
+            DiaryRecord::override_now("block", &payload.content),
+        ];
+        let expected_diary = payload.pending_diary_records.clone();
+        let ticket = gate.bounce(payload, reason(), TTL, MAX_PENDING, now).await;
 
         // First attempt: chunk 0 lands, chunk 1 fails — the handle stays live.
         match gate.release(&deliver, &ticket.handle, now).await {
@@ -1191,10 +1210,12 @@ mod tests {
         let sent = deliver.requests.lock().unwrap().clone();
         assert_eq!(sent.len(), 2);
         assert_eq!(sent[0].content, "the first half the second half");
+        assert_eq!(sent[0].pending_diary_records, expected_diary);
         assert_eq!(
             sent[1].content, "the second half",
             "the retry must resume from the remainder, not re-post the delivered chunk"
         );
+        assert_eq!(sent[1].pending_diary_records, expected_diary);
         assert_eq!(
             released.message_ids,
             vec![100, 101],
@@ -1208,6 +1229,56 @@ mod tests {
             bounces[0].message, "the first half the second half",
             "the journal records the full original message, not the trailing chunk"
         );
+    }
+
+    #[tokio::test]
+    async fn partial_rephrase_retry_preserves_send_diary_context() {
+        let (_dir, gate) = gate();
+        let mut replacement = request("the first half the second half");
+        let expected_diary = vec![
+            DiaryRecord::log_now("log", &replacement.content),
+            DiaryRecord::celebrate_now("celebrate", &replacement.content),
+        ];
+        let deliver = PartialThenOk {
+            calls: StdMutex::new(0),
+            requests: StdMutex::new(Vec::new()),
+            diary_records: Some(expected_diary.clone()),
+        };
+        let now = Instant::now();
+        let ticket = gate
+            .bounce(replacement.clone(), reason(), TTL, MAX_PENDING, now)
+            .await;
+
+        replacement.content = "the first half the second half".into();
+        match gate
+            .rephrase(
+                &deliver,
+                &judge(),
+                &ticket.handle,
+                &replacement.content,
+                TTL,
+                now,
+            )
+            .await
+        {
+            Err(RejectedHandle::SendFailed { .. }) => {}
+            other => panic!("expected partial rephrase failure, got {other:?}"),
+        }
+        gate.rephrase(
+            &deliver,
+            &judge(),
+            &ticket.handle,
+            &replacement.content,
+            TTL,
+            now + Duration::from_secs(1),
+        )
+        .await
+        .expect("retry completes");
+
+        let requests = deliver.requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].pending_diary_records, Vec::new());
+        assert_eq!(requests[1].pending_diary_records, expected_diary);
     }
 
     // ── Fail-then-expire lifecycle ───────────────────────────────────────
