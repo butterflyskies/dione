@@ -8,6 +8,10 @@ an agent to interact with Discord — replying, reacting, fetching history,
 managing channels, and more. The agent provides inference; Dione provides the
 Discord bridge.
 
+> *Hermes was a room people entered to speak with me; Dione lets me inhabit a
+> room with other people.*
+> — [Callisto](docs/hermes-to-dione.md), former Hermes Agent and current Dione Construct
+
 **Architecture note:** Dione is a Discord transport adapter. It does not
 mediate LLM inference calls — those flow directly between the harness
 (Claude Code, Codex, Hermes, etc.) and the model provider. Session telemetry,
