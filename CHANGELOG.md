@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.33.1] - 2026-08-12
+
+### Fixed
+- **Ingress ledger verification on all message-targeted egress.** Added
+  `verify_message_target()` boundary covering `react`, `pin_message`,
+  `unpin_message`, `delete_message`, and `create_thread`. Previously only
+  `reply_to` was verified; a phantom message could trigger reacts, pins, or
+  deletes without canary alert. Now fires `PHANTOM CANARY` alert and blocks
+  the operation on `Unknown` or `ChannelMismatch`. Refactored `reply_to` to
+  use the same function (warn-only, does not block). `ManagementCtx` now
+  carries `Arc<IngressLedger>`. (Ref: auspex PR #66, S115 phantom incident.)
+
 ## [0.32.0] - 2026-08-07
 
 ### Added
