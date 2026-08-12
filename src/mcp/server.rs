@@ -105,6 +105,7 @@ impl DioneServer {
             http: self.http.clone(),
             state: self.state.clone(),
             config,
+            ingress_ledger: self.ingress_ledger.clone(),
         }
     }
 

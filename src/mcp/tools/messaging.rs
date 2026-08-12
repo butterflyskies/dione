@@ -31,7 +31,11 @@ use crate::state::State;
 const CONTRADICTIONARY_CELEBRATE_REACT: &str = "\u{2728}";
 
 /// Fire-and-forget phantom canary alert to the configured alert channel.
-fn phantom_canary_alert(http: &Arc<serenity::http::Http>, channel: ChannelId, message: &str) {
+pub(crate) fn phantom_canary_alert(
+    http: &Arc<serenity::http::Http>,
+    channel: ChannelId,
+    message: &str,
+) {
     let http = Arc::clone(http);
     let content = message.to_owned();
     tokio::spawn(async move {
@@ -40,6 +44,98 @@ fn phantom_canary_alert(http: &Arc<serenity::http::Http>, channel: ChannelId, me
             tracing::warn!(error = %e, "failed to send phantom canary alert");
         }
     });
+}
+
+/// Verify a message target against the ingress ledger before performing a
+/// Discord mutation. Returns `Err(json)` with a canary alert on `Unknown`
+/// or `ChannelMismatch`, blocking the operation. `Expired` and `Unavailable`
+/// log but allow the operation to proceed (legitimate edge cases).
+///
+/// `operation` names the egress path for tracing and alerts (e.g. "react",
+/// "pin_message").
+pub(crate) fn verify_message_target(
+    ledger: &IngressLedger,
+    http: &Arc<serenity::http::Http>,
+    config: &LoadedConfig,
+    message_id: MessageId,
+    channel_id: ChannelId,
+    operation: &str,
+) -> Result<(), Value> {
+    match ledger.verify(message_id, channel_id) {
+        crate::ingress_ledger::VerifyResult::Admitted { .. } => Ok(()),
+        crate::ingress_ledger::VerifyResult::Unknown => {
+            tracing::warn!(
+                message_id = message_id.get(),
+                channel_id = channel_id.get(),
+                operation,
+                "egress: message_id not in ingress ledger"
+            );
+            if let Some(alert_ch) = config.phantom_canary_channel {
+                phantom_canary_alert(
+                    http,
+                    alert_ch,
+                    &format!(
+                        "⚠️ PHANTOM CANARY: {operation} target message {msg} in channel {ch} not in ingress ledger (Unknown)",
+                        msg = message_id.get(),
+                        ch = channel_id.get(),
+                    ),
+                );
+            }
+            Err(json!({
+                "error": format!(
+                    "message {} not in ingress ledger — possible phantom. {operation} blocked.",
+                    message_id.get()
+                )
+            }))
+        }
+        crate::ingress_ledger::VerifyResult::ChannelMismatch {
+            admitted_channel,
+            claimed_channel,
+        } => {
+            tracing::warn!(
+                message_id = message_id.get(),
+                admitted_channel = admitted_channel.get(),
+                claimed_channel = claimed_channel.get(),
+                operation,
+                "egress: message_id channel mismatch"
+            );
+            if let Some(alert_ch) = config.phantom_canary_channel {
+                phantom_canary_alert(
+                    http,
+                    alert_ch,
+                    &format!(
+                        "⚠️ PHANTOM CANARY: {operation} target message {msg} channel mismatch — admitted from {admitted}, claimed {claimed} (ChannelMismatch)",
+                        msg = message_id.get(),
+                        admitted = admitted_channel,
+                        claimed = claimed_channel,
+                    ),
+                );
+            }
+            Err(json!({
+                "error": format!(
+                    "message {} channel mismatch — possible phantom. {operation} blocked.",
+                    message_id.get()
+                )
+            }))
+        }
+        crate::ingress_ledger::VerifyResult::Expired => {
+            tracing::info!(
+                message_id = message_id.get(),
+                channel_id = channel_id.get(),
+                operation,
+                "egress: message_id expired from ingress ledger"
+            );
+            Ok(())
+        }
+        crate::ingress_ledger::VerifyResult::Unavailable => {
+            tracing::warn!(
+                message_id = message_id.get(),
+                operation,
+                "egress: ingress ledger unavailable; cannot verify message target"
+            );
+            Ok(())
+        }
+    }
 }
 
 /// Bounded display name for bot author attribution (Discord caps usernames at 32 chars).
@@ -429,63 +525,16 @@ pub async fn reply_with_hook_overrides(
     no_rly_hooks: &[HookName],
 ) -> Value {
     if let Some(ref_id) = reply_to_message_id {
-        match ctx.ingress_ledger.verify(ref_id, channel_id) {
-            crate::ingress_ledger::VerifyResult::Admitted { .. } => {}
-            crate::ingress_ledger::VerifyResult::Unknown => {
-                tracing::warn!(
-                    message_id = ref_id.get(),
-                    channel_id = channel_id.get(),
-                    "egress: reply_to_message_id not in ingress ledger"
-                );
-                if let Some(alert_ch) = ctx.config.phantom_canary_channel {
-                    phantom_canary_alert(
-                        &ctx.http,
-                        alert_ch,
-                        &format!(
-                            "⚠️ PHANTOM CANARY: reply_to_message_id {} in channel {} not in ingress ledger (Unknown)",
-                            ref_id.get(),
-                            channel_id.get()
-                        ),
-                    );
-                }
-            }
-            crate::ingress_ledger::VerifyResult::ChannelMismatch {
-                admitted_channel,
-                claimed_channel,
-            } => {
-                tracing::warn!(
-                    message_id = ref_id.get(),
-                    admitted_channel = admitted_channel.get(),
-                    claimed_channel = claimed_channel.get(),
-                    "egress: reply_to_message_id channel mismatch"
-                );
-                if let Some(alert_ch) = ctx.config.phantom_canary_channel {
-                    phantom_canary_alert(
-                        &ctx.http,
-                        alert_ch,
-                        &format!(
-                            "⚠️ PHANTOM CANARY: reply_to_message_id {} channel mismatch — admitted from {}, claimed {} (ChannelMismatch)",
-                            ref_id.get(),
-                            admitted_channel,
-                            claimed_channel
-                        ),
-                    );
-                }
-            }
-            crate::ingress_ledger::VerifyResult::Expired => {
-                tracing::info!(
-                    message_id = ref_id.get(),
-                    channel_id = channel_id.get(),
-                    "egress: reply_to_message_id expired from ingress ledger"
-                );
-            }
-            crate::ingress_ledger::VerifyResult::Unavailable => {
-                tracing::warn!(
-                    message_id = ref_id.get(),
-                    "egress: ingress ledger unavailable; cannot verify reply_to_message_id"
-                );
-            }
-        }
+        // Warn-only for reply: the reply_to is optional context, not the
+        // primary action. The message still sends even if verification fails.
+        let _ = verify_message_target(
+            &ctx.ingress_ledger,
+            &ctx.http,
+            &ctx.config,
+            ref_id,
+            channel_id,
+            "reply_to",
+        );
     }
 
     let prepared = match prepare_outbound(
@@ -959,6 +1008,17 @@ pub async fn react(
     emoji: &str,
 ) -> Value {
     if let Err(e) = check_outbound(ctx, channel_id).await {
+        return e;
+    }
+
+    if let Err(e) = verify_message_target(
+        &ctx.ingress_ledger,
+        &ctx.http,
+        &ctx.config,
+        message_id,
+        channel_id,
+        "react",
+    ) {
         return e;
     }
 

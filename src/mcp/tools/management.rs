@@ -7,6 +7,8 @@ use serenity::model::id::{ChannelId, MessageId};
 
 use crate::config::LoadedConfig;
 use crate::gate::OutboundGate;
+use crate::ingress_ledger::IngressLedger;
+use crate::mcp::tools::messaging::verify_message_target;
 use crate::state::State;
 
 /// Context for channel management tools.
@@ -14,6 +16,7 @@ pub struct ManagementCtx {
     pub http: Arc<serenity::http::Http>,
     pub state: State,
     pub config: Arc<LoadedConfig>,
+    pub ingress_ledger: Arc<IngressLedger>,
 }
 
 async fn check_outbound(ctx: &ManagementCtx, channel_id: ChannelId) -> Result<(), Value> {
@@ -39,6 +42,16 @@ pub async fn pin_message(
     if let Err(e) = check_outbound(ctx, channel_id).await {
         return e;
     }
+    if let Err(e) = verify_message_target(
+        &ctx.ingress_ledger,
+        &ctx.http,
+        &ctx.config,
+        message_id,
+        channel_id,
+        "pin_message",
+    ) {
+        return e;
+    }
     match ctx.http.pin_message(channel_id, message_id, None).await {
         Ok(()) => json!({ "ok": true }),
         Err(e) => json!({ "error": e.to_string() }),
@@ -53,6 +66,16 @@ pub async fn unpin_message(
     message_id: MessageId,
 ) -> Value {
     if let Err(e) = check_outbound(ctx, channel_id).await {
+        return e;
+    }
+    if let Err(e) = verify_message_target(
+        &ctx.ingress_ledger,
+        &ctx.http,
+        &ctx.config,
+        message_id,
+        channel_id,
+        "unpin_message",
+    ) {
         return e;
     }
     match ctx.http.unpin_message(channel_id, message_id, None).await {
@@ -72,6 +95,19 @@ pub async fn create_thread(
     if let Err(e) = check_outbound(ctx, channel_id).await {
         return e;
     }
+    if let Some(mid) = message_id {
+        if let Err(e) = verify_message_target(
+            &ctx.ingress_ledger,
+            &ctx.http,
+            &ctx.config,
+            mid,
+            channel_id,
+            "create_thread",
+        ) {
+            return e;
+        }
+    }
+
     let thread_builder = CreateThread::new(name).kind(ChannelType::PublicThread);
 
     let result = match message_id {
@@ -115,6 +151,16 @@ pub async fn delete_message(
     if let Err(e) = check_outbound(ctx, channel_id).await {
         return e;
     }
+    if let Err(e) = verify_message_target(
+        &ctx.ingress_ledger,
+        &ctx.http,
+        &ctx.config,
+        message_id,
+        channel_id,
+        "delete_message",
+    ) {
+        return e;
+    }
     match ctx.http.delete_message(channel_id, message_id, None).await {
         Ok(()) => json!({ "ok": true }),
         Err(e) => json!({ "error": e.to_string() }),
@@ -145,6 +191,7 @@ mod tests {
             http: Arc::new(serenity::http::Http::new("fake")),
             state: new_state(),
             config: Arc::new(config),
+            ingress_ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
         }
     }
 
