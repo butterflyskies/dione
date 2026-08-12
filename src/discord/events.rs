@@ -1,15 +1,24 @@
 use crate::{
     bell_rings::BellStatus,
+    dice::{DiceExpression, OsEntropy},
     gate::{GateDecision, InboundGate, MentionDetector, MentionKind},
     mcp::tools::bot_state::DiscordCommand,
     mcp::tools::messaging::create_dm_channel,
     queue::AccessRequest,
+    roll_receipts::RollReceiptStore,
     timestamp::Timestamp,
 };
 use serenity::{
     async_trait,
-    builder::{CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage},
-    model::{event::MessageUpdateEvent, prelude::*},
+    builder::{
+        CreateAllowedMentions, CreateCommand, CreateCommandOption, CreateInteractionResponse,
+        CreateInteractionResponseMessage, CreateMessage, EditInteractionResponse,
+    },
+    model::{
+        application::{Command, CommandDataOptionValue, CommandOptionType},
+        event::MessageUpdateEvent,
+        prelude::*,
+    },
     prelude::*,
 };
 use std::sync::{
@@ -144,6 +153,8 @@ pub struct Handler {
     pub nameplate_service: Option<Arc<crate::nameplates::NameplateService>>,
     /// Ingress ledger — records messages admitted by the gateway for egress verification.
     pub ingress_ledger: Arc<crate::ingress_ledger::IngressLedger>,
+    /// Durable, idempotent receipts for transport-native dice rolls.
+    pub roll_receipts: Arc<RollReceiptStore>,
 }
 
 impl Handler {
@@ -217,6 +228,10 @@ impl EventHandler for Handler {
             id,
             "Discord gateway ready"
         );
+
+        if let Err(error) = ensure_roll_command(&ctx.http).await {
+            tracing::warn!(%error, "failed to register /roll command");
+        }
 
         // Take the command receiver and spawn a task that processes gateway
         // commands (e.g. presence updates) using this Context.
@@ -652,8 +667,19 @@ impl EventHandler for Handler {
     }
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
-        let Interaction::Component(component) = interaction else {
-            return;
+        let component = match interaction {
+            Interaction::Command(command) if command.data.name == "roll" => {
+                NativeRollHandler {
+                    state: &self.state,
+                    state_dir: &self.state_dir,
+                    receipts: &self.roll_receipts,
+                }
+                .handle(&ctx, &command)
+                .await;
+                return;
+            }
+            Interaction::Component(component) => component,
+            _ => return,
         };
 
         let custom_id = &component.data.custom_id;
@@ -733,6 +759,266 @@ impl EventHandler for Handler {
         if let Err(e) = self.tx.send(event).await {
             tracing::warn!(error = %e, "failed to send permission response event");
         }
+    }
+}
+
+/// Capability-minimal handler for the transport reflex. It intentionally has
+/// no notification sender, so `/roll` cannot enqueue a construct/model turn.
+struct NativeRollHandler<'a> {
+    state: &'a crate::state::State,
+    state_dir: &'a camino::Utf8Path,
+    receipts: &'a RollReceiptStore,
+}
+
+impl NativeRollHandler<'_> {
+    async fn handle(
+        &self,
+        ctx: &Context,
+        command: &serenity::model::application::CommandInteraction,
+    ) {
+        let config = crate::config::load_config(self.state_dir);
+        let sender_id = command.user.id.get();
+        let is_dm = command.guild_id.is_none();
+        let resolved = match tokio::time::timeout(
+            // Keep most of Discord's three-second response window in reserve
+            // for scheduling and the acknowledgement request itself.
+            std::time::Duration::from_millis(500),
+            resolve_guild_channel(
+                &ctx.http,
+                self.state,
+                &config,
+                command.channel_id.get(),
+                is_dm,
+            ),
+        )
+        .await
+        {
+            Ok(resolved) => resolved,
+            Err(_) => {
+                respond_to_roll_error(
+                    command,
+                    &ctx.http,
+                    "Could not verify this channel before Discord's response deadline.",
+                )
+                .await;
+                return;
+            }
+        };
+        let decision = if is_dm {
+            InboundGate::check_dm(&config, sender_id)
+        } else {
+            InboundGate::check_guild_passive(
+                &config,
+                resolved.gate_channel_id,
+                sender_id,
+                command.guild_id.map(|id| id.get()),
+            )
+        };
+        if decision != GateDecision::Deliver {
+            respond_to_roll_error(
+                command,
+                &ctx.http,
+                "This channel or user is not authorized to roll here.",
+            )
+            .await;
+            return;
+        }
+
+        let Some(expression_text) = command
+            .data
+            .options
+            .iter()
+            .find(|option| option.name == "dice")
+            .and_then(|option| match &option.value {
+                CommandDataOptionValue::String(value) => Some(value.as_str()),
+                _ => None,
+            })
+        else {
+            respond_to_roll_error(command, &ctx.http, "Missing required `dice` expression.").await;
+            return;
+        };
+        let expression = match DiceExpression::parse(expression_text) {
+            Ok(expression) => expression,
+            Err(error) => {
+                respond_to_roll_error(
+                    command,
+                    &ctx.http,
+                    &format!("Invalid dice expression: {error}."),
+                )
+                .await;
+                return;
+            }
+        };
+
+        let transport = SerenityRollTransport {
+            command,
+            http: &ctx.http,
+        };
+        let mut entropy = OsEntropy::collect().await;
+        if let Err(error) = execute_native_roll(
+            &transport,
+            self.receipts,
+            command.id,
+            expression,
+            &mut entropy,
+        )
+        .await
+        {
+            tracing::warn!(%error, "transport-native /roll did not complete");
+        }
+    }
+}
+
+#[async_trait]
+trait NativeRollTransport: Sync {
+    async fn defer(&self) -> Result<(), NativeRollTransportError>;
+    async fn response_message_id(&self) -> Result<MessageId, NativeRollTransportError>;
+    async fn edit(&self, content: &str) -> Result<(), NativeRollTransportError>;
+}
+
+#[derive(Debug, thiserror::Error)]
+enum NativeRollTransportError {
+    #[error(transparent)]
+    Discord(#[from] serenity::Error),
+    #[cfg(test)]
+    #[error("injected transport failure: {0}")]
+    Test(&'static str),
+}
+
+#[derive(Debug, thiserror::Error)]
+enum NativeRollError {
+    #[error("could not retrieve the canonical Discord response")]
+    Response(#[source] NativeRollTransportError),
+    #[error("could not publish the canonical Discord response")]
+    Publish(#[source] NativeRollTransportError),
+    #[error(transparent)]
+    Receipt(#[from] crate::roll_receipts::RollReceiptError),
+}
+
+struct SerenityRollTransport<'a> {
+    command: &'a serenity::model::application::CommandInteraction,
+    http: &'a serenity::http::Http,
+}
+
+#[async_trait]
+impl NativeRollTransport for SerenityRollTransport<'_> {
+    async fn defer(&self) -> Result<(), NativeRollTransportError> {
+        self.command
+            .create_response(
+                self.http,
+                CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new()),
+            )
+            .await
+            .map_err(NativeRollTransportError::from)
+    }
+
+    async fn response_message_id(&self) -> Result<MessageId, NativeRollTransportError> {
+        self.command
+            .get_response(self.http)
+            .await
+            .map(|response| response.id)
+            .map_err(NativeRollTransportError::from)
+    }
+
+    async fn edit(&self, content: &str) -> Result<(), NativeRollTransportError> {
+        self.command
+            .edit_response(
+                self.http,
+                EditInteractionResponse::new()
+                    .content(content)
+                    .allowed_mentions(CreateAllowedMentions::new()),
+            )
+            .await
+            .map(|_| ())
+            .map_err(NativeRollTransportError::from)
+    }
+}
+
+async fn execute_native_roll(
+    transport: &impl NativeRollTransport,
+    receipts: &RollReceiptStore,
+    interaction_id: InteractionId,
+    expression: DiceExpression,
+    seed_source: &mut impl crate::dice::SeedSource,
+) -> Result<(), NativeRollError> {
+    // Defer before lock wait, disk I/O, or entropy. A replay may already be
+    // acknowledged, so defer failure is reconciled through get_response.
+    let _ = transport.defer().await;
+    let message_id = match transport.response_message_id().await {
+        Ok(message_id) => message_id,
+        Err(error) => {
+            let _ = transport
+                .edit("Could not bind this interaction to a receipt; no roll was sampled.")
+                .await;
+            return Err(NativeRollError::Response(error));
+        }
+    };
+    match receipts
+        .get_or_roll(interaction_id, expression, seed_source)
+        .await
+    {
+        Ok(_) => {}
+        Err(error) => {
+            let _ = transport
+                .edit("The entropy source or receipt store failed; no roll was published.")
+                .await;
+            return Err(error.into());
+        }
+    }
+    let receipt = receipts.bind_response(interaction_id, message_id).await?;
+    if receipt.publication().is_published() {
+        return Ok(());
+    }
+    let content = receipt.render()?;
+    transport
+        .edit(&content)
+        .await
+        .map_err(NativeRollError::Publish)?;
+    receipts.mark_published(interaction_id, message_id).await?;
+    tracing::info!("published transport-native /roll without notification delivery");
+    Ok(())
+}
+
+async fn ensure_roll_command(http: &serenity::http::Http) -> serenity::Result<()> {
+    let builder = roll_command_definition();
+    let existing = Command::get_global_commands(http).await?;
+    if let Some(command) = existing.into_iter().find(|command| command.name == "roll") {
+        Command::edit_global_command(http, command.id, builder).await?;
+    } else {
+        Command::create_global_command(http, builder).await?;
+    }
+    Ok(())
+}
+
+fn roll_command_definition() -> CreateCommand {
+    CreateCommand::new("roll")
+        .description("Roll polyhedral dice once, inside Dione, without waking a model")
+        .add_option(
+            CreateCommandOption::new(
+                CommandOptionType::String,
+                "dice",
+                "Dice notation such as d6, 2d20, or 4d6-1",
+            )
+            .required(true)
+            .min_length(2)
+            .max_length(32),
+        )
+}
+
+async fn respond_to_roll_error(
+    command: &serenity::model::application::CommandInteraction,
+    http: &serenity::http::Http,
+    content: &str,
+) {
+    let message = CreateInteractionResponseMessage::new()
+        .content(content)
+        .allowed_mentions(CreateAllowedMentions::new())
+        .ephemeral(true);
+    if let Err(error) = command
+        .create_response(http, CreateInteractionResponse::Message(message))
+        .await
+    {
+        tracing::warn!(%error, "failed to send /roll interaction response");
     }
 }
 
@@ -1042,6 +1328,176 @@ async fn resolve_thread_parent(
     }
 
     parent_id
+}
+
+#[cfg(test)]
+mod native_roll_tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+
+    use super::*;
+    use crate::dice::{
+        ENTROPY_SEED_BYTES, EntropyProvenance, GeneratedSeed, RollError, SeedSource,
+    };
+
+    struct TestSeedSource {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl SeedSource for TestSeedSource {
+        fn generate_seed(&mut self) -> Result<GeneratedSeed, RollError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(GeneratedSeed {
+                bytes: [7; ENTROPY_SEED_BYTES],
+                provenance: EntropyProvenance::TestSequence,
+            })
+        }
+    }
+
+    struct FakeTransport {
+        message_id: MessageId,
+        response_fails: bool,
+        edit_fails: AtomicBool,
+        defers: AtomicUsize,
+        edits: tokio::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl NativeRollTransport for FakeTransport {
+        async fn defer(&self) -> Result<(), NativeRollTransportError> {
+            self.defers.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn response_message_id(&self) -> Result<MessageId, NativeRollTransportError> {
+            if self.response_fails {
+                Err(NativeRollTransportError::Test("response unavailable"))
+            } else {
+                Ok(self.message_id)
+            }
+        }
+
+        async fn edit(&self, content: &str) -> Result<(), NativeRollTransportError> {
+            if self.edit_fails.swap(false, Ordering::SeqCst) {
+                return Err(NativeRollTransportError::Test("edit failure"));
+            }
+            self.edits.lock().await.push(content.to_owned());
+            Ok(())
+        }
+    }
+
+    fn fake_transport(message_id: u64) -> FakeTransport {
+        FakeTransport {
+            message_id: MessageId::new(message_id),
+            response_fails: false,
+            edit_fails: AtomicBool::new(false),
+            defers: AtomicUsize::new(0),
+            edits: tokio::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    #[test]
+    fn registered_command_keeps_the_required_typed_dice_option() {
+        let command = serde_json::to_value(roll_command_definition()).unwrap();
+        assert_eq!(command["name"], "roll");
+        assert_eq!(command["options"][0]["name"], "dice");
+        assert_eq!(command["options"][0]["required"], true);
+        assert_eq!(command["options"][0]["min_length"], 2);
+        assert_eq!(command["options"][0]["max_length"], 32);
+    }
+
+    #[tokio::test]
+    async fn transport_retry_reuses_one_seed_and_one_canonical_message() {
+        let directory = tempfile::tempdir().unwrap();
+        let state_dir = camino::Utf8Path::from_path(directory.path()).unwrap();
+        let receipts = RollReceiptStore::new(state_dir);
+        let transport = fake_transport(99);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let interaction_id = InteractionId::new(42);
+        for _ in 0..2 {
+            execute_native_roll(
+                &transport,
+                &receipts,
+                interaction_id,
+                DiceExpression::parse("2d6+1").unwrap(),
+                &mut TestSeedSource {
+                    calls: Arc::clone(&calls),
+                },
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(transport.defers.load(Ordering::SeqCst), 2);
+        let edits = transport.edits.lock().await;
+        assert_eq!(edits.len(), 1);
+        assert!(edits[0].contains("receipt: `discord:99`"));
+    }
+
+    #[tokio::test]
+    async fn response_failure_happens_before_entropy_or_receipt_creation() {
+        let directory = tempfile::tempdir().unwrap();
+        let state_dir = camino::Utf8Path::from_path(directory.path()).unwrap();
+        let receipts = RollReceiptStore::new(state_dir);
+        let transport = FakeTransport {
+            response_fails: true,
+            ..fake_transport(99)
+        };
+        let calls = Arc::new(AtomicUsize::new(0));
+        let result = execute_native_roll(
+            &transport,
+            &receipts,
+            InteractionId::new(43),
+            DiceExpression::parse("d20").unwrap(),
+            &mut TestSeedSource {
+                calls: Arc::clone(&calls),
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(!state_dir.join("roll-receipts").exists());
+    }
+
+    #[tokio::test]
+    async fn edit_failure_recovers_without_resampling() {
+        let directory = tempfile::tempdir().unwrap();
+        let state_dir = camino::Utf8Path::from_path(directory.path()).unwrap();
+        let receipts = RollReceiptStore::new(state_dir);
+        let transport = fake_transport(100);
+        transport.edit_fails.store(true, Ordering::SeqCst);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let interaction_id = InteractionId::new(44);
+        let expression = DiceExpression::parse("d6-1").unwrap();
+        assert!(
+            execute_native_roll(
+                &transport,
+                &receipts,
+                interaction_id,
+                expression.clone(),
+                &mut TestSeedSource {
+                    calls: Arc::clone(&calls),
+                },
+            )
+            .await
+            .is_err()
+        );
+        execute_native_roll(
+            &transport,
+            &receipts,
+            interaction_id,
+            expression,
+            &mut TestSeedSource {
+                calls: Arc::clone(&calls),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(transport.edits.lock().await.len(), 1);
+    }
 }
 
 /// Sends a DM to an admin about a pending access request.

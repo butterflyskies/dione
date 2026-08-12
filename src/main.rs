@@ -236,6 +236,7 @@ async fn main() -> Result<()> {
         pronoun_service,
         nameplate_service,
         ingress_ledger: ingress_ledger.clone(),
+        roll_receipts: std::sync::Arc::new(dione::roll_receipts::RollReceiptStore::new(&state_dir)),
     };
 
     let mut discord_client = dione::discord::client::build_client(&token, handler)
