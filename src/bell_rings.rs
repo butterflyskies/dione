@@ -170,8 +170,8 @@ impl MemoryMcpProvider {
                     *client = Some(connected);
                     ConnectOutcome::Ready
                 }
-                Err(_) => {
-                    tracing::warn!(endpoint = %self.endpoint, "bell provider cold-start failed");
+                Err(e) => {
+                    tracing::warn!(endpoint = %self.endpoint, error = ?e, "bell provider cold-start failed");
                     ConnectOutcome::Error
                 }
             }

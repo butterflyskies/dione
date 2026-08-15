@@ -10,14 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [0.33.2] - 2026-08-15
 
 ### Fixed
-- **Bells: use system CA store for MCP provider connections.** Changed reqwest
-  TLS from `rustls-tls` (compiled-in webpki roots only) to
-  `rustls-tls-native-roots` (reads the system certificate store). Bells
-  providers behind a private CA (e.g. collective-conscious on echoes) were
-  unreachable because the internal CA was not in webpki's compiled-in Mozilla
-  root set, and `SSL_CERT_FILE` is ignored by rustls. Now reads
-  `/etc/ssl/certs/ca-certificates.crt` (or platform equivalent) at startup.
-  (Ref: dione#313, diagnosed cross-seat by Ari S118 + Lain S119.)
+- **Bells: enable TLS on rmcp's HTTP client.** rmcp depends on reqwest 0.13
+  (separate from dione/serenity's reqwest 0.12 — no feature unification).
+  The `transport-streamable-http-client-reqwest` feature only enabled `json`
+  and `stream` on rmcp's reqwest — no TLS at all. Every HTTPS bells provider
+  failed with `ConnectError("invalid URL, scheme is not http")` because the
+  HTTP client had no HTTPS connector. Added rmcp's `reqwest` feature, which
+  enables rustls + `rustls-platform-verifier` (webpki roots + native system
+  CA store) on rmcp's reqwest 0.13. Also improved cold-start error logging
+  (`Err(_)` → `Err(e)` with debug format). (Ref: dione#313, diagnosed Lain
+  S119. Prior cert-trust attribution was incomplete — the actual failure was
+  absence of TLS, not distrust.)
 
 ## [0.33.1] - 2026-08-12
 

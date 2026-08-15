@@ -38,10 +38,10 @@ chrono-tz = "0.10"
 camino = { version = "1", features = ["serde1"] }
 futures-util = "0.3"
 notify = "8"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
-rmcp = { version = "1.1", features = ["client", "transport-streamable-http-client-reqwest"] }
+rmcp = { version = "1.1", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
 tokio-tungstenite = { version = "0.21", default-features = false, features = ["handshake"] }
 typst = "0.14.2"
 typst-render = "0.14.2"
