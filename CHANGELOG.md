@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.33.2] - 2026-08-15
+
+### Fixed
+- **Bells: use system CA store for MCP provider connections.** Changed reqwest
+  TLS from `rustls-tls` (compiled-in webpki roots only) to
+  `rustls-tls-native-roots` (reads the system certificate store). Bells
+  providers behind a private CA (e.g. collective-conscious on echoes) were
+  unreachable because the internal CA was not in webpki's compiled-in Mozilla
+  root set, and `SSL_CERT_FILE` is ignored by rustls. Now reads
+  `/etc/ssl/certs/ca-certificates.crt` (or platform equivalent) at startup.
+  (Ref: dione#313, diagnosed cross-seat by Ari S118 + Lain S119.)
+
 ## [0.33.1] - 2026-08-12
 
 ### Fixed
