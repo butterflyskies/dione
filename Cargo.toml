@@ -3,7 +3,7 @@ members = [".", "crates/auspex-core"]
 
 [package]
 name = "dione"
-version = "0.33.1"
+version = "0.33.2"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
@@ -38,7 +38,7 @@ chrono-tz = "0.10"
 camino = { version = "1", features = ["serde1"] }
 futures-util = "0.3"
 notify = "8"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 rmcp = { version = "1.1", features = ["client", "transport-streamable-http-client-reqwest"] }
