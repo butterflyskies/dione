@@ -23,7 +23,7 @@ fn load_config_from_disk(state_dir: &Utf8PathBuf) -> LoadedConfig {
     let config_path = state_dir.join("config.toml");
     let contents = std::fs::read_to_string(&config_path).unwrap_or_default();
     let raw: Config = toml::from_str(&contents).unwrap_or_default();
-    LoadedConfig::from_raw(raw)
+    LoadedConfig::try_from_raw(raw).expect("test configuration generation")
 }
 
 /// Read channel list directly from disk (bypasses global cache).

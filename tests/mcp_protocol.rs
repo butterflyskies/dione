@@ -57,9 +57,10 @@ struct GlobalConfigGuard(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>)
 impl Drop for GlobalConfigGuard {
     fn drop(&mut self) {
         // Runs while the lock is still held (fields drop after the drop body).
-        dione::config::store_loaded_config(&dione::config::LoadedConfig::from_raw(
-            dione::config::Config::default(),
-        ));
+        dione::config::store_loaded_config(
+            &dione::config::LoadedConfig::try_from_raw(dione::config::Config::default())
+                .expect("test configuration generation"),
+        );
     }
 }
 
@@ -69,7 +70,9 @@ fn set_global_config(config: dione::config::Config) -> GlobalConfigGuard {
     let guard = CONFIG_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    dione::config::store_loaded_config(&dione::config::LoadedConfig::from_raw(config));
+    dione::config::store_loaded_config(
+        &dione::config::LoadedConfig::try_from_raw(config).expect("test configuration generation"),
+    );
     GlobalConfigGuard(guard)
 }
 

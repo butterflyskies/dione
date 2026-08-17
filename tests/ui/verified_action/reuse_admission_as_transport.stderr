@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/verified_action/reuse_admission_as_transport.rs:15:30
+   |
+15 |     let _ = resolver().begin(facts());
+   |                        ----- ^^^^^^^ expected `VerifiedAppAction<Unresolved>`, found `AdmissionFacts`
+   |                        |
+   |                        arguments to this method are incorrect
+   |
+   = note: expected struct `VerifiedAppAction<state::Unresolved>`
+              found struct `AdmissionFacts`
+note: method defined here
+  --> tests/ui/verified_action/../../../src/discord/verified_action.rs
+   |
+   |     pub(crate) fn begin(&self, action: VerifiedAppAction<Unresolved>) -> ResolutionSession {
+   |                   ^^^^^        -------------------------------------

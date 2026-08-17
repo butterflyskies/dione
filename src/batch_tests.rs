@@ -110,6 +110,27 @@ fn ctx_with_tz() -> BatchContext {
     }
 }
 
+#[test]
+fn batch_header_has_no_application_transport_suffix() {
+    let rendered =
+        serialize_batch(&[msg(1, "alice", 4242, "hello")], &ctx_basic()).expect("serialize");
+    assert!(rendered.contains("1|15:30|alice|L=1\n"));
+    assert!(!rendered.contains("|A="));
+    assert!(!rendered.contains("|@"));
+}
+
+#[test]
+fn same_effective_user_preserves_each_visible_message_name() {
+    let rendered = serialize_batch(
+        &[msg(1, "alice", 4242, "one"), msg(2, "bob", 4242, "two")],
+        &ctx_basic(),
+    )
+    .expect("serialize");
+    assert!(rendered.contains("[users 4242=alice 4242=bob]"));
+    assert!(rendered.contains("1|15:30|alice|L=1\none"));
+    assert!(rendered.contains("2|15:30|bob|L=1\ntwo"));
+}
+
 // ── Basic serialization ──────────────────────────────────────────────────
 
 #[test]

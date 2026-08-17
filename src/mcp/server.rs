@@ -252,18 +252,15 @@ pub async fn run(
                     }
 
 
-                    // Rate-limit check for message events.
-                    if let NotificationEvent::Message(MessageEvent { ref user_id, ref chat_id, .. }) = event {
-                        let user_id_str = user_id.get().to_string();
-                        let chat_id_str = chat_id.get().to_string();
-                        let sender = ParticipantId::new(&user_id_str);
-                        let channel = ChannelRef::new(&chat_id_str);
+                    // MessageEvent.user_id is already the admitted effective
+                    // participant, independent of transport.
+                    if let Some(key) = message_rate_limit_key(&event) {
                         let now = Instant::now();
-                        match rate_limiter.check_message(&sender, &channel, &[], now) {
+                        match rate_limiter.check_message(&key.participant, &key.channel, &[], now) {
                             RateLimitDecision::Allowed { remaining, .. } => {
                                 tracing::trace!(
-                                    user_id = user_id.get(),
-                                    chat_id = chat_id.get(),
+                                    user_id = key.user_id,
+                                    chat_id = key.chat_id,
                                     remaining,
                                     "rate limiter: message allowed"
                                 );
@@ -273,8 +270,8 @@ pub async fn run(
                                 // OverflowPolicy::Buffer is accepted by config but not
                                 // yet implemented — see #79 for sender class wiring.
                                 tracing::info!(
-                                    user_id = user_id.get(),
-                                    chat_id = chat_id.get(),
+                                    user_id = key.user_id,
+                                    chat_id = key.chat_id,
                                     retry_after_ms = retry_after.as_millis() as u64,
                                     "rate limiter: message denied, dropping"
                                 );
@@ -597,6 +594,30 @@ async fn deliver_flushed(
     Ok(())
 }
 
+struct MessageRateLimitKey {
+    participant: ParticipantId,
+    channel: ChannelRef,
+    user_id: u64,
+    chat_id: u64,
+}
+
+fn message_rate_limit_key(event: &NotificationEvent) -> Option<MessageRateLimitKey> {
+    let NotificationEvent::Message(MessageEvent {
+        user_id, chat_id, ..
+    }) = event
+    else {
+        return None;
+    };
+    let user_id = user_id.get();
+    let chat_id = chat_id.get();
+    Some(MessageRateLimitKey {
+        participant: ParticipantId::new(user_id.to_string()),
+        channel: ChannelRef::new(chat_id.to_string()),
+        user_id,
+        chat_id,
+    })
+}
+
 /// Extract the delivery delay (ms) for an event based on its channel ID.
 ///
 /// Returns the configured delay for channel events (Message, MessageEdit,
@@ -662,9 +683,11 @@ mod tests {
         config::{ChannelConfig, Config, LoadedConfig},
         delivery_buffer::{BufferResult, DeliveryBuffer},
         mcp::notifications::IntoNotification,
+        rate_limiter::{OverflowPolicy, RateLimitConfig, ScopeConfig},
         timestamp::Timestamp,
     };
     use serenity::model::id::{ChannelId, MessageId, UserId};
+    use std::collections::HashMap;
 
     #[tokio::test]
     async fn messaging_context_uses_process_installed_pipeline() {
@@ -774,6 +797,48 @@ mod tests {
     fn extract_delay_message_uses_channel_config() {
         let config = config_with_channel_delay(42, 500);
         assert_eq!(extract_delay_ms(&message_event(42), &config), 500);
+    }
+
+    #[test]
+    fn direct_and_represented_same_human_share_the_actual_rate_limit_bucket() {
+        let mut limiter = RateLimiter::new(RateLimitConfig {
+            enabled: true,
+            default: ScopeConfig {
+                max_tokens: 1,
+                window: Duration::from_secs(3600),
+                cooldown: Duration::from_secs(3600),
+                overflow: OverflowPolicy::Drop { notify: true },
+            },
+            classes: Vec::new(),
+            individuals: HashMap::new(),
+            channels: HashMap::new(),
+        });
+        let direct = message_event(42);
+        let mut represented = message_event(42);
+        let NotificationEvent::Message(represented_message) = &mut represented else {
+            unreachable!("message_event always builds a message")
+        };
+        represented_message.message_id = MessageId::new(2);
+        represented_message.user = "visible PK member".into();
+
+        let direct_key = message_rate_limit_key(&direct).expect("direct message key");
+        let represented_key =
+            message_rate_limit_key(&represented).expect("represented message key");
+        let now = Instant::now();
+
+        assert!(matches!(
+            limiter.check_message(&direct_key.participant, &direct_key.channel, &[], now),
+            RateLimitDecision::Allowed { remaining: 0, .. }
+        ));
+        assert!(matches!(
+            limiter.check_message(
+                &represented_key.participant,
+                &represented_key.channel,
+                &[],
+                now
+            ),
+            RateLimitDecision::Denied { .. }
+        ));
     }
 
     #[test]

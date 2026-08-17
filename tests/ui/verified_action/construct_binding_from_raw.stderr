@@ -1,0 +1,42 @@
+error[E0308]: mismatched types
+ --> tests/ui/verified_action/construct_binding_from_raw.rs:8:21
+  |
+8 |         message_id: 1,
+  |                     ^ expected `MessageId`, found integer
+  |
+help: call `Into::into` on this expression to convert `{integer}` into `MessageId`
+  |
+8 |         message_id: 1.into(),
+  |                      +++++++
+
+error[E0308]: mismatched types
+ --> tests/ui/verified_action/construct_binding_from_raw.rs:9:21
+  |
+9 |         channel_id: 2,
+  |                     ^ expected `ChannelId`, found integer
+  |
+help: call `Into::into` on this expression to convert `{integer}` into `serenity::all::ChannelId`
+  |
+9 |         channel_id: 2.into(),
+  |                      +++++++
+
+warning: unreachable expression
+  --> tests/ui/verified_action/construct_binding_from_raw.rs:11:21
+   |
+10 |         context: loop {},
+   |                  ------- any code following this expression is unreachable
+11 |         webhook_id: 3,
+   |                     ^ unreachable expression
+   |
+   = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+error[E0308]: mismatched types
+  --> tests/ui/verified_action/construct_binding_from_raw.rs:11:21
+   |
+11 |         webhook_id: 3,
+   |                     ^ expected `WebhookId`, found integer
+   |
+help: call `Into::into` on this expression to convert `{integer}` into `WebhookId`
+   |
+11 |         webhook_id: 3.into(),
+   |                      +++++++

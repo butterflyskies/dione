@@ -24,7 +24,7 @@ use crate::discord::events::{MessageEvent, NotificationEvent};
 use crate::timestamp::{Timestamp, format_compact};
 use chrono_tz::Tz;
 use serenity::model::id::{ChannelId, UserId};
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt::Write;
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -61,9 +61,10 @@ pub enum BatchError {
 
 // ── Trait ───────────────────────────────────────────────────────────────────
 
-/// User roster: maps user_id -> short name. Uses BTreeMap for deterministic
-/// ordering in the serialized output. Borrows names from the source messages.
-type Roster<'a> = BTreeMap<UserId, &'a str>;
+/// Visible participant roster. A single effective identity may legitimately
+/// have multiple message display names (for example PluralKit members), so the
+/// pair—not only the ID—is the deduplication key.
+type Roster<'a> = BTreeSet<(UserId, &'a str)>;
 
 /// Trait for writing a single entry in the compact batch wire format.
 pub trait BatchSerialize {
@@ -156,7 +157,7 @@ fn extract_one(
 fn build_roster<'a>(messages: &[&'a MessageEvent]) -> Roster<'a> {
     let mut roster = Roster::new();
     for msg in messages {
-        roster.entry(msg.user_id).or_insert(msg.user.as_str());
+        roster.insert((msg.user_id, msg.user.as_str()));
     }
     roster
 }
@@ -243,26 +244,20 @@ impl BatchSerialize for MessageEvent {
     fn write_batch_entry(
         &self,
         out: &mut String,
-        roster: &Roster<'_>,
+        _roster: &Roster<'_>,
         tz: Option<Tz>,
     ) -> Result<(), BatchError> {
         let ts = format_timestamp(&self.timestamp, tz);
 
-        // Direct lookup — roster is keyed by UserId.
-        let short_name = roster
-            .get(&self.user_id)
-            .copied()
-            .unwrap_or(self.user.as_str());
-
         let content = self.normalized_content();
         let line_count = self.content_line_count();
 
-        // Header: MSG_ID|LOCAL_TS|SHORT_NAME|L=LINECOUNT[|suffix]
+        // Header: MSG_ID|LOCAL_TS|SHORT_NAME|L=LINECOUNT[|suffix].
         // IDs use Display at the serialization boundary — no early .get().
         write!(
             out,
             "{}|{}|{}|L={}",
-            self.message_id, ts, short_name, line_count
+            self.message_id, ts, self.user, line_count
         )?;
 
         if let Some(reply_to) = self.reply_to_message_id {

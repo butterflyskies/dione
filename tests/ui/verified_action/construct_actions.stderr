@@ -1,0 +1,41 @@
+warning: unreachable expression
+ --> tests/ui/verified_action/construct_actions.rs:9:18
+  |
+8 |         transport: loop {},
+  |                    ------- any code following this expression is unreachable
+9 |         binding: loop {},
+  |                  ^^^^^^^ unreachable expression
+  |
+  = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable expression
+  --> tests/ui/verified_action/construct_actions.rs:14:18
+   |
+13 |         transport: loop {},
+   |                    ------- any code following this expression is unreachable
+14 |         binding: loop {},
+   |                  ^^^^^^^ unreachable expression
+
+error[E0451]: fields `transport`, `binding` and `state` of struct `VerifiedAppAction` are private
+  --> tests/ui/verified_action/construct_actions.rs:8:9
+   |
+ 7 |     let _: VerifiedAppAction<Unresolved> = VerifiedAppAction {
+   |                                            ----------------- in this type
+ 8 |         transport: loop {},
+   |         ^^^^^^^^^ private field
+ 9 |         binding: loop {},
+   |         ^^^^^^^ private field
+10 |         state: loop {},
+   |         ^^^^^ private field
+
+error[E0451]: fields `transport`, `binding` and `state` of struct `VerifiedAppAction` are private
+  --> tests/ui/verified_action/construct_actions.rs:13:9
+   |
+12 |     let _: VerifiedAppAction<Resolved> = VerifiedAppAction {
+   |                                          ----------------- in this type
+13 |         transport: loop {},
+   |         ^^^^^^^^^ private field
+14 |         binding: loop {},
+   |         ^^^^^^^ private field
+15 |         state: loop {},
+   |         ^^^^^ private field

@@ -225,6 +225,11 @@ async fn main() -> Result<()> {
     // Build ingress ledger (shared between gateway and MCP egress).
     let ingress_ledger = std::sync::Arc::new(dione::ingress_ledger::IngressLedger::new());
 
+    // Build PluralKit identity resolver.
+    let pk_resolver = Some(std::sync::Arc::new(
+        dione::pluralkit::PkResolver::with_defaults(),
+    ));
+
     // Build Discord event handler.
     let handler = Handler {
         state: state.clone(),
@@ -236,6 +241,7 @@ async fn main() -> Result<()> {
         pronoun_service,
         nameplate_service,
         ingress_ledger: ingress_ledger.clone(),
+        pk_resolver,
     };
 
     let mut discord_client = dione::discord::client::build_client(&token, handler)

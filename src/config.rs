@@ -1,7 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read as _;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use arc_swap::ArcSwap;
 use camino::{Utf8Path, Utf8PathBuf};
@@ -30,6 +33,20 @@ pub enum ConfigError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }
+
+#[derive(Debug, Error, PartialEq, Eq)]
+#[error("configuration generation counter exhausted")]
+pub struct ConfigGenerationError;
+
+fn allocate_generation(counter: &AtomicU64) -> Result<u64, ConfigGenerationError> {
+    counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            value.checked_add(1)
+        })
+        .map_err(|_| ConfigGenerationError)
+}
+
+static NEXT_CONFIG_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 // ── Config types ─────────────────────────────────────────────────────────────
 
@@ -649,6 +666,14 @@ pub struct ChannelConfig {
     pub id: String,
     pub require_mention: bool,
     pub allow_from: Vec<String>,
+    /// PluralKit system UUIDs allowed on this channel.
+    /// When non-empty, a PK-proxied message whose system UUID matches is admitted.
+    #[serde(default)]
+    pub allow_pk_systems: Vec<String>,
+    /// PluralKit member UUIDs allowed on this channel.
+    /// When non-empty, a PK-proxied message whose member UUID matches is admitted.
+    #[serde(default)]
+    pub allow_pk_members: Vec<String>,
     /// Per-channel coalescing delay for channel events (milliseconds).
     /// When > 0, channel events (messages, edits, deletes, reactions) are
     /// buffered and flushed after this delay. Non-channel events (traces,
@@ -663,6 +688,8 @@ impl Default for ChannelConfig {
             id: String::new(),
             require_mention: true,
             allow_from: Vec::new(),
+            allow_pk_systems: Vec::new(),
+            allow_pk_members: Vec::new(),
             delivery_delay_ms: None,
         }
     }
@@ -901,6 +928,8 @@ impl RateLimitTomlConfig {
 /// Created once per config load; used for all gate checks.
 #[derive(Debug, Clone)]
 pub struct LoadedConfig {
+    /// Process-monotonic identity of this parsed configuration snapshot.
+    generation: u64,
     pub raw: Config,
     /// Parsed user IDs from `access.allow_from` for O(1) membership test.
     pub allowed_ids: HashSet<u64>,
@@ -931,8 +960,37 @@ pub struct LoadedConfig {
 pub struct ChannelPolicy {
     pub require_mention: bool,
     pub allow_from: HashSet<u64>,
+    /// PluralKit system UUIDs allowed on this channel.
+    pub allow_pk_systems: HashSet<String>,
+    /// PluralKit member UUIDs allowed on this channel.
+    pub allow_pk_members: HashSet<String>,
     /// Per-channel coalescing delay (milliseconds). 0 = immediate.
     pub delivery_delay_ms: u64,
+    /// True when any raw user/system/member selector was specified, even if
+    /// validation rejected it. Preserves restriction intent and prevents an
+    /// all-invalid identity policy from failing open.
+    raw_had_identity_entries: bool,
+}
+
+impl ChannelPolicy {
+    /// Returns `true` if ANY identity filter list is non-empty, OR if the raw
+    /// config specified identity selectors that validation rejected.
+    ///
+    /// A "restricted" channel requires identity resolution for proxy messages
+    /// because at least one allow-list constrains who may speak. When the raw
+    /// config had identity entries but all were invalid, this still returns `true` —
+    /// the channel fails closed rather than silently becoming unrestricted.
+    pub fn has_identity_filter(&self) -> bool {
+        !self.allow_from.is_empty()
+            || !self.allow_pk_systems.is_empty()
+            || !self.allow_pk_members.is_empty()
+            || self.raw_had_identity_entries
+    }
+
+    /// Whether raw user/system/member selectors expressed restriction intent.
+    pub(crate) fn raw_had_identity_entries(&self) -> bool {
+        self.raw_had_identity_entries
+    }
 }
 
 impl std::ops::Deref for LoadedConfig {
@@ -944,7 +1002,24 @@ impl std::ops::Deref for LoadedConfig {
 
 impl LoadedConfig {
     /// Build from raw Config, parsing IDs and compiling regexes.
-    pub fn from_raw(mut raw: Config) -> Self {
+    pub fn try_from_raw(raw: Config) -> Result<Self, ConfigGenerationError> {
+        Self::try_from_raw_with_counter(raw, &NEXT_CONFIG_GENERATION)
+    }
+
+    fn try_from_raw_with_counter(
+        raw: Config,
+        counter: &AtomicU64,
+    ) -> Result<Self, ConfigGenerationError> {
+        let generation = allocate_generation(counter)?;
+        Ok(Self::from_raw_with_generation(raw, generation))
+    }
+
+    #[cfg(test)]
+    pub fn from_raw(raw: Config) -> Self {
+        Self::try_from_raw(raw).expect("test configuration generation")
+    }
+
+    fn from_raw_with_generation(mut raw: Config, generation: u64) -> Self {
         let allowed_ids = parse_id_set(&raw.access.allow_from);
         let admin_ids = parse_id_set(&raw.access.admins);
         let channel_policies = raw
@@ -952,14 +1027,28 @@ impl LoadedConfig {
             .iter()
             .filter_map(|ch| {
                 let id = ch.id.parse::<u64>().ok()?;
+                let raw_had_identity_entries = !ch.allow_from.is_empty()
+                    || !ch.allow_pk_systems.is_empty()
+                    || !ch.allow_pk_members.is_empty();
                 Some((
                     id,
                     ChannelPolicy {
                         require_mention: ch.require_mention,
                         allow_from: parse_id_set(&ch.allow_from),
+                        allow_pk_systems: validate_pk_uuids(
+                            &ch.allow_pk_systems,
+                            "allow_pk_systems",
+                            &ch.id,
+                        ),
+                        allow_pk_members: validate_pk_uuids(
+                            &ch.allow_pk_members,
+                            "allow_pk_members",
+                            &ch.id,
+                        ),
                         delivery_delay_ms: ch
                             .delivery_delay_ms
                             .unwrap_or(raw.delivery.delivery_delay_ms),
+                        raw_had_identity_entries,
                     },
                 ))
             })
@@ -1009,6 +1098,7 @@ impl LoadedConfig {
             .filter(|&id| id != 0)
             .map(ChannelId::new);
         Self {
+            generation,
             raw,
             allowed_ids,
             admin_ids,
@@ -1022,6 +1112,11 @@ impl LoadedConfig {
             pronoun_excluded,
             phantom_canary_channel,
         }
+    }
+
+    /// Returns the process-monotonic generation of this exact parsed snapshot.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// O(1) check if a user is in the allowlist.
@@ -1112,6 +1207,31 @@ fn parse_id_set(ids: &[String]) -> HashSet<u64> {
     ids.iter().filter_map(|s| s.parse::<u64>().ok()).collect()
 }
 
+/// Validate and collect PK UUID strings, logging errors for invalid entries.
+///
+/// Invalid entries are discarded from the parsed set but the caller tracks
+/// whether the raw config had entries via `raw_had_identity_entries`, ensuring
+/// `has_identity_filter()` still returns true — the channel fails closed
+/// rather than silently becoming unrestricted.
+fn validate_pk_uuids(uuids: &[String], field: &str, channel_id: &str) -> HashSet<String> {
+    uuids
+        .iter()
+        .filter_map(|s| match crate::pluralkit::PkUuid::parse(s.as_str()) {
+            Ok(uuid) => Some(uuid.as_str().to_owned()),
+            Err(e) => {
+                tracing::error!(
+                    channel_id,
+                    field,
+                    value = s.as_str(),
+                    error = e,
+                    "invalid PK UUID in config — entry rejected, channel will fail closed"
+                );
+                None
+            }
+        })
+        .collect()
+}
+
 fn compile_mention_patterns(config: &Config) -> Option<RegexSet> {
     if config.mentions.patterns.is_empty() {
         return None;
@@ -1178,7 +1298,19 @@ pub fn config_path(state_dir: &Utf8Path) -> Utf8PathBuf {
 }
 
 static LAST_VALID_CONFIG: std::sync::LazyLock<ArcSwap<LoadedConfig>> =
-    std::sync::LazyLock::new(|| ArcSwap::from_pointee(LoadedConfig::from_raw(Config::default())));
+    std::sync::LazyLock::new(|| {
+        ArcSwap::from_pointee(LoadedConfig::from_raw_with_generation(Config::default(), 0))
+    });
+
+fn build_and_store_raw_config(
+    raw: Config,
+    counter: &AtomicU64,
+    cache: &ArcSwap<LoadedConfig>,
+) -> Result<LoadedConfig, ConfigGenerationError> {
+    let loaded = LoadedConfig::try_from_raw_with_counter(raw, counter)?;
+    cache.store(Arc::new(loaded.clone()));
+    Ok(loaded)
+}
 
 /// Returns the current config from the in-memory cache.
 ///
@@ -1264,8 +1396,15 @@ pub fn reload_config(state_dir: &Utf8Path) -> (LoadedConfig, Option<String>) {
         }
     }
 
-    let loaded = LoadedConfig::from_raw(raw);
-    store_loaded_config(&loaded);
+    let loaded = match build_and_store_raw_config(raw, &NEXT_CONFIG_GENERATION, &LAST_VALID_CONFIG)
+    {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            let cached = (**LAST_VALID_CONFIG.load()).clone();
+            tracing::error!(%error, "failed to allocate configuration generation");
+            return (cached, Some(error.to_string()));
+        }
+    };
     (loaded, config_error)
 }
 
@@ -1327,6 +1466,31 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         (dir, path)
+    }
+
+    #[test]
+    fn generation_exhaustion_is_typed_and_never_reuses_max() {
+        let counter = AtomicU64::new(u64::MAX);
+
+        assert_eq!(allocate_generation(&counter), Err(ConfigGenerationError));
+        assert_eq!(allocate_generation(&counter), Err(ConfigGenerationError));
+        assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+    }
+
+    #[test]
+    fn generation_exhaustion_preserves_the_exact_published_snapshot() {
+        let prior = LoadedConfig::from_raw_with_generation(Config::default(), 77);
+        let cache = ArcSwap::from_pointee(prior);
+        let before = cache.load_full();
+        let counter = AtomicU64::new(u64::MAX);
+
+        assert!(matches!(
+            build_and_store_raw_config(Config::default(), &counter, &cache),
+            Err(ConfigGenerationError)
+        ));
+        let after = cache.load_full();
+        assert!(Arc::ptr_eq(&before, &after));
+        assert_eq!(after.generation(), 77);
     }
 
     /// Serialises tests that call [`reload_config`].
@@ -1893,6 +2057,102 @@ delivery_delay_ms = 300
             cfg.delivery_delay_ms(999),
             850,
             "unconfigured channel inherits global"
+        );
+    }
+
+    // ── PK config fail-closed tests ────────────────────────────────────────
+
+    /// When ALL PK system entries are invalid, has_identity_filter() still
+    /// returns true (fail closed). A typo must not broaden authority.
+    #[test]
+    fn test_all_invalid_pk_systems_fail_closed() {
+        let raw = Config {
+            channels: vec![ChannelConfig {
+                id: "500".to_string(),
+                allow_pk_systems: vec!["not-a-uuid".to_string(), "also-bad".to_string()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let cfg = LoadedConfig::from_raw(raw);
+        let policy = cfg.channel_policy(500).expect("channel 500 must exist");
+        assert!(
+            policy.allow_pk_systems.is_empty(),
+            "invalid UUIDs must be discarded from parsed set"
+        );
+        assert!(
+            policy.has_identity_filter(),
+            "channel must still be treated as restricted (fail closed)"
+        );
+    }
+
+    /// When ALL PK member entries are invalid, has_identity_filter() still
+    /// returns true (fail closed).
+    #[test]
+    fn test_all_invalid_pk_members_fail_closed() {
+        let raw = Config {
+            channels: vec![ChannelConfig {
+                id: "500".to_string(),
+                allow_pk_members: vec!["bad-uuid".to_string()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let cfg = LoadedConfig::from_raw(raw);
+        let policy = cfg.channel_policy(500).expect("channel 500 must exist");
+        assert!(
+            policy.allow_pk_members.is_empty(),
+            "invalid UUIDs must be discarded from parsed set"
+        );
+        assert!(
+            policy.has_identity_filter(),
+            "channel must still be treated as restricted (fail closed)"
+        );
+    }
+
+    /// Mixed valid and invalid PK entries: valid entries are kept and the
+    /// channel is restricted.
+    #[test]
+    fn test_mixed_valid_invalid_pk_entries() {
+        let raw = Config {
+            channels: vec![ChannelConfig {
+                id: "500".to_string(),
+                allow_pk_systems: vec![
+                    "a0000001-0000-0000-0000-000000000001".to_string(),
+                    "not-valid".to_string(),
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let cfg = LoadedConfig::from_raw(raw);
+        let policy = cfg.channel_policy(500).expect("channel 500 must exist");
+        assert_eq!(
+            policy.allow_pk_systems.len(),
+            1,
+            "only valid UUIDs must be in the parsed set"
+        );
+        assert!(
+            policy.has_identity_filter(),
+            "channel with any PK entries must be restricted"
+        );
+    }
+
+    /// No PK entries at all: has_identity_filter() returns false (unrestricted).
+    #[test]
+    fn test_no_pk_entries_unrestricted() {
+        let raw = Config {
+            channels: vec![ChannelConfig {
+                id: "500".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let cfg = LoadedConfig::from_raw(raw);
+        let policy = cfg.channel_policy(500).expect("channel 500 must exist");
+        assert!(
+            !policy.has_identity_filter(),
+            "channel with no identity entries must be unrestricted"
         );
     }
 

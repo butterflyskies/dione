@@ -635,7 +635,7 @@ fn config_delivery_delay_per_channel() {
         ],
         ..Default::default()
     };
-    let loaded = LoadedConfig::from_raw(raw);
+    let loaded = LoadedConfig::try_from_raw(raw).expect("test configuration generation");
 
     assert_eq!(loaded.delivery_delay_ms(111), 500);
     assert_eq!(loaded.delivery_delay_ms(222), 0);
@@ -1280,7 +1280,7 @@ fn global_default_flows_through_pipeline() {
         }],
         ..Default::default()
     };
-    let loaded = LoadedConfig::from_raw(raw);
+    let loaded = LoadedConfig::try_from_raw(raw).expect("test configuration generation");
 
     let mut limiter = make_limiter(false, 100);
     let mut buffer = DeliveryBuffer::new();
@@ -1349,7 +1349,7 @@ fn per_channel_override_with_global_default() {
         ],
         ..Default::default()
     };
-    let loaded = LoadedConfig::from_raw(raw);
+    let loaded = LoadedConfig::try_from_raw(raw).expect("test configuration generation");
 
     let mut limiter = make_limiter(false, 100);
     let mut buffer = DeliveryBuffer::new();

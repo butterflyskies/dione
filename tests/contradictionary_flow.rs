@@ -98,7 +98,7 @@ fn config_with_contradictionary(entries: Vec<Entry>) -> LoadedConfig {
     });
     raw.contradictionary.enabled = true;
     raw.contradictionary.entries = entries;
-    LoadedConfig::from_raw(raw)
+    LoadedConfig::try_from_raw(raw).expect("test configuration generation")
 }
 
 /// Build a MessagingCtx with a fake HTTP client and the given state dir. The
@@ -436,7 +436,9 @@ async fn release_into_a_revoked_channel_is_refused_and_keeps_the_handle() {
     let ctx_revoked = MessagingCtx::new(
         Arc::new(serenity::http::Http::new("fake-token-for-testing")),
         new_state(),
-        Arc::new(LoadedConfig::from_raw(Config::default())),
+        Arc::new(
+            LoadedConfig::try_from_raw(Config::default()).expect("test configuration generation"),
+        ),
         state_dir.clone(),
         gate.clone(),
         Arc::new(dione::ingress_ledger::IngressLedger::new()),

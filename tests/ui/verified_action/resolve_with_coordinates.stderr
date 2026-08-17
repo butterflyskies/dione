@@ -1,0 +1,16 @@
+error[E0061]: this method takes 1 argument but 2 arguments were supplied
+  --> tests/ui/verified_action/resolve_with_coordinates.rs:16:24
+   |
+16 |     let _ = resolver().begin(action(), MessageId::new(9));
+   |                        ^^^^^           ----------------- unexpected argument #2 of type `MessageId`
+   |
+note: method defined here
+  --> tests/ui/verified_action/../../../src/discord/verified_action.rs
+   |
+   |     pub(crate) fn begin(&self, action: VerifiedAppAction<Unresolved>) -> ResolutionSession {
+   |                   ^^^^^
+help: remove the extra argument
+   |
+16 -     let _ = resolver().begin(action(), MessageId::new(9));
+16 +     let _ = resolver().begin(action());
+   |

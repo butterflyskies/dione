@@ -1,0 +1,27 @@
+error[E0382]: use of moved value: `action`
+  --> tests/ui/verified_action/reuse_action.rs:17:34
+   |
+15 |     let action = action();
+   |         ------ move occurs because `action` has type `VerifiedAppAction<Resolved>`, which does not implement the `Copy` trait
+16 |     VerifiedActionGate::evaluate(action, policy());
+   |                                  ------ value moved here
+17 |     VerifiedActionGate::evaluate(action, policy());
+   |                                  ^^^^^^ value used here after move
+   |
+note: consider changing this parameter type in method `evaluate` to borrow instead if owning the value isn't necessary
+  --> tests/ui/verified_action/../../../src/discord/verified_action.rs
+   |
+   |     pub(crate) fn evaluate(
+   |                   -------- in this method
+   |         action: VerifiedAppAction<Resolved>,
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter takes ownership of the value
+note: if `VerifiedAppAction<Resolved>` implemented `Clone`, you could clone the value
+  --> tests/ui/verified_action/../../../src/discord/verified_action.rs
+   |
+   | pub(crate) struct VerifiedAppAction<S>
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider implementing `Clone` for this type
+   |
+  ::: tests/ui/verified_action/reuse_action.rs:16:34
+   |
+16 |     VerifiedActionGate::evaluate(action, policy());
+   |                                  ------ you could clone this value

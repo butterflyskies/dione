@@ -49,7 +49,11 @@ impl InboundGate {
     ///
     /// When `guild_id` is `Some`, checks the guild mute store first — a muted
     /// guild drops all push delivery regardless of channel or sender policy.
-    pub fn check_guild(
+    ///
+    /// This is the direct-human gate. Verified app actions use the separate
+    /// linear `VerifiedActionGate`; accepting an origin/proof surrogate here
+    /// would recreate the bypass that boundary is designed to prevent.
+    pub(crate) fn check_guild(
         config: &LoadedConfig,
         channel_id: u64,
         sender_id: u64,
@@ -82,51 +86,14 @@ impl InboundGate {
             return GateDecision::Drop;
         }
 
-        if !policy.allow_from.is_empty() && !policy.allow_from.contains(&sender_id) {
+        // When any identity filter is active, a direct user must be explicitly
+        // present in `allow_from`. Provider-specific selectors cannot authorize
+        // a direct transport.
+        if policy.has_identity_filter() && !policy.allow_from.contains(&sender_id) {
             tracing::debug!(
                 channel_id,
                 sender_id,
-                "guild message dropped: sender not in channel allow_from"
-            );
-            return GateDecision::Drop;
-        }
-
-        GateDecision::Deliver
-    }
-
-    /// Decides what to do with a passive guild event (edit, delete) that lacks
-    /// mention context. Enforces channel opt-in and `allow_from` but not
-    /// `require_mention`.
-    ///
-    /// When `guild_id` is `Some`, checks the guild mute store first.
-    pub fn check_guild_passive(
-        config: &LoadedConfig,
-        channel_id: u64,
-        sender_id: u64,
-        guild_id: Option<u64>,
-    ) -> GateDecision {
-        if let Some(gid) = guild_id
-            && let Some(store) = crate::mute_store::global()
-            && store.is_guild_muted(gid)
-        {
-            tracing::debug!(
-                guild_id = gid,
-                channel_id,
-                "guild event dropped: guild muted"
-            );
-            return GateDecision::Drop;
-        }
-
-        let Some(policy) = config.channel_policy(channel_id) else {
-            tracing::debug!(channel_id, "guild event dropped: channel not opted in");
-            return GateDecision::Drop;
-        };
-
-        if !policy.allow_from.is_empty() && !policy.allow_from.contains(&sender_id) {
-            tracing::debug!(
-                channel_id,
-                sender_id,
-                "guild event dropped: sender not in channel allow_from"
+                "guild message dropped: sender not in identity lists (direct transport)"
             );
             return GateDecision::Drop;
         }
@@ -434,50 +401,43 @@ mod tests {
         );
     }
 
-    // ── Passive guild gate tests ────────────────────────────────────────────────
-
+    // Direct transport cannot satisfy provider-specific identity selectors.
     #[test]
-    fn test_guild_passive_delivers_in_require_mention_channel() {
-        let config = loaded(base_config());
-        assert_eq!(
-            InboundGate::check_guild_passive(&config, 500, 999, None),
-            GateDecision::Deliver
-        );
-    }
-
-    #[test]
-    fn test_guild_passive_delivers_without_require_mention() {
+    fn test_pk_only_filter_rejects_direct_user() {
         let mut raw = base_config();
         raw.channels[0].require_mention = false;
+        raw.channels[0].allow_pk_systems = vec!["a0000001-0000-0000-0000-000000000001".to_string()];
         let config = loaded(raw);
-        assert_eq!(
-            InboundGate::check_guild_passive(&config, 500, 999, None),
-            GateDecision::Deliver
-        );
-    }
 
-    #[test]
-    fn test_guild_passive_drops_unknown_channel() {
-        let config = loaded(base_config());
         assert_eq!(
-            InboundGate::check_guild_passive(&config, 9999, 100, None),
+            InboundGate::check_guild(&config, 500, 999, false, None),
             GateDecision::Drop
         );
     }
 
     #[test]
-    fn test_guild_passive_enforces_allow_from() {
+    fn test_pk_filter_and_explicit_direct_user_admit() {
         let mut raw = base_config();
-        raw.channels[0].require_mention = true;
-        raw.channels[0].allow_from = vec!["200".to_string()];
+        raw.channels[0].require_mention = false;
+        raw.channels[0].allow_from = vec!["999".to_string()];
+        raw.channels[0].allow_pk_systems = vec!["a0000001-0000-0000-0000-000000000001".to_string()];
         let config = loaded(raw);
 
         assert_eq!(
-            InboundGate::check_guild_passive(&config, 500, 200, None),
+            InboundGate::check_guild(&config, 500, 999, false, None),
             GateDecision::Deliver
         );
+    }
+
+    #[test]
+    fn test_invalid_pk_only_filter_still_rejects_direct_user() {
+        let mut raw = base_config();
+        raw.channels[0].require_mention = false;
+        raw.channels[0].allow_pk_systems = vec!["invalid".to_string()];
+        let config = loaded(raw);
+
         assert_eq!(
-            InboundGate::check_guild_passive(&config, 500, 999, None),
+            InboundGate::check_guild(&config, 500, 999, false, None),
             GateDecision::Drop
         );
     }

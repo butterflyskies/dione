@@ -1,0 +1,13 @@
+error[E0451]: fields `message_id`, `channel_id`, `context` and `webhook_id` of struct `EventBinding` are private
+  --> tests/ui/verified_action/construct_binding_typed.rs:9:9
+   |
+ 8 |     let _ = EventBinding {
+   |             ------------ in this type
+ 9 |         message_id: MessageId::new(1),
+   |         ^^^^^^^^^^ private field
+10 |         channel_id: ChannelId::new(2),
+   |         ^^^^^^^^^^ private field
+11 |         context: EventContext::DirectMessage,
+   |         ^^^^^^^ private field
+12 |         webhook_id: WebhookId::new(3),
+   |         ^^^^^^^^^^ private field

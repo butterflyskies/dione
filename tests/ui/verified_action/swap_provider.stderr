@@ -1,0 +1,7 @@
+error[E0615]: attempted to take value of method `provider` on type `ResolutionSession`
+  --> tests/ui/verified_action/swap_provider.rs:18:13
+   |
+18 |     session.provider = TransportProvider::PluralKit;
+   |             ^^^^^^^^ method, not a field
+   |
+   = help: methods are immutable and cannot be assigned to

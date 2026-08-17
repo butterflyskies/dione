@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Per-channel identity policy now enforces transport/principal separation.**
+  The per-channel allowlist previously compared the webhook's user ID (a
+  transport artifact) against `allow_from`, silently dropping proxy-authored
+  messages even when the represented author was allowed. Verified app actions
+  now bind the Discord event to provider-resolved identity facts before a fresh
+  policy snapshot evaluates `allow_from`, `allow_pk_systems`, and
+  `allow_pk_members`. Restricted channels fail closed when identity resolution
+  is unavailable, while unsupported webhook creators cannot enter the verified
+  action path. A bounded ingress lifecycle ledger preserves the admitted
+  principal and exact message context across edits and deletes without reusing
+  short-lived provider proofs. Construct-facing notifications expose the
+  represented user as the ordinary participant and retain each message's visible
+  sender name without leaking provider or verification state. (#321, #322, #328)
+
 ## [0.33.2] - 2026-08-15
 
 ### Fixed

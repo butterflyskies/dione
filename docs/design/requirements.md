@@ -299,12 +299,17 @@ admins = ["184695080709324800"]
 [[channels]]
 id = "846209781206941736"
 require_mention = true
-allow_from = []  # empty = any member (subject to require_mention)
+allow_from = []               # empty = any member (subject to require_mention)
+allow_pk_systems = []         # PK system UUIDs (8-4-4-4-12 hex or 5-char short ID)
+allow_pk_members = []         # PK member UUIDs — OR semantics with allow_from
 
 [[channels]]
 id = "912345678901234567"
 require_mention = false
 allow_from = ["184695080709324800", "221773638772129792"]
+# Identity filter: if ANY list is non-empty, only matching identities pass.
+# PK resolution failure on a filtered channel -> fail closed (drop).
+# Unverified webhooks are always dropped regardless of filter state.
 
 # --- Mention Detection -----------------------------------------------------
 

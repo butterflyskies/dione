@@ -17,6 +17,7 @@ pub mod mute_store;
 pub mod nameplates;
 pub mod no_rly;
 pub mod permissions;
+pub mod pluralkit;
 pub mod pre_send;
 pub mod pronouns;
 pub mod queue;

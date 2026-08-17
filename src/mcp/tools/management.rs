@@ -95,17 +95,17 @@ pub async fn create_thread(
     if let Err(e) = check_outbound(ctx, channel_id).await {
         return e;
     }
-    if let Some(mid) = message_id {
-        if let Err(e) = verify_message_target(
+    if let Some(mid) = message_id
+        && let Err(e) = verify_message_target(
             &ctx.ingress_ledger,
             &ctx.http,
             &ctx.config,
             mid,
             channel_id,
             "create_thread",
-        ) {
-            return e;
-        }
+        )
+    {
+        return e;
     }
 
     let thread_builder = CreateThread::new(name).kind(ChannelType::PublicThread);

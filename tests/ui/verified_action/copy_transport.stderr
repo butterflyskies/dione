@@ -1,0 +1,27 @@
+error[E0382]: use of moved value: `transport`
+  --> tests/ui/verified_action/copy_transport.rs:15:13
+   |
+13 |     let transport = transport();
+   |         --------- move occurs because `transport` has type `VerifiedTransport`, which does not implement the `Copy` trait
+14 |     consume(transport);
+   |             --------- value moved here
+15 |     consume(transport);
+   |             ^^^^^^^^^ value used here after move
+   |
+note: consider changing this parameter type in function `consume` to borrow instead if owning the value isn't necessary
+  --> tests/ui/verified_action/copy_transport.rs:10:15
+   |
+10 | fn consume(_: VerifiedTransport) {}
+   |    -------    ^^^^^^^^^^^^^^^^^ this parameter takes ownership of the value
+   |    |
+   |    in this function
+note: if `VerifiedTransport` implemented `Clone`, you could clone the value
+  --> tests/ui/verified_action/../../../src/discord/verified_action.rs
+   |
+   | pub(crate) struct VerifiedTransport {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider implementing `Clone` for this type
+   |
+  ::: tests/ui/verified_action/copy_transport.rs:14:13
+   |
+14 |     consume(transport);
+   |             --------- you could clone this value

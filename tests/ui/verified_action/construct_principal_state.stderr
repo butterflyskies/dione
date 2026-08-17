@@ -1,0 +1,13 @@
+error[E0603]: enum `ResolvedState` is private
+ --> tests/ui/verified_action/construct_principal_state.rs:5:30
+  |
+5 |     let _ = verified_action::ResolvedState::AppOnly;
+  |                              ^^^^^^^^^^^^^  ------- unit variant `AppOnly` is not publicly re-exported
+  |                              |
+  |                              private enum
+  |
+note: the enum `ResolvedState` is defined here
+ --> tests/ui/verified_action/../../../src/discord/verified_action.rs
+  |
+  | enum ResolvedState {
+  | ^^^^^^^^^^^^^^^^^^

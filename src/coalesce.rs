@@ -33,7 +33,7 @@ use crate::timestamp::{Timestamp, format_compact};
 use chrono_tz::Tz;
 use serde_json::{Value, json};
 use serenity::model::id::{ChannelId, UserId};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -256,23 +256,22 @@ fn count_lines(s: &str) -> usize {
     if s.is_empty() { 0 } else { s.lines().count() }
 }
 
-/// User roster for heterogeneous batches.
-type Roster = BTreeMap<UserId, String>;
+/// Visible participant roster. The same effective user may have multiple
+/// per-event display names.
+type Roster = BTreeSet<(UserId, String)>;
 
 fn build_heterogeneous_roster(events: &[NotificationEvent]) -> Roster {
     let mut roster = Roster::new();
     for event in events {
         match event {
             NotificationEvent::Message(msg) => {
-                roster
-                    .entry(msg.user_id)
-                    .or_insert_with(|| msg.user.clone());
+                roster.insert((msg.user_id, msg.user.clone()));
             }
             NotificationEvent::Reaction { user_id, user, .. } => {
-                roster.entry(*user_id).or_insert_with(|| user.clone());
+                roster.insert((*user_id, user.clone()));
             }
             NotificationEvent::MessageEdit { user_id, user, .. } => {
-                roster.entry(*user_id).or_insert_with(|| user.clone());
+                roster.insert((*user_id, user.clone()));
             }
             _ => {}
         }
@@ -330,25 +329,24 @@ fn write_event_entry(out: &mut String, event: &NotificationEvent, roster: &Roste
         }
         NotificationEvent::Reaction {
             message_id,
-            user_id,
+            user,
             emoji,
             ..
         } => {
-            let name = roster.get(user_id).map(|s| s.as_str()).unwrap_or("?");
-            writeln!(out, "!react|{message_id}|{name}|{emoji}").unwrap();
+            writeln!(out, "!react|{message_id}|{user}|{emoji}").unwrap();
         }
         NotificationEvent::MessageEdit {
             message_id,
-            user_id,
+            user,
             new_content,
             timestamp,
             ..
         } => {
-            let name = roster.get(user_id).map(|s| s.as_str()).unwrap_or("?");
             let ts = format_timestamp(timestamp, tz);
             let content = normalize_content(new_content);
             let line_count = count_lines(content);
-            writeln!(out, "!edit|{message_id}|{ts}|{name}|L={line_count}").unwrap();
+            write!(out, "!edit|{message_id}|{ts}|{user}|L={line_count}").unwrap();
+            writeln!(out).unwrap();
             if !content.is_empty() {
                 writeln!(out, "{content}").unwrap();
             }
@@ -373,17 +371,18 @@ fn write_event_entry(out: &mut String, event: &NotificationEvent, roster: &Roste
     }
 }
 
-fn write_message_entry(out: &mut String, msg: &MessageEvent, roster: &Roster, tz: Option<Tz>) {
+fn write_message_entry(out: &mut String, msg: &MessageEvent, _roster: &Roster, tz: Option<Tz>) {
     let ts = format_timestamp(&msg.timestamp, tz);
-    let name = roster
-        .get(&msg.user_id)
-        .map(|s| s.as_str())
-        .unwrap_or(msg.user.as_str());
     let content = msg.normalized_content();
     let line_count = msg.content_line_count();
 
     // Header: MSG_ID|TS|NAME|L=LINES[|>REPLY_TO][|+ATTACHMENTS]
-    write!(out, "{}|{}|{}|L={}", msg.message_id, ts, name, line_count).unwrap();
+    write!(
+        out,
+        "{}|{}|{}|L={}",
+        msg.message_id, ts, msg.user, line_count
+    )
+    .unwrap();
 
     if let Some(reply_to) = msg.reply_to_message_id {
         write!(out, "|>{reply_to}").unwrap();
@@ -515,6 +514,41 @@ mod tests {
             message_id: MessageId::new(msg_id),
             thread_parent_id: None,
         }
+    }
+
+    #[test]
+    fn create_edit_and_delete_have_transport_neutral_headers() {
+        let create = msg_event(1, 2, "alice", "hello");
+        let edit = edit_event(1, 2);
+        let delete = delete_event(1, 2);
+        let CoalesceResult::Coalesced(value) =
+            coalesce(vec![create, edit, delete], None).expect("coalesced")
+        else {
+            panic!("expected coalesced delivery");
+        };
+        let rendered = value["params"]["content"].as_str().expect("content");
+        assert!(!rendered.contains("|A="));
+        assert!(!rendered.contains("|@"));
+        assert!(rendered.contains("!delete|2\n"));
+    }
+
+    #[test]
+    fn heterogeneous_events_preserve_each_visible_name_for_one_effective_user() {
+        let create = msg_event(1, 2, "alice", "hello");
+        let mut edit = edit_event(1, 2);
+        let NotificationEvent::MessageEdit { user, .. } = &mut edit else {
+            unreachable!()
+        };
+        *user = "bob".to_owned();
+        let CoalesceResult::Coalesced(value) =
+            coalesce(vec![create, edit], None).expect("coalesced")
+        else {
+            panic!("expected coalesced delivery");
+        };
+        let rendered = value["params"]["content"].as_str().expect("content");
+        assert!(rendered.contains("[users 100=alice 100=bob]"));
+        assert!(rendered.contains("2|15:30|alice|L=1\nhello"));
+        assert!(rendered.contains("!edit|2|15:31|bob|L=1\nedited content"));
     }
 
     #[test]

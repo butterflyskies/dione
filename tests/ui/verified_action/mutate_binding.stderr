@@ -1,0 +1,5 @@
+error[E0616]: field `message_id` of struct `EventBinding` is private
+  --> tests/ui/verified_action/mutate_binding.rs:13:13
+   |
+13 |     binding.message_id = MessageId::new(2);
+   |             ^^^^^^^^^^ private field

@@ -1,0 +1,33 @@
+warning: unreachable expression
+ --> tests/ui/verified_action/construct_admission.rs:9:19
+  |
+8 |         binding: loop {},
+  |                  ------- any code following this expression is unreachable
+9 |         provider: loop {},
+  |                   ^^^^^^^ unreachable expression
+  |
+  = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+error[E0451]: fields `binding`, `provider`, `provenance`, `policy_generation`, `policy_fingerprint` and `admitted_at` of struct `AdmissionFacts` are private
+  --> tests/ui/verified_action/construct_admission.rs:8:9
+   |
+ 7 |     let _ = AdmissionFacts {
+   |             -------------- in this type
+ 8 |         binding: loop {},
+   |         ^^^^^^^ private field
+ 9 |         provider: loop {},
+   |         ^^^^^^^^ private field
+10 |         provenance: loop {},
+   |         ^^^^^^^^^^ private field
+11 |         policy_generation: loop {},
+   |         ^^^^^^^^^^^^^^^^^ private field
+12 |         policy_fingerprint: loop {},
+   |         ^^^^^^^^^^^^^^^^^^ private field
+13 |         admitted_at: loop {},
+   |         ^^^^^^^^^^^ private field
+
+error: type `AdmissionProvenance` is private
+  --> tests/ui/verified_action/construct_admission.rs:10:21
+   |
+10 |         provenance: loop {},
+   |                     ^^^^^^^ private type

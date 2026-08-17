@@ -60,7 +60,7 @@ impl ConfigStore {
         // (consistent state). toml_edit ↔ toml round-trip should always
         // succeed, but we verify eagerly rather than racing the rename.
         let raw: crate::config::Config = toml::from_str(&serialized)?;
-        let loaded = crate::config::LoadedConfig::from_raw(raw);
+        let loaded = crate::config::LoadedConfig::try_from_raw(raw)?;
 
         tokio::fs::write(&self.tmp_path, &serialized).await?;
         if let Err(e) = tokio::fs::rename(&self.tmp_path, &self.config_path).await {

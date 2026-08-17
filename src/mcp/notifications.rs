@@ -592,4 +592,39 @@ mod tests {
         let meta = &json["params"]["meta"];
         assert!(meta.get("reply_to_message_id").is_none());
     }
+
+    #[test]
+    fn message_envelope_has_no_application_transport_tells() {
+        use crate::discord::events::MessageTargeting;
+
+        let event = NotificationEvent::Message(MessageEvent {
+            chat_id: ChannelId::new(100),
+            message_id: MessageId::new(200),
+            user: "alice".into(),
+            user_id: UserId::new(4242),
+            content: "hello".into(),
+            targeting: MessageTargeting::Ambient,
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            attachments: vec![],
+            is_voice_message: false,
+            thread_parent_id: None,
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            reply_to_user: None,
+            reply_to_content_preview: None,
+            bells: None,
+            bells_status: None,
+        });
+        let notification = event.into_notification();
+        let meta = &notification["params"]["meta"];
+        assert_eq!(meta["user_id"], "4242");
+        for forbidden in [
+            "app_action_provenance",
+            "app_action_state",
+            "app_action_provider",
+            "represented_sender_id",
+        ] {
+            assert!(meta.get(forbidden).is_none(), "leaked {forbidden}");
+        }
+    }
 }

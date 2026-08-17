@@ -1,5 +1,13 @@
 use crate::{
     bell_rings::BellStatus,
+    discord::{
+        verified_action::{
+            LifecycleContext, LifecycleProvenance, VerifiedActionGate, VerifiedGateVerdict,
+        },
+        verified_action_runtime::{
+            BoundPrincipalResolver, VerifiedUpdateCandidate, fresh_policy_snapshot,
+        },
+    },
     gate::{GateDecision, InboundGate, MentionDetector, MentionKind},
     mcp::tools::bot_state::DiscordCommand,
     mcp::tools::messaging::create_dm_channel,
@@ -144,6 +152,8 @@ pub struct Handler {
     pub nameplate_service: Option<Arc<crate::nameplates::NameplateService>>,
     /// Ingress ledger — records messages admitted by the gateway for egress verification.
     pub ingress_ledger: Arc<crate::ingress_ledger::IngressLedger>,
+    /// PluralKit identity resolver for proxy webhook messages.
+    pub pk_resolver: Option<Arc<crate::pluralkit::PkResolver>>,
 }
 
 impl Handler {
@@ -181,6 +191,55 @@ impl Handler {
             Some(PronounDisplayName(resolved))
         }
     }
+
+    async fn emit_lifecycle_delete(
+        &self,
+        channel_id: ChannelId,
+        message_id: MessageId,
+        guild_id: Option<GuildId>,
+    ) {
+        emit_lifecycle_delete_to(
+            &self.state,
+            &self.ingress_ledger,
+            &self.tx,
+            channel_id,
+            message_id,
+            guild_id,
+        )
+        .await;
+    }
+}
+
+async fn emit_lifecycle_delete_to(
+    state: &crate::state::State,
+    ingress_ledger: &crate::ingress_ledger::IngressLedger,
+    tx: &tokio::sync::mpsc::Sender<NotificationEvent>,
+    channel_id: ChannelId,
+    message_id: MessageId,
+    guild_id: Option<GuildId>,
+) {
+    if state
+        .read()
+        .await
+        .recent_sent_ids
+        .contains(&message_id.get())
+    {
+        return;
+    }
+    let context = guild_id.map_or(LifecycleContext::DirectMessage, LifecycleContext::Guild);
+    let crate::ingress_ledger::TransitionResult::Admitted(admission) =
+        ingress_ledger.transition_delete(message_id, channel_id, context)
+    else {
+        return;
+    };
+    let event = NotificationEvent::MessageDelete {
+        chat_id: admission.channel_id(),
+        message_id: admission.message_id(),
+        thread_parent_id: admission.thread_parent_id(),
+    };
+    if let Err(error) = tx.send(event).await {
+        tracing::warn!(%error, "failed to send message delete notification");
+    }
 }
 
 /// Record a gateway-admitted message before attempting notification delivery.
@@ -192,10 +251,27 @@ async fn send_gateway_admitted_message(
     ingress_ledger: &crate::ingress_ledger::IngressLedger,
     tx: &tokio::sync::mpsc::Sender<NotificationEvent>,
     msg: &Message,
+    thread_parent_id: Option<ChannelId>,
     event: NotificationEvent,
     delivery_kind: &'static str,
 ) {
-    ingress_ledger.note_admitted(msg.id, msg.channel_id, msg.author.id, &msg.content);
+    let context = msg
+        .guild_id
+        .map_or(LifecycleContext::DirectMessage, LifecycleContext::Guild);
+    if !matches!(
+        ingress_ledger.admit_direct_create(
+            msg.id,
+            msg.channel_id,
+            context,
+            msg.author.id,
+            thread_parent_id,
+            &msg.content,
+            msg.timestamp,
+        ),
+        crate::ingress_ledger::TransitionResult::Admitted(_)
+    ) {
+        return;
+    }
     if let Err(error) = tx.send(event).await {
         tracing::warn!(
             %error,
@@ -228,18 +304,12 @@ impl EventHandler for Handler {
     async fn message(&self, ctx: Context, msg: Message) {
         let config = crate::config::load_config(&self.state_dir);
 
-        if should_filter_bot_message(
-            &ctx.http,
-            &self.state,
-            &config,
-            msg.author.bot,
-            msg.author.id.get(),
-            msg.webhook_id.map(|w| w.get()),
-        )
-        .await
-        {
+        // Quick bot filter for non-webhook bots — no expensive lookups needed.
+        let is_webhook = msg.webhook_id.is_some();
+        if msg.author.bot && !config.is_allowed(msg.author.id.get()) && !is_webhook {
             return;
         }
+
         let bot_user_id = self.bot_user_id.load(Ordering::Relaxed);
 
         {
@@ -248,6 +318,12 @@ impl EventHandler for Handler {
         }
 
         let is_dm = msg.guild_id.is_none();
+
+        // DM policy authorizes direct Discord users only. Until a typed app-DM
+        // policy exists, webhook transport in a DM must fail closed.
+        if is_dm && !is_direct_dm_transport(is_dm, is_webhook) {
+            return;
+        }
 
         if is_dm {
             let sender_id = msg.author.id.get();
@@ -267,6 +343,7 @@ impl EventHandler for Handler {
                     let event = build_message_event(
                         &msg,
                         &config,
+                        &self.ingress_ledger,
                         None,
                         MessageTargeting::DirectMessage,
                         pronoun_name,
@@ -275,6 +352,7 @@ impl EventHandler for Handler {
                         &self.ingress_ledger,
                         &self.tx,
                         &msg,
+                        None,
                         event,
                         "dm",
                     )
@@ -338,6 +416,97 @@ impl EventHandler for Handler {
             let resolved =
                 resolve_guild_channel(&ctx.http, &self.state, &config, channel_id, false).await;
 
+            // Preflight: skip expensive proxy/PK resolution for ineligible messages.
+            // Channel eligibility, guild mute, and mention checks are all O(1).
+            if !is_webhook {
+                let Some(policy) = config.channel_policy(resolved.gate_channel_id) else {
+                    tracing::trace!(
+                        channel_id,
+                        "guild message dropped: channel not opted in (preflight)"
+                    );
+                    return;
+                };
+                if let Some(gid) = msg.guild_id.map(|g| g.get())
+                    && let Some(store) = crate::mute_store::global()
+                    && store.is_guild_muted(gid)
+                {
+                    tracing::trace!(channel_id, "guild message dropped: guild muted (preflight)");
+                    return;
+                }
+                if policy.require_mention && mention_kind.is_none() {
+                    tracing::trace!(
+                        channel_id,
+                        "guild message dropped: mention required (preflight)"
+                    );
+                    return;
+                }
+            }
+
+            if is_webhook {
+                let delivery_msg = msg.clone();
+                let resolution = async {
+                    let action = crate::discord::verified_action::DiscordTransportVerifier::new()
+                        .verify(&ctx.http, &self.state, msg)
+                        .await?;
+                    let pk_resolver = self.pk_resolver.as_deref()?;
+                    Some(
+                        BoundPrincipalResolver::new(pk_resolver)
+                            .resolve(action)
+                            .await,
+                    )
+                };
+                let Some(plan) = admit_verified_create_after_wait(
+                    &delivery_msg,
+                    bot_user_id,
+                    &self.ingress_ledger,
+                    resolution,
+                    resolve_thread_parent(&ctx.http, &self.state, channel_id),
+                    || crate::config::load_config(&self.state_dir),
+                    |guild_id, _gate_channel_id| {
+                        crate::mute_store::global()
+                            .is_some_and(|store| store.is_guild_muted(guild_id))
+                    },
+                )
+                .await
+                else {
+                    return;
+                };
+                let pronoun_name = self.resolve_pronoun_name(&delivery_msg).await;
+                let event = build_verified_message_event(
+                    &plan.admission,
+                    &delivery_msg,
+                    &plan.config,
+                    &self.ingress_ledger,
+                    plan.thread_parent_id,
+                    plan.targeting,
+                    pronoun_name,
+                );
+                if let Err(error) = self.tx.send(event).await {
+                    tracing::warn!(%error, "failed to send verified guild app action");
+                }
+                return;
+            }
+
+            // Direct human/non-provider guild messages remain on the direct gate.
+            if should_drop_bot_message(msg.author.bot, msg.author.id.get(), &config) {
+                return;
+            }
+
+            // Resolve immutable topology before taking the policy snapshot.
+            let thread_parent_id = resolve_thread_parent(&ctx.http, &self.state, channel_id).await;
+            let config = crate::config::load_config(&self.state_dir);
+            let resolved = ResolvedChannel {
+                thread_parent_id,
+                gate_channel_id: select_gate_channel(&config, channel_id, thread_parent_id),
+            };
+            let mention_kind = MentionDetector::classify(
+                bot_user_id,
+                &message_mentions,
+                &msg.content,
+                referenced_author_id,
+                config.mention_patterns.as_ref(),
+            );
+
             let decision = InboundGate::check_guild(
                 &config,
                 resolved.gate_channel_id,
@@ -354,6 +523,7 @@ impl EventHandler for Handler {
                     let event = build_message_event(
                         &msg,
                         &config,
+                        &self.ingress_ledger,
                         resolved.thread_parent_id,
                         targeting,
                         pronoun_name,
@@ -362,6 +532,7 @@ impl EventHandler for Handler {
                         &self.ingress_ledger,
                         &self.tx,
                         &msg,
+                        resolved.thread_parent_id.map(ChannelId::new),
                         event,
                         "guild",
                     )
@@ -490,6 +661,21 @@ impl EventHandler for Handler {
             return;
         };
 
+        let verified_candidate = match VerifiedUpdateCandidate::from_gateway(
+            &event,
+            old_if_available.as_ref(),
+            new.as_ref(),
+        ) {
+            Ok(candidate) => candidate,
+            Err(reason) => {
+                tracing::debug!(
+                    reason,
+                    "message update dropped: gateway representations conflict"
+                );
+                return;
+            }
+        };
+
         let author = event
             .author
             .as_ref()
@@ -501,22 +687,27 @@ impl EventHandler for Handler {
 
         let config = crate::config::load_config(&self.state_dir);
 
-        let webhook_id = event.webhook_id.flatten().map(|w| w.get());
-        if should_filter_bot_message(
-            &ctx.http,
-            &self.state,
-            &config,
-            author.bot,
-            author.id.get(),
-            webhook_id,
-        )
-        .await
-        {
+        // Resolve webhook_id from event, new, or old (P2-2: fallback chain).
+        let webhook_id = event
+            .webhook_id
+            .flatten()
+            .map(|w| w.get())
+            .or_else(|| new.as_ref().and_then(|m| m.webhook_id.map(|w| w.get())))
+            .or_else(|| {
+                old_if_available
+                    .as_ref()
+                    .and_then(|m| m.webhook_id.map(|w| w.get()))
+            });
+        let is_webhook = webhook_id.is_some();
+
+        // Quick bot filter for non-webhook bots.
+        if author.bot && !config.is_allowed(author.id.get()) && !is_webhook {
             return;
         }
 
         let new_content = event
             .content
+            .clone()
             .or_else(|| new.as_ref().map(|m| m.content.clone()));
         let Some(new_content) = new_content else {
             return;
@@ -526,28 +717,142 @@ impl EventHandler for Handler {
 
         let is_dm = event.guild_id.is_none();
 
-        let resolved =
-            resolve_guild_channel(&ctx.http, &self.state, &config, channel_id, is_dm).await;
-
-        let decision = if is_dm {
-            InboundGate::check_dm(&config, author.id.get())
-        } else {
-            InboundGate::check_guild_passive(
-                &config,
-                resolved.gate_channel_id,
-                author.id.get(),
-                event.guild_id.map(|g| g.get()),
-            )
-        };
-        if !matches!(decision, GateDecision::Deliver) {
-            tracing::trace!(
-                channel_id,
-                sender_id = author.id.get(),
-                ?decision,
-                "message edit dropped by gate"
-            );
+        if is_dm && !is_direct_dm_transport(is_dm, is_webhook) {
             return;
         }
+
+        // Check the ingress ledger: only deliver edits for messages that were
+        // admitted by the create handler. Applies to both DMs and guild
+        // messages — DM lifecycle events must also have admission evidence (P2).
+        {
+            let verify = self.ingress_ledger.verify(event.id, event.channel_id);
+            if !matches!(verify, crate::ingress_ledger::VerifyResult::Admitted { .. }) {
+                tracing::trace!(
+                    channel_id,
+                    message_id = event.id.get(),
+                    ?verify,
+                    "message edit dropped: original message not in admission ledger"
+                );
+                return;
+            }
+        }
+
+        let lifecycle_context = event
+            .guild_id
+            .map_or(LifecycleContext::DirectMessage, LifecycleContext::Guild);
+        let (final_config, admission) = if is_dm {
+            if !matches!(
+                InboundGate::check_dm(&config, author.id.get()),
+                GateDecision::Deliver
+            ) {
+                return;
+            }
+            let admission = match self.ingress_ledger.transition_passive_edit(
+                event.id,
+                event.channel_id,
+                lifecycle_context,
+                author.id,
+                &new_content,
+                edited_ts,
+                |_| true,
+            ) {
+                crate::ingress_ledger::TransitionResult::Admitted(snapshot) => snapshot,
+                crate::ingress_ledger::TransitionResult::Duplicate
+                | crate::ingress_ledger::TransitionResult::Rejected
+                | crate::ingress_ledger::TransitionResult::Unavailable => return,
+            };
+            (config, admission)
+        } else if let Some(candidate) = verified_candidate {
+            let Some(webhook_id) = webhook_id.filter(|id| *id != 0).map(WebhookId::new) else {
+                return;
+            };
+            let resolution = async {
+                let action = crate::discord::verified_action::DiscordTransportVerifier::new()
+                    .verify_update(&ctx.http, &self.state, candidate)
+                    .await?;
+                let pk_resolver = self.pk_resolver.as_deref()?;
+                Some(
+                    BoundPrincipalResolver::new(pk_resolver)
+                        .resolve(action)
+                        .await,
+                )
+            };
+            let Some(plan) = admit_verified_edit_after_wait(
+                &event,
+                new.as_ref(),
+                old_if_available.as_ref(),
+                author,
+                &new_content,
+                edited_ts,
+                webhook_id,
+                self.bot_user_id.load(Ordering::Relaxed),
+                &self.ingress_ledger,
+                resolution,
+                resolve_thread_parent(&ctx.http, &self.state, channel_id),
+                || crate::config::load_config(&self.state_dir),
+                |guild_id, _gate_channel_id| {
+                    crate::mute_store::global().is_some_and(|store| store.is_guild_muted(guild_id))
+                },
+            )
+            .await
+            else {
+                return;
+            };
+            (plan.config, plan.admission)
+        } else {
+            let thread_parent_id = resolve_thread_parent(&ctx.http, &self.state, channel_id).await;
+            let config = crate::config::load_config(&self.state_dir);
+            let gate_channel_id = select_gate_channel(&config, channel_id, thread_parent_id);
+            let message_mentions = event
+                .mentions
+                .as_ref()
+                .map(|mentions| {
+                    mentions
+                        .iter()
+                        .map(|user| user.id.get())
+                        .collect::<Vec<_>>()
+                })
+                .or_else(|| {
+                    new.as_ref()
+                        .map(|message| message.mentions.iter().map(|user| user.id.get()).collect())
+                })
+                .unwrap_or_default();
+            let referenced_author_id = new
+                .as_ref()
+                .and_then(|message| message.referenced_message.as_deref())
+                .or_else(|| old_if_available.as_ref()?.referenced_message.as_deref())
+                .map(|message| message.author.id.get());
+            let mention_kind = MentionDetector::classify(
+                self.bot_user_id.load(Ordering::Relaxed),
+                &message_mentions,
+                &new_content,
+                referenced_author_id,
+                config.mention_patterns.as_ref(),
+            );
+            let admission = match self.ingress_ledger.transition_passive_edit(
+                event.id,
+                event.channel_id,
+                lifecycle_context,
+                author.id,
+                &new_content,
+                edited_ts,
+                |lineage| {
+                    passive_edit_policy_allows(
+                        &config,
+                        gate_channel_id,
+                        event.guild_id.map(|guild_id| guild_id.get()),
+                        mention_kind,
+                        lineage,
+                    )
+                },
+            ) {
+                crate::ingress_ledger::TransitionResult::Admitted(snapshot) => snapshot,
+                crate::ingress_ledger::TransitionResult::Duplicate
+                | crate::ingress_ledger::TransitionResult::Rejected
+                | crate::ingress_ledger::TransitionResult::Unavailable => return,
+            };
+            (config, admission)
+        };
 
         let sender_name = {
             let mut state = self.state.write().await;
@@ -566,7 +871,8 @@ impl EventHandler for Handler {
             sender_name
         };
 
-        let timestamp = config.localize_rfc3339(&serenity_ts_to_rfc3339("edited_ts", &edited_ts));
+        let timestamp =
+            final_config.localize_rfc3339(&serenity_ts_to_rfc3339("edited_ts", &edited_ts));
 
         // message_reference is Option<Option<MessageReference>> in update events:
         // outer Option = field present in update, inner Option = nullable value.
@@ -577,13 +883,13 @@ impl EventHandler for Handler {
             .and_then(reply_to_id);
 
         let ev = NotificationEvent::MessageEdit {
-            chat_id: event.channel_id,
-            message_id: event.id,
+            chat_id: admission.channel_id(),
+            message_id: admission.message_id(),
             user: sender_name,
-            user_id: author.id,
+            user_id: admission.effective_user_id(),
             new_content,
             timestamp,
-            thread_parent_id: resolved.thread_parent_id.map(ChannelId::new),
+            thread_parent_id: admission.thread_parent_id(),
             reply_to_message_id,
         };
 
@@ -594,60 +900,25 @@ impl EventHandler for Handler {
 
     async fn message_delete(
         &self,
-        ctx: Context,
+        _ctx: Context,
         channel_id: ChannelId,
         deleted_message_id: MessageId,
         guild_id: Option<GuildId>,
     ) {
-        let cid = channel_id.get();
-        let mid = deleted_message_id.get();
+        self.emit_lifecycle_delete(channel_id, deleted_message_id, guild_id)
+            .await;
+    }
 
-        {
-            let state = self.state.read().await;
-            if state.recent_sent_ids.contains(&mid) {
-                return;
-            }
-        }
-
-        let config = crate::config::load_config(&self.state_dir);
-
-        let is_dm = guild_id.is_none();
-
-        let resolved = resolve_guild_channel(&ctx.http, &self.state, &config, cid, is_dm).await;
-
-        // Guild mute check — suppress push delivery for muted guilds.
-        if let Some(gid) = guild_id
-            && let Some(store) = crate::mute_store::global()
-            && store.is_guild_muted(gid.get())
-        {
-            tracing::debug!(
-                guild_id = gid.get(),
-                channel_id = cid,
-                "message delete dropped: guild muted"
-            );
-            return;
-        }
-
-        let is_known = if is_dm {
-            config.access.dm_policy != crate::config::DmPolicy::Disabled && {
-                let state = self.state.read().await;
-                state.dm_channel_ids.contains(&cid)
-            }
-        } else {
-            config.channel_policy(resolved.gate_channel_id).is_some()
-        };
-        if !is_known {
-            return;
-        }
-
-        let ev = NotificationEvent::MessageDelete {
-            chat_id: channel_id,
-            message_id: deleted_message_id,
-            thread_parent_id: resolved.thread_parent_id.map(ChannelId::new),
-        };
-
-        if let Err(e) = self.tx.send(ev).await {
-            tracing::warn!(error = %e, "failed to send message delete notification");
+    async fn message_delete_bulk(
+        &self,
+        _ctx: Context,
+        channel_id: ChannelId,
+        multiple_deleted_messages_ids: Vec<MessageId>,
+        guild_id: Option<GuildId>,
+    ) {
+        for message_id in multiple_deleted_messages_ids {
+            self.emit_lifecycle_delete(channel_id, message_id, guild_id)
+                .await;
         }
     }
 
@@ -782,6 +1053,263 @@ struct ResolvedChannel {
     gate_channel_id: u64,
 }
 
+struct VerifiedCreatePlan {
+    admission: crate::ingress_ledger::LifecycleSnapshot,
+    config: Arc<crate::config::LoadedConfig>,
+    thread_parent_id: Option<u64>,
+    targeting: MessageTargeting,
+}
+
+struct VerifiedEditPlan {
+    admission: crate::ingress_ledger::LifecycleSnapshot,
+    config: Arc<crate::config::LoadedConfig>,
+}
+
+async fn admit_verified_create_after_wait<RF, TF, LF, MF>(
+    msg: &Message,
+    bot_user_id: u64,
+    ledger: &crate::ingress_ledger::IngressLedger,
+    resolved_action: RF,
+    topology: TF,
+    load_fresh_config: LF,
+    observe_current_mute: MF,
+) -> Option<VerifiedCreatePlan>
+where
+    RF: std::future::Future<
+            Output = Option<
+                crate::discord::verified_action::VerifiedAppAction<
+                    crate::discord::verified_action::Resolved,
+                >,
+            >,
+        >,
+    TF: std::future::Future<Output = Option<u64>>,
+    LF: FnOnce() -> Arc<crate::config::LoadedConfig>,
+    MF: FnOnce(u64, u64) -> bool,
+{
+    msg.guild_id?;
+    let action = resolved_action.await?;
+    let thread_parent_id = topology.await;
+    let config = load_fresh_config();
+    let channel_id = msg.channel_id.get();
+    let gate_channel_id = select_gate_channel(&config, channel_id, thread_parent_id);
+    let mentions = msg
+        .mentions
+        .iter()
+        .map(|user| user.id.get())
+        .collect::<Vec<_>>();
+    let referenced_author_id = msg.referenced_message.as_deref().map(|m| m.author.id.get());
+    let mention_kind = MentionDetector::classify(
+        bot_user_id,
+        &mentions,
+        &msg.content,
+        referenced_author_id,
+        config.mention_patterns.as_ref(),
+    );
+    let muted = msg
+        .guild_id
+        .is_some_and(|guild_id| observe_current_mute(guild_id.get(), gate_channel_id));
+    if !fresh_guild_envelope_allows_with_mute(&config, gate_channel_id, mention_kind, muted) {
+        return None;
+    }
+    let policy = fresh_policy_snapshot(&config, gate_channel_id)?;
+    let facts = match VerifiedActionGate::evaluate(action, policy) {
+        VerifiedGateVerdict::Allow(facts) => facts,
+        VerifiedGateVerdict::Deny => return None,
+    };
+    let webhook_id = msg.webhook_id?;
+    let context = msg
+        .guild_id
+        .map_or(LifecycleContext::DirectMessage, LifecycleContext::Guild);
+    let admission = match ledger.admit_verified_create(
+        facts.into_lifecycle(),
+        msg.id,
+        msg.channel_id,
+        context,
+        webhook_id,
+        msg.author.id,
+        thread_parent_id.map(ChannelId::new),
+        &msg.content,
+        msg.timestamp,
+    ) {
+        crate::ingress_ledger::TransitionResult::Admitted(snapshot) => snapshot,
+        crate::ingress_ledger::TransitionResult::Duplicate
+        | crate::ingress_ledger::TransitionResult::Rejected
+        | crate::ingress_ledger::TransitionResult::Unavailable => return None,
+    };
+    Some(VerifiedCreatePlan {
+        admission,
+        config,
+        thread_parent_id,
+        targeting: mention_kind.map_or(MessageTargeting::Ambient, MessageTargeting::GuildDirected),
+    })
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "verified edit orchestration keeps immutable gateway evidence explicit"
+)]
+async fn admit_verified_edit_after_wait<RF, TF, LF, MF>(
+    event: &MessageUpdateEvent,
+    new: Option<&Message>,
+    old: Option<&Message>,
+    author: &User,
+    new_content: &str,
+    edited_ts: serenity::model::Timestamp,
+    webhook_id: WebhookId,
+    bot_user_id: u64,
+    ledger: &crate::ingress_ledger::IngressLedger,
+    resolved_action: RF,
+    topology: TF,
+    load_fresh_config: LF,
+    observe_current_mute: MF,
+) -> Option<VerifiedEditPlan>
+where
+    RF: std::future::Future<
+            Output = Option<
+                crate::discord::verified_action::VerifiedAppAction<
+                    crate::discord::verified_action::Resolved,
+                >,
+            >,
+        >,
+    TF: std::future::Future<Output = Option<u64>>,
+    LF: FnOnce() -> Arc<crate::config::LoadedConfig>,
+    MF: FnOnce(u64, u64) -> bool,
+{
+    event.guild_id?;
+    let action = resolved_action.await?;
+    let thread_parent_id = topology.await;
+    let config = load_fresh_config();
+    let gate_channel_id = select_gate_channel(&config, event.channel_id.get(), thread_parent_id);
+    let mentions = event
+        .mentions
+        .as_ref()
+        .map(|mentions| {
+            mentions
+                .iter()
+                .map(|user| user.id.get())
+                .collect::<Vec<_>>()
+        })
+        .or_else(|| new.map(|message| message.mentions.iter().map(|user| user.id.get()).collect()))
+        .unwrap_or_default();
+    let referenced_author_id = new
+        .and_then(|message| message.referenced_message.as_deref())
+        .or_else(|| old?.referenced_message.as_deref())
+        .map(|message| message.author.id.get());
+    let mention_kind = MentionDetector::classify(
+        bot_user_id,
+        &mentions,
+        new_content,
+        referenced_author_id,
+        config.mention_patterns.as_ref(),
+    );
+    let muted = event
+        .guild_id
+        .is_some_and(|guild_id| observe_current_mute(guild_id.get(), gate_channel_id));
+    if !fresh_guild_envelope_allows_with_mute(&config, gate_channel_id, mention_kind, muted) {
+        return None;
+    }
+    let policy = fresh_policy_snapshot(&config, gate_channel_id)?;
+    let facts = match VerifiedActionGate::evaluate(action, policy) {
+        VerifiedGateVerdict::Allow(facts) => facts,
+        VerifiedGateVerdict::Deny => return None,
+    };
+    let context = event
+        .guild_id
+        .map_or(LifecycleContext::DirectMessage, LifecycleContext::Guild);
+    let admission = match ledger.transition_verified_edit(
+        facts.into_lifecycle(),
+        event.id,
+        event.channel_id,
+        context,
+        webhook_id,
+        author.id,
+        new_content,
+        edited_ts,
+    ) {
+        crate::ingress_ledger::TransitionResult::Admitted(snapshot) => snapshot,
+        crate::ingress_ledger::TransitionResult::Duplicate
+        | crate::ingress_ledger::TransitionResult::Rejected
+        | crate::ingress_ledger::TransitionResult::Unavailable => return None,
+    };
+    Some(VerifiedEditPlan { admission, config })
+}
+
+fn select_gate_channel(
+    config: &crate::config::LoadedConfig,
+    channel_id: u64,
+    thread_parent_id: Option<u64>,
+) -> u64 {
+    if config.channel_policy(channel_id).is_some() {
+        channel_id
+    } else {
+        thread_parent_id.unwrap_or(channel_id)
+    }
+}
+
+#[cfg(test)]
+fn fresh_guild_envelope_allows(
+    config: &crate::config::LoadedConfig,
+    gate_channel_id: u64,
+    guild_id: Option<u64>,
+    mention_kind: Option<MentionKind>,
+) -> bool {
+    let muted = guild_id.is_some_and(|guild_id| {
+        crate::mute_store::global().is_some_and(|store| store.is_guild_muted(guild_id))
+    });
+    fresh_guild_envelope_allows_with_mute(config, gate_channel_id, mention_kind, muted)
+}
+
+fn fresh_guild_envelope_allows_with_mute(
+    config: &crate::config::LoadedConfig,
+    gate_channel_id: u64,
+    mention_kind: Option<MentionKind>,
+    muted: bool,
+) -> bool {
+    let Some(policy) = config.channel_policy(gate_channel_id) else {
+        return false;
+    };
+    if muted {
+        return false;
+    }
+    !policy.require_mention || mention_kind.is_some()
+}
+
+fn passive_edit_policy_allows(
+    config: &crate::config::LoadedConfig,
+    gate_channel_id: u64,
+    guild_id: Option<u64>,
+    mention_kind: Option<MentionKind>,
+    lineage: &crate::ingress_ledger::LifecycleView<'_>,
+) -> bool {
+    if guild_id.is_some_and(|guild_id| {
+        crate::mute_store::global().is_some_and(|store| store.is_guild_muted(guild_id))
+    }) {
+        return false;
+    }
+    let Some(policy) = config.channel_policy(gate_channel_id) else {
+        return false;
+    };
+    if policy.require_mention && mention_kind.is_none() {
+        return false;
+    }
+    if !policy.has_identity_filter() {
+        return true;
+    }
+    match lineage.provenance() {
+        None => policy.allow_from.contains(&lineage.actor_id().get()),
+        Some(LifecycleProvenance::Represented {
+            discord_user_id,
+            system_id,
+            member_id,
+        }) => {
+            policy.allow_from.contains(&discord_user_id.get())
+                || system_id.is_some_and(|id| policy.allow_pk_systems.contains(&id.to_string()))
+                || member_id.is_some_and(|id| policy.allow_pk_members.contains(&id.to_string()))
+        }
+        Some(LifecycleProvenance::AppOnly) | Some(LifecycleProvenance::Unavailable(_)) => false,
+    }
+}
+
 /// Resolves thread parentage for a channel and returns the effective gate
 /// channel ID.
 ///
@@ -851,7 +1379,10 @@ const REPLY_PREVIEW_MAX_CHARS: usize = 100;
 /// message embedded by Discord. Returns `(user_id, user, content_preview)`,
 /// each independently optional. Only populated for genuine replies
 /// (`MessageReferenceKind::Default`); forwards/crossposts yield all `None`.
-fn reply_context(msg: &Message) -> (Option<UserId>, Option<String>, Option<String>) {
+fn reply_context(
+    msg: &Message,
+    ingress_ledger: &crate::ingress_ledger::IngressLedger,
+) -> (Option<UserId>, Option<String>, Option<String>) {
     let is_reply = msg
         .message_reference
         .as_ref()
@@ -863,7 +1394,18 @@ fn reply_context(msg: &Message) -> (Option<UserId>, Option<String>, Option<Strin
         return (None, None, None);
     };
     let preview = reply_preview(&parent.content);
-    (Some(parent.author.id), Some(display_name(parent)), preview)
+    let reply_to_user_id = if parent.webhook_id.is_some() {
+        let context = parent
+            .guild_id
+            .map_or(LifecycleContext::DirectMessage, LifecycleContext::Guild);
+        ingress_ledger
+            .active_snapshot(parent.id, parent.channel_id, context)
+            .filter(|snapshot| snapshot.provider().is_some())
+            .map(|snapshot| snapshot.effective_user_id())
+    } else {
+        Some(parent.author.id)
+    };
+    (reply_to_user_id, Some(display_name(parent)), preview)
 }
 
 /// Resolves the best available display name for a message author.
@@ -949,6 +1491,57 @@ fn reply_preview(content: &str) -> Option<String> {
 fn build_message_event(
     msg: &Message,
     config: &crate::config::LoadedConfig,
+    ingress_ledger: &crate::ingress_ledger::IngressLedger,
+    thread_parent_id: Option<u64>,
+    targeting: MessageTargeting,
+    pronoun_display_name: Option<PronounDisplayName>,
+) -> NotificationEvent {
+    build_message_event_with_coordinates(
+        msg.channel_id,
+        msg.id,
+        msg.author.id,
+        msg,
+        config,
+        ingress_ledger,
+        thread_parent_id,
+        targeting,
+        pronoun_display_name,
+    )
+}
+
+fn build_verified_message_event(
+    admission: &crate::ingress_ledger::LifecycleSnapshot,
+    msg: &Message,
+    config: &crate::config::LoadedConfig,
+    ingress_ledger: &crate::ingress_ledger::IngressLedger,
+    thread_parent_id: Option<u64>,
+    targeting: MessageTargeting,
+    pronoun_display_name: Option<PronounDisplayName>,
+) -> NotificationEvent {
+    build_message_event_with_coordinates(
+        admission.channel_id(),
+        admission.message_id(),
+        admission.effective_user_id(),
+        msg,
+        config,
+        ingress_ledger,
+        thread_parent_id,
+        targeting,
+        pronoun_display_name,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the shared direct/verified event builder keeps immutable Discord coordinates explicit at the transport-neutral serialization boundary"
+)]
+fn build_message_event_with_coordinates(
+    chat_id: ChannelId,
+    message_id: MessageId,
+    effective_user_id: UserId,
+    msg: &Message,
+    config: &crate::config::LoadedConfig,
+    ingress_ledger: &crate::ingress_ledger::IngressLedger,
     thread_parent_id: Option<u64>,
     targeting: MessageTargeting,
     pronoun_display_name: Option<PronounDisplayName>,
@@ -969,17 +1562,18 @@ fn build_message_event(
         .unwrap_or(false);
 
     let reply_to_message_id = msg.message_reference.as_ref().and_then(reply_to_id);
-    let (reply_to_user_id, reply_to_user, reply_to_content_preview) = reply_context(msg);
+    let (reply_to_user_id, reply_to_user, reply_to_content_preview) =
+        reply_context(msg, ingress_ledger);
 
     let resolved_name = pronoun_display_name
         .map(|p| p.0)
         .unwrap_or_else(|| resolve_user_identity(Some(&display_name(msg)), Some(&msg.author.name)));
 
     NotificationEvent::Message(MessageEvent {
-        chat_id: msg.channel_id,
-        message_id: msg.id,
+        chat_id,
+        message_id,
         user: resolved_name,
-        user_id: msg.author.id,
+        user_id: effective_user_id,
         content: msg.content.clone(),
         targeting,
         timestamp: config
@@ -1107,70 +1701,8 @@ fn should_drop_bot_message(
     is_bot && !config.is_allowed(user_id)
 }
 
-/// Returns `true` if this bot message should be filtered (dropped).
-/// Proxy bot webhooks (e.g. PluralKit) are allowed through.
-async fn should_filter_bot_message(
-    http: &serenity::http::Http,
-    state: &crate::state::State,
-    config: &crate::config::LoadedConfig,
-    is_bot: bool,
-    user_id: u64,
-    webhook_id: Option<u64>,
-) -> bool {
-    if !should_drop_bot_message(is_bot, user_id, config) {
-        return false;
-    }
-    match webhook_id {
-        Some(wh_id) => !is_proxy_webhook(http, state, wh_id).await,
-        None => true,
-    }
-}
-
-/// Bot user IDs of known proxy bots (e.g. PluralKit) whose webhook messages
-/// should be treated as human-authored.
-const PROXY_BOT_IDS: &[u64] = &[
-    466378653216014359, // PluralKit
-];
-
-/// Checks whether a webhook was created by a known proxy bot.
-///
-/// First checks the in-memory cache, then falls back to a Discord API call
-/// to fetch the webhook's creator. Caches the result either way. PluralKit
-/// reuses webhooks per-channel, so the cache is very effective — typically
-/// one API call per channel, ever.
-async fn is_proxy_webhook(
-    http: &serenity::http::Http,
-    state: &crate::state::State,
-    webhook_id: u64,
-) -> bool {
-    // Check cache first.
-    {
-        let state = state.read().await;
-        if let Some(&is_proxy) = state.proxy_webhooks.get(&webhook_id) {
-            return is_proxy;
-        }
-    }
-
-    // Cache miss — ask Discord for the webhook's creator.
-    match http.get_webhook(WebhookId::new(webhook_id)).await {
-        Ok(webhook) => {
-            let is_proxy = webhook
-                .user
-                .as_ref()
-                .is_some_and(|u| PROXY_BOT_IDS.contains(&u.id.get()));
-            let mut state = state.write().await;
-            state.record_proxy_webhook(webhook_id, is_proxy);
-            is_proxy
-        }
-        Err(e) => {
-            tracing::debug!(
-                webhook_id,
-                error = %e,
-                "failed to look up webhook for proxy bot detection — not caching"
-            );
-            false
-        }
-    }
+fn is_direct_dm_transport(is_dm: bool, is_webhook: bool) -> bool {
+    is_dm && !is_webhook
 }
 
 #[cfg(test)]
@@ -1239,6 +1771,551 @@ mod tests {
         );
     }
 
+    #[test]
+    fn webhook_dm_create_and_update_fail_closed_before_direct_gate() {
+        assert!(is_direct_dm_transport(true, false));
+        assert!(!is_direct_dm_transport(true, true));
+        assert!(!is_direct_dm_transport(false, true));
+    }
+
+    #[test]
+    fn fresh_snapshot_controls_thread_mapping_and_mention_classification() {
+        let config = |channel_id: &str, require_mention: bool, patterns: Vec<&str>| {
+            let mut raw = Config::default();
+            raw.channels.push(crate::config::ChannelConfig {
+                id: channel_id.to_owned(),
+                require_mention,
+                ..Default::default()
+            });
+            raw.mentions.patterns = patterns.into_iter().map(str::to_owned).collect();
+            LoadedConfig::from_raw(raw)
+        };
+        let before_wait = config("20", false, vec!["old-name"]);
+        let after_wait = config("30", true, vec!["new-name"]);
+        assert_eq!(select_gate_channel(&before_wait, 20, Some(30)), 20);
+        assert_eq!(select_gate_channel(&after_wait, 20, Some(30)), 30);
+
+        let mention = MentionDetector::classify(
+            999,
+            &[],
+            "hello new-name",
+            None,
+            after_wait.mention_patterns.as_ref(),
+        );
+        assert!(mention.is_some());
+        assert!(fresh_guild_envelope_allows(
+            &after_wait,
+            select_gate_channel(&after_wait, 20, Some(30)),
+            Some(40),
+            mention,
+        ));
+    }
+
+    const TEST_PK_CREATOR: u64 = 466_378_653_216_014_359;
+
+    fn verified_message(id: u64, content: &str, guild_id: Option<u64>) -> Message {
+        let mut payload = wire_message_body(id, wire_author(500, "proxy"), content);
+        payload["channel_id"] = serde_json::json!("20");
+        payload["guild_id"] = guild_id.map_or(serde_json::Value::Null, |id| {
+            serde_json::Value::String(id.to_string())
+        });
+        payload["webhook_id"] = serde_json::json!("40");
+        message_from_wire(payload)
+    }
+
+    fn handler_policy_config(
+        channel_id: u64,
+        allow_from: &[u64],
+        require_mention: bool,
+        patterns: &[&str],
+    ) -> Arc<LoadedConfig> {
+        let mut raw = Config::default();
+        raw.channels.push(crate::config::ChannelConfig {
+            id: channel_id.to_string(),
+            require_mention,
+            allow_from: allow_from.iter().map(u64::to_string).collect(),
+            ..Default::default()
+        });
+        raw.mentions.patterns = patterns.iter().map(|value| (*value).to_owned()).collect();
+        Arc::new(LoadedConfig::from_raw(raw))
+    }
+
+    fn represented_test_facts(user_id: u64) -> crate::pluralkit::VerifiedPkFacts {
+        crate::pluralkit::VerifiedPkFacts::Represented {
+            discord_user_id: UserId::new(user_id),
+            system_id: None,
+            member_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn verified_create_uses_only_post_wait_config_then_current_mute() {
+        use arc_swap::ArcSwap;
+        use std::sync::Mutex;
+
+        let snapshots = Arc::new(ArcSwap::from(handler_policy_config(
+            99,
+            &[],
+            false,
+            &["old"],
+        )));
+        let after = handler_policy_config(30, &[42], true, &["new-name"]);
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let msg = verified_message(100, "hello new-name", Some(60));
+        let resolution_msg = msg.clone();
+        let snapshots_for_wait = Arc::clone(&snapshots);
+        let order_for_wait = Arc::clone(&order);
+        let resolution = crate::discord::verified_action_runtime::resolve_test_create_with_sources(
+            resolution_msg,
+            async move {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                snapshots_for_wait.store(after);
+                order_for_wait.lock().expect("order lock").push("provider");
+                Some(TEST_PK_CREATOR)
+            },
+            std::future::ready(Ok(represented_test_facts(42))),
+        );
+        let order_for_config = Arc::clone(&order);
+        let order_for_mute = Arc::clone(&order);
+        let snapshots_for_load = Arc::clone(&snapshots);
+        let plan = admit_verified_create_after_wait(
+            &msg,
+            999,
+            &crate::ingress_ledger::IngressLedger::new(),
+            resolution,
+            std::future::ready(Some(30)),
+            move || {
+                order_for_config.lock().expect("order lock").push("config");
+                snapshots_for_load.load_full()
+            },
+            move |guild_id, gate_channel_id| {
+                order_for_mute.lock().expect("order lock").push("mute");
+                assert_eq!((guild_id, gate_channel_id), (60, 30));
+                false
+            },
+        )
+        .await
+        .expect("post-wait policy admits");
+
+        assert_eq!(plan.thread_parent_id, Some(30));
+        assert!(matches!(
+            plan.targeting,
+            MessageTargeting::GuildDirected(MentionKind::ConfiguredPattern)
+        ));
+        assert_eq!(
+            order.lock().expect("order lock").as_slice(),
+            ["provider", "config", "mute"]
+        );
+    }
+
+    #[tokio::test]
+    async fn verified_create_real_gate_covers_supported_and_unavailable_outcomes() {
+        async fn admitted(
+            id: u64,
+            config: Arc<LoadedConfig>,
+            facts: Result<crate::pluralkit::VerifiedPkFacts, crate::pluralkit::PkResolveError>,
+        ) -> bool {
+            let msg = verified_message(id, "ambient", Some(60));
+            let action = crate::discord::verified_action_runtime::resolve_test_create_with_sources(
+                msg.clone(),
+                std::future::ready(Some(TEST_PK_CREATOR)),
+                std::future::ready(facts),
+            );
+            admit_verified_create_after_wait(
+                &msg,
+                999,
+                &crate::ingress_ledger::IngressLedger::new(),
+                action,
+                std::future::ready(None),
+                move || config,
+                |_, _| false,
+            )
+            .await
+            .is_some()
+        }
+
+        assert!(
+            admitted(
+                110,
+                handler_policy_config(20, &[42], false, &[]),
+                Ok(represented_test_facts(42))
+            )
+            .await
+        );
+        assert!(
+            !admitted(
+                111,
+                handler_policy_config(20, &[7], false, &[]),
+                Ok(represented_test_facts(42))
+            )
+            .await
+        );
+        assert!(
+            admitted(
+                112,
+                handler_policy_config(20, &[], false, &[]),
+                Err(crate::pluralkit::PkResolveError::Timeout),
+            )
+            .await
+        );
+        assert!(
+            !admitted(
+                113,
+                handler_policy_config(20, &[42], false, &[]),
+                Err(crate::pluralkit::PkResolveError::Timeout),
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn unsupported_creator_and_fresh_envelope_changes_fail_closed() {
+        async fn attempt(
+            id: u64,
+            creator: Option<u64>,
+            config: Arc<LoadedConfig>,
+            muted: bool,
+        ) -> bool {
+            let msg = verified_message(id, "ambient", Some(60));
+            let action = crate::discord::verified_action_runtime::resolve_test_create_with_sources(
+                msg.clone(),
+                std::future::ready(creator),
+                std::future::ready(Ok(represented_test_facts(42))),
+            );
+            admit_verified_create_after_wait(
+                &msg,
+                999,
+                &crate::ingress_ledger::IngressLedger::new(),
+                action,
+                std::future::ready(None),
+                move || config,
+                move |_, _| muted,
+            )
+            .await
+            .is_some()
+        }
+
+        assert!(
+            !attempt(
+                120,
+                Some(1),
+                handler_policy_config(20, &[], false, &[]),
+                false
+            )
+            .await
+        );
+        assert!(
+            !attempt(
+                121,
+                Some(TEST_PK_CREATOR),
+                handler_policy_config(30, &[], false, &[]),
+                false
+            )
+            .await
+        );
+        assert!(
+            !attempt(
+                122,
+                Some(TEST_PK_CREATOR),
+                handler_policy_config(20, &[], true, &["required"]),
+                false
+            )
+            .await
+        );
+        assert!(
+            !attempt(
+                123,
+                Some(TEST_PK_CREATOR),
+                handler_policy_config(20, &[], false, &[]),
+                true
+            )
+            .await
+        );
+    }
+
+    fn verified_update_event(
+        id: u64,
+        author_id: u64,
+        guild_id: Option<u64>,
+        webhook_id: Option<u64>,
+    ) -> MessageUpdateEvent {
+        serde_json::from_value(serde_json::json!({
+            "id": id.to_string(),
+            "channel_id": "20",
+            "guild_id": guild_id.map(|id| id.to_string()),
+            "webhook_id": webhook_id.map(|id| id.to_string()),
+            "author": {
+                "id": author_id.to_string(),
+                "username": "proxy",
+                "discriminator": "0",
+                "bot": false
+            },
+            "content": "edited",
+            "edited_timestamp": "2026-01-01T00:00:01Z"
+        }))
+        .expect("valid update")
+    }
+
+    #[tokio::test]
+    async fn sufficient_partial_update_uses_verified_path_and_conflicts_fail_closed() {
+        let ledger = crate::ingress_ledger::IngressLedger::new();
+        let create = verified_message(130, "before", Some(60));
+        let create_action =
+            crate::discord::verified_action_runtime::resolve_test_create_with_sources(
+                create.clone(),
+                std::future::ready(Some(TEST_PK_CREATOR)),
+                std::future::ready(Ok(represented_test_facts(42))),
+            );
+        assert!(
+            admit_verified_create_after_wait(
+                &create,
+                999,
+                &ledger,
+                create_action,
+                std::future::ready(None),
+                || handler_policy_config(20, &[42], false, &[]),
+                |_, _| false,
+            )
+            .await
+            .is_some()
+        );
+
+        let event = verified_update_event(130, 500, Some(60), Some(40));
+        let candidate = VerifiedUpdateCandidate::from_gateway(&event, None, None)
+            .expect("consistent raw update")
+            .expect("raw update is sufficient");
+        let action = crate::discord::verified_action_runtime::resolve_test_update_with_sources(
+            candidate,
+            std::future::ready(Some(TEST_PK_CREATOR)),
+            std::future::ready(Ok(represented_test_facts(42))),
+        );
+        assert!(
+            admit_verified_edit_after_wait(
+                &event,
+                None,
+                None,
+                event.author.as_ref().expect("author"),
+                event.content.as_deref().expect("content"),
+                event.edited_timestamp.expect("edited timestamp"),
+                WebhookId::new(40),
+                999,
+                &ledger,
+                action,
+                std::future::ready(None),
+                || handler_policy_config(20, &[42], false, &[]),
+                |_, _| false,
+            )
+            .await
+            .is_some()
+        );
+
+        let conflicting_new = verified_message(130, "edited", Some(60));
+        let conflict = verified_update_event(130, 501, Some(60), Some(40));
+        assert!(
+            VerifiedUpdateCandidate::from_gateway(&conflict, None, Some(&conflicting_new)).is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn dm_lineage_and_delete_bulk_emit_only_admitted_direct_messages() {
+        let ledger = crate::ingress_ledger::IngressLedger::new();
+        for id in [140, 141] {
+            assert!(matches!(
+                ledger.admit_direct_create(
+                    MessageId::new(id),
+                    ChannelId::new(20),
+                    LifecycleContext::DirectMessage,
+                    UserId::new(500),
+                    None,
+                    "dm",
+                    serenity::model::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+                ),
+                crate::ingress_ledger::TransitionResult::Admitted(_)
+            ));
+        }
+        assert!(matches!(
+            ledger.transition_passive_edit(
+                MessageId::new(140),
+                ChannelId::new(20),
+                LifecycleContext::DirectMessage,
+                UserId::new(500),
+                "dm edited",
+                serenity::model::Timestamp::parse("2026-01-01T00:00:01Z").unwrap(),
+                |_| true,
+            ),
+            crate::ingress_ledger::TransitionResult::Admitted(_)
+        ));
+
+        let state = Arc::new(tokio::sync::RwLock::new(crate::state::SharedState::new()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        for id in [140, 999, 141] {
+            emit_lifecycle_delete_to(
+                &state,
+                &ledger,
+                &tx,
+                ChannelId::new(20),
+                MessageId::new(id),
+                None,
+            )
+            .await;
+        }
+        let first = rx.recv().await.expect("first admitted delete");
+        let second = rx.recv().await.expect("second admitted delete");
+        assert!(
+            matches!(first, NotificationEvent::MessageDelete { message_id, .. } if message_id == MessageId::new(140))
+        );
+        assert!(
+            matches!(second, NotificationEvent::MessageDelete { message_id, .. } if message_id == MessageId::new(141))
+        );
+        assert!(rx.try_recv().is_err());
+        emit_lifecycle_delete_to(
+            &state,
+            &ledger,
+            &tx,
+            ChannelId::new(20),
+            MessageId::new(140),
+            None,
+        )
+        .await;
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn webhook_dm_create_and_update_stop_before_injected_sources() {
+        use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+
+        let invoked = Arc::new(AtomicBool::new(false));
+        let invoked_create = Arc::clone(&invoked);
+        let msg = verified_message(150, "dm", None);
+        let action = crate::discord::verified_action_runtime::resolve_test_create_with_sources(
+            msg.clone(),
+            async move {
+                invoked_create.store(true, AtomicOrdering::Relaxed);
+                Some(TEST_PK_CREATOR)
+            },
+            std::future::ready(Ok(represented_test_facts(42))),
+        );
+        let ledger = crate::ingress_ledger::IngressLedger::new();
+        assert!(
+            admit_verified_create_after_wait(
+                &msg,
+                999,
+                &ledger,
+                action,
+                std::future::ready(None),
+                || handler_policy_config(20, &[], false, &[]),
+                |_, _| false,
+            )
+            .await
+            .is_none()
+        );
+        assert!(!invoked.load(AtomicOrdering::Relaxed));
+
+        let event = verified_update_event(150, 500, None, Some(40));
+        let candidate = VerifiedUpdateCandidate::from_gateway(&event, None, None)
+            .expect("consistent")
+            .expect("sufficient");
+        let invoked_update = Arc::clone(&invoked);
+        let action = crate::discord::verified_action_runtime::resolve_test_update_with_sources(
+            candidate,
+            async move {
+                invoked_update.store(true, AtomicOrdering::Relaxed);
+                Some(TEST_PK_CREATOR)
+            },
+            std::future::ready(Ok(represented_test_facts(42))),
+        );
+        assert!(
+            admit_verified_edit_after_wait(
+                &event,
+                None,
+                None,
+                event.author.as_ref().expect("author"),
+                event.content.as_deref().expect("content"),
+                event.edited_timestamp.expect("edited timestamp"),
+                WebhookId::new(40),
+                999,
+                &ledger,
+                action,
+                std::future::ready(None),
+                || handler_policy_config(20, &[], false, &[]),
+                |_, _| false,
+            )
+            .await
+            .is_none()
+        );
+        assert!(!invoked.load(AtomicOrdering::Relaxed));
+    }
+
+    #[test]
+    fn passive_verified_edit_reapplies_identity_and_mention_policy() {
+        use crate::discord::verified_action::{LifecycleProvenance, test_lifecycle_facts};
+
+        let mut raw = Config::default();
+        raw.channels.push(crate::config::ChannelConfig {
+            id: "100".to_owned(),
+            require_mention: true,
+            allow_from: vec!["600".to_owned()],
+            ..Default::default()
+        });
+        let config = LoadedConfig::from_raw(raw);
+        let ledger = crate::ingress_ledger::IngressLedger::new();
+        let facts = test_lifecycle_facts(
+            MessageId::new(10),
+            ChannelId::new(100),
+            GuildId::new(200),
+            WebhookId::new(400),
+            LifecycleProvenance::Represented {
+                discord_user_id: UserId::new(600),
+                system_id: None,
+                member_id: None,
+            },
+        );
+        assert!(matches!(
+            ledger.admit_verified_create(
+                facts,
+                MessageId::new(10),
+                ChannelId::new(100),
+                LifecycleContext::Guild(GuildId::new(200)),
+                WebhookId::new(400),
+                UserId::new(500),
+                None,
+                "one",
+                serenity::model::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            ),
+            crate::ingress_ledger::TransitionResult::Admitted(_)
+        ));
+        assert_eq!(
+            ledger.transition_passive_edit(
+                MessageId::new(10),
+                ChannelId::new(100),
+                LifecycleContext::Guild(GuildId::new(200)),
+                UserId::new(500),
+                "two",
+                serenity::model::Timestamp::parse("2026-01-01T00:00:01Z").unwrap(),
+                |lineage| passive_edit_policy_allows(&config, 100, Some(200), None, lineage),
+            ),
+            crate::ingress_ledger::TransitionResult::Rejected
+        );
+        assert!(matches!(
+            ledger.transition_passive_edit(
+                MessageId::new(10),
+                ChannelId::new(100),
+                LifecycleContext::Guild(GuildId::new(200)),
+                UserId::new(500),
+                "two",
+                serenity::model::Timestamp::parse("2026-01-01T00:00:01Z").unwrap(),
+                |lineage| passive_edit_policy_allows(
+                    &config,
+                    100,
+                    Some(200),
+                    Some(MentionKind::DirectMention),
+                    lineage,
+                ),
+            ),
+            crate::ingress_ledger::TransitionResult::Admitted(_)
+        ));
+    }
+
     // ── Gateway reaction filter tests ────────────────────────────────────────
 
     /// The bot's own gateway reactions are dropped — intentional self-reacts
@@ -1265,24 +2342,6 @@ mod tests {
     }
 
     // ── proxy bot constant tests ───────────────────────────────────────────────
-
-    /// PluralKit's bot ID is in the proxy bot list.
-    #[test]
-    fn test_pluralkit_is_in_proxy_bot_ids() {
-        assert!(
-            PROXY_BOT_IDS.contains(&466378653216014359),
-            "PluralKit bot ID must be in PROXY_BOT_IDS"
-        );
-    }
-
-    /// Carl-bot (a non-proxy bot) is not in the proxy bot list.
-    #[test]
-    fn test_carlbot_not_in_proxy_bot_ids() {
-        assert!(
-            !PROXY_BOT_IDS.contains(&235148962103951360),
-            "Carl-bot must not be in PROXY_BOT_IDS"
-        );
-    }
 
     // ── reply_to_id tests ──────────────────────────────────────────────────────
 
@@ -1391,6 +2450,35 @@ mod tests {
         serde_json::from_value(payload).expect("valid Message JSON")
     }
 
+    #[test]
+    fn verified_delivery_rejects_raw_coordinate_mismatch() {
+        let mut payload = wire_message_body(11, wire_author(7, "proxy"), "hello");
+        payload["guild_id"] = serde_json::json!("30");
+        payload["webhook_id"] = serde_json::json!("40");
+        let message = message_from_wire(payload);
+        let facts = crate::discord::verified_action::test_admission_facts(
+            MessageId::new(10),
+            ChannelId::new(message.channel_id.get()),
+            GuildId::new(30),
+            WebhookId::new(40),
+        );
+        let ledger = crate::ingress_ledger::IngressLedger::new();
+        assert_eq!(
+            ledger.admit_verified_create(
+                facts.into_lifecycle(),
+                message.id,
+                message.channel_id,
+                LifecycleContext::Guild(GuildId::new(30)),
+                WebhookId::new(40),
+                message.author.id,
+                None,
+                &message.content,
+                message.timestamp,
+            ),
+            crate::ingress_ledger::TransitionResult::Rejected
+        );
+    }
+
     fn wire_reply_message(
         content: &str,
         reference: serde_json::Value,
@@ -1413,10 +2501,17 @@ mod tests {
             "gateway payload",
         ));
         let ledger = crate::ingress_ledger::IngressLedger::new();
-        let event = build_message_event(&msg, &config, None, MessageTargeting::DirectMessage, None);
+        let event = build_message_event(
+            &msg,
+            &config,
+            &ledger,
+            None,
+            MessageTargeting::DirectMessage,
+            None,
+        );
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
 
-        send_gateway_admitted_message(&ledger, &tx, &msg, event, "test").await;
+        send_gateway_admitted_message(&ledger, &tx, &msg, None, event, "test").await;
 
         let delivered = rx.recv().await.expect("notification event");
         let NotificationEvent::Message(delivered) = delivered else {
@@ -1433,16 +2528,18 @@ mod tests {
 
     #[test]
     fn reply_context_returns_none_for_non_reply() {
+        let ledger = crate::ingress_ledger::IngressLedger::new();
         let msg = message_from_wire(wire_message_body(
             100,
             wire_author(1, "alice"),
             "not a reply",
         ));
-        assert_eq!(reply_context(&msg), (None, None, None));
+        assert_eq!(reply_context(&msg, &ledger), (None, None, None));
     }
 
     #[test]
     fn reply_context_returns_none_for_forward() {
+        let ledger = crate::ingress_ledger::IngressLedger::new();
         let msg = wire_reply_message(
             "forwarded",
             serde_json::json!({
@@ -1456,11 +2553,12 @@ mod tests {
                 "parent text",
             )),
         );
-        assert_eq!(reply_context(&msg), (None, None, None));
+        assert_eq!(reply_context(&msg, &ledger), (None, None, None));
     }
 
     #[test]
     fn reply_context_returns_none_when_referenced_message_absent() {
+        let ledger = crate::ingress_ledger::IngressLedger::new();
         let msg = wire_reply_message(
             "reply without parent body",
             serde_json::json!({
@@ -1470,11 +2568,12 @@ mod tests {
             }),
             None,
         );
-        assert_eq!(reply_context(&msg), (None, None, None));
+        assert_eq!(reply_context(&msg, &ledger), (None, None, None));
     }
 
     #[test]
     fn reply_context_extracts_author_and_preview_for_reply() {
+        let ledger = crate::ingress_ledger::IngressLedger::new();
         let msg = wire_reply_message(
             "my reply",
             serde_json::json!({
@@ -1488,7 +2587,7 @@ mod tests {
                 "parent message content",
             )),
         );
-        let (uid, user, preview) = reply_context(&msg);
+        let (uid, user, preview) = reply_context(&msg, &ledger);
         assert_eq!(uid, Some(UserId::new(500)));
         assert_eq!(user.as_deref(), Some("parentuser"));
         assert_eq!(preview.as_deref(), Some("parent message content"));
@@ -1496,6 +2595,7 @@ mod tests {
 
     #[test]
     fn reply_context_omits_preview_for_empty_parent_content() {
+        let ledger = crate::ingress_ledger::IngressLedger::new();
         let msg = wire_reply_message(
             "my reply",
             serde_json::json!({
@@ -1505,10 +2605,78 @@ mod tests {
             }),
             Some(wire_message_body(999, wire_author(500, "parentuser"), "")),
         );
-        let (uid, user, preview) = reply_context(&msg);
+        let (uid, user, preview) = reply_context(&msg, &ledger);
         assert_eq!(uid, Some(UserId::new(500)));
         assert_eq!(user.as_deref(), Some("parentuser"));
         assert_eq!(preview, None);
+    }
+
+    #[test]
+    fn reply_context_never_exposes_unverified_webhook_author() {
+        let ledger = crate::ingress_ledger::IngressLedger::new();
+        let mut parent = wire_message_body(999, wire_author(500, "proxy"), "parent");
+        parent["guild_id"] = serde_json::json!("30");
+        parent["webhook_id"] = serde_json::json!("40");
+        let msg = wire_reply_message(
+            "reply",
+            serde_json::json!({
+                "type": 0,
+                "channel_id": "1",
+                "message_id": "999",
+            }),
+            Some(parent),
+        );
+
+        let (uid, user, preview) = reply_context(&msg, &ledger);
+        assert_eq!(uid, None);
+        assert_eq!(user.as_deref(), Some("proxy"));
+        assert_eq!(preview.as_deref(), Some("parent"));
+    }
+
+    #[test]
+    fn reply_context_uses_admitted_represented_participant() {
+        let ledger = crate::ingress_ledger::IngressLedger::new();
+        let facts = crate::discord::verified_action::test_lifecycle_facts(
+            MessageId::new(999),
+            ChannelId::new(1),
+            GuildId::new(30),
+            WebhookId::new(40),
+            LifecycleProvenance::Represented {
+                discord_user_id: UserId::new(600),
+                system_id: None,
+                member_id: None,
+            },
+        );
+        assert!(matches!(
+            ledger.admit_verified_create(
+                facts,
+                MessageId::new(999),
+                ChannelId::new(1),
+                LifecycleContext::Guild(GuildId::new(30)),
+                WebhookId::new(40),
+                UserId::new(500),
+                None,
+                "parent",
+                serenity::model::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            ),
+            crate::ingress_ledger::TransitionResult::Admitted(_)
+        ));
+        let mut parent = wire_message_body(999, wire_author(500, "proxy"), "parent");
+        parent["guild_id"] = serde_json::json!("30");
+        parent["webhook_id"] = serde_json::json!("40");
+        let msg = wire_reply_message(
+            "reply",
+            serde_json::json!({
+                "type": 0,
+                "channel_id": "1",
+                "message_id": "999",
+            }),
+            Some(parent),
+        );
+
+        let (uid, _, _) = reply_context(&msg, &ledger);
+        assert_eq!(uid, Some(UserId::new(600)));
+        assert_ne!(uid, Some(UserId::new(500)));
     }
 
     // ── build_message_event tests ─────────────────────────────────────────────
@@ -1516,6 +2684,7 @@ mod tests {
     #[test]
     fn build_message_event_populates_reply_context_for_reply() {
         let config = LoadedConfig::from_raw(Config::default());
+        let ledger = crate::ingress_ledger::IngressLedger::new();
         let msg = wire_reply_message(
             "my reply",
             serde_json::json!({
@@ -1530,7 +2699,14 @@ mod tests {
             )),
         );
 
-        let event = build_message_event(&msg, &config, None, MessageTargeting::Ambient, None);
+        let event = build_message_event(
+            &msg,
+            &config,
+            &ledger,
+            None,
+            MessageTargeting::Ambient,
+            None,
+        );
         let NotificationEvent::Message(MessageEvent {
             reply_to_message_id,
             reply_to_user_id,
@@ -1553,6 +2729,78 @@ mod tests {
         );
         assert_eq!(content, "my reply");
         assert_eq!(user, "alice");
+    }
+
+    #[test]
+    fn represented_and_direct_messages_share_the_same_construct_envelope_shape() {
+        use crate::mcp::notifications::IntoNotification;
+
+        let config = LoadedConfig::from_raw(Config::default());
+        let direct_ledger = crate::ingress_ledger::IngressLedger::new();
+        let direct = message_from_wire(wire_message_body(200, wire_author(600, "alice"), "hello"));
+        let direct = build_message_event(
+            &direct,
+            &config,
+            &direct_ledger,
+            None,
+            MessageTargeting::Ambient,
+            None,
+        )
+        .into_notification();
+
+        let represented_ledger = crate::ingress_ledger::IngressLedger::new();
+        let mut represented_message = wire_message_body(201, wire_author(500, "alice"), "hello");
+        represented_message["guild_id"] = serde_json::json!("30");
+        represented_message["webhook_id"] = serde_json::json!("40");
+        let represented_message = message_from_wire(represented_message);
+        let facts = crate::discord::verified_action::test_lifecycle_facts(
+            represented_message.id,
+            represented_message.channel_id,
+            GuildId::new(30),
+            WebhookId::new(40),
+            LifecycleProvenance::Represented {
+                discord_user_id: UserId::new(600),
+                system_id: None,
+                member_id: None,
+            },
+        );
+        let crate::ingress_ledger::TransitionResult::Admitted(admission) = represented_ledger
+            .admit_verified_create(
+                facts,
+                represented_message.id,
+                represented_message.channel_id,
+                LifecycleContext::Guild(GuildId::new(30)),
+                WebhookId::new(40),
+                represented_message.author.id,
+                None,
+                &represented_message.content,
+                represented_message.timestamp,
+            )
+        else {
+            panic!("represented message must admit");
+        };
+        let represented = build_verified_message_event(
+            &admission,
+            &represented_message,
+            &config,
+            &represented_ledger,
+            None,
+            MessageTargeting::Ambient,
+            None,
+        )
+        .into_notification();
+
+        let direct_meta = direct["params"]["meta"].as_object().expect("direct meta");
+        let represented_meta = represented["params"]["meta"]
+            .as_object()
+            .expect("represented meta");
+        assert_eq!(
+            direct_meta.keys().collect::<Vec<_>>(),
+            represented_meta.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(direct_meta["user_id"], "600");
+        assert_eq!(represented_meta["user_id"], "600");
+        assert_ne!(represented_meta["user_id"], "500");
     }
 
     // ── display_name tests ───────────────────────────────────────────────────

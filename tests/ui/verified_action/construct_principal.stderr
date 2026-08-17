@@ -1,0 +1,11 @@
+error[E0451]: fields `discord_user_id`, `system_id` and `member_id` of struct `RepresentedPrincipal` are private
+  --> tests/ui/verified_action/construct_principal.rs:9:9
+   |
+ 8 |     let _ = RepresentedPrincipal {
+   |             -------------------- in this type
+ 9 |         discord_user_id: UserId::new(1),
+   |         ^^^^^^^^^^^^^^^ private field
+10 |         system_id: None,
+   |         ^^^^^^^^^ private field
+11 |         member_id: None,
+   |         ^^^^^^^^^ private field

@@ -127,6 +127,11 @@ admins = ["184695..."]        # receives permission prompts + access requests
 id = "846209..."
 require_mention = true
 allow_from = []               # empty = any member (subject to require_mention)
+allow_pk_systems = []         # PK system UUIDs (8-4-4-4-12 hex or 5-char short ID)
+allow_pk_members = []         # PK member UUIDs — OR semantics with allow_from
+# Identity filter: if ANY list is non-empty, only matching identities pass.
+# PK resolution failure on a filtered channel → fail closed (drop).
+# Unverified webhooks are always dropped regardless of filter state.
 
 [mentions]
 patterns = ["(?i)\\bdione\\b"]
