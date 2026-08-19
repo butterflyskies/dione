@@ -1041,6 +1041,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn durable_payload_preserves_optional_evidence_projection() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        let consumer = primary_consumer(&queue).await;
+        let mut payload = message("1", "claim [🔍=v1:AAAAAAAAAAw]");
+        payload["params"]["meta"]["evidence"] = json!([{
+            "locator": "v1:AAAAAAAAAAw",
+            "author_id": "300"
+        }]);
+
+        assert!(queue.enqueue(payload.clone()).await.unwrap());
+        let leased = queue
+            .next_event(&consumer, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .expect("leased event");
+        assert_eq!(leased.event, payload);
+    }
+
+    #[tokio::test]
     async fn lease_ack_removes_event_durably() {
         let dir = TempDir::new().unwrap();
         let path = temp_path(&dir);

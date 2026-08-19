@@ -6,6 +6,7 @@ use crate::{
         wait_duration,
     },
     config_store::{ConfigStore, DiscordId},
+    evidence::{EvidenceKeys, parse_tool_evidence_keys},
     mcp::{
         ids::Snowflake,
         server::DioneServer,
@@ -19,10 +20,10 @@ use crate::{
             },
             management::{create_thread, delete_message, pin_message, unpin_message},
             messaging::{
-                download_attachment, edit_message_with_hook_overrides, fetch_messages,
-                fetch_new_since, fetch_pins, get_message, react as discord_react, release_held,
-                rephrase_held, reply_with_hook_overrides, send_dm_with_hook_overrides,
-                send_file_with_hook_overrides,
+                ReplyToolOptions, download_attachment, edit_message_with_hook_overrides,
+                fetch_messages, fetch_new_since, fetch_pins, get_message, react as discord_react,
+                release_held, rephrase_held, reply_with_evidence_and_hook_overrides,
+                send_dm_with_evidence_and_hook_overrides, send_file_with_hook_overrides,
             },
             no_rly::{no_rly_condense, no_rly_stats, no_rly_vacuum},
             render::{render_latex, render_latex_to_channel_with_hook_overrides},
@@ -200,13 +201,21 @@ pub(crate) async fn call_tool(
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             let no_rly_hooks = parse_hook_overrides(&args)?;
-            reply_with_hook_overrides(
+            let evidence_keys = if config.delivery.evidence_markers_enabled {
+                parse_tool_evidence_keys(&args)?
+            } else {
+                EvidenceKeys::empty()
+            };
+            reply_with_evidence_and_hook_overrides(
                 &ctx,
                 channel_id,
                 content,
                 reply_to,
-                suppress_ping,
-                &no_rly_hooks,
+                ReplyToolOptions {
+                    suppress_ping,
+                    no_rly_hooks: &no_rly_hooks,
+                    evidence_keys: &evidence_keys,
+                },
             )
             .await
         }
@@ -326,7 +335,19 @@ pub(crate) async fn call_tool(
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing content".to_string())?;
             let no_rly_hooks = parse_hook_overrides(&args)?;
-            send_dm_with_hook_overrides(&ctx, user_id, content, &no_rly_hooks).await
+            let evidence_keys = if config.delivery.evidence_markers_enabled {
+                parse_tool_evidence_keys(&args)?
+            } else {
+                EvidenceKeys::empty()
+            };
+            send_dm_with_evidence_and_hook_overrides(
+                &ctx,
+                user_id,
+                content,
+                &no_rly_hooks,
+                &evidence_keys,
+            )
+            .await
         }
 
         // Introspection

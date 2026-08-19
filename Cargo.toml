@@ -3,7 +3,7 @@ members = [".", "crates/auspex-core"]
 
 [package]
 name = "dione"
-version = "0.33.2"
+version = "0.34.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
@@ -33,6 +33,7 @@ fs2 = "0.4"
 libc = "0.2"
 regex = "1"
 aho-corasick = "1"
+base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 chrono-tz = "0.10"
 camino = { version = "1", features = ["serde1"] }

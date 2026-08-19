@@ -22,6 +22,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   represented user as the ordinary participant and retain each message's visible
   sender name without leaking provider or verification state. (#321, #322, #328)
 
+## [0.34.0] - 2026-08-15
+
+### Added
+- **Receipt-shaped Vaelii evidence metadata for `reply` and `send_dm`.** Callers
+  may attach up to four canonical positive-decimal evidence keys. Dione turns
+  them into ordered, terminal `[🔍=v1:…]` locators after all pre-send rewrites,
+  carries the ordered locator set through hook and audit context, and returns
+  the published locators in the send receipt. Evidence-bearing sends fail
+  before Discord delivery if they would be split across messages.
+- **Author-bound evidence projection on every receive path.** Live Claude and
+  Codex notifications, durable Codex events, `fetch_messages`, `fetch_pins`,
+  `fetch_new_since`, and `get_message` expose parsed locators alongside the
+  Discord author ID without treating the linked material as verified truth.
+  Evidence-bearing events bypass delayed coalescing so their provenance cannot
+  be separated from the message that carries it. A bounded per-channel burst
+  budget preserves that immediate path without letting authorized senders turn
+  evidence suffixes into an unbounded coalescing bypass; overflow waits for the
+  normal deadline and then emits as individual FIFO notifications so compact
+  batch formatting cannot erase author-bound evidence.
+
+### Security
+- Evidence keys reject JSON numbers and non-canonical encodings, locators use
+  exact eight-byte big-endian payloads with bounded aggregate marker size, and
+  marker parsing excludes quoted, fenced, and arbitrary-backtick inline code.
+  Markdown fences are recognized only at their valid indentation boundary, so
+  indented backticks neither close a live fence nor open a cross-line inline
+  span that suppresses a later claim. Message edits
+  project current-content evidence with the editor identity, while
+  evidence-bearing sends and replacements fail closed rather than entering the
+  `no_rly` hold lifecycle. The first-contact DM branch and lifecycle boundaries
+  are covered by end-to-end regression tests.
+
 ## [0.33.2] - 2026-08-15
 
 ### Fixed

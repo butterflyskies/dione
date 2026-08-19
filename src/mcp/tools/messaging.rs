@@ -14,6 +14,10 @@ use crate::config::{ChunkMode, DmPolicy, LoadedConfig};
 use crate::contradictionary::{Action, BlockOutcome, DiaryRecord, append_diary_record};
 use crate::discord::chunk;
 use crate::discord::events::NotificationEvent;
+use crate::evidence::{
+    EvidenceKeys, EvidenceTransport, append_markers, locator_metadata, parse_evidence_locators,
+    project_evidence,
+};
 use crate::gate::OutboundGate;
 use crate::ingress_ledger::IngressLedger;
 use crate::no_rly::consent::{
@@ -29,6 +33,7 @@ use crate::state::State;
 
 /// Self-react emoji for contradictionary celebrate hits (✨ — sparkles).
 const CONTRADICTIONARY_CELEBRATE_REACT: &str = "\u{2728}";
+static NO_EVIDENCE: EvidenceKeys = EvidenceKeys::empty();
 
 /// Fire-and-forget phantom canary alert to the configured alert channel.
 pub(crate) fn phantom_canary_alert(
@@ -307,6 +312,7 @@ struct OutboundDraft<'a> {
     text: &'a str,
     reply_to: Option<MessageId>,
     pre_send: PreSendOptions<'a>,
+    evidence_keys: &'a EvidenceKeys,
 }
 
 impl<'a> OutboundDraft<'a> {
@@ -321,6 +327,7 @@ impl<'a> OutboundDraft<'a> {
             text,
             reply_to,
             pre_send,
+            evidence_keys: &NO_EVIDENCE,
         }
     }
 
@@ -330,7 +337,13 @@ impl<'a> OutboundDraft<'a> {
             text,
             reply_to: None,
             pre_send,
+            evidence_keys: &NO_EVIDENCE,
         }
+    }
+
+    fn with_evidence(mut self, evidence_keys: &'a EvidenceKeys) -> Self {
+        self.evidence_keys = evidence_keys;
+        self
     }
 }
 
@@ -365,6 +378,12 @@ async fn prepare_outbound(
     ctx: &MessagingCtx,
     draft: OutboundDraft<'_>,
 ) -> Result<PreparedOutbound, Value> {
+    let disabled_evidence = EvidenceKeys::empty();
+    let evidence_keys = if ctx.config.delivery.evidence_markers_enabled {
+        draft.evidence_keys
+    } else {
+        &disabled_evidence
+    };
     let prepared_pipeline = match ctx.pre_send_pipeline.clone() {
         Some(pipeline) => {
             let no_rly = pipeline
@@ -385,7 +404,7 @@ async fn prepare_outbound(
     let Some((pipeline, no_rly)) = prepared_pipeline else {
         return Ok(PreparedOutbound {
             destination: draft.destination,
-            text: draft.text.to_owned(),
+            text: append_markers(draft.text, evidence_keys),
             reply_to: draft.reply_to,
             surface: draft.pre_send.surface,
         });
@@ -408,7 +427,7 @@ async fn prepare_outbound(
             }
         }
     };
-    let hook_context = HookContext::new(
+    let mut hook_context = HookContext::new(
         draft.text,
         draft.destination,
         channel_type,
@@ -417,6 +436,14 @@ async fn prepare_outbound(
     .with_author_id(ctx.author_id)
     .with_reply_to(draft.reply_to)
     .with_metadata("outbound_surface", draft.pre_send.surface.as_str());
+    if !evidence_keys.is_empty() {
+        hook_context = hook_context
+            .with_metadata("evidence_locators", locator_metadata(evidence_keys))
+            .with_metadata(
+                "evidence_transport",
+                EvidenceTransport::TerminalVisibleSuffixV1AfterHooks.as_str(),
+            );
+    }
     let outcome =
         match tokio::task::spawn_blocking(move || pipeline.run(&hook_context, &no_rly)).await {
             Ok(Ok(outcome)) => outcome,
@@ -467,7 +494,7 @@ async fn prepare_outbound(
 
     Ok(PreparedOutbound {
         destination,
-        text: outcome.final_text().unwrap_or(draft.text).to_owned(),
+        text: append_markers(outcome.final_text().unwrap_or(draft.text), evidence_keys),
         reply_to,
         surface: draft.pre_send.surface,
     })
@@ -524,6 +551,33 @@ pub async fn reply_with_hook_overrides(
     suppress_ping: bool,
     no_rly_hooks: &[HookName],
 ) -> Value {
+    reply_with_evidence_and_hook_overrides(
+        ctx,
+        channel_id,
+        content,
+        reply_to_message_id,
+        ReplyToolOptions {
+            suppress_ping,
+            no_rly_hooks,
+            evidence_keys: &NO_EVIDENCE,
+        },
+    )
+    .await
+}
+
+pub(crate) struct ReplyToolOptions<'a> {
+    pub(crate) suppress_ping: bool,
+    pub(crate) no_rly_hooks: &'a [HookName],
+    pub(crate) evidence_keys: &'a EvidenceKeys,
+}
+
+pub(crate) async fn reply_with_evidence_and_hook_overrides(
+    ctx: &MessagingCtx,
+    channel_id: ChannelId,
+    content: &str,
+    reply_to_message_id: Option<MessageId>,
+    options: ReplyToolOptions<'_>,
+) -> Value {
     if let Some(ref_id) = reply_to_message_id {
         // Warn-only for reply: the reply_to is optional context, not the
         // primary action. The message still sends even if verification fails.
@@ -545,16 +599,32 @@ pub async fn reply_with_hook_overrides(
             reply_to_message_id,
             PreSendOptions {
                 surface: OutboundSurface::Reply,
-                bypasses: no_rly_hooks,
+                bypasses: options.no_rly_hooks,
             },
-        ),
+        )
+        .with_evidence(options.evidence_keys),
     )
     .await
     {
         Ok(prepared) => prepared,
         Err(error) => return error,
     };
-    deliver_prepared_reply(ctx, prepared, ReplyTransportOptions { suppress_ping }).await
+    if ctx.config.delivery.evidence_markers_enabled
+        && !options.evidence_keys.is_empty()
+        && parse_evidence_locators(&prepared.text).is_empty()
+    {
+        return json!({
+            "error": "evidence markers cannot be attached inside quoted or fenced content"
+        });
+    }
+    deliver_prepared_reply(
+        ctx,
+        prepared,
+        ReplyTransportOptions {
+            suppress_ping: options.suppress_ping,
+        },
+    )
+    .await
 }
 
 struct ReplyTransportOptions {
@@ -575,6 +645,9 @@ async fn deliver_prepared_reply(
     };
     let reply_to_message_id = prepared.reply_to;
     let content = prepared.text;
+    if let Err(error) = validate_evidence_chunking(&ctx.config, &content) {
+        return error;
+    }
 
     let request = ReplyRequest {
         channel_id,
@@ -587,6 +660,13 @@ async fn deliver_prepared_reply(
     if let Some(ref judge) = ctx.config.contradictionary
         && let Verdict::Bounce(reason) = judge.judge(&content)
     {
+        if ctx.config.delivery.evidence_markers_enabled
+            && !parse_evidence_locators(&content).is_empty()
+        {
+            return json!({
+                "error": "evidence-bearing messages cannot enter the no_rly hold lifecycle; revise and send a fresh evidence-bearing reply"
+            });
+        }
         let ticket = ctx
             .no_rly
             .bounce(
@@ -611,9 +691,44 @@ async fn deliver_prepared_reply(
     }
 
     match deliver_reply(ctx, &request).await {
-        Ok(sent_ids) => json!({ "ok": true, "message_ids": sent_ids }),
+        Ok(sent_ids) => {
+            let mut response = json!({ "ok": true, "message_ids": sent_ids });
+            let locators = parse_evidence_locators(&content);
+            if ctx.config.delivery.evidence_markers_enabled && !locators.is_empty() {
+                response["evidence_locators"] = json!(
+                    locators
+                        .iter()
+                        .map(crate::evidence::EvidenceLocator::as_str)
+                        .collect::<Vec<_>>()
+                );
+            }
+            response
+        }
         Err(e) => json!({ "error": e.message }),
     }
+}
+
+fn validate_evidence_chunking(config: &LoadedConfig, content: &str) -> Result<(), Value> {
+    if !config.delivery.evidence_markers_enabled {
+        return Ok(());
+    }
+    if parse_evidence_locators(content).is_empty() {
+        return Ok(());
+    }
+    let limit = config.delivery.text_chunk_limit;
+    let mode = config.delivery.chunk_mode;
+    let effective_mode = if limit == 0 {
+        ChunkMode::Paragraph
+    } else {
+        mode
+    };
+    let effective_limit = if limit == 0 { 2000 } else { limit };
+    if chunk(content, effective_limit, effective_mode).len() > 1 {
+        return Err(json!({
+            "error": "evidence-bearing messages must fit in one Discord message"
+        }));
+    }
+    Ok(())
 }
 
 /// The construct-facing shape of a bounce: the error names the reason, and
@@ -887,6 +1002,12 @@ pub async fn rephrase_held(ctx: &MessagingCtx, handle: &str, content: &str) -> V
     // "cannot send an empty message" error, stranding the handle.
     if content.trim().is_empty() {
         return json!({ "error": "rephrase content must not be empty" });
+    }
+    if ctx.config.delivery.evidence_markers_enabled && !parse_evidence_locators(content).is_empty()
+    {
+        return json!({
+            "error": "evidence-bearing replacements are not supported by rephrase; send a fresh evidence-bearing reply"
+        });
     }
     let handle = HoldHandle::new(handle);
     let ttl = ctx.config.no_rly_hold_ttl();
@@ -1168,7 +1289,7 @@ fn build_pins_response(config: &LoadedConfig, mut messages: Vec<Message>) -> Val
 /// Serializes one message into the wire shape shared by `fetch_messages`,
 /// `fetch_new_since`, and `search_messages`, so the tools cannot drift apart.
 pub(crate) fn message_json(config: &LoadedConfig, m: &Message) -> Value {
-    json!({
+    let mut message = json!({
         "id": m.id.get().to_string(),
         "author": m.author.name,
         "author_id": m.author.id.get().to_string(),
@@ -1179,7 +1300,11 @@ pub(crate) fn message_json(config: &LoadedConfig, m: &Message) -> Value {
             "url": a.url,
             "size": a.size,
         })).collect::<Vec<_>>(),
-    })
+    });
+    if config.delivery.evidence_markers_enabled {
+        project_evidence(&mut message, &m.content, m.author.id);
+    }
+    message
 }
 
 // ── fetch_new_since ───────────────────────────────────────────────────────────
@@ -1426,6 +1551,17 @@ pub async fn send_dm_with_hook_overrides(
     content: &str,
     no_rly_hooks: &[HookName],
 ) -> Value {
+    send_dm_with_evidence_and_hook_overrides(ctx, user_id, content, no_rly_hooks, &NO_EVIDENCE)
+        .await
+}
+
+pub(crate) async fn send_dm_with_evidence_and_hook_overrides(
+    ctx: &MessagingCtx,
+    user_id: UserId,
+    content: &str,
+    no_rly_hooks: &[HookName],
+    evidence_keys: &EvidenceKeys,
+) -> Value {
     if ctx.config.access.dm_policy == DmPolicy::Disabled {
         return json!({ "error": "dm_policy is set to disabled; cannot initiate DMs" });
     }
@@ -1439,13 +1575,26 @@ pub async fn send_dm_with_hook_overrides(
                 surface: OutboundSurface::SendDm,
                 bypasses: no_rly_hooks,
             },
-        ),
+        )
+        .with_evidence(evidence_keys),
     )
     .await
     {
         Ok(prepared) => prepared,
         Err(error) => return error,
     };
+
+    if ctx.config.delivery.evidence_markers_enabled
+        && !evidence_keys.is_empty()
+        && parse_evidence_locators(&prepared.text).is_empty()
+    {
+        return json!({
+            "error": "evidence markers cannot be attached inside quoted or fenced content"
+        });
+    }
+    if let Err(error) = validate_evidence_chunking(&ctx.config, &prepared.text) {
+        return error;
+    }
 
     if prepared.channel_id().is_some() {
         return deliver_prepared_reply(
@@ -1483,12 +1632,17 @@ pub async fn send_dm_with_hook_overrides(
         return result;
     }
 
-    let message_ids = result["message_ids"].clone();
-    json!({
-        "ok": true,
-        "channel_id": channel_id.get().to_string(),
-        "message_ids": message_ids,
-    })
+    add_dm_channel_receipt(result, channel_id)
+}
+
+fn add_dm_channel_receipt(mut result: Value, channel_id: ChannelId) -> Value {
+    if let Value::Object(fields) = &mut result {
+        fields.insert(
+            "channel_id".to_string(),
+            Value::String(channel_id.get().to_string()),
+        );
+    }
+    result
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -1564,23 +1718,19 @@ pub async fn get_message(
     }
 
     match ctx.http.get_message(channel_id, message_id).await {
-        Ok(m) => {
-            json!({
-                "id": m.id.get().to_string(),
-                "author": m.author.name,
-                "author_id": m.author.id.get().to_string(),
-                "content": m.content,
-                "timestamp": ctx.config.localize_rfc3339(&serenity_ts_to_rfc3339(&m.timestamp)),
-                "attachments": m.attachments.iter().map(|a| json!({
-                    "name": a.filename,
-                    "url": a.url,
-                    "size": a.size,
-                    "content_type": a.content_type,
-                })).collect::<Vec<_>>(),
-            })
-        }
+        Ok(m) => get_message_json(&ctx.config, &m),
         Err(e) => json!({ "error": e.to_string() }),
     }
+}
+
+fn get_message_json(config: &LoadedConfig, message: &Message) -> Value {
+    let mut projected = message_json(config, message);
+    if let Some(attachments) = projected["attachments"].as_array_mut() {
+        for (attachment, source) in attachments.iter_mut().zip(&message.attachments) {
+            attachment["content_type"] = json!(source.content_type);
+        }
+    }
+    projected
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1609,14 +1759,18 @@ mod tests {
     use super::*;
     use crate::{
         config::{ChannelConfig, Config},
+        contradictionary::{Action, Entry, MatchMode},
         no_rly::judge::{ReasonEntry, RejectReason},
         pre_send::{
-            Assessment, AuditTrail, ConstructFeedback, HookContext, HookDecision, HookOutput,
-            PipelineMode, PreSendHook, PreSendPipeline,
+            Assessment, AuditSink, AuditTrail, ConstructFeedback, FeedbackSink, HookContext,
+            HookDecision, HookOutput, PipelineMode, PreSendHook, PreSendPipeline, SinkError,
+            SinkFailurePolicy,
         },
         state::new_state,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[test]
     fn outbound_surface_strings_are_canonical() {
@@ -1639,6 +1793,12 @@ mod tests {
     }
 
     struct ContextCaptureHook(Arc<std::sync::Mutex<Option<HookContext>>>);
+
+    struct MetadataRewriteHook(Arc<std::sync::Mutex<Option<HookContext>>>);
+
+    struct ContextAuditSink(Arc<std::sync::Mutex<Option<HookContext>>>);
+
+    struct QuietFeedbackSink;
 
     struct CountingDecisionHook {
         decision: HookDecision,
@@ -1674,6 +1834,40 @@ mod tests {
                 ConstructFeedback::default(),
                 AuditTrail::default(),
             )
+        }
+    }
+
+    impl PreSendHook for MetadataRewriteHook {
+        fn name(&self) -> HookName {
+            HookName::parse("metadata-rewrite").unwrap()
+        }
+
+        fn execute(&self, context: &HookContext) -> HookOutput {
+            *self.0.lock().expect("context lock") = Some(context.clone());
+            HookOutput::new(
+                HookDecision::Rewrite {
+                    text: "rewritten".to_string(),
+                },
+                ConstructFeedback::default(),
+                AuditTrail::new(vec![Assessment::new("receipt", 1.0, "rewritten")]),
+            )
+        }
+    }
+
+    impl FeedbackSink for QuietFeedbackSink {
+        fn record(
+            &self,
+            _feedback: &ConstructFeedback,
+            _context: &HookContext,
+        ) -> Result<(), SinkError> {
+            Ok(())
+        }
+    }
+
+    impl AuditSink for ContextAuditSink {
+        fn record(&self, _trail: &AuditTrail, context: &HookContext) -> Result<(), SinkError> {
+            *self.0.lock().expect("audit context lock") = Some(context.clone());
+            Ok(())
         }
     }
 
@@ -1764,7 +1958,26 @@ mod tests {
     }
 
     fn test_config() -> LoadedConfig {
-        LoadedConfig::from_raw(Config::default())
+        let mut raw = Config::default();
+        raw.delivery.evidence_markers_enabled = true;
+        LoadedConfig::from_raw(raw)
+    }
+
+    fn blocking_test_config() -> LoadedConfig {
+        let mut raw = Config::default();
+        raw.delivery.evidence_markers_enabled = true;
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        raw.contradictionary.enabled = true;
+        raw.contradictionary.entries.push(Entry {
+            pattern: "straightforward".into(),
+            action: Action::Block,
+            match_mode: MatchMode::Word,
+            reason: Some("nothing is ever straightforward".into()),
+        });
+        LoadedConfig::from_raw(raw)
     }
 
     fn messaging_ctx(config: LoadedConfig) -> MessagingCtx {
@@ -1776,6 +1989,119 @@ mod tests {
             Arc::new(ConsentGate::new(camino::Utf8Path::new("/tmp"))),
             Arc::new(crate::ingress_ledger::IngressLedger::new()),
         )
+    }
+
+    async fn fake_discord_http() -> (
+        Arc<serenity::http::Http>,
+        Arc<std::sync::Mutex<Vec<(String, String)>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake Discord API");
+        let address = listener.local_addr().expect("fake Discord API address");
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = Arc::clone(&requests);
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 4096];
+                loop {
+                    let Ok(read) = stream.read(&mut buffer).await else {
+                        return;
+                    };
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    let Some(header_end) =
+                        request.windows(4).position(|window| window == b"\r\n\r\n")
+                    else {
+                        continue;
+                    };
+                    let headers = String::from_utf8_lossy(&request[..header_end]);
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|value| value.trim().parse::<usize>().ok())
+                        })
+                        .unwrap_or_default();
+                    if request.len() >= header_end + 4 + content_length {
+                        break;
+                    }
+                }
+
+                let request_text = String::from_utf8_lossy(&request);
+                let request_line = request_text.lines().next().unwrap_or_default();
+                let path = request_line.split_whitespace().nth(1).unwrap_or_default();
+                let body = request_text
+                    .split_once("\r\n\r\n")
+                    .map_or("", |(_, body)| body);
+                captured
+                    .lock()
+                    .expect("request capture lock")
+                    .push((path.to_owned(), body.to_owned()));
+
+                let (status, response_body) = if path.ends_with("/users/@me/channels") {
+                    (
+                        "200 OK",
+                        json!({
+                            "id": "4242",
+                            "last_message_id": null,
+                            "last_pin_timestamp": null,
+                            "type": 1,
+                            "recipients": [{
+                                "id": "77",
+                                "username": "recipient",
+                                "global_name": null,
+                                "avatar": null,
+                                "discriminator": "0",
+                                "public_flags": 0,
+                                "bot": false
+                            }]
+                        })
+                        .to_string(),
+                    )
+                } else if path.ends_with("/typing") {
+                    ("204 No Content", String::new())
+                } else if path.ends_with("/messages") {
+                    let content = serde_json::from_str::<Value>(body)
+                        .ok()
+                        .and_then(|body| body["content"].as_str().map(str::to_owned))
+                        .unwrap_or_default();
+                    (
+                        "200 OK",
+                        wire_message(
+                            9001,
+                            &content,
+                            "2026-08-15T09:00:00.000000+00:00",
+                            json!([]),
+                        )
+                        .to_string(),
+                    )
+                } else {
+                    ("404 Not Found", "{}".to_owned())
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+                    response_body.len()
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write fake Discord response");
+            }
+        });
+        let http = serenity::http::HttpBuilder::new("fake")
+            .proxy(format!("http://{address}"))
+            .ratelimiter_disabled(true)
+            .build();
+        (Arc::new(http), requests, server)
     }
 
     fn messaging_ctx_with_halt_pipeline(
@@ -1790,6 +2116,263 @@ mod tests {
         let ctx = messaging_ctx(config);
         let ctx = ctx.with_pre_send_pipeline(Arc::new(pipeline));
         (ctx, surfaces)
+    }
+
+    #[tokio::test]
+    async fn ordered_evidence_metadata_and_transport_reach_hooks_and_final_audit_context() {
+        let hook_context = Arc::new(std::sync::Mutex::new(None));
+        let audit_context = Arc::new(std::sync::Mutex::new(None));
+        let pipeline = PreSendPipeline::new(vec![Box::new(MetadataRewriteHook(Arc::clone(
+            &hook_context,
+        )))])
+        .unwrap()
+        .with_mode(PipelineMode::Enforce)
+        .with_sinks(
+            Box::new(QuietFeedbackSink),
+            Box::new(ContextAuditSink(Arc::clone(&audit_context))),
+            SinkFailurePolicy::FailClosed,
+        );
+        let mut raw = Config::default();
+        raw.delivery.evidence_markers_enabled = true;
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        let ctx =
+            messaging_ctx(LoadedConfig::from_raw(raw)).with_pre_send_pipeline(Arc::new(pipeline));
+        let keys =
+            crate::evidence::parse_tool_evidence_keys(&json!({ "evidence_keys": ["34", "12"] }))
+                .unwrap();
+
+        let prepared = prepare_outbound(
+            &ctx,
+            OutboundDraft::channel(
+                ChannelId::new(42),
+                "original",
+                None,
+                PreSendOptions {
+                    surface: OutboundSurface::Reply,
+                    bypasses: &[],
+                },
+            )
+            .with_evidence(&keys),
+        )
+        .await
+        .unwrap();
+
+        let hook_context = hook_context.lock().unwrap().clone().unwrap();
+        assert_eq!(hook_context.text(), "original");
+        assert_eq!(
+            hook_context.metadata("evidence_locators"),
+            Some("v1:AAAAAAAAACI,v1:AAAAAAAAAAw")
+        );
+        assert_eq!(
+            hook_context.metadata("evidence_transport"),
+            Some("terminal-visible-suffix-v1-after-hooks")
+        );
+
+        let audit_context = audit_context.lock().unwrap().clone().unwrap();
+        assert_eq!(audit_context.text(), "rewritten");
+        assert_eq!(
+            audit_context.metadata("evidence_locators"),
+            Some("v1:AAAAAAAAACI,v1:AAAAAAAAAAw")
+        );
+        assert_eq!(
+            audit_context.metadata("evidence_transport"),
+            Some(EvidenceTransport::TerminalVisibleSuffixV1AfterHooks.as_str())
+        );
+        assert_eq!(
+            prepared.text,
+            "rewritten [🔍=v1:AAAAAAAAACI] [🔍=v1:AAAAAAAAAAw]"
+        );
+    }
+
+    #[tokio::test]
+    async fn evidence_bearing_multi_chunk_reply_fails_before_discord_delivery() {
+        let mut raw = Config::default();
+        raw.delivery.evidence_markers_enabled = true;
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        raw.delivery.text_chunk_limit = 8;
+        let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
+        let keys = crate::evidence::parse_tool_evidence_keys(&json!({ "evidence_keys": ["12"] }))
+            .expect("valid bridge key");
+
+        let response = reply_with_evidence_and_hook_overrides(
+            &ctx,
+            ChannelId::new(42),
+            "long enough to split",
+            None,
+            ReplyToolOptions {
+                suppress_ping: false,
+                no_rly_hooks: &[],
+                evidence_keys: &keys,
+            },
+        )
+        .await;
+
+        assert_eq!(
+            response["error"],
+            "evidence-bearing messages must fit in one Discord message"
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_outbound_evidence_is_a_text_no_op() {
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
+        let keys =
+            crate::evidence::parse_tool_evidence_keys(&json!({ "evidence_keys": ["12"] })).unwrap();
+
+        let prepared = prepare_outbound(
+            &ctx,
+            OutboundDraft::channel(
+                ChannelId::new(42),
+                "byte exact",
+                None,
+                PreSendOptions {
+                    surface: OutboundSurface::Reply,
+                    bypasses: &[],
+                },
+            )
+            .with_evidence(&keys),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(prepared.text, "byte exact");
+    }
+
+    #[tokio::test]
+    async fn evidence_bearing_reply_cannot_enter_held_lifecycle() {
+        let ctx = messaging_ctx(blocking_test_config());
+        let keys = crate::evidence::parse_tool_evidence_keys(&json!({
+            "evidence_keys": ["12"]
+        }))
+        .expect("valid bridge key");
+
+        let response = reply_with_evidence_and_hook_overrides(
+            &ctx,
+            ChannelId::new(42),
+            "straightforward",
+            None,
+            ReplyToolOptions {
+                suppress_ping: false,
+                no_rly_hooks: &[],
+                evidence_keys: &keys,
+            },
+        )
+        .await;
+
+        assert_eq!(
+            response["error"],
+            "evidence-bearing messages cannot enter the no_rly hold lifecycle; revise and send a fresh evidence-bearing reply"
+        );
+        assert_eq!(ctx.no_rly.pending().await, 0);
+    }
+
+    #[tokio::test]
+    async fn evidence_bearing_rephrase_is_refused_without_consuming_handle() {
+        let ctx = messaging_ctx(blocking_test_config());
+        let bounce = reply(&ctx, ChannelId::new(42), "straightforward", None, false).await;
+        let handle = bounce["held"]["handle"]
+            .as_str()
+            .expect("ordinary blocked reply should return a handle");
+        assert_eq!(ctx.no_rly.pending().await, 1);
+
+        let response = rephrase_held(&ctx, handle, "grounded [🔍=v1:AAAAAAAAAAw]").await;
+
+        assert_eq!(
+            response["error"],
+            "evidence-bearing replacements are not supported by rephrase; send a fresh evidence-bearing reply"
+        );
+        assert_eq!(ctx.no_rly.pending().await, 1);
+    }
+
+    #[tokio::test]
+    async fn first_contact_dm_branch_preserves_ordered_evidence_receipt() {
+        let (http, requests, server) = fake_discord_http().await;
+        let ctx = MessagingCtx::new(
+            http,
+            new_state(),
+            Arc::new(test_config()),
+            "/tmp".into(),
+            Arc::new(ConsentGate::new(camino::Utf8Path::new("/tmp"))),
+            Arc::new(crate::ingress_ledger::IngressLedger::new()),
+        );
+        let keys =
+            crate::evidence::parse_tool_evidence_keys(&json!({ "evidence_keys": ["34", "12"] }))
+                .expect("valid bridge keys");
+
+        let result =
+            send_dm_with_evidence_and_hook_overrides(&ctx, UserId::new(77), "grounded", &[], &keys)
+                .await;
+        server.abort();
+
+        assert_eq!(
+            result,
+            json!({
+                "ok": true,
+                "channel_id": "4242",
+                "message_ids": [9001],
+                "evidence_locators": ["v1:AAAAAAAAACI", "v1:AAAAAAAAAAw"],
+            })
+        );
+        let requests = requests.lock().expect("request capture lock");
+        assert!(
+            requests
+                .iter()
+                .any(|(path, _)| path.ends_with("/users/@me/channels")),
+            "the first-contact branch must create the DM channel"
+        );
+        let sent_body = requests
+            .iter()
+            .find(|(path, _)| path.ends_with("/messages"))
+            .map(|(_, body)| body)
+            .expect("the first-contact branch must send the prepared message");
+        assert_eq!(
+            serde_json::from_str::<Value>(sent_body).unwrap()["content"],
+            "grounded [🔍=v1:AAAAAAAAACI] [🔍=v1:AAAAAAAAAAw]"
+        );
+    }
+
+    #[test]
+    fn get_message_and_fetch_share_evidence_projection() {
+        let content = "grounded [🔍=v1:AAAAAAAAAAw]";
+        let messages = from_wire(json!([wire_message(
+            3001,
+            content,
+            "2026-06-09T12:00:00.000000+00:00",
+            json!([])
+        )]));
+
+        let fetched = message_json(&test_config(), &messages[0]);
+        let single = get_message_json(&test_config(), &messages[0]);
+        assert_eq!(single["content"], fetched["content"]);
+        assert_eq!(single["evidence"], fetched["evidence"]);
+        assert_eq!(single["author_id"], fetched["author_id"]);
+    }
+
+    #[test]
+    fn message_projection_is_absent_when_evidence_markers_are_disabled() {
+        let content = "grounded [🔍=v1:AAAAAAAAAAw]";
+        let messages = from_wire(json!([wire_message(
+            3001,
+            content,
+            "2026-06-09T12:00:00.000000+00:00",
+            json!([])
+        )]));
+        let disabled = LoadedConfig::from_raw(Config::default());
+
+        let projected = message_json(&disabled, &messages[0]);
+        assert_eq!(projected["content"], content);
+        assert!(projected.get("evidence").is_none());
     }
 
     // ── Contradictionary self-react notifications ─────────────────────────

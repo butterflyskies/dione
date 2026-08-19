@@ -777,6 +777,10 @@ pub struct DeliveryConfig {
     /// Global default coalescing delay for channel events (milliseconds).
     /// Per-channel `delivery_delay_ms` overrides this. Default: 0 (no buffering).
     pub delivery_delay_ms: u64,
+    /// Enable Vaelii evidence markers on inbound and outbound messages.
+    ///
+    /// Default-off while the tracer bullet is being validated in production.
+    pub evidence_markers_enabled: bool,
     /// When to prepend the preamble to delivered events.
     ///
     /// - `always` (default): every event gets the preamble.
@@ -799,6 +803,7 @@ impl Default for DeliveryConfig {
             text_chunk_limit: 2000,
             chunk_mode: ChunkMode::Paragraph,
             delivery_delay_ms: 0,
+            evidence_markers_enabled: false,
             preamble_mode: PreambleMode::Always,
             preamble_template: PreambleTemplate::default(),
         }
@@ -2058,6 +2063,20 @@ delivery_delay_ms = 300
             850,
             "unconfigured channel inherits global"
         );
+    }
+
+    #[test]
+    fn evidence_markers_default_off_and_parse_explicit_opt_in() {
+        assert!(!DeliveryConfig::default().evidence_markers_enabled);
+
+        let parsed: Config = toml::from_str(
+            r#"
+[delivery]
+evidence_markers_enabled = true
+"#,
+        )
+        .unwrap();
+        assert!(parsed.delivery.evidence_markers_enabled);
     }
 
     // ── PK config fail-closed tests ────────────────────────────────────────

@@ -9,12 +9,19 @@ use crate::discord::events::NotificationEvent;
 use std::collections::{BTreeMap, VecDeque};
 use tokio::time::Instant;
 
+const EVIDENCE_IMMEDIATE_BURST: u8 = 4;
+const EVIDENCE_IMMEDIATE_WINDOW: tokio::time::Duration = tokio::time::Duration::from_secs(1);
+
 /// Per-channel coalescing buffer.
 #[derive(Default)]
 pub struct DeliveryBuffer {
     /// Buffered events per channel ID, with the flush deadline.
     /// BTreeMap gives deterministic cross-channel ordering in flush_all/flush_ready.
     channels: BTreeMap<u64, ChannelBuffer>,
+    /// Per-channel cap on evidence-triggered immediate flushes. This prevents
+    /// a syntactically valid opaque marker from becoming an unbounded batching
+    /// bypass while preserving a small low-latency burst for real evidence.
+    evidence_immediate: BTreeMap<u64, EvidenceImmediateBudget>,
 }
 
 struct ChannelBuffer {
@@ -22,10 +29,21 @@ struct ChannelBuffer {
     flush_at: Instant,
 }
 
+struct EvidenceImmediateBudget {
+    window_started: Instant,
+    used: u8,
+}
+
 /// Result of offering an event to the buffer.
+#[must_use]
 pub enum BufferResult {
     /// Event should be forwarded immediately (not buffered).
     Immediate(Box<NotificationEvent>),
+    /// Older same-channel events must be delivered before this immediate event.
+    FlushThenImmediate {
+        preceding: Vec<NotificationEvent>,
+        event: Box<NotificationEvent>,
+    },
     /// Event was buffered; will be flushed at the channel's deadline.
     Buffered,
 }
@@ -38,9 +56,34 @@ impl DeliveryBuffer {
     /// Offer an event to the buffer. Returns `Immediate` for events that
     /// should not be buffered (non-channel events, or channels with delay=0).
     pub fn buffer_event(&mut self, event: NotificationEvent, delay_ms: u64) -> BufferResult {
-        // No delay → immediate passthrough regardless of event type.
+        self.buffer_event_with_evidence(event, delay_ms, true)
+    }
+
+    /// Offer an event with evidence-marker handling controlled explicitly.
+    pub fn buffer_event_with_evidence(
+        &mut self,
+        event: NotificationEvent,
+        delay_ms: u64,
+        evidence_markers_enabled: bool,
+    ) -> BufferResult {
+        // Legacy compact batch formats have no structured evidence field.
+        // Evidence-bearing messages remain individual notifications so their
+        // parsed locators and Discord-derived author attribution survive.
+        // Ordinary channel events also become immediate when a live config
+        // change removes their delay. In both cases, drain older same-channel
+        // events first so the immediate path cannot overtake them.
         if delay_ms == 0 {
-            return BufferResult::Immediate(Box::new(event));
+            return self.immediate_in_channel_order(event);
+        }
+
+        if evidence_markers_enabled && event.has_offered_evidence() {
+            let channel_id = extract_channel_id(&event);
+            if self.claim_evidence_immediate(channel_id, Instant::now()) {
+                return self.immediate_in_channel_order(event);
+            }
+            // Budget overflow deliberately falls through to the ordinary
+            // delayed buffer. A later admitted evidence event may flush it,
+            // but can never overtake it.
         }
 
         // Non-channel events (Trace, PermissionResponse, ConfigError) always
@@ -68,6 +111,68 @@ impl DeliveryBuffer {
 
         buf.events.push_back(event);
         BufferResult::Buffered
+    }
+
+    fn claim_evidence_immediate(&mut self, channel_id: u64, now: Instant) -> bool {
+        self.evidence_immediate.retain(|_, budget| {
+            now.saturating_duration_since(budget.window_started) < EVIDENCE_IMMEDIATE_WINDOW
+        });
+        let budget = self
+            .evidence_immediate
+            .entry(channel_id)
+            .or_insert(EvidenceImmediateBudget {
+                window_started: now,
+                used: 0,
+            });
+        if budget.used >= EVIDENCE_IMMEDIATE_BURST {
+            return false;
+        }
+        budget.used += 1;
+        true
+    }
+
+    fn immediate_in_channel_order(&mut self, event: NotificationEvent) -> BufferResult {
+        if !is_channel_event(&event) {
+            return BufferResult::Immediate(Box::new(event));
+        }
+
+        let channel_id = extract_channel_id(&event);
+        let preceding = self
+            .channels
+            .remove(&channel_id)
+            .map_or_else(Vec::new, |buffer| buffer.events.into_iter().collect());
+        if preceding.is_empty() {
+            BufferResult::Immediate(Box::new(event))
+        } else {
+            BufferResult::FlushThenImmediate {
+                preceding,
+                event: Box::new(event),
+            }
+        }
+    }
+
+    /// Re-insert events that could not be delivered. Events are prepended
+    /// to their channel's buffer in original order so `flush_all` will
+    /// include them. The flush deadline is set to `now` (already past due)
+    /// so the next `flush_ready` picks them up immediately.
+    ///
+    /// This bypasses `buffer_event`'s delay/immediate policy — requeued
+    /// events are stored unconditionally and never returned as `Immediate`.
+    pub fn requeue(&mut self, events: Vec<NotificationEvent>) {
+        for event in events.into_iter().rev() {
+            if !is_channel_event(&event) {
+                continue;
+            }
+            let channel_id = extract_channel_id(&event);
+            let buf = self
+                .channels
+                .entry(channel_id)
+                .or_insert_with(|| ChannelBuffer {
+                    events: VecDeque::new(),
+                    flush_at: Instant::now(),
+                });
+            buf.events.push_front(event);
+        }
     }
 
     /// Returns the earliest flush deadline across all non-empty channel
@@ -185,6 +290,15 @@ mod tests {
         }
     }
 
+    fn evidence_event(chat_id: u64, label: &str) -> NotificationEvent {
+        let mut event = msg_event(chat_id);
+        let NotificationEvent::Message(message) = &mut event else {
+            panic!("message fixture");
+        };
+        message.content = format!("{label} [🔍=v1:AAAAAAAAAAw]");
+        event
+    }
+
     fn trace_event() -> NotificationEvent {
         NotificationEvent::Trace {
             level: "info".to_string(),
@@ -192,6 +306,288 @@ mod tests {
             message: "trace msg".to_string(),
             fields: vec![],
         }
+    }
+
+    #[test]
+    fn evidence_bearing_message_bypasses_delayed_coalescing() {
+        let mut event = msg_event(42);
+        let NotificationEvent::Message(message) = &mut event else {
+            panic!("message fixture");
+        };
+        message.content = "claim [🔍=v1:AAAAAAAAAAw]".to_string();
+        let mut buffer = DeliveryBuffer::new();
+
+        assert!(matches!(
+            buffer.buffer_event(event, 500),
+            BufferResult::Immediate(_)
+        ));
+        assert!(buffer.flush_all().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn evidence_immediate_budget_buffers_overflow_in_fifo_order() {
+        let mut buffer = DeliveryBuffer::new();
+        for index in 0..EVIDENCE_IMMEDIATE_BURST {
+            assert!(matches!(
+                buffer.buffer_event(evidence_event(42, &format!("burst-{index}")), 500),
+                BufferResult::Immediate(_)
+            ));
+        }
+
+        assert!(matches!(
+            buffer.buffer_event(evidence_event(42, "overflow-1"), 500),
+            BufferResult::Buffered
+        ));
+        assert!(matches!(
+            buffer.buffer_event(evidence_event(42, "overflow-2"), 500),
+            BufferResult::Buffered
+        ));
+
+        let flushed = buffer.flush_all();
+        let contents: Vec<&str> = flushed
+            .iter()
+            .map(|event| match event {
+                NotificationEvent::Message(message) => message.content.as_str(),
+                _ => panic!("message fixture"),
+            })
+            .collect();
+        assert_eq!(
+            contents,
+            [
+                "overflow-1 [🔍=v1:AAAAAAAAAAw]",
+                "overflow-2 [🔍=v1:AAAAAAAAAAw]",
+            ]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn evidence_immediate_budget_recovers_and_flushes_buffered_predecessor() {
+        let mut buffer = DeliveryBuffer::new();
+        for index in 0..EVIDENCE_IMMEDIATE_BURST {
+            assert!(matches!(
+                buffer.buffer_event(evidence_event(42, &format!("burst-{index}")), 500),
+                BufferResult::Immediate(_)
+            ));
+        }
+        assert!(matches!(
+            buffer.buffer_event(evidence_event(42, "overflow"), 500),
+            BufferResult::Buffered
+        ));
+
+        tokio::time::advance(EVIDENCE_IMMEDIATE_WINDOW).await;
+        let BufferResult::FlushThenImmediate { preceding, event } =
+            buffer.buffer_event(evidence_event(42, "recovered"), 500)
+        else {
+            panic!("recovered budget must preserve FIFO before immediate delivery");
+        };
+        assert_eq!(preceding.len(), 1);
+        let NotificationEvent::Message(preceding) = &preceding[0] else {
+            panic!("message fixture");
+        };
+        assert!(preceding.content.starts_with("overflow "));
+        let NotificationEvent::Message(current) = *event else {
+            panic!("message fixture");
+        };
+        assert!(current.content.starts_with("recovered "));
+    }
+
+    #[test]
+    fn evidence_message_flushes_older_same_channel_events_first() {
+        let mut buffer = DeliveryBuffer::new();
+        let mut older = msg_event(42);
+        let NotificationEvent::Message(message) = &mut older else {
+            panic!("message fixture");
+        };
+        message.content = "older".to_string();
+        assert!(matches!(
+            buffer.buffer_event(older, 500),
+            BufferResult::Buffered
+        ));
+
+        let mut evidence = msg_event(42);
+        let NotificationEvent::Message(message) = &mut evidence else {
+            panic!("message fixture");
+        };
+        message.content = "claim [🔍=v1:AAAAAAAAAAw]".to_string();
+        let BufferResult::FlushThenImmediate { preceding, event } =
+            buffer.buffer_event(evidence, 500)
+        else {
+            panic!("evidence event must flush its predecessors");
+        };
+
+        assert_eq!(preceding.len(), 1);
+        let NotificationEvent::Message(older) = &preceding[0] else {
+            panic!("older message");
+        };
+        assert_eq!(older.content, "older");
+        assert!(event.has_offered_evidence());
+        assert!(buffer.flush_all().is_empty());
+    }
+
+    #[test]
+    fn disabled_evidence_marker_uses_ordinary_buffering() {
+        let mut buffer = DeliveryBuffer::new();
+        let mut event = msg_event(42);
+        let NotificationEvent::Message(message) = &mut event else {
+            panic!("message fixture");
+        };
+        message.content = "claim [🔍=v1:AAAAAAAAAAw]".to_string();
+
+        assert!(matches!(
+            buffer.buffer_event_with_evidence(event, 500, false),
+            BufferResult::Buffered
+        ));
+    }
+
+    #[test]
+    fn evidence_message_flushes_predecessors_after_delay_changes_to_zero() {
+        let mut buffer = DeliveryBuffer::new();
+        assert!(matches!(
+            buffer.buffer_event(msg_event(42), 500),
+            BufferResult::Buffered
+        ));
+        let mut evidence = msg_event(42);
+        let NotificationEvent::Message(message) = &mut evidence else {
+            panic!("message fixture");
+        };
+        message.content = "claim [🔍=v1:AAAAAAAAAAw]".to_string();
+
+        let BufferResult::FlushThenImmediate { preceding, .. } = buffer.buffer_event(evidence, 0)
+        else {
+            panic!("configuration change must not reorder the channel");
+        };
+        assert_eq!(preceding.len(), 1);
+    }
+
+    #[test]
+    fn ordinary_message_flushes_predecessors_after_delay_changes_to_zero() {
+        let mut buffer = DeliveryBuffer::new();
+        let mut older = msg_event(42);
+        let NotificationEvent::Message(message) = &mut older else {
+            panic!("message fixture");
+        };
+        message.content = "older".to_string();
+        assert!(matches!(
+            buffer.buffer_event(older, 500),
+            BufferResult::Buffered
+        ));
+
+        let mut current = msg_event(42);
+        let NotificationEvent::Message(message) = &mut current else {
+            panic!("message fixture");
+        };
+        message.content = "current".to_string();
+        let BufferResult::FlushThenImmediate { preceding, event } = buffer.buffer_event(current, 0)
+        else {
+            panic!("configuration change must preserve ordinary message FIFO");
+        };
+
+        assert_eq!(preceding.len(), 1);
+        let NotificationEvent::Message(older) = &preceding[0] else {
+            panic!("older message");
+        };
+        let NotificationEvent::Message(current) = *event else {
+            panic!("current message");
+        };
+        assert_eq!(older.content, "older");
+        assert_eq!(current.content, "current");
+        assert!(buffer.flush_all().is_empty());
+    }
+
+    #[test]
+    fn ordinary_edit_flushes_predecessors_after_delay_changes_to_zero() {
+        let mut buffer = DeliveryBuffer::new();
+        assert!(matches!(
+            buffer.buffer_event(msg_event(42), 500),
+            BufferResult::Buffered
+        ));
+        let edit = NotificationEvent::MessageEdit {
+            chat_id: ChannelId::new(42),
+            message_id: MessageId::new(1),
+            user: "alice".to_string(),
+            user_id: UserId::new(100),
+            new_content: "edited".to_string(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            thread_parent_id: None,
+            reply_to_message_id: None,
+        };
+
+        let BufferResult::FlushThenImmediate { preceding, event } = buffer.buffer_event(edit, 0)
+        else {
+            panic!("configuration change must preserve ordinary edit FIFO");
+        };
+
+        assert_eq!(preceding.len(), 1);
+        assert!(matches!(preceding[0], NotificationEvent::Message(_)));
+        assert!(matches!(*event, NotificationEvent::MessageEdit { .. }));
+        assert!(buffer.flush_all().is_empty());
+    }
+
+    #[test]
+    fn malformed_marker_remains_eligible_for_coalescing() {
+        let mut event = msg_event(42);
+        let NotificationEvent::Message(message) = &mut event else {
+            panic!("message fixture");
+        };
+        message.content = "claim [🔍=v1:short]".to_string();
+        let mut buffer = DeliveryBuffer::new();
+
+        assert!(matches!(
+            buffer.buffer_event(event, 500),
+            BufferResult::Buffered
+        ));
+    }
+
+    #[test]
+    fn edit_coalescing_tracks_only_the_marker_in_current_content() {
+        let edit = |new_content: &str| NotificationEvent::MessageEdit {
+            chat_id: ChannelId::new(42),
+            message_id: MessageId::new(1),
+            user: "alice".to_string(),
+            user_id: UserId::new(100),
+            new_content: new_content.to_string(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            thread_parent_id: None,
+            reply_to_message_id: None,
+        };
+        let mut buffer = DeliveryBuffer::new();
+
+        assert!(matches!(
+            buffer.buffer_event(edit("edited [🔍=v1:AAAAAAAAAAw]"), 500),
+            BufferResult::Immediate(_)
+        ));
+        assert!(matches!(
+            buffer.buffer_event(edit("edited"), 500),
+            BufferResult::Buffered
+        ));
+    }
+
+    #[test]
+    fn evidence_edit_flushes_older_same_channel_events_first() {
+        let mut buffer = DeliveryBuffer::new();
+        assert!(matches!(
+            buffer.buffer_event(msg_event(42), 500),
+            BufferResult::Buffered
+        ));
+        let evidence_edit = NotificationEvent::MessageEdit {
+            chat_id: ChannelId::new(42),
+            message_id: MessageId::new(1),
+            user: "alice".to_string(),
+            user_id: UserId::new(100),
+            new_content: "edited [🔍=v1:AAAAAAAAAAw]".to_string(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            thread_parent_id: None,
+            reply_to_message_id: None,
+        };
+
+        let BufferResult::FlushThenImmediate { preceding, event } =
+            buffer.buffer_event(evidence_edit, 500)
+        else {
+            panic!("evidence edit must flush its predecessors");
+        };
+        assert_eq!(preceding.len(), 1);
+        assert!(matches!(preceding[0], NotificationEvent::Message(_)));
+        assert!(matches!(*event, NotificationEvent::MessageEdit { .. }));
     }
 
     #[test]
@@ -244,8 +640,14 @@ mod tests {
         let mut buf = DeliveryBuffer::new();
 
         // Buffer two messages for the same channel.
-        buf.buffer_event(msg_event(1), 100);
-        buf.buffer_event(msg_event(1), 100);
+        assert!(matches!(
+            buf.buffer_event(msg_event(1), 100),
+            BufferResult::Buffered
+        ));
+        assert!(matches!(
+            buf.buffer_event(msg_event(1), 100),
+            BufferResult::Buffered
+        ));
 
         // Before deadline: nothing flushed.
         let now = Instant::now();
@@ -264,7 +666,10 @@ mod tests {
         let mut buf = DeliveryBuffer::new();
 
         // Channel 1 has a short delay.
-        buf.buffer_event(msg_event(1), 50);
+        assert!(matches!(
+            buf.buffer_event(msg_event(1), 50),
+            BufferResult::Buffered
+        ));
         // Channel 2 has a longer delay.
         let ch2_event = NotificationEvent::Message(MessageEvent {
             chat_id: ChannelId::new(2),
@@ -284,7 +689,10 @@ mod tests {
             bells: None,
             bells_status: None,
         });
-        buf.buffer_event(ch2_event, 500);
+        assert!(matches!(
+            buf.buffer_event(ch2_event, 500),
+            BufferResult::Buffered
+        ));
 
         // After 100ms: ch1 should flush, ch2 should not.
         let now = Instant::now() + tokio::time::Duration::from_millis(100);
@@ -305,13 +713,19 @@ mod tests {
         let mut buf = DeliveryBuffer::new();
 
         // Buffer and flush.
-        buf.buffer_event(msg_event(1), 50);
+        assert!(matches!(
+            buf.buffer_event(msg_event(1), 50),
+            BufferResult::Buffered
+        ));
         let later = Instant::now() + tokio::time::Duration::from_millis(100);
         let flushed = buf.flush_ready(later);
         assert_eq!(flushed.len(), 1);
 
         // Buffer again — new deadline should be set.
-        buf.buffer_event(msg_event(1), 50);
+        assert!(matches!(
+            buf.buffer_event(msg_event(1), 50),
+            BufferResult::Buffered
+        ));
         assert!(buf.next_flush_deadline().is_some());
     }
 }
@@ -405,6 +819,10 @@ mod proptests {
                         let event = events[event_idx % pool_size].clone();
                         match buf.buffer_event(event, *delay_ms) {
                             BufferResult::Immediate(_) => total_immediate += 1,
+                            BufferResult::FlushThenImmediate { preceding, .. } => {
+                                total_flushed += preceding.len();
+                                total_immediate += 1;
+                            }
                             BufferResult::Buffered => total_buffered += 1,
                         }
                     }
@@ -523,6 +941,9 @@ mod proptests {
                         let event = events[event_idx % pool_size].clone();
                         match buf.buffer_event(event, *delay_ms) {
                             BufferResult::Immediate(_) => {} // not tracked
+                            BufferResult::FlushThenImmediate { preceding, .. } => {
+                                total_flushed_ready += preceding.len();
+                            }
                             BufferResult::Buffered => total_buffered += 1,
                         }
                     }

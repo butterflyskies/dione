@@ -134,6 +134,21 @@ pub enum NotificationEvent {
     },
 }
 
+impl NotificationEvent {
+    /// Whether this event carries an exact terminal author-offered evidence marker.
+    pub(crate) fn has_offered_evidence(&self) -> bool {
+        match self {
+            Self::Message(message) => {
+                !crate::evidence::parse_evidence_locators(&message.content).is_empty()
+            }
+            Self::MessageEdit { new_content, .. } => {
+                !crate::evidence::parse_evidence_locators(new_content).is_empty()
+            }
+            _ => false,
+        }
+    }
+}
+
 // ── Handler struct ────────────────────────────────────────────────────────────
 
 /// Serenity event handler — bridges Discord gateway events to the MCP layer.

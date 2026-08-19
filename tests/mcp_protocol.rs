@@ -242,6 +242,55 @@ async fn test_initialize_request_dispatch() {
         resp["result"]["capabilities"]["tools"].is_object(),
         "dispatch initialize must return capabilities.tools"
     );
+    assert_eq!(resp["result"]["protocolVersion"], "2024-11-05");
+}
+
+#[tokio::test]
+async fn test_initialize_negotiates_supported_protocol() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2025-06-18" }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+
+    assert_eq!(resp["result"]["protocolVersion"], "2025-06-18");
+}
+
+#[tokio::test]
+async fn test_initialize_negotiates_current_codex_protocol() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2025-11-25" }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+
+    assert_eq!(resp["result"]["protocolVersion"], "2025-11-25");
+}
+
+#[tokio::test]
+async fn test_initialize_unknown_protocol_falls_back_to_latest_supported() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2099-01-01" }
+    });
+    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
+
+    assert_eq!(resp["result"]["protocolVersion"], "2025-11-25");
 }
 
 // ── tools/list ────────────────────────────────────────────────────────────────
@@ -1478,6 +1527,81 @@ fn test_reply_tool_schema_includes_suppress_ping() {
         "reply tool schema must include suppress_ping property"
     );
     insta::assert_json_snapshot!(props["suppress_ping"]);
+}
+
+#[test]
+fn evidence_key_schema_is_bounded_on_send_surfaces_only() {
+    let list = test_helpers::get_tools_list_with_evidence();
+    let tools = list["tools"].as_array().expect("tools array");
+    for name in ["reply", "send_dm"] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .expect("send tool");
+        let schema = &tool["inputSchema"]["properties"]["evidence_keys"];
+        assert_eq!(schema["type"], "array");
+        assert_eq!(schema["maxItems"], 4);
+        assert_eq!(schema["items"]["type"], "string");
+        assert!(
+            schema["description"]
+                .as_str()
+                .unwrap()
+                .contains("not verification")
+        );
+    }
+
+    let edit = tools
+        .iter()
+        .find(|tool| tool["name"] == "edit_message")
+        .expect("edit tool");
+    assert!(
+        edit["inputSchema"]["properties"]
+            .get("evidence_keys")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn evidence_key_dispatch_rejects_noncanonical_and_numeric_inputs() {
+    let mut config = dione::config::Config::default();
+    config.delivery.evidence_markers_enabled = true;
+    let _config = set_global_config(config);
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+    let cases = [
+        json!([1]),
+        json!([9_007_199_254_740_993u64]),
+        json!(["0"]),
+        json!(["01"]),
+        json!(["-1"]),
+        json!(["18446744073709551616"]),
+        json!(["1", "2", "3", "4", "5"]),
+        json!("1"),
+    ];
+
+    for (index, evidence_keys) in cases.into_iter().enumerate() {
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 900 + index,
+            "method": "tools/call",
+            "params": {
+                "name": "reply",
+                "arguments": {
+                    "channel_id": "999999",
+                    "content": "claim",
+                    "evidence_keys": evidence_keys
+                }
+            }
+        });
+        let response = test_helpers::dispatch_request(&server, request)
+            .await
+            .expect("JSON-RPC response");
+        let message = response["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("evidence_keys") || message.contains("evidence keys"),
+            "case {index} must fail at evidence key parsing, got: {response}"
+        );
+    }
 }
 
 #[tokio::test]

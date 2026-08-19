@@ -74,6 +74,8 @@ admins = []             # Discord user IDs that receive access requests
 
 [delivery]
 text_chunk_limit = 2000
+# Opt in to the Vaelii evidence-marker tracer bullet. Default: false.
+# evidence_markers_enabled = false
 # Global default coalescing delay for channel events (ms). Per-channel
 # delivery_delay_ms overrides this. 0 = no buffering.
 # delivery_delay_ms = 0

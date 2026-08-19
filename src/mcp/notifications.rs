@@ -5,6 +5,7 @@
 //! line — no batch wrapping.
 
 use crate::discord::events::{MessageEvent, NotificationEvent};
+use crate::evidence::project_evidence;
 use serde_json::{Value, json};
 
 // ── Trait ────────────────────────────────────────────────────────────────────
@@ -12,13 +13,20 @@ use serde_json::{Value, json};
 /// Convert a value into an MCP JSON-RPC notification.
 pub(crate) trait IntoNotification {
     /// Full JSON-RPC 2.0 notification with `jsonrpc`, `method`, and `params`.
-    fn into_notification(self) -> Value;
+    fn into_notification(self) -> Value
+    where
+        Self: Sized,
+    {
+        self.into_notification_with_evidence(true)
+    }
+
+    fn into_notification_with_evidence(self, evidence_markers_enabled: bool) -> Value;
 }
 
 // ── Impl for NotificationEvent ──────────────────────────────────────────────
 
 impl IntoNotification for NotificationEvent {
-    fn into_notification(self) -> Value {
+    fn into_notification_with_evidence(self, evidence_markers_enabled: bool) -> Value {
         match self {
             NotificationEvent::Message(MessageEvent {
                 chat_id,
@@ -80,6 +88,9 @@ impl IntoNotification for NotificationEvent {
                 }
                 if let Some(status) = bells_status {
                     meta["bells_status"] = json!(status.as_str());
+                }
+                if evidence_markers_enabled {
+                    project_evidence(&mut meta, &content, user_id);
                 }
                 json!({
                     "jsonrpc": "2.0",
@@ -180,6 +191,9 @@ impl IntoNotification for NotificationEvent {
                 if let Some(reply_id) = reply_to_message_id {
                     meta["reply_to_message_id"] = json!(reply_id.get().to_string());
                 }
+                if evidence_markers_enabled {
+                    project_evidence(&mut meta, &new_content, user_id);
+                }
                 json!({
                     "jsonrpc": "2.0",
                     "method": "notifications/claude/channel",
@@ -267,6 +281,50 @@ mod tests {
         let json = event.into_notification();
         let meta = &json["params"]["meta"];
         assert!(meta.get("thread_parent_id").is_none());
+    }
+
+    #[test]
+    fn message_edit_projects_current_evidence_and_removal_clears_it() {
+        let edit = |new_content: &str| NotificationEvent::MessageEdit {
+            chat_id: ChannelId::new(100),
+            message_id: MessageId::new(200),
+            user: "alice".into(),
+            user_id: UserId::new(300),
+            new_content: new_content.into(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            thread_parent_id: None,
+            reply_to_message_id: None,
+        };
+
+        let added = edit("edited [🔍=v1:AAAAAAAAAAw]").into_notification();
+        assert_eq!(
+            added["params"]["meta"]["evidence"],
+            json!([{
+                "locator": "v1:AAAAAAAAAAw",
+                "author_id": "300",
+            }])
+        );
+
+        let removed = edit("edited").into_notification();
+        assert!(removed["params"]["meta"].get("evidence").is_none());
+    }
+
+    #[test]
+    fn disabled_evidence_projection_preserves_visible_content_only() {
+        let event = NotificationEvent::MessageEdit {
+            chat_id: ChannelId::new(100),
+            message_id: MessageId::new(200),
+            user: "alice".into(),
+            user_id: UserId::new(300),
+            new_content: "edited [🔍=v1:AAAAAAAAAAw]".into(),
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            thread_parent_id: None,
+            reply_to_message_id: None,
+        };
+
+        let json = event.into_notification_with_evidence(false);
+        assert_eq!(json["params"]["content"], "edited [🔍=v1:AAAAAAAAAAw]");
+        assert!(json["params"]["meta"].get("evidence").is_none());
     }
 
     #[test]

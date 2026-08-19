@@ -4,8 +4,22 @@ use super::tools::bot_state::{ActivityType, OnlineStatus};
 use crate::codex::TransportMode;
 use serde_json::{Value, json};
 
+const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
+const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
+    LATEST_PROTOCOL_VERSION,
+    "2025-06-18",
+    "2025-03-26",
+    "2024-11-05",
+];
+
 /// Build the MCP `initialize` response.
-pub(crate) fn initialize_response(mode: TransportMode) -> Value {
+pub(crate) fn initialize_response(
+    mode: TransportMode,
+    requested_protocol_version: Option<&str>,
+) -> Value {
+    let protocol_version = requested_protocol_version
+        .filter(|requested| SUPPORTED_PROTOCOL_VERSIONS.contains(requested))
+        .unwrap_or(LATEST_PROTOCOL_VERSION);
     let capabilities = match mode {
         TransportMode::ClaudeCode => json!({
             "tools": {},
@@ -17,7 +31,7 @@ pub(crate) fn initialize_response(mode: TransportMode) -> Value {
         TransportMode::Codex => json!({ "tools": {} }),
     };
     json!({
-        "protocolVersion": "2024-11-05",
+        "protocolVersion": protocol_version,
         "capabilities": capabilities,
         "serverInfo": {
             "name": "dione",
@@ -27,7 +41,7 @@ pub(crate) fn initialize_response(mode: TransportMode) -> Value {
 }
 
 /// Build the MCP `tools/list` response.
-pub(crate) fn tools_list(mode: TransportMode) -> Value {
+pub(crate) fn tools_list(mode: TransportMode, evidence_markers_enabled: bool) -> Value {
     let mut response = json!({
         "tools": [
             tool("reply", "Send a reply to a Discord channel or DM. A contradictionary block-tier match does not send: the message is held under a single-use handle and the error names the matched pattern(s) plus the handle. Act on it with no_rly (send verbatim), rephrase (replacement, re-checked), or ignore it to let it expire.", json!({
@@ -38,7 +52,8 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                     "content": { "type": "string", "description": "Message content" },
                     "reply_to_message_id": { "type": "string", "description": "Optional message ID to reply to" },
                     "suppress_ping": { "type": "boolean", "description": "When true, the reply will not ping the user being replied to (default: false)" },
-                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for this send. Every bypass is audited. This does not bypass the contradictionary; use the no_rly(handle) tool for that." }
+                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for this send. Every bypass is audited. This does not bypass the contradictionary; use the no_rly(handle) tool for that." },
+                    "evidence_keys": evidence_keys_schema()
                 }
             })),
             tool("no_rly", "Release a message held by the contradictionary: sends the byte-identical held text with its original addressing. Handles are single-use — they die on release, rephrase, or expiry (default 3 minutes) and cannot be replayed; only a failed send leaves the handle live for a retry. Ordering: the message lands when released, not at its original position in the conversation.", json!({
@@ -194,7 +209,8 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
                 "properties": {
                     "user_id": { "type": "string", "description": "Discord user ID to send the DM to" },
                     "content": { "type": "string", "description": "Message content to send" },
-                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass; every bypass is audited." }
+                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass; every bypass is audited." },
+                    "evidence_keys": evidence_keys_schema()
                 }
             })),
             tool("list_guilds", "List guilds the bot is in", json!({
@@ -497,6 +513,16 @@ pub(crate) fn tools_list(mode: TransportMode) -> Value {
             })),
         ]);
     }
+    if !evidence_markers_enabled {
+        for tool in response["tools"].as_array_mut().expect("tools is an array") {
+            if matches!(tool["name"].as_str(), Some("reply" | "send_dm")) {
+                tool["inputSchema"]["properties"]
+                    .as_object_mut()
+                    .expect("tool properties is an object")
+                    .remove("evidence_keys");
+            }
+        }
+    }
     response
 }
 
@@ -508,12 +534,29 @@ pub(crate) fn tool(name: &str, description: &str, input_schema: Value) -> Value 
     })
 }
 
+fn evidence_keys_schema() -> Value {
+    json!({
+        "type": "array",
+        "maxItems": crate::evidence::MAX_EVIDENCE_REFS,
+        "items": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$",
+            "maxLength": 20
+        },
+        "description": format!(
+            "Canonical positive decimal u64 strings naming opaque keys into the Vaelii evidence bridge. JSON numbers are rejected to avoid precision loss. Dione encodes each as exactly eight big-endian bytes using unpadded base64url and appends terminal [🔍=v1:<token>] markers; at most {} references and {} aggregate marker bytes. A locator is author-offered evidence, not verification.",
+            crate::evidence::MAX_EVIDENCE_REFS,
+            crate::evidence::MAX_EVIDENCE_MARKER_BYTES,
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn fetch_messages_schema() -> Value {
-        let list = tools_list(TransportMode::ClaudeCode);
+        let list = tools_list(TransportMode::ClaudeCode, false);
         list["tools"]
             .as_array()
             .unwrap()
@@ -521,6 +564,28 @@ mod tests {
             .find(|t| t["name"] == "fetch_messages")
             .expect("fetch_messages must be in tools list")
             .clone()
+    }
+
+    #[test]
+    fn evidence_keys_schema_is_exposed_only_when_enabled() {
+        for enabled in [false, true] {
+            let list = tools_list(TransportMode::Codex, enabled);
+            for name in ["reply", "send_dm"] {
+                let tool = list["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|tool| tool["name"] == name)
+                    .unwrap();
+                assert_eq!(
+                    tool["inputSchema"]["properties"]
+                        .get("evidence_keys")
+                        .is_some(),
+                    enabled,
+                    "{name} evidence schema must follow the config gate"
+                );
+            }
+        }
     }
 
     #[test]

@@ -141,6 +141,7 @@ ack_reaction = ""             # empty = no auto-reaction
 reply_to_mode = "first"       # "first" | "all" | "off"
 text_chunk_limit = 2000
 chunk_mode = "paragraph"      # "paragraph" | "length"
+evidence_markers_enabled = false # opt in to Vaelii evidence-marker transport
 preamble_mode = "always"      # "always" | "first" | "never"
 # preamble_template = "..."   # custom text, max 1024 bytes
 

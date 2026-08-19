@@ -508,7 +508,7 @@ pub struct DiaryRecord {
     pub timestamp: Timestamp,
     /// The contradictionary pattern(s) that matched, comma-joined.
     pub pattern: String,
-    /// The outgoing message text (truncated to [`DIARY_MAX_MESSAGE_LEN`]).
+    /// The outgoing message text (truncated to the diary message-length limit).
     pub message: String,
     /// Which action tier produced this line. Serializes lowercase (`"block"`,
     /// `"log"`, `"celebrate"`).

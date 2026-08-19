@@ -846,11 +846,12 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.33.2"
+version = "0.34.0"
 dependencies = [
  "aho-corasick",
  "arc-swap",
  "auspex-core",
+ "base64",
  "camino",
  "chrono",
  "chrono-tz",

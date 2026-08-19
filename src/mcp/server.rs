@@ -161,6 +161,7 @@ pub async fn run(
     // load config just for the tz. Updated opportunistically when we already
     // load config per-event for the rate limiter.
     let initial_tz = config.tz;
+    let initial_evidence_markers_enabled = config.delivery.evidence_markers_enabled;
 
     let state_dir_notif = server.state_dir.clone();
 
@@ -202,6 +203,7 @@ pub async fn run(
         let mut rx = event_rx;
         let mut events_since_prune: u64 = 0;
         let mut tz = initial_tz;
+        let mut evidence_markers_enabled = initial_evidence_markers_enabled;
         const PRUNE_INTERVAL: u64 = 100;
 
         loop {
@@ -225,7 +227,15 @@ pub async fn run(
                 } => {
                     let now = tokio::time::Instant::now();
                     let flushed = delivery_buffer.flush_ready(now);
-                    if let Err(error) = deliver_flushed(&notification_sink, flushed, tz).await {
+                    let outcome = deliver_flushed(
+                        &notification_sink,
+                        flushed,
+                        tz,
+                        evidence_markers_enabled,
+                    ).await;
+                    // Requeue undelivered events so flush_all picks them up.
+                    delivery_buffer.requeue(outcome.undelivered);
+                    if let Some(error) = outcome.error {
                         tracing::error!(error = %error, "inbound delivery failed; shutting down");
                         cancel_notif.cancel();
                         break;
@@ -242,6 +252,7 @@ pub async fn run(
                     // Keep tz in sync with config changes so flushes use
                     // the current value without a separate config load.
                     tz = cfg.tz;
+                    evidence_markers_enabled = cfg.delivery.evidence_markers_enabled;
 
                     // Live-reload rate limiter config before the check so
                     // changes apply to the current event, not the next one.
@@ -309,9 +320,37 @@ pub async fn run(
                     // Delivery buffer: coalesce channel events per channel.
                     let delay_ms = extract_delay_ms(&event, &cfg);
 
-                    match delivery_buffer.buffer_event(event, delay_ms) {
+                    match delivery_buffer.buffer_event_with_evidence(
+                        event,
+                        delay_ms,
+                        evidence_markers_enabled,
+                    ) {
                         BufferResult::Immediate(event) => {
-                            let notification = (*event).into_notification();
+                            let notification = (*event)
+                                .into_notification_with_evidence(evidence_markers_enabled);
+                            if let Err(error) = notification_sink.deliver(&notification).await {
+                                tracing::error!(error = %error, "inbound delivery failed; shutting down");
+                                cancel_notif.cancel();
+                                break;
+                            }
+                        }
+                        BufferResult::FlushThenImmediate { preceding, event } => {
+                            let outcome = deliver_flushed(
+                                &notification_sink,
+                                preceding,
+                                tz,
+                                evidence_markers_enabled,
+                            ).await;
+                            delivery_buffer.requeue(outcome.undelivered);
+                            if let Some(error) = outcome.error {
+                                // Preserve the trigger event — it was never attempted.
+                                delivery_buffer.requeue(vec![*event]);
+                                tracing::error!(error = %error, "inbound FIFO flush failed; shutting down");
+                                cancel_notif.cancel();
+                                break;
+                            }
+                            let notification = (*event)
+                                .into_notification_with_evidence(evidence_markers_enabled);
                             if let Err(error) = notification_sink.deliver(&notification).await {
                                 tracing::error!(error = %error, "inbound delivery failed; shutting down");
                                 cancel_notif.cancel();
@@ -335,7 +374,16 @@ pub async fn run(
 
         // Channel closed — flush any remaining buffered events.
         let remaining = delivery_buffer.flush_all();
-        if let Err(error) = deliver_flushed(&notification_sink, remaining, tz).await {
+        let outcome =
+            deliver_flushed(&notification_sink, remaining, tz, evidence_markers_enabled).await;
+        if !outcome.undelivered.is_empty() {
+            tracing::error!(
+                dropped = outcome.undelivered.len(),
+                "final flush: {} evidence events could not be delivered",
+                outcome.undelivered.len()
+            );
+        }
+        if let Some(error) = outcome.error {
             tracing::error!(error = %error, "failed to persist final inbound events");
             cancel_notif.cancel();
         }
@@ -441,11 +489,20 @@ async fn handle_request(server: &DioneServer, req: Value) -> Option<Value> {
 async fn dispatch(server: &DioneServer, method: &str, params: Value) -> Result<Value, String> {
     match method {
         // ── MCP lifecycle ─────────────────────────────────────────────────────
-        "initialize" => Ok(initialize_response(server.mode)),
+        "initialize" => Ok(initialize_response(
+            server.mode,
+            params.get("protocolVersion").and_then(Value::as_str),
+        )),
         "notifications/initialized" => Ok(json!({})),
 
         // ── Tool discovery ────────────────────────────────────────────────────
-        "tools/list" => Ok(tools_list(server.mode)),
+        "tools/list" => {
+            let config = crate::config::load_config(&server.state_dir);
+            Ok(tools_list(
+                server.mode,
+                config.delivery.evidence_markers_enabled,
+            ))
+        }
 
         // ── Tool invocation ───────────────────────────────────────────────────
         "tools/call" => {
@@ -564,34 +621,106 @@ async fn write_line(stdout: &Arc<Mutex<tokio::io::Stdout>>, value: &Value) {
 /// Single events pass through as individual notifications. Multiple events
 /// are coalesced into a single batched notification so the LLM receives one
 /// prompt injection per batch window instead of N.
+/// Outcome of attempting to deliver a batch of flushed events.
+struct DeliverOutcome {
+    /// First error encountered, if any.
+    error: Option<String>,
+    /// Evidence events that could not be delivered due to a mid-FIFO sink
+    /// error. The caller should re-buffer these to prevent silent drops.
+    undelivered: Vec<NotificationEvent>,
+}
+
+impl DeliverOutcome {
+    fn ok() -> Self {
+        Self {
+            error: None,
+            undelivered: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn into_result(self) -> Result<(), String> {
+        match self.error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
 async fn deliver_flushed(
     sink: &NotificationSink,
     events: Vec<NotificationEvent>,
     tz: Option<chrono_tz::Tz>,
-) -> Result<(), String> {
+    evidence_markers_enabled: bool,
+) -> DeliverOutcome {
     if events.is_empty() {
-        return Ok(());
+        return DeliverOutcome::ok();
     }
 
     let event_count = events.len();
 
+    // The legacy coalesced format is intentionally compact and cannot carry
+    // author-bound structured evidence per event. If any delayed event bears
+    // evidence, preserve the entire FIFO as individual notifications at the
+    // normal flush deadline rather than silently erasing provenance.
+    if evidence_markers_enabled && events.iter().any(NotificationEvent::has_offered_evidence) {
+        tracing::debug!(
+            event_count,
+            "delivering evidence-bearing flush as individual FIFO notifications"
+        );
+        let mut events = events;
+        let mut index = 0;
+        while index < events.len() {
+            // Clone to build the notification — the original stays in the
+            // Vec so it can be returned on failure.
+            let notification = events[index].clone().into_notification_with_evidence(true);
+            match sink.deliver(&notification).await {
+                Ok(()) => index += 1,
+                Err(error) => {
+                    // Preserve the failed event AND the unattempted tail.
+                    let undelivered = events.split_off(index);
+                    tracing::warn!(
+                        remaining = undelivered.len(),
+                        "mid-FIFO sink error; preserving {} undelivered evidence events for requeue",
+                        undelivered.len()
+                    );
+                    return DeliverOutcome {
+                        error: Some(error),
+                        undelivered,
+                    };
+                }
+            }
+        }
+        return DeliverOutcome::ok();
+    }
+
     match coalesce(events, tz) {
         Some(CoalesceResult::Single(event)) => {
-            let notification = event.into_notification();
-            sink.deliver(&notification).await?;
+            let notification = event.into_notification_with_evidence(evidence_markers_enabled);
+            if let Err(error) = sink.deliver(&notification).await {
+                return DeliverOutcome {
+                    error: Some(error),
+                    undelivered: Vec::new(),
+                };
+            }
         }
         Some(CoalesceResult::Coalesced(notification)) => {
             tracing::debug!(
                 event_count,
                 "coalesced {event_count} events into single delivery"
             );
-            sink.deliver(&notification).await?;
+            if let Err(error) = sink.deliver(&notification).await {
+                return DeliverOutcome {
+                    error: Some(error),
+                    undelivered: Vec::new(),
+                };
+            }
         }
         None => {
             // Empty — nothing to deliver.
         }
     }
-    Ok(())
+    DeliverOutcome::ok()
 }
 
 struct MessageRateLimitKey {
@@ -653,21 +782,25 @@ pub mod test_helpers {
 
     /// Exposes `tools_list` for unit testing tool discovery.
     pub fn get_tools_list() -> Value {
-        crate::mcp::protocol::tools_list(TransportMode::ClaudeCode)
+        crate::mcp::protocol::tools_list(TransportMode::ClaudeCode, false)
+    }
+
+    pub fn get_tools_list_with_evidence() -> Value {
+        crate::mcp::protocol::tools_list(TransportMode::ClaudeCode, true)
     }
 
     pub fn get_codex_tools_list() -> Value {
-        crate::mcp::protocol::tools_list(TransportMode::Codex)
+        crate::mcp::protocol::tools_list(TransportMode::Codex, false)
     }
 
     /// Exposes `initialize_response` for unit testing the handshake.
     pub fn get_initialize_response() -> Value {
-        crate::mcp::protocol::initialize_response(TransportMode::ClaudeCode)
+        crate::mcp::protocol::initialize_response(TransportMode::ClaudeCode, None)
     }
 
     /// Exposes the Codex initialize response for protocol tests.
     pub fn get_codex_initialize_response() -> Value {
-        crate::mcp::protocol::initialize_response(TransportMode::Codex)
+        crate::mcp::protocol::initialize_response(TransportMode::Codex, None)
     }
 
     /// Exposes `handle_request` for unit testing request dispatch.
@@ -793,6 +926,127 @@ mod tests {
         })
     }
 
+    fn evidence_message_event(index: u64) -> NotificationEvent {
+        NotificationEvent::Message(MessageEvent {
+            chat_id: ChannelId::new(42),
+            message_id: MessageId::new(100 + index),
+            user: format!("user-{index}"),
+            user_id: UserId::new(200 + index),
+            content: format!("claim-{index} [🔍=v1:AAAAAAAAAAw] [🔍=v1:AAAAAAAAACI]"),
+            targeting: crate::discord::events::MessageTargeting::Ambient,
+            timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            attachments: vec![],
+            is_voice_message: false,
+            thread_parent_id: None,
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            reply_to_user: None,
+            reply_to_content_preview: None,
+            bells: None,
+            bells_status: None,
+        })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn evidence_burst_overflow_reaches_real_sink_losslessly_in_fifo_order() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let state_dir = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let queue = CodexEventQueue::load(&state_dir).unwrap();
+        let consumer = queue
+            .register_consumer(
+                "evidence overflow test".to_owned(),
+                Duration::from_secs(60),
+                true,
+                true,
+            )
+            .await
+            .unwrap()
+            .consumer_id;
+        let sink = NotificationSink::Codex(queue.clone());
+        let mut buffer = DeliveryBuffer::new();
+
+        for index in 0..6 {
+            match buffer.buffer_event(evidence_message_event(index), 500) {
+                BufferResult::Immediate(event) => {
+                    sink.deliver(&event.into_notification()).await.unwrap();
+                }
+                BufferResult::Buffered => {
+                    assert!(index >= 4, "only budget overflow may be delayed");
+                }
+                BufferResult::FlushThenImmediate { .. } => {
+                    panic!("one uninterrupted burst has no buffered predecessor recovery")
+                }
+            }
+        }
+
+        tokio::time::advance(Duration::from_millis(500)).await;
+        let overflow = buffer.flush_ready(tokio::time::Instant::now());
+        assert_eq!(overflow.len(), 2);
+        let outcome = deliver_flushed(&sink, overflow, None, true).await;
+        assert!(outcome.undelivered.is_empty());
+        outcome.into_result().unwrap();
+
+        for index in 0..6 {
+            let leased = queue
+                .next_event(&consumer, Duration::ZERO, Duration::from_secs(60))
+                .await
+                .unwrap()
+                .expect("all six events must reach the final sink");
+            assert_eq!(
+                leased.event["params"]["content"],
+                format!("claim-{index} [🔍=v1:AAAAAAAAAAw] [🔍=v1:AAAAAAAAACI]")
+            );
+            let evidence = leased.event["params"]["meta"]["evidence"]
+                .as_array()
+                .expect("structured evidence must survive final delivery");
+            assert_eq!(evidence.len(), 2);
+            assert_eq!(evidence[0]["locator"], "v1:AAAAAAAAAAw");
+            assert_eq!(evidence[1]["locator"], "v1:AAAAAAAAACI");
+            assert_eq!(evidence[0]["author_id"], (200 + index).to_string());
+            assert_eq!(evidence[1]["author_id"], (200 + index).to_string());
+            queue
+                .acknowledge(&consumer, &leased.delivery_token)
+                .await
+                .unwrap();
+        }
+        assert_eq!(queue.status().await.queued, 0);
+    }
+
+    #[tokio::test]
+    async fn disabled_evidence_delivery_preserves_text_without_projection() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let state_dir = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let queue = CodexEventQueue::load(&state_dir).unwrap();
+        let consumer = queue
+            .register_consumer(
+                "disabled evidence test".to_owned(),
+                Duration::from_secs(60),
+                true,
+                true,
+            )
+            .await
+            .unwrap()
+            .consumer_id;
+        let sink = NotificationSink::Codex(queue.clone());
+        let event = evidence_message_event(0);
+        let expected_content = match &event {
+            NotificationEvent::Message(message) => message.content.clone(),
+            _ => unreachable!(),
+        };
+
+        deliver_flushed(&sink, vec![event], None, false)
+            .await
+            .into_result()
+            .unwrap();
+        let leased = queue
+            .next_event(&consumer, Duration::ZERO, Duration::from_secs(60))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(leased.event["params"]["content"], expected_content);
+        assert!(leased.event["params"]["meta"].get("evidence").is_none());
+    }
+
     #[test]
     fn extract_delay_message_uses_channel_config() {
         let config = config_with_channel_delay(42, 500);
@@ -906,6 +1160,9 @@ mod tests {
         let result = buf.buffer_event(message_event(42), 0);
         let notification = match result {
             BufferResult::Immediate(event) => (*event).into_notification(),
+            BufferResult::FlushThenImmediate { .. } => {
+                panic!("delay=0 cannot require a preceding flush")
+            }
             BufferResult::Buffered => panic!("expected Immediate for delay=0"),
         };
         assert_eq!(notification["jsonrpc"], "2.0");
