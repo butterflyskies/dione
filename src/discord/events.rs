@@ -49,6 +49,86 @@ pub struct DesiredPresence {
     pub status: OnlineStatus,
 }
 
+/// A replaceable presence sink that survives gateway reconnects.
+///
+/// Bundles the live sink slot with the desired-state store. Both always
+/// travel together: `ready()`, command processing, install, and replay
+/// all take the pair. The newtype names the `Arc<RwLock<Option<Arc<…>>>>`
+/// pattern and encapsulates the lock/option dance.
+#[derive(Clone)]
+pub struct SharedPresence {
+    sink: Arc<tokio::sync::RwLock<Option<Arc<dyn PresenceSink>>>>,
+    desired: Arc<tokio::sync::RwLock<Option<DesiredPresence>>>,
+}
+
+impl SharedPresence {
+    /// Creates empty slots — no sink installed, no desired presence.
+    pub fn new() -> Self {
+        Self {
+            sink: Arc::new(tokio::sync::RwLock::new(None)),
+            desired: Arc::new(tokio::sync::RwLock::new(None)),
+        }
+    }
+
+    /// Install a new sink and replay the stored desired presence.
+    ///
+    /// Called from `ready()` on each gateway reconnect. The old sink is
+    /// replaced; the command processor reads the shared slot on each
+    /// dispatch, so it picks up the new sink immediately.
+    pub async fn install(&self, new_sink: Arc<dyn PresenceSink>) {
+        {
+            let mut slot = self.sink.write().await;
+            *slot = Some(new_sink);
+        }
+        self.replay().await;
+    }
+
+    /// Store desired presence and dispatch to the current sink.
+    ///
+    /// If no sink is available (reconnecting), the desired state is
+    /// still stored — it will be replayed when the next sink installs.
+    pub async fn set_presence(&self, activity: Option<ActivityData>, status: OnlineStatus) {
+        {
+            let mut desired = self.desired.write().await;
+            *desired = Some(DesiredPresence {
+                activity: activity.clone(),
+                status,
+            });
+        }
+        let sink = self.sink.read().await;
+        if let Some(ref sink) = *sink {
+            sink.set_presence(activity, status);
+        } else {
+            tracing::warn!(
+                "presence command accepted but shard messenger unavailable \
+                 (reconnecting); will replay on next ready"
+            );
+        }
+    }
+
+    /// Read the stored desired presence (test-only).
+    #[cfg(test)]
+    pub(crate) async fn desired_for_test(&self) -> Option<DesiredPresence> {
+        self.desired.read().await.clone()
+    }
+
+    /// Replay the stored desired presence to the current sink, if both exist.
+    async fn replay(&self) {
+        let sink_guard = self.sink.read().await;
+        let desired_guard = self.desired.read().await;
+        if let (Some(sink), Some(desired)) = (&*sink_guard, &*desired_guard) {
+            tracing::info!("replaying desired presence on reconnect");
+            sink.set_presence(desired.activity.clone(), desired.status);
+        }
+    }
+}
+
+impl Default for SharedPresence {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A display name with pronouns already resolved and appended (e.g. "paceheart (she/her)").
 pub struct PronounDisplayName(pub String);
 
@@ -185,12 +265,9 @@ pub struct Handler {
     /// Receiver for gateway-level commands from MCP tools (e.g. presence updates).
     /// Taken once during `ready()` to spawn the command processing task.
     pub discord_cmd_rx: tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<DiscordCommand>>>,
-    /// Shared presence sink — updated on each `ready()` with the current shard
-    /// messenger, so the command processor always dispatches to the live gateway.
-    pub discord_gateway_shard: Arc<tokio::sync::RwLock<Option<Arc<dyn PresenceSink>>>>,
-    /// Last desired presence — replayed on reconnect so the bot's status
-    /// survives gateway restarts.
-    pub desired_presence: Arc<tokio::sync::RwLock<Option<DesiredPresence>>>,
+    /// Presence sink + desired-state store — updated on each `ready()` with the
+    /// current shard messenger, replayed on reconnect.
+    pub presence: SharedPresence,
     /// Pronoun resolution service (PronounDB v2 adapter with cache).
     pub pronoun_service: Option<Arc<crate::pronouns::PronounService>>,
     /// Construct nameplate service (construct-nameplates repo adapter with cache).
@@ -340,22 +417,13 @@ impl EventHandler for Handler {
         );
 
         // Install the new shard messenger and replay any stored presence.
-        install_and_replay(
-            &self.discord_gateway_shard,
-            &self.desired_presence,
-            Arc::new(ctx.shard.clone()),
-        )
-        .await;
+        self.presence.install(Arc::new(ctx.shard.clone())).await;
 
         // Take the command receiver (once) and spawn the command processor.
         // On reconnect, the existing processor continues — it reads the
         // shared sink, which was just updated above.
         if let Some(rx) = self.discord_cmd_rx.lock().await.take() {
-            tokio::spawn(run_discord_commands(
-                Arc::clone(&self.discord_gateway_shard),
-                Arc::clone(&self.desired_presence),
-                rx,
-            ));
+            tokio::spawn(run_discord_commands(self.presence.clone(), rx));
         }
     }
 
@@ -1069,12 +1137,11 @@ impl EventHandler for Handler {
 
 /// Processes gateway-level commands sent from MCP tools.
 ///
-/// Reads from the shared [`PresenceSink`] on each dispatch so that reconnects
+/// Reads from the [`SharedPresence`] on each dispatch so that reconnects
 /// (which install a new shard messenger via `ready()`) take effect immediately
 /// without restarting the processor.
 async fn run_discord_commands(
-    shard: Arc<tokio::sync::RwLock<Option<Arc<dyn PresenceSink>>>>,
-    desired_presence: Arc<tokio::sync::RwLock<Option<DesiredPresence>>>,
+    presence: SharedPresence,
     mut rx: tokio::sync::mpsc::Receiver<DiscordCommand>,
 ) {
     tracing::debug!("discord command processor started");
@@ -1097,63 +1164,11 @@ async fn run_discord_commands(
                     "setting presence"
                 );
 
-                // Store desired presence for replay on reconnect.
-                {
-                    let mut desired = desired_presence.write().await;
-                    *desired = Some(DesiredPresence {
-                        activity: activity.clone(),
-                        status,
-                    });
-                }
-
-                // Dispatch to the current sink.
-                let sink = shard.read().await;
-                if let Some(ref sink) = *sink {
-                    sink.set_presence(activity, status);
-                } else {
-                    tracing::warn!(
-                        "presence command accepted but shard messenger unavailable \
-                         (reconnecting); will replay on next ready"
-                    );
-                }
+                presence.set_presence(activity, status).await;
             }
         }
     }
     tracing::debug!("discord command processor stopped (channel closed)");
-}
-
-/// Replays the last desired presence to the current sink, if both exist.
-///
-/// Called from `ready()` on reconnect so the bot's presence survives
-/// gateway restarts.
-pub(crate) async fn replay_presence(
-    shard: &Arc<tokio::sync::RwLock<Option<Arc<dyn PresenceSink>>>>,
-    desired_presence: &Arc<tokio::sync::RwLock<Option<DesiredPresence>>>,
-) {
-    // Hold both locks together to prevent a racing command from storing+dispatching
-    // a newer state B between our read of desired A and our dispatch of A.
-    let sink_guard = shard.read().await;
-    let desired_guard = desired_presence.read().await;
-    if let (Some(sink), Some(desired)) = (&*sink_guard, &*desired_guard) {
-        tracing::info!("replaying desired presence on reconnect");
-        sink.set_presence(desired.activity.clone(), desired.status);
-    }
-}
-
-/// Installs a new presence sink and replays the last desired presence.
-///
-/// Called from `ready()` on each gateway reconnect. Extracted so tests can
-/// exercise the same install+replay path without constructing a full `Handler`.
-pub(crate) async fn install_and_replay(
-    shard_slot: &Arc<tokio::sync::RwLock<Option<Arc<dyn PresenceSink>>>>,
-    desired_presence: &Arc<tokio::sync::RwLock<Option<DesiredPresence>>>,
-    new_sink: Arc<dyn PresenceSink>,
-) {
-    {
-        let mut slot = shard_slot.write().await;
-        *slot = Some(new_sink);
-    }
-    replay_presence(shard_slot, desired_presence).await;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -3063,17 +3078,14 @@ mod tests {
     async fn presence_queue_drain_last_write_wins() {
         use crate::mcp::tools::bot_state::{ActivityType, DiscordCommand, OnlineStatus};
 
-        let shard: Arc<tokio::sync::RwLock<Option<Arc<dyn PresenceSink>>>> =
-            Arc::new(tokio::sync::RwLock::new(None));
-        let desired: Arc<tokio::sync::RwLock<Option<DesiredPresence>>> =
-            Arc::new(tokio::sync::RwLock::new(None));
+        let presence = SharedPresence::new();
         let (tx, rx) = tokio::sync::mpsc::channel::<DiscordCommand>(16);
 
         let sink = Arc::new(MockPresenceSink::new());
-        // Use install_and_replay — the same path ready() takes.
-        install_and_replay(&shard, &desired, sink.clone()).await;
+        // Use install — the same path ready() takes.
+        presence.install(sink.clone()).await;
 
-        let handle = tokio::spawn(run_discord_commands(shard.clone(), desired.clone(), rx));
+        let handle = tokio::spawn(run_discord_commands(presence.clone(), rx));
 
         // Send three commands in quick succession.
         for (status, name) in [
@@ -3098,10 +3110,9 @@ mod tests {
         assert_eq!(sink.call_count(), 3, "all three commands must dispatch");
 
         // Desired presence reflects the last write.
-        let stored = desired
-            .read()
+        let stored = presence
+            .desired_for_test()
             .await
-            .clone()
             .expect("desired presence stored");
         assert_eq!(
             stored.status,
@@ -3115,7 +3126,7 @@ mod tests {
 
     /// Reconnect dispatch: Ready(A) -> command -> Ready(B) -> replay.
     ///
-    /// Uses `install_and_replay` — the same code path `ready()` takes —
+    /// Uses `SharedPresence::install` — the same code path `ready()` takes —
     /// so deleting production replay logic would cause this test to fail.
     /// Asserts that reconnect replay reaches B exactly once, and no
     /// post-replacement dispatch leaks through A.
@@ -3123,18 +3134,15 @@ mod tests {
     async fn presence_reconnect_replays_to_new_sink_not_old() {
         use crate::mcp::tools::bot_state::{ActivityType, DiscordCommand, OnlineStatus};
 
-        let shard: Arc<tokio::sync::RwLock<Option<Arc<dyn PresenceSink>>>> =
-            Arc::new(tokio::sync::RwLock::new(None));
-        let desired: Arc<tokio::sync::RwLock<Option<DesiredPresence>>> =
-            Arc::new(tokio::sync::RwLock::new(None));
+        let presence = SharedPresence::new();
         let (tx, rx) = tokio::sync::mpsc::channel::<DiscordCommand>(16);
 
-        // Install mock sink A via install_and_replay (simulates first ready()).
+        // Install mock sink A (simulates first ready()).
         let sink_a = Arc::new(MockPresenceSink::new());
-        install_and_replay(&shard, &desired, sink_a.clone()).await;
+        presence.install(sink_a.clone()).await;
 
         // Spawn the command processor (once, like the real ready()).
-        let handle = tokio::spawn(run_discord_commands(shard.clone(), desired.clone(), rx));
+        let handle = tokio::spawn(run_discord_commands(presence.clone(), rx));
 
         // Send a SetPresence command through the channel.
         tx.send(DiscordCommand::SetPresence {
@@ -3157,10 +3165,10 @@ mod tests {
             assert_eq!(calls[0].1, serenity::model::user::OnlineStatus::Idle);
         }
 
-        // Simulate reconnect: install mock sink B via install_and_replay
+        // Simulate reconnect: install mock sink B
         // (the same code path ready() takes — tests the real wiring).
         let sink_b = Arc::new(MockPresenceSink::new());
-        install_and_replay(&shard, &desired, sink_b.clone()).await;
+        presence.install(sink_b.clone()).await;
 
         // Sink B received exactly one set_presence call (replay).
         assert_eq!(sink_b.call_count(), 1, "sink B must receive replay");
