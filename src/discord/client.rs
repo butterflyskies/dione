@@ -1,5 +1,4 @@
-use serenity::client::Client;
-use serenity::model::gateway::GatewayIntents;
+use serenity::{client::Client, model::gateway::GatewayIntents};
 
 /// Builds a serenity Discord [`Client`] with the standard intents and the given event handler.
 pub async fn build_client(

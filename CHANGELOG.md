@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **Presence updates survive gateway reconnects.** After a Discord gateway
+  reconnect, the command processor reads from a shared shard messenger that
+  is refreshed on each `ready()` event, replacing the previously captured
+  one that targeted a dead shard. The last-desired presence state is
+  recorded and replayed automatically on reconnect, restoring the bot's
+  status without MCP intervention. Commands are always stored regardless
+  of gateway availability; if no shard messenger is available, execution
+  is deferred until the next `ready()` event.
 - **Per-channel identity policy now enforces transport/principal separation.**
   The per-channel allowlist previously compared the webhook's user ID (a
   transport artifact) against `allow_from`, silently dropping proxy-authored

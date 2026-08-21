@@ -1,9 +1,10 @@
 use camino::Utf8PathBuf;
+use dione::{
+    config::{Config, DmPolicy, LoadedConfig},
+    config_store::{ConfigStore, DiscordId},
+};
 use serde_json::{Value, json};
 use tempfile::TempDir;
-
-use dione::config::{Config, DmPolicy, LoadedConfig};
-use dione::config_store::{ConfigStore, DiscordId};
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 

@@ -1,11 +1,8 @@
-use std::sync::Arc;
-
+use crate::{config::LoadedConfig, config_store::ConfigStore};
 use camino::Utf8PathBuf;
 use serde_json::{Value, json};
 use serenity::model::id::UserId;
-
-use crate::config::LoadedConfig;
-use crate::config_store::ConfigStore;
+use std::sync::Arc;
 
 /// Context for access management tools.
 pub struct AccessCtx {

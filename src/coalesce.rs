@@ -27,14 +27,18 @@
 //! For single-event flushes, events pass through as individual notifications
 //! (no coalescing overhead). Coalescing only activates for 2+ events.
 
-use crate::batch::{BatchContext, serialize_batch};
-use crate::discord::events::{MessageEvent, NotificationEvent};
-use crate::timestamp::{Timestamp, format_compact};
+use crate::{
+    batch::{BatchContext, serialize_batch},
+    discord::events::{MessageEvent, NotificationEvent},
+    timestamp::{Timestamp, format_compact},
+};
 use chrono_tz::Tz;
 use serde_json::{Value, json};
 use serenity::model::id::{ChannelId, UserId};
-use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write,
+};
 
 // ── Public API ──────────────────────────────────────────────────────────────
 

@@ -28,19 +28,19 @@
 //! Expiry is enforced at reserve time (see [`super::queue`]), so a handle past
 //! its TTL is dead even if the background sweep has not caught it yet.
 
-use std::time::{Duration, Instant};
-
+use crate::{
+    contradictionary::DiaryRecord,
+    no_rly::{
+        journal::{self, JournalHandle, Outcome},
+        judge::{OutboundJudge, RejectReason, Verdict},
+        queue::{ClaimError, Held, HoldHandle, HoldQueue},
+    },
+};
 use camino::Utf8Path;
 use serenity::model::id::{ChannelId, MessageId};
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::sync::Mutex;
-
-use crate::contradictionary::DiaryRecord;
-use crate::no_rly::{
-    journal::{self, JournalHandle, Outcome},
-    judge::{OutboundJudge, RejectReason, Verdict},
-    queue::{ClaimError, Held, HoldHandle, HoldQueue},
-};
 
 /// Everything needed to send (or re-send) one reply. Held verbatim in the
 /// queue: release sends exactly this, and rephrase replaces only `content` —
@@ -553,14 +553,6 @@ impl ConsentGate {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::VecDeque,
-        sync::{Arc, Mutex as StdMutex},
-    };
-
-    use camino::Utf8PathBuf;
-    use tempfile::TempDir;
-
     use super::*;
     use crate::{
         contradictionary::{Action, Contradictionary, Entry, MatchMode},
@@ -569,6 +561,12 @@ mod tests {
             judge::{AlwaysClear, ReasonEntry},
         },
     };
+    use camino::Utf8PathBuf;
+    use std::{
+        collections::VecDeque,
+        sync::{Arc, Mutex as StdMutex},
+    };
+    use tempfile::TempDir;
 
     const TTL: Duration = Duration::from_secs(180);
     const MAX_PENDING: usize = 32;

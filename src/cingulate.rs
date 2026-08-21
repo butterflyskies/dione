@@ -3,13 +3,12 @@
 //! The classifier logic lives in the [`cingulate`] crate. This module wraps it
 //! as a [`PreSendHook`] so it can participate in the outbound pipeline.
 
-use cingulate::{PatternAction, PatternSet};
-use thiserror::Error;
-
 use crate::pre_send::{
     Assessment, AuditTrail, ConstructFeedback, HookContext, HookDecision, HookName, HookOutput,
     PreSendHook,
 };
+use cingulate::{PatternAction, PatternSet};
+use thiserror::Error;
 
 const HOOK_NAME: &str = "tier-1";
 

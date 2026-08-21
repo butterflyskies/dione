@@ -1,9 +1,7 @@
-use std::collections::BTreeMap;
-use std::io;
-
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::{collections::BTreeMap, io};
 
 /// Maximum preview length stored per access request.
 const PREVIEW_MAX: usize = 100;

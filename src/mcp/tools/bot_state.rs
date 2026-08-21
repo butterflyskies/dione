@@ -1,14 +1,8 @@
-use std::fmt;
-use std::str::FromStr;
-use std::sync::Arc;
-
+use crate::{config::LoadedConfig, gate::OutboundGate, state::State};
 use serde_json::{Value, json};
 use serenity::model::id::ChannelId;
+use std::{fmt, str::FromStr, sync::Arc};
 use tokio::sync::mpsc;
-
-use crate::config::LoadedConfig;
-use crate::gate::OutboundGate;
-use crate::state::State;
 
 /// Bot online status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,7 +148,7 @@ impl FromStr for ActivityType {
 
 /// Commands the Discord task can execute on behalf of MCP tools that need
 /// gateway-level operations (e.g. presence updates).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DiscordCommand {
     /// Update the bot's presence status and activity.
     SetPresence {
@@ -208,7 +202,7 @@ pub async fn set_presence(
     };
 
     match tx.send(cmd).await {
-        Ok(()) => json!({ "ok": true }),
+        Ok(()) => json!({ "ok": true, "status": "accepted" }),
         Err(e) => json!({ "error": format!("failed to send presence command: {e}") }),
     }
 }

@@ -238,6 +238,8 @@ async fn main() -> Result<()> {
         state_dir: state_dir.clone(),
         bot_user_id: AtomicU64::new(0),
         discord_cmd_rx: tokio::sync::Mutex::new(Some(discord_cmd_rx)),
+        discord_gateway_shard: Arc::new(tokio::sync::RwLock::new(None)),
+        desired_presence: Arc::new(tokio::sync::RwLock::new(None)),
         pronoun_service,
         nameplate_service,
         ingress_ledger: ingress_ledger.clone(),

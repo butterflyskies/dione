@@ -1,15 +1,19 @@
 //! Verified capture targets and deterministic Atom 1b backfill planning.
 
-use crate::config::{DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES, DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES};
-use crate::gaie::archive::StoredOriginEvidence;
-use crate::gaie::service::{MessageOriginEvidence, message_batch_with_origin};
-use crate::gaie::{
-    Archive, ArchiveError, ArchivePaths, Checkpoint, CorpusId, DiscordArchiveClient,
-    DiscordArchiveError, MessageContext, StreamCheckpoint,
+use crate::{
+    config::{DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES, DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES},
+    gaie::{
+        Archive, ArchiveError, ArchivePaths, Checkpoint, CorpusId, DiscordArchiveClient,
+        DiscordArchiveError, MessageContext, StreamCheckpoint,
+        archive::StoredOriginEvidence,
+        service::{MessageOriginEvidence, message_batch_with_origin},
+    },
 };
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::sync::Arc;
+use std::{
+    collections::{BTreeMap, BTreeSet, HashSet},
+    sync::Arc,
+};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

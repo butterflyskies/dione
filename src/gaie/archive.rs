@@ -1,15 +1,16 @@
-use crate::gaie::backfill::parse_or_migrate_checkpoint;
-use crate::gaie::{CorpusId, Event};
+use crate::gaie::{CorpusId, Event, backfill::parse_or_migrate_checkpoint};
 use camino::{Utf8Path, Utf8PathBuf};
 use fs2::FileExt as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read as _, Write as _};
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    fs::{self, File, OpenOptions},
+    io::{self, Read as _, Write as _},
+};
 use thiserror::Error;
 
 const FORMAT_VERSION: &str = "2";
@@ -865,8 +866,10 @@ pub(crate) fn hex_sha256(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gaie::service::{MessageOriginEvidence, message_batch_with_origin};
-    use crate::gaie::{EventKind, Ingest, Lineage, MessageContext, Payload, Relations, Source};
+    use crate::gaie::{
+        EventKind, Ingest, Lineage, MessageContext, Payload, Relations, Source,
+        service::{MessageOriginEvidence, message_batch_with_origin},
+    };
     use proptest::prelude::*;
 
     fn fixture_event(sequence: u64) -> Event {

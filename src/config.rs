@@ -1,21 +1,23 @@
-use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::io::Read as _;
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use crate::{
+    contradictionary::{Contradictionary, ContradictionaryConfig, load_sidecar_entries},
+    pre_send::ConstructId,
+    timestamp::Timestamp,
 };
-
 use arc_swap::ArcSwap;
 use camino::{Utf8Path, Utf8PathBuf};
 use regex::RegexSet;
 use serde::{Deserialize, Deserializer, de::Error as _};
 use serenity::model::id::{ChannelId, UserId};
+use std::{
+    collections::{HashMap, HashSet},
+    fs::File,
+    io::Read as _,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 use thiserror::Error;
-
-use crate::contradictionary::{Contradictionary, ContradictionaryConfig, load_sidecar_entries};
-use crate::pre_send::ConstructId;
-use crate::timestamp::Timestamp;
 
 /// Default maximum size of one GAIE attachment (25 MiB).
 pub const DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;

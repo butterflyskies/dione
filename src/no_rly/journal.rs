@@ -25,23 +25,20 @@
 //! Both rewrite atomically (temp file + rename), so a crash mid-maintenance
 //! leaves the original journal intact.
 
-use std::{
-    collections::{BTreeMap, HashSet},
-    fs, io,
-    io::Write,
-};
-
-use tokio::sync::{mpsc, oneshot};
-
-use camino::{Utf8Path, Utf8PathBuf};
-use chrono::{DateTime, NaiveDate, Utc};
-use serde::{Deserialize, Serialize};
-
 use crate::{
     no_rly::{judge::RejectReason, queue::HoldHandle},
     timestamp::Timestamp,
     util::truncate_chars,
 };
+use camino::{Utf8Path, Utf8PathBuf};
+use chrono::{DateTime, NaiveDate, Utc};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fs, io,
+    io::Write,
+};
+use tokio::sync::{mpsc, oneshot};
 
 /// Name of the journal file, created under the channel state directory
 /// (`~/.claude/channels/dione/no_rly_journal.jsonl`).
@@ -763,12 +760,11 @@ impl ResolvedBounce<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::no_rly::judge::ReasonEntry;
     use camino::Utf8PathBuf;
     use chrono::TimeZone;
     use tempfile::TempDir;
-
-    use super::*;
-    use crate::no_rly::judge::ReasonEntry;
 
     fn temp_journal() -> (TempDir, Journal) {
         let dir = TempDir::new().unwrap();

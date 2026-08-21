@@ -18,16 +18,14 @@
 //! Time is passed in explicitly (`now: Instant`) so every invariant is
 //! testable without sleeping — the same convention as `rate_limiter`.
 
+use crate::{no_rly::judge::RejectReason, timestamp::Timestamp};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fmt,
     hash::{BuildHasher, Hasher, RandomState},
     time::{Duration, Instant},
 };
-
-use serde::{Deserialize, Serialize};
-
-use crate::{no_rly::judge::RejectReason, timestamp::Timestamp};
 
 /// A single-use claim ticket for one bounced message.
 ///
@@ -409,9 +407,8 @@ impl<T> Default for HoldQueue<T> {
 
 #[cfg(test)]
 mod tests {
-    use proptest::prelude::*;
-
     use super::*;
+    use proptest::prelude::*;
 
     const TTL: Duration = Duration::from_secs(180);
 

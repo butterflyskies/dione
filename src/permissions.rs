@@ -1,8 +1,9 @@
-use serenity::builder::{CreateActionRow, CreateButton, CreateMessage};
-use serenity::model::channel::ReactionType;
-use thiserror::Error;
-
 use crate::state::{PendingPermission, State};
+use serenity::{
+    builder::{CreateActionRow, CreateButton, CreateMessage},
+    model::channel::ReactionType,
+};
+use thiserror::Error;
 
 // ── Error type ────────────────────────────────────────────────────────────────
 

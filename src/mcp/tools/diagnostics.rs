@@ -1,8 +1,7 @@
 //! Diagnostics tools: runtime trace-level control and version info.
 
-use serde_json::{Value, json};
-
 use crate::tracing_channel::TraceLevelController;
+use serde_json::{Value, json};
 
 /// Context for diagnostics tools.
 pub struct DiagnosticsCtx<'a> {

@@ -4,8 +4,10 @@
 //! full JSON-RPC notification. Each event is emitted as its own notification
 //! line — no batch wrapping.
 
-use crate::discord::events::{MessageEvent, NotificationEvent};
-use crate::evidence::project_evidence;
+use crate::{
+    discord::events::{MessageEvent, NotificationEvent},
+    evidence::project_evidence,
+};
 use serde_json::{Value, json};
 
 // ── Trait ────────────────────────────────────────────────────────────────────
@@ -244,8 +246,7 @@ impl IntoNotification for NotificationEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bell_rings::BellStatus;
-    use crate::timestamp::Timestamp;
+    use crate::{bell_rings::BellStatus, timestamp::Timestamp};
     use serenity::model::id::{ChannelId, MessageId, UserId};
 
     #[test]

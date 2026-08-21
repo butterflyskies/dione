@@ -1,10 +1,12 @@
 //! Generic pre-send hook plumbing for outbound messages.
 
 use serenity::model::id::{ChannelId, GuildId, MessageId, UserId};
-use std::collections::{HashMap, HashSet};
-use std::fmt;
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    panic::{AssertUnwindSafe, catch_unwind},
+    sync::{Arc, OnceLock, RwLock},
+};
 
 /// Whether hook dispositions are observed or enforced.
 #[non_exhaustive]
@@ -791,9 +793,8 @@ fn capture_sink_failure(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
-
     use super::*;
+    use std::sync::{Arc, Mutex};
 
     struct FailingSink;
 

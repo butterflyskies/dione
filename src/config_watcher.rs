@@ -1,9 +1,8 @@
+use crate::discord::events::NotificationEvent;
 use camino::Utf8PathBuf;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-
-use crate::discord::events::NotificationEvent;
 
 pub fn spawn(
     state_dir: Utf8PathBuf,

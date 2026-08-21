@@ -6,21 +6,17 @@
 //! path where possible (block returns before hitting Discord; celebrate needs
 //! a real HTTP layer, so we verify the conditions that trigger the self-react).
 
-use std::fs;
-use std::sync::Arc;
-
 use camino::Utf8PathBuf;
-use serenity::model::id::{ChannelId, MessageId};
-use tempfile::TempDir;
-
 use dione::{
     config::{ChannelConfig, Config, LoadedConfig, reload_config},
     contradictionary::{Action, Contradictionary, DIARY_FILE_NAME, Entry, MatchMode},
     mcp::tools::messaging::{self, MessagingCtx},
-    no_rly::consent::ConsentGate,
-    no_rly::journal::JOURNAL_FILE_NAME,
+    no_rly::{consent::ConsentGate, journal::JOURNAL_FILE_NAME},
     state::new_state,
 };
+use serenity::model::id::{ChannelId, MessageId};
+use std::{fs, sync::Arc};
+use tempfile::TempDir;
 
 // ── Test data: the actual substrate tells and group vocabulary ───────────────
 

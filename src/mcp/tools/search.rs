@@ -1,16 +1,15 @@
 //! Guild message search: wraps Discord's `GET /guilds/{guild_id}/messages/search`.
 
-use std::collections::{BTreeMap, HashSet};
-use std::fmt;
-
+use super::messaging::{MessagingCtx, message_json};
+use crate::{gate::OutboundGate, mcp::ids::Snowflake};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use serenity::model::id::{ChannelId, GuildId, UserId};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fmt,
+};
 use thiserror::Error;
-
-use super::messaging::{MessagingCtx, message_json};
-use crate::gate::OutboundGate;
-use crate::mcp::ids::Snowflake;
 
 // ── Error type ───────────────────────────────────────────────────────────────
 
@@ -1170,9 +1169,8 @@ mod tests {
     }
 
     mod proptests {
-        use proptest::prelude::*;
-
         use super::*;
+        use proptest::prelude::*;
 
         proptest! {
             /// Every value in 1..=25 produces a valid SearchLimit whose get()

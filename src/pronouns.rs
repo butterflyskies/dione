@@ -1,6 +1,7 @@
-use std::collections::HashMap;
-use std::time::{Duration, Instant};
-
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 use tokio::sync::RwLock;
 
 /// Documented PronounDB v2 English pronoun sets.

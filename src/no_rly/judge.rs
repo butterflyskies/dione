@@ -5,11 +5,9 @@
 //! a future classifier (the "cingulate") can implement [`OutboundJudge`] and
 //! slot in without the queue, handles, journal, or expiry changing shape.
 
-use std::fmt;
-
-use serde::{Deserialize, Serialize};
-
 use crate::contradictionary::{Action, Contradictionary};
+use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// A single matched rule inside a [`RejectReason`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

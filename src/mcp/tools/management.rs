@@ -1,15 +1,16 @@
-use std::sync::Arc;
-
+use crate::{
+    config::LoadedConfig, gate::OutboundGate, ingress_ledger::IngressLedger,
+    mcp::tools::messaging::verify_message_target, state::State,
+};
 use serde_json::{Value, json};
-use serenity::builder::CreateThread;
-use serenity::model::channel::ChannelType;
-use serenity::model::id::{ChannelId, MessageId};
-
-use crate::config::LoadedConfig;
-use crate::gate::OutboundGate;
-use crate::ingress_ledger::IngressLedger;
-use crate::mcp::tools::messaging::verify_message_target;
-use crate::state::State;
+use serenity::{
+    builder::CreateThread,
+    model::{
+        channel::ChannelType,
+        id::{ChannelId, MessageId},
+    },
+};
+use std::sync::Arc;
 
 /// Context for channel management tools.
 pub struct ManagementCtx {
@@ -169,13 +170,13 @@ pub async fn delete_message(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use serenity::model::id::ChannelId;
-
     use super::*;
-    use crate::config::{ChannelConfig, Config, LoadedConfig};
-    use crate::state::new_state;
+    use crate::{
+        config::{ChannelConfig, Config, LoadedConfig},
+        state::new_state,
+    };
+    use serenity::model::id::ChannelId;
+    use std::sync::Arc;
 
     fn config_with_channel(channel_id: u64) -> LoadedConfig {
         let mut raw = Config::default();

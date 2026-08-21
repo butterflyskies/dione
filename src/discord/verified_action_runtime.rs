@@ -3,16 +3,6 @@
 //! Network clients and shared state live here so compile-fail tests can exercise
 //! the proof API itself without replacing production dependencies with stubs.
 
-use std::{collections::HashSet, num::NonZeroU64, time::Duration};
-
-use chrono::Utc;
-use serenity::{
-    http::Http,
-    model::{channel::Message, event::MessageUpdateEvent},
-};
-use sha2::{Digest as _, Sha256};
-use uuid::Uuid;
-
 use super::verified_action::{
     DiscordTransportVerifier, EventBinding, EventContext, FreshPolicySnapshot, PrincipalResolver,
     RepresentedPrincipal, ResolutionFailure, ResolutionFailureClass, TransportProvider, Unresolved,
@@ -22,6 +12,14 @@ use crate::{
     pluralkit::{PkResolveError, PkResolver, VerifiedPkFacts},
     state::{State, observe_webhook_creator},
 };
+use chrono::Utc;
+use serenity::{
+    http::Http,
+    model::{channel::Message, event::MessageUpdateEvent},
+};
+use sha2::{Digest as _, Sha256};
+use std::{collections::HashSet, num::NonZeroU64, time::Duration};
+use uuid::Uuid;
 
 const DISCORD_VERIFICATION_DEADLINE: Duration = Duration::from_secs(5);
 

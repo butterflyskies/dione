@@ -1,8 +1,7 @@
 //! Snowflake: a validated Discord ID for use at the MCP tool boundary.
 
-use std::num::NonZeroU64;
-
 use serenity::model::id::{ChannelId, GuildId, MessageId, UserId};
+use std::num::NonZeroU64;
 
 /// A Discord snowflake parsed from an MCP tool argument.
 ///

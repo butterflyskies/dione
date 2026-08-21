@@ -1,11 +1,12 @@
-use std::collections::{HashMap, hash_map::Entry};
-use std::fmt;
-use std::str::FromStr;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
-
 use serenity::model::id::{ChannelId, MessageId, UserId};
 use sha2::{Digest as _, Sha256};
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    fmt,
+    str::FromStr,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 use uuid::Uuid;
 
 const DEFAULT_TTL: Duration = Duration::from_secs(3600);
@@ -487,10 +488,11 @@ pub(crate) fn parse_structured_command(content: &str) -> Option<ParsedCommand> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Barrier};
-    use std::thread;
-
     use super::*;
+    use std::{
+        sync::{Arc, Barrier},
+        thread,
+    };
 
     const PACE: UserId = UserId::new(437002871280631808);
     const GUEST: UserId = UserId::new(999999);

@@ -4,11 +4,6 @@
 //! these tools only read and maintain the journal, plus report the live
 //! queue depth.
 
-use std::sync::Arc;
-
-use chrono::{Days, Utc};
-use serde_json::{Value, json};
-
 use crate::{
     config::LoadedConfig,
     no_rly::{
@@ -16,6 +11,9 @@ use crate::{
         journal::{Outcome, StatsFilter},
     },
 };
+use chrono::{Days, Utc};
+use serde_json::{Value, json};
+use std::sync::Arc;
 
 /// Context for the journal tools.
 pub struct NoRlyCtx {

@@ -1,11 +1,8 @@
-use std::path::Path;
-
+use crate::{timestamp::Timestamp, util::truncate_chars};
 use aho_corasick::AhoCorasick;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-
-use crate::timestamp::Timestamp;
-use crate::util::truncate_chars;
+use std::path::Path;
 
 /// Action to take when a pattern matches outbound text.
 ///

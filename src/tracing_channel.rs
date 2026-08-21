@@ -4,16 +4,11 @@
 //! notification pipeline, where they appear as channel notifications with
 //! `type="trace"` metadata — differentiated from Discord events.
 
+use crate::discord::events::NotificationEvent;
 use std::sync::Arc;
-
 use tokio::sync::mpsc;
 use tracing::Subscriber;
-use tracing_subscriber::EnvFilter;
-use tracing_subscriber::Layer;
-use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::reload;
-
-use crate::discord::events::NotificationEvent;
+use tracing_subscriber::{EnvFilter, Layer, registry::LookupSpan, reload};
 
 // ── TraceLevelController ─────────────────────────────────────────────────────
 

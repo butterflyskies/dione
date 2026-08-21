@@ -17,16 +17,16 @@
 //! - **Data minimization**: cache only the authorization projection (IDs),
 //!   not names, pronouns, or avatars.
 
-use std::collections::{HashMap, VecDeque};
-use std::num::NonZeroU64;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
+use crate::discord::verified_action::{EventBinding as VerifiedEventBinding, EventContext};
 use serenity::model::id::{ChannelId, GuildId, MessageId, UserId};
+use std::{
+    collections::{HashMap, VecDeque},
+    num::NonZeroU64,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::sync::{RwLock, Semaphore};
 use uuid::Uuid;
-
-use crate::discord::verified_action::{EventBinding as VerifiedEventBinding, EventContext};
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -681,8 +681,10 @@ impl PkResolver {
 mod tests {
     use super::*;
     use proptest::prelude::*;
-    use std::collections::HashSet;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        collections::HashSet,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     // ── PkResolverConfig defaults ───────────────────────────────────────────
 
@@ -1029,10 +1031,12 @@ mod tests {
 
     #[test]
     fn verified_cache_expiry_is_physical_and_does_not_erase_lifecycle_admission() {
-        use crate::discord::verified_action::{
-            LifecycleContext, LifecycleProvenance, test_lifecycle_facts,
+        use crate::{
+            discord::verified_action::{
+                LifecycleContext, LifecycleProvenance, test_lifecycle_facts,
+            },
+            ingress_ledger::{IngressLedger, TransitionResult},
         };
-        use crate::ingress_ledger::{IngressLedger, TransitionResult};
         use serenity::model::{Timestamp, id::WebhookId};
 
         let mut cache = VerifiedFactsCache::new(2);

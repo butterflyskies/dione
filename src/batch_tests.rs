@@ -1,6 +1,5 @@
 use super::*;
-use crate::discord::events::AttachmentMeta;
-use crate::timestamp::Timestamp;
+use crate::{discord::events::AttachmentMeta, timestamp::Timestamp};
 use serenity::model::id::{ChannelId, MessageId, UserId};
 
 fn msg(message_id: u64, user: &str, user_id: u64, content: &str) -> NotificationEvent {

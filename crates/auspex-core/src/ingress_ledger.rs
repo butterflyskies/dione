@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
-
-use sha2::{Digest as _, Sha256};
-
 use crate::{ChannelRef, ContentHash, MessageRef, PrincipalRef};
+use sha2::{Digest as _, Sha256};
+use std::{
+    collections::HashMap,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 const DEFAULT_TTL: Duration = Duration::from_secs(7200);
 const DEFAULT_MAX_ENTRIES: usize = 16_384;

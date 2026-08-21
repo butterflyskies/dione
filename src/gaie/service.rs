@@ -1,24 +1,27 @@
-use crate::gaie::archive::StoredOriginEvidence;
-use crate::gaie::backfill::{
-    DiscoveryPage, DiscoveryRoute, RootKind, ThreadCandidate, ThreadKind, discover_capture_targets,
-};
-use crate::gaie::origin::{
-    DISCORD_COLLECTOR_VERSION, DISCORD_HTTP_ADAPTER_NAME, DISCORD_HTTP_ADAPTER_VERSION,
-    project_discord_message, project_discord_reaction,
-};
 use crate::gaie::{
     Attachment, CaptureRoot, CaptureTarget, Event, EventKind, Ingest, Lineage, OriginAdapter,
     OriginEvidenceRef, Payload, Relations, Source,
+    archive::StoredOriginEvidence,
+    backfill::{
+        DiscoveryPage, DiscoveryRoute, RootKind, ThreadCandidate, ThreadKind,
+        discover_capture_targets,
+    },
+    origin::{
+        DISCORD_COLLECTOR_VERSION, DISCORD_HTTP_ADAPTER_NAME, DISCORD_HTTP_ADAPTER_VERSION,
+        project_discord_message, project_discord_reaction,
+    },
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
-use std::fs::{self, File, OpenOptions};
-use std::io::Write as _;
-use std::net::IpAddr;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-use std::time::{Duration, Instant};
+use std::{
+    fs::{self, File, OpenOptions},
+    io::Write as _,
+    net::IpAddr,
+    time::{Duration, Instant},
+};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -2104,8 +2107,10 @@ mod tests {
             Archive, ArchivePaths, BackfillOptions, Checkpoint, CorpusId, StreamCheckpoint,
             run_backfill,
         };
-        use std::collections::{BTreeMap, BTreeSet};
-        use std::sync::{Arc, Mutex};
+        use std::{
+            collections::{BTreeMap, BTreeSet},
+            sync::{Arc, Mutex},
+        };
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
         let temp = tempfile::tempdir().unwrap();

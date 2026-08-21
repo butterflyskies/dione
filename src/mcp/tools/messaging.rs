@@ -1,35 +1,40 @@
-use std::{sync::Arc, time::Instant};
-
+use crate::{
+    config::{ChunkMode, DmPolicy, LoadedConfig},
+    contradictionary::{Action, BlockOutcome, DiaryRecord, append_diary_record},
+    discord::{chunk, events::NotificationEvent},
+    evidence::{
+        EvidenceKeys, EvidenceTransport, append_markers, locator_metadata, parse_evidence_locators,
+        project_evidence,
+    },
+    gate::OutboundGate,
+    ingress_ledger::IngressLedger,
+    no_rly::{
+        consent::{
+            BounceTicket, ConsentGate, DeliverError, DeliverReply, RejectedHandle, Rephrased,
+            ReplyRequest,
+        },
+        judge::{AlwaysClear, OutboundJudge, Verdict},
+        queue::HoldHandle,
+    },
+    pre_send::{
+        ChannelType as HookChannelType, ConstructId, HookContext, HookDecision, HookName,
+        OutboundDestination, PreSendPipeline,
+    },
+    state::State,
+};
 use camino::Utf8PathBuf;
 use serde_json::{Value, json};
-use serenity::builder::{CreateAllowedMentions, CreateAttachment, CreateMessage, EditMessage};
-use serenity::http::MessagePagination;
-use serenity::model::Timestamp;
-use serenity::model::channel::Message;
-use serenity::model::id::{ChannelId, MessageId, UserId};
-
+use serenity::{
+    builder::{CreateAllowedMentions, CreateAttachment, CreateMessage, EditMessage},
+    http::MessagePagination,
+    model::{
+        Timestamp,
+        channel::Message,
+        id::{ChannelId, MessageId, UserId},
+    },
+};
+use std::{sync::Arc, time::Instant};
 use tokio::sync::mpsc;
-
-use crate::config::{ChunkMode, DmPolicy, LoadedConfig};
-use crate::contradictionary::{Action, BlockOutcome, DiaryRecord, append_diary_record};
-use crate::discord::chunk;
-use crate::discord::events::NotificationEvent;
-use crate::evidence::{
-    EvidenceKeys, EvidenceTransport, append_markers, locator_metadata, parse_evidence_locators,
-    project_evidence,
-};
-use crate::gate::OutboundGate;
-use crate::ingress_ledger::IngressLedger;
-use crate::no_rly::consent::{
-    BounceTicket, ConsentGate, DeliverError, DeliverReply, RejectedHandle, Rephrased, ReplyRequest,
-};
-use crate::no_rly::judge::{AlwaysClear, OutboundJudge, Verdict};
-use crate::no_rly::queue::HoldHandle;
-use crate::pre_send::{
-    ChannelType as HookChannelType, ConstructId, HookContext, HookDecision, HookName,
-    OutboundDestination, PreSendPipeline,
-};
-use crate::state::State;
 
 /// Self-react emoji for contradictionary celebrate hits (✨ — sparkles).
 const CONTRADICTIONARY_CELEBRATE_REACT: &str = "\u{2728}";
@@ -1769,8 +1774,10 @@ mod tests {
         state::new_state,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
 
     #[test]
     fn outbound_surface_strings_are_canonical() {

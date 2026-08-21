@@ -1,7 +1,8 @@
-use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
-
 use serde::Deserialize;
+use std::{
+    collections::{HashMap, HashSet},
+    time::{Duration, Instant},
+};
 use tokio::sync::RwLock;
 
 pub const DEFAULT_NAMEPLATES_URL: &str =

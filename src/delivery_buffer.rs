@@ -254,8 +254,7 @@ fn extract_channel_id(event: &NotificationEvent) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discord::events::MessageEvent;
-    use crate::timestamp::Timestamp;
+    use crate::{discord::events::MessageEvent, timestamp::Timestamp};
     use serenity::model::id::{ChannelId, MessageId, UserId};
 
     fn msg_event(chat_id: u64) -> NotificationEvent {
@@ -733,8 +732,7 @@ mod tests {
 #[cfg(test)]
 mod proptests {
     use super::*;
-    use crate::discord::events::MessageEvent;
-    use crate::timestamp::Timestamp;
+    use crate::{discord::events::MessageEvent, timestamp::Timestamp};
     use proptest::prelude::*;
     use serenity::model::id::{ChannelId, MessageId, UserId};
 

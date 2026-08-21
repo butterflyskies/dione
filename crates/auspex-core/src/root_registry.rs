@@ -1,11 +1,14 @@
-use std::collections::HashMap;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
-
-use crate::receipt::ActivationRoot;
-use crate::verdict::RootVerdict;
-use crate::{ChannelRef, EpochId, MessageRef, RootId};
+use crate::{
+    ChannelRef, EpochId, MessageRef, RootId, receipt::ActivationRoot, verdict::RootVerdict,
+};
+use std::{
+    collections::HashMap,
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 const DEFAULT_TTL: Duration = Duration::from_secs(7200);
 const DEFAULT_MAX_ROOTS: usize = 16_384;
@@ -279,8 +282,7 @@ impl RootRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::receipt::DiscordIngressReceipt;
-    use crate::{ContentHash, PrincipalRef};
+    use crate::{ContentHash, PrincipalRef, receipt::DiscordIngressReceipt};
     use sha2::{Digest as _, Sha256};
 
     const CH_A: ChannelRef = ChannelRef::new(100);

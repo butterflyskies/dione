@@ -1,9 +1,7 @@
-use std::fs;
-
+use crate::config::{DmPolicy, LoadedConfig};
 use camino::Utf8Path;
 use regex::RegexSet;
-
-use crate::config::{DmPolicy, LoadedConfig};
+use std::fs;
 
 // ── Decision type ─────────────────────────────────────────────────────────────
 

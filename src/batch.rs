@@ -20,12 +20,13 @@
 //! message with attachments
 //! ```
 
-use crate::discord::events::{MessageEvent, NotificationEvent};
-use crate::timestamp::{Timestamp, format_compact};
+use crate::{
+    discord::events::{MessageEvent, NotificationEvent},
+    timestamp::{Timestamp, format_compact},
+};
 use chrono_tz::Tz;
 use serenity::model::id::{ChannelId, UserId};
-use std::collections::BTreeSet;
-use std::fmt::Write;
+use std::{collections::BTreeSet, fmt::Write};
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

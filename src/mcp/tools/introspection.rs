@@ -1,9 +1,7 @@
-use std::sync::Arc;
-
+use crate::config::LoadedConfig;
 use serde_json::{Value, json};
 use serenity::model::id::{ChannelId, GuildId, UserId};
-
-use crate::config::LoadedConfig;
+use std::sync::Arc;
 
 /// Context for introspection tools.
 pub struct IntrospectionCtx {

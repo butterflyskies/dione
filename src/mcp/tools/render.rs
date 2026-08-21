@@ -1,9 +1,8 @@
+use crate::mcp::tools::messaging::MessagingCtx;
 use serde_json::{Value, json};
 use serenity::model::id::ChannelId;
 use typst::layout::PagedDocument;
 use typst_as_lib::TypstEngine;
-
-use crate::mcp::tools::messaging::MessagingCtx;
 
 const MATH_TEMPLATE: &str = r##"
 #set page(width: auto, height: auto, margin: 4pt)
@@ -152,15 +151,15 @@ pub async fn render_latex_to_channel_with_hook_overrides(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use camino::Utf8PathBuf;
-
     use super::*;
-    use crate::config::{Config, LoadedConfig};
-    use crate::mcp::tools::messaging::MessagingCtx;
-    use crate::pre_send::HookName;
-    use crate::state::new_state;
+    use crate::{
+        config::{Config, LoadedConfig},
+        mcp::tools::messaging::MessagingCtx,
+        pre_send::HookName,
+        state::new_state,
+    };
+    use camino::Utf8PathBuf;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn captionless_render_to_channel_rejects_hook_overrides_before_rendering() {
