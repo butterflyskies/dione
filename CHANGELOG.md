@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.35.1] - 2026-08-22
+
+### Fixed
+- **Codex event consumers retain their requested lifetime on refresh.** Consumer
+  registrations now persist their requested TTL and reuse it when polling,
+  acknowledging, claiming primary ownership, or receiving a handoff. Previously
+  each operation silently reset the lifetime to 15 minutes, so a crashed
+  short-lived bridge could block its replacement much longer than requested.
+  Existing inbox files remain compatible and use the historical 15-minute
+  default when no persisted TTL is present.
+
 ## [0.35.0] - 2026-08-21
 
 ### Fixed

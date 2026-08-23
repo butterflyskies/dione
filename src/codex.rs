@@ -186,6 +186,14 @@ struct ConsumerRegistration {
     id: ConsumerId,
     label: String,
     expires_at: DateTime<Utc>,
+    #[serde(default = "default_consumer_ttl_seconds")]
+    ttl_seconds: u64,
+}
+
+impl ConsumerRegistration {
+    fn ttl(&self) -> Duration {
+        Duration::from_secs(self.ttl_seconds).min(MAX_CONSUMER_TTL)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -423,7 +431,7 @@ impl DurableInbox {
         live_thread_id: Option<&CodexThreadId>,
     ) -> Result<Option<LeasedEvent>, CodexQueueError> {
         self.transaction(|inbox| {
-            inbox.touch_consumer(consumer_id, now, DEFAULT_CONSUMER_TTL)?;
+            inbox.touch_consumer(consumer_id, now)?;
             for event in &mut inbox.state.entries {
                 if event
                     .lease
@@ -486,9 +494,10 @@ impl DurableInbox {
         &mut self,
         consumer_id: &ConsumerId,
         token: &DeliveryToken,
+        now: DateTime<Utc>,
     ) -> Result<(), CodexQueueError> {
         self.transaction(|inbox| {
-            inbox.touch_consumer(consumer_id, Utc::now(), DEFAULT_CONSUMER_TTL)?;
+            inbox.touch_consumer(consumer_id, now)?;
             let Some(index) = inbox.state.entries.iter().position(|event| {
                 event.lease.as_ref().is_some_and(|lease| {
                     lease.token == *token && lease.consumer_id.as_ref() == Some(consumer_id)
@@ -573,6 +582,7 @@ impl DurableInbox {
                 id: consumer_id.clone(),
                 label,
                 expires_at,
+                ttl_seconds: ttl.as_secs(),
             });
             if make_primary {
                 inbox.state.primary_consumer = Some(consumer_id.clone());
@@ -610,6 +620,7 @@ impl DurableInbox {
                 // after a long outage. Keeping the identity also keeps its
                 // already-routed events deliverable.
                 consumer.expires_at = now + duration_delta(MAX_CONSUMER_TTL);
+                consumer.ttl_seconds = MAX_CONSUMER_TTL.as_secs();
                 return Ok(primary);
             }
             inbox.expire_consumers(now);
@@ -623,6 +634,7 @@ impl DurableInbox {
                 id: consumer_id.clone(),
                 label: LIVE_CONSUMER_LABEL.to_owned(),
                 expires_at: now + duration_delta(MAX_CONSUMER_TTL),
+                ttl_seconds: MAX_CONSUMER_TTL.as_secs(),
             });
             // Existing unassigned/orphaned events are intentionally not moved.
             // Enabling live delivery must not replay an arbitrary old backlog.
@@ -643,7 +655,7 @@ impl DurableInbox {
             if inbox.state.primary_consumer.as_ref() != Some(from) {
                 return Err(CodexQueueError::NotPrimaryConsumer);
             }
-            inbox.touch_consumer(to, now, DEFAULT_CONSUMER_TTL)?;
+            inbox.touch_consumer(to, now)?;
             let mut moved_pending = 0;
             let mut invalidated_leases = 0;
             if move_pending {
@@ -678,7 +690,7 @@ impl DurableInbox {
             if inbox.state.primary_consumer.is_some() {
                 return Err(CodexQueueError::PrimaryConsumerExists);
             }
-            inbox.touch_consumer(consumer_id, now, DEFAULT_CONSUMER_TTL)?;
+            inbox.touch_consumer(consumer_id, now)?;
             let active_consumers: HashSet<_> = inbox
                 .state
                 .consumers
@@ -708,7 +720,6 @@ impl DurableInbox {
         &mut self,
         consumer_id: &ConsumerId,
         now: DateTime<Utc>,
-        ttl: Duration,
     ) -> Result<(), CodexQueueError> {
         self.expire_consumers(now);
         let Some(consumer) = self
@@ -719,7 +730,7 @@ impl DurableInbox {
         else {
             return Err(CodexQueueError::UnknownConsumer);
         };
-        consumer.expires_at = now + duration_delta(ttl);
+        consumer.expires_at = now + duration_delta(consumer.ttl());
         Ok(())
     }
 
@@ -909,7 +920,10 @@ impl CodexEventQueue {
         consumer_id: &ConsumerId,
         token: &DeliveryToken,
     ) -> Result<(), CodexQueueError> {
-        self.inbox.lock().await.acknowledge(consumer_id, token)?;
+        self.inbox
+            .lock()
+            .await
+            .acknowledge(consumer_id, token, Utc::now())?;
         self.changed.notify_waiters();
         Ok(())
     }
@@ -991,6 +1005,10 @@ pub fn consumer_ttl(seconds: Option<u64>) -> Duration {
         .map(Duration::from_secs)
         .unwrap_or(DEFAULT_CONSUMER_TTL)
         .clamp(Duration::from_secs(60), MAX_CONSUMER_TTL)
+}
+
+const fn default_consumer_ttl_seconds() -> u64 {
+    DEFAULT_CONSUMER_TTL.as_secs()
 }
 
 fn duration_delta(duration: Duration) -> TimeDelta {
@@ -1080,6 +1098,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lease_and_ack_refresh_the_registered_consumer_ttl() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        let registered_at = Utc::now();
+        let ttl = Duration::from_secs(60);
+        let consumer = queue
+            .inbox
+            .lock()
+            .await
+            .register_consumer(
+                "short lived".to_owned(),
+                registered_at,
+                ttl,
+                true,
+                true,
+            )
+            .unwrap()
+            .consumer_id;
+        queue.enqueue(message("1", "hello")).await.unwrap();
+
+        let leased_at = registered_at + TimeDelta::seconds(30);
+        let event = queue
+            .inbox
+            .lock()
+            .await
+            .lease_next(&consumer, leased_at, DEFAULT_LEASE, None)
+            .unwrap()
+            .unwrap();
+        let lease_refresh = queue
+            .inbox
+            .lock()
+            .await
+            .state
+            .consumers
+            .iter()
+            .find(|registration| registration.id == consumer)
+            .unwrap()
+            .expires_at;
+        assert_eq!(lease_refresh, leased_at + TimeDelta::seconds(60));
+
+        let acknowledged_at = registered_at + TimeDelta::seconds(40);
+        queue
+            .inbox
+            .lock()
+            .await
+            .acknowledge(&consumer, &event.delivery_token, acknowledged_at)
+            .unwrap();
+        let ack_refresh = queue
+            .inbox
+            .lock()
+            .await
+            .state
+            .consumers
+            .iter()
+            .find(|registration| registration.id == consumer)
+            .unwrap()
+            .expires_at;
+        assert_eq!(ack_refresh, acknowledged_at + TimeDelta::seconds(60));
+    }
+
+    #[tokio::test]
     async fn expired_lease_is_redelivered_with_new_token() {
         let dir = TempDir::new().unwrap();
         let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
@@ -1159,6 +1238,84 @@ mod tests {
                 .as_ref()
                 .map(CodexThreadId::as_str),
             Some("legacy-thread")
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_consumer_without_stored_ttl_uses_the_default() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let now = Utc::now();
+        std::fs::write(
+            path.join(INBOX_FILE_NAME),
+            serde_json::to_vec(&json!({
+                "next_id": 1,
+                "primary_consumer": "codex-consumer-0",
+                "consumers": [{
+                    "id": "codex-consumer-0",
+                    "label": "legacy consumer",
+                    "expires_at": now + TimeDelta::hours(1)
+                }],
+                "entries": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let consumer = ConsumerId::parse("codex-consumer-0").unwrap();
+        let refreshed_at = now + TimeDelta::minutes(1);
+        let mut inbox = queue.inbox.lock().await;
+        inbox.touch_consumer(&consumer, refreshed_at).unwrap();
+        let registration = inbox
+            .state
+            .consumers
+            .iter()
+            .find(|registration| registration.id == consumer)
+            .unwrap();
+        assert_eq!(registration.ttl_seconds, DEFAULT_CONSUMER_TTL.as_secs());
+        assert_eq!(
+            registration.expires_at,
+            refreshed_at + duration_delta(DEFAULT_CONSUMER_TTL)
+        );
+    }
+
+    #[tokio::test]
+    async fn registered_consumer_ttl_survives_restart() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let registered_at = Utc::now();
+        let consumer = {
+            let queue = CodexEventQueue::load(&path).unwrap();
+            queue
+                .inbox
+                .lock()
+                .await
+                .register_consumer(
+                    "short lived".to_owned(),
+                    registered_at,
+                    Duration::from_secs(60),
+                    true,
+                    true,
+                )
+                .unwrap()
+                .consumer_id
+        };
+
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let refreshed_at = registered_at + TimeDelta::seconds(30);
+        let mut inbox = queue.inbox.lock().await;
+        inbox.touch_consumer(&consumer, refreshed_at).unwrap();
+        let registration = inbox
+            .state
+            .consumers
+            .iter()
+            .find(|registration| registration.id == consumer)
+            .unwrap();
+        assert_eq!(registration.ttl_seconds, 60);
+        assert_eq!(
+            registration.expires_at,
+            refreshed_at + TimeDelta::seconds(60)
         );
     }
 
