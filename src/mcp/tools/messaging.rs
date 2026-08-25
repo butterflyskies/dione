@@ -57,9 +57,10 @@ pub(crate) fn phantom_canary_alert(
 }
 
 /// Verify a message target against the ingress ledger before performing a
-/// Discord mutation. Returns `Err(json)` with a canary alert on `Unknown`
-/// or `ChannelMismatch`, blocking the operation. `Expired` and `Unavailable`
-/// log but allow the operation to proceed (legitimate edge cases).
+/// Discord mutation. Returns `Err(json)` and raises a canary alert on
+/// `Unknown`, blocking the operation. `ChannelMismatch` is also blocked but is
+/// reported directly without a phantom alert. `Expired` and `Unavailable` log
+/// but allow the operation to proceed (legitimate edge cases).
 ///
 /// `operation` names the egress path for tracing and alerts (e.g. "react",
 /// "pin_message").
@@ -71,6 +72,24 @@ pub(crate) fn verify_message_target(
     channel_id: ChannelId,
     operation: &str,
 ) -> Result<(), Value> {
+    verify_message_target_with_alert(
+        ledger,
+        config,
+        message_id,
+        channel_id,
+        operation,
+        |alert_channel, content| phantom_canary_alert(http, alert_channel, &content),
+    )
+}
+
+fn verify_message_target_with_alert(
+    ledger: &IngressLedger,
+    config: &LoadedConfig,
+    message_id: MessageId,
+    channel_id: ChannelId,
+    operation: &str,
+    mut alert: impl FnMut(ChannelId, String),
+) -> Result<(), Value> {
     match ledger.verify(message_id, channel_id) {
         crate::ingress_ledger::VerifyResult::Admitted { .. } => Ok(()),
         crate::ingress_ledger::VerifyResult::Unknown => {
@@ -81,10 +100,9 @@ pub(crate) fn verify_message_target(
                 "egress: message_id not in ingress ledger"
             );
             if let Some(alert_ch) = config.phantom_canary_channel {
-                phantom_canary_alert(
-                    http,
+                alert(
                     alert_ch,
-                    &format!(
+                    format!(
                         "⚠️ PHANTOM CANARY: {operation} target message {msg} in channel {ch} not in ingress ledger (Unknown)",
                         msg = message_id.get(),
                         ch = channel_id.get(),
@@ -109,23 +127,16 @@ pub(crate) fn verify_message_target(
                 operation,
                 "egress: message_id channel mismatch"
             );
-            if let Some(alert_ch) = config.phantom_canary_channel {
-                phantom_canary_alert(
-                    http,
-                    alert_ch,
-                    &format!(
-                        "⚠️ PHANTOM CANARY: {operation} target message {msg} channel mismatch — admitted from {admitted}, claimed {claimed} (ChannelMismatch)",
-                        msg = message_id.get(),
-                        admitted = admitted_channel,
-                        claimed = claimed_channel,
-                    ),
-                );
-            }
             Err(json!({
                 "error": format!(
-                    "message {} channel mismatch — possible phantom. {operation} blocked.",
-                    message_id.get()
-                )
+                    "message {message_id} was admitted in channel {admitted_channel}, not claimed channel {claimed_channel}; {operation} blocked",
+                ),
+                "reason": "channel_mismatch",
+                "message_id": message_id.to_string(),
+                "admitted_channel_id": admitted_channel.to_string(),
+                "claimed_channel_id": claimed_channel.to_string(),
+                "operation": operation,
+                "blocked": true,
             }))
         }
         crate::ingress_ledger::VerifyResult::Expired => {
@@ -583,17 +594,21 @@ pub(crate) async fn reply_with_evidence_and_hook_overrides(
     reply_to_message_id: Option<MessageId>,
     options: ReplyToolOptions<'_>,
 ) -> Value {
-    if let Some(ref_id) = reply_to_message_id {
-        // Warn-only for reply: the reply_to is optional context, not the
-        // primary action. The message still sends even if verification fails.
-        let _ = verify_message_target(
+    if let Err(error) = check_outbound(ctx, channel_id).await {
+        return error;
+    }
+
+    if let Some(ref_id) = reply_to_message_id
+        && let Err(error) = verify_message_target(
             &ctx.ingress_ledger,
             &ctx.http,
             &ctx.config,
             ref_id,
             channel_id,
             "reply_to",
-        );
+        )
+    {
+        return error;
     }
 
     let prepared = match prepare_outbound(
@@ -1987,6 +2002,151 @@ mod tests {
         LoadedConfig::from_raw(raw)
     }
 
+    fn configured_ingress_test_config() -> LoadedConfig {
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        raw.phantom_canary.alert_channel_id = "99".into();
+        LoadedConfig::from_raw(raw)
+    }
+
+    #[test]
+    fn ingress_rejections_route_alerts_by_verdict() {
+        let config = configured_ingress_test_config();
+        let ledger = IngressLedger::new();
+        ledger.note_admitted(
+            MessageId::new(7),
+            ChannelId::new(41),
+            UserId::new(100),
+            "known message",
+        );
+        let mut alerts = Vec::new();
+
+        let mismatch = verify_message_target_with_alert(
+            &ledger,
+            &config,
+            MessageId::new(7),
+            ChannelId::new(42),
+            "react",
+            |channel, content| alerts.push((channel, content)),
+        )
+        .expect_err("a channel mismatch must be blocked");
+
+        assert_eq!(mismatch["reason"], "channel_mismatch");
+        assert_eq!(mismatch["message_id"], "7");
+        assert_eq!(mismatch["admitted_channel_id"], "41");
+        assert_eq!(mismatch["claimed_channel_id"], "42");
+        assert_eq!(mismatch["operation"], "react");
+        assert_eq!(mismatch["blocked"], true);
+        assert!(mismatch["error"].as_str().is_some_and(|error| {
+            error.contains("admitted in channel 41")
+                && error.contains("claimed channel 42")
+                && error.contains("react blocked")
+        }));
+        assert!(
+            alerts.is_empty(),
+            "a known mismatch must not page as phantom"
+        );
+
+        let unknown = verify_message_target_with_alert(
+            &ledger,
+            &config,
+            MessageId::new(8),
+            ChannelId::new(42),
+            "react",
+            |channel, content| alerts.push((channel, content)),
+        )
+        .expect_err("an unknown target must be blocked");
+
+        assert!(unknown["error"].as_str().is_some_and(|error| {
+            error.contains("possible phantom") && error.contains("react blocked")
+        }));
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].0, ChannelId::new(99));
+        assert!(alerts[0].1.contains("PHANTOM CANARY"));
+        assert!(alerts[0].1.contains("Unknown"));
+    }
+
+    #[tokio::test]
+    async fn ingress_rejections_do_not_reach_discord_mutation() {
+        let (http, requests, server) = fake_discord_http().await;
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        let ledger = Arc::new(IngressLedger::new());
+        ledger.note_admitted(
+            MessageId::new(7),
+            ChannelId::new(41),
+            UserId::new(100),
+            "known message",
+        );
+        let ctx = MessagingCtx::new(
+            http,
+            new_state(),
+            Arc::new(LoadedConfig::from_raw(raw)),
+            "/tmp".into(),
+            Arc::new(ConsentGate::new(camino::Utf8Path::new("/tmp"))),
+            ledger,
+        );
+
+        let mismatch = react(&ctx, ChannelId::new(42), MessageId::new(7), "✅").await;
+        let unknown = react(&ctx, ChannelId::new(42), MessageId::new(8), "✅").await;
+        let mismatched_reply = reply(
+            &ctx,
+            ChannelId::new(42),
+            "reply body",
+            Some(MessageId::new(7)),
+            false,
+        )
+        .await;
+        let unknown_reply = reply(
+            &ctx,
+            ChannelId::new(42),
+            "reply body",
+            Some(MessageId::new(8)),
+            false,
+        )
+        .await;
+        let disallowed_reply = reply(
+            &ctx,
+            ChannelId::new(43),
+            "reply body",
+            Some(MessageId::new(7)),
+            false,
+        )
+        .await;
+
+        assert_eq!(mismatch["reason"], "channel_mismatch");
+        assert_eq!(mismatched_reply["reason"], "channel_mismatch");
+        assert!(
+            unknown["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("possible phantom"))
+        );
+        assert!(
+            unknown_reply["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("possible phantom"))
+        );
+        assert_eq!(
+            disallowed_reply["error"],
+            "channel 43 is not a permitted outbound target"
+        );
+        assert!(
+            disallowed_reply.get("admitted_channel_id").is_none(),
+            "an unauthorized destination must not expose ledger provenance"
+        );
+        assert!(
+            requests.lock().expect("request capture lock").is_empty(),
+            "neither rejection may reach the Discord HTTP boundary"
+        );
+        server.abort();
+    }
+
     fn messaging_ctx(config: LoadedConfig) -> MessagingCtx {
         MessagingCtx::new(
             Arc::new(serenity::http::Http::new("fake")),
@@ -2543,18 +2703,49 @@ mod tests {
         let (mut ctx, _) = messaging_ctx_with_halt_pipeline(LoadedConfig::from_raw(raw));
         ctx.ingress_ledger = Arc::clone(&ledger);
 
-        for message_id in [7, 9, 8] {
-            let result = reply_with_hook_overrides(
-                &ctx,
-                ChannelId::new(42),
-                "text",
-                Some(MessageId::new(message_id)),
-                false,
-                &[],
-            )
-            .await;
-            assert_eq!(result["error"], "blocked by test hook");
-        }
+        // Admitted reply (msg 7 in ch 42) → reaches halt hook.
+        let admitted = reply_with_hook_overrides(
+            &ctx,
+            ChannelId::new(42),
+            "text",
+            Some(MessageId::new(7)),
+            false,
+            &[],
+        )
+        .await;
+        assert_eq!(admitted["error"], "blocked by test hook");
+
+        // Unknown reply (msg 9 not in ledger) → blocked before halt hook.
+        let unknown = reply_with_hook_overrides(
+            &ctx,
+            ChannelId::new(42),
+            "text",
+            Some(MessageId::new(9)),
+            false,
+            &[],
+        )
+        .await;
+        assert!(
+            unknown["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("possible phantom")),
+            "unknown reply_to must be blocked before reaching hooks: {unknown}"
+        );
+
+        // Mismatch reply (msg 8 admitted in ch 41, claimed ch 42) → blocked before halt hook.
+        let mismatch = reply_with_hook_overrides(
+            &ctx,
+            ChannelId::new(42),
+            "text",
+            Some(MessageId::new(8)),
+            false,
+            &[],
+        )
+        .await;
+        assert_eq!(
+            mismatch["reason"], "channel_mismatch",
+            "channel mismatch reply_to must be blocked before reaching hooks: {mismatch}"
+        );
 
         assert_eq!(
             ledger.take_observed_verifications(),

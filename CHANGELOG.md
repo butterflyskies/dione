@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.35.2] - 2026-08-25
+
+### Fixed
+- **Channel mismatches are distinguished from phantom ingress.** The `reply_to`
+  verifier now blocks mismatched and unknown replies before Discord HTTP instead
+  of warn-only discard. Channel mismatches return admitted/claimed channel IDs
+  for authorized override without emitting a phantom page; unknown messages
+  still trigger the phantom page. Outbound authority is checked before exposing
+  ledger provenance.
+
 ## [0.35.1] - 2026-08-22
 
 ### Fixed

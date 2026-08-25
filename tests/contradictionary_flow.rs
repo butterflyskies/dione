@@ -14,7 +14,7 @@ use dione::{
     no_rly::{consent::ConsentGate, journal::JOURNAL_FILE_NAME},
     state::new_state,
 };
-use serenity::model::id::{ChannelId, MessageId};
+use serenity::model::id::ChannelId;
 use std::{fs, sync::Arc};
 use tempfile::TempDir;
 
@@ -137,11 +137,14 @@ fn held_handle(result: &serde_json::Value) -> &str {
 async fn reply_block_holds_message_with_handle() {
     let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
 
+    // No reply_to — the test is about contradictionary matching, not ingress
+    // classification. The old fixture used an unadmitted reply_to that was
+    // silently passed through; the fail-closed fix now blocks it.
     let result = messaging::reply(
         &ctx,
         ChannelId::new(42),
         "this is a straightforward implementation",
-        Some(MessageId::new(1)),
+        None,
         false,
     )
     .await;
