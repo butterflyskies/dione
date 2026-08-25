@@ -155,6 +155,24 @@ lightweight threat model in [threat-model.md](threat-model.md).
 - Mock MCP transport: in-memory channel pair simulating stdio
 - Snapshot testing via `insta` for notification payloads and tool responses
 - Parameterized tests via `test-case` for gate decision matrices
+
+## Public package privacy
+
+The release workflow runs `scripts/verify-public-package-privacy.sh` against the
+exact `.crate` archive produced by every `cargo package` invocation for both
+`auspex-core` and `dione`. Integration fixtures independently prove that each
+structural private-dependency class is rejected, that binary payloads are
+skipped, and that the public historical Cingulate name remains allowed. A
+separate synthetic fixture proves that an external forbidden marker is
+rejected without printing the marker. Real values are never checked into the
+repository; CI can require a non-empty House-managed
+marker file when that overlay is provisioned. Two explicitly consented public
+name canaries are also rejected as whole tokens, case-insensitively; their
+literal spellings do not occur in the checked-in package inputs. Tree and
+archive checks consume the same structural-rule table. Archive traversal
+preserves newline-bearing member names, scans normalized names as well as
+non-binary contents, reports only redacted rule IDs, and fails closed on
+archive, traversal, read, or matcher errors.
 ## GAIE archive Atom 1b acceptance tests
 
 | Test | Requirement | Independent oracle |

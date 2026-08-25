@@ -1,0 +1,14 @@
+dependency-source-url	github\.com/butterflyskies/{PRIVATE_DEP}\.git
+git-source	git\+[^[:space:]]*{PRIVATE_DEP}
+rust-path	{PRIVATE_DEP}::[[:alnum:]_]
+rust-module	(^|[[:space:]])mod[[:space:]]+{PRIVATE_DEP}[[:space:]]*;
+rust-use	(^|[[:space:]])use[[:space:]]+((crate|self|super)::)?{PRIVATE_DEP}([[:space:]]*::[^;]+)?[[:space:]]*;
+crate-module	crate::{PRIVATE_DEP}([^[:alnum:]_]|$)
+source-file	(^|/)src/{PRIVATE_DEP}\.rs([^[:alnum:]_.-]|$)
+manifest-dependency	{PRIVATE_DEP}[[:space:]]*=[[:space:]]*[{'"]
+cargo-path-dependency	(^|[,{[:space:]])path[[:space:]]*=[[:space:]]*["']([^"']*/)?{PRIVATE_DEP}(/[^"']*)?["']
+local-path-unix	(^|[[:space:]="'(,])(\.\.?/|/)[^[:space:]'"]*{PRIVATE_DEP}(/|[[:space:]'"]|$)
+local-path-windows	[[:alpha:]]:\\[^[:space:]'"]*\\{PRIVATE_DEP}(\\|[[:space:]'"]|$)
+internal-endpoint	{PRIVATE_DEP}[[:alnum:].-]*\.svc\.echoes
+negative-canary-long	(^|[^[:alnum:]_]){CANARY_LONG}([^[:alnum:]_]|$)
+negative-canary-short	(^|[^[:alnum:]_]){CANARY_SHORT}([^[:alnum:]_]|$)

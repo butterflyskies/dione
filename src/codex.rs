@@ -1107,13 +1107,7 @@ mod tests {
             .inbox
             .lock()
             .await
-            .register_consumer(
-                "short lived".to_owned(),
-                registered_at,
-                ttl,
-                true,
-                true,
-            )
+            .register_consumer("short lived".to_owned(), registered_at, ttl, true, true)
             .unwrap()
             .consumer_id;
         queue.enqueue(message("1", "hello")).await.unwrap();

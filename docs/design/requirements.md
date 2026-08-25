@@ -149,6 +149,7 @@ phase: 2
 | P-14 | No Docker/container build in CI | User decision |
 | P-15 | Use native async traits (no `async-trait` crate) and language/library features stable in Rust 1.93; adopting newer features requires an explicit MSRV change | Convention |
 | P-16 | No `async-trait` dependency; native `impl Trait` in return position for async | Convention |
+| P-17 | Every crates.io candidate archive shall be scanned across all included non-binary files before upload. The public Cingulate project name and historical references are allowed; private dependency source URLs, local source paths, internal endpoints, adapter artifacts, private data, and personal records or identifiers are forbidden. Consented public negative canaries and structural dependency markers are checked without logging matched content; private values are supplied only through an external marker file and are never logged. | Release privacy boundary |
 
 ## ASVS & ISO 27001 Review
 

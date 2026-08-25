@@ -1,6 +1,5 @@
 pub mod batch;
 pub mod bell_rings;
-pub mod cingulate;
 pub mod coalesce;
 pub mod codex;
 pub mod config;

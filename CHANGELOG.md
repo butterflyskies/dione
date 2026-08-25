@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+- **Cingulate runtime integration.** Removed the external classifier dependency,
+  adapter module, and startup registration from the public package. The generic
+  pre-send hook and outbound-judge seams remain available for independent use.
+  Release gates now scan every packaged non-binary file for private dependency
+  sources, paths, endpoints, and adapter artifacts, with a non-logging external
+  marker input for private data and personal records or identifiers. Public
+  Cingulate history remains allowed, while explicitly consented name canaries
+  remain absent from the package.
+
 ## [0.35.2] - 2026-08-25
 
 ### Fixed
@@ -188,7 +198,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [0.30.0] - 2026-08-04
 
 ### Added
-- **Tier-1 Cingulate adapter.** Wires `cingulate::PatternSet` into the outbound
+- **Tier-1 Cingulate adapter.** Wires the classifier into the outbound
   message pipeline via `PreSendHook`. The classifier runs in observe mode by
   default; enforce mode is configurable. Extracted from #184 (butterflysky-syne).
 

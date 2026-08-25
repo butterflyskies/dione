@@ -2,8 +2,8 @@
 //!
 //! The queue machinery in [`super::consent`] and [`super::queue`] only ever
 //! sees a [`Verdict`]. Today the judge is the contradictionary word-matcher;
-//! a future classifier (the "cingulate") can implement [`OutboundJudge`] and
-//! slot in without the queue, handles, journal, or expiry changing shape.
+//! a future classifier can implement [`OutboundJudge`] and slot in without the
+//! queue, handles, journal, or expiry changing shape.
 
 use crate::contradictionary::{Action, Contradictionary};
 use serde::{Deserialize, Serialize};

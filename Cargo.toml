@@ -14,7 +14,7 @@ keywords = ["discord", "mcp", "claude-code", "codex", "bot"]
 categories = ["command-line-utilities"]
 
 [dependencies]
-auspex-core = { path = "crates/auspex-core" }
+auspex-core = { version = "0.2.0", path = "crates/auspex-core" }
 arc-swap = "1"
 clap = { version = "4", features = ["derive", "env"] }
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "http", "rustls_backend", "cache"] }
@@ -50,10 +50,9 @@ typst-assets = { version = "0.14.2", features = ["fonts"] }
 typst-as-lib = "0.15.4"
 mitex = "0.2.4"
 tempfile = "3"
-cingulate = { git = "https://github.com/butterflyskies/cingulate.git", branch = "main" }
 
 [dev-dependencies]
-auspex-core = { path = "crates/auspex-core", features = ["test-support"] }
+auspex-core = { version = "0.2.0", path = "crates/auspex-core", features = ["test-support"] }
 insta = { version = "1", features = ["json", "redactions"] }
 proptest = "1"
 test-case = "3"

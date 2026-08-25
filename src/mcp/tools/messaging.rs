@@ -3022,8 +3022,8 @@ mod tests {
             "channel_id": "1080000000000000001",
             "author": {
                 "id": "210987654321098765",
-                "username": "miranda",
-                "global_name": "Miranda",
+                "username": "example-user",
+                "global_name": "Example User",
                 "avatar": null,
                 "discriminator": "0",
                 "public_flags": 0,
@@ -3181,7 +3181,7 @@ mod tests {
         attachment_keys.sort_unstable();
         assert_eq!(attachment_keys, ["name", "size", "url"]);
 
-        assert_eq!(msg["author"], "miranda");
+        assert_eq!(msg["author"], "example-user");
         assert_eq!(msg["author_id"], "210987654321098765");
         assert_eq!(msg["attachments"][0]["name"], "photo.png");
         assert!(
