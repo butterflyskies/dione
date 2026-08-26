@@ -1,7 +1,7 @@
 use crate::{
     config::{ChunkMode, DmPolicy, LoadedConfig},
     contradictionary::{Action, BlockOutcome, DiaryRecord, append_diary_record},
-    discord::{chunk, events::NotificationEvent},
+    discord::{chunk, chunk_preserving_fences_with_context, events::NotificationEvent},
     evidence::{
         EvidenceKeys, EvidenceTransport, append_markers, locator_metadata, parse_evidence_locators,
         project_evidence,
@@ -675,6 +675,7 @@ async fn deliver_prepared_reply(
         reply_to_message_id,
         suppress_ping: options.suppress_ping,
         pending_diary_records: Vec::new(),
+        fence_context: Default::default(),
     };
 
     if let Some(ref judge) = ctx.config.contradictionary
@@ -861,13 +862,19 @@ async fn deliver_reply(
     };
     let effective_limit = if limit == 0 { 2000 } else { limit };
 
-    let chunks = chunk(content, effective_limit, effective_mode);
+    let chunks = chunk_preserving_fences_with_context(
+        content,
+        effective_limit,
+        effective_mode,
+        request.fence_context(),
+    )
+    .map_err(|error| DeliverError::total(error.to_string()))?;
     let mut sent_ids: Vec<u64> = Vec::new();
     let mut first_msg_id: Option<MessageId> = None;
     let mut bot_author: Option<(UserId, BotDisplayName)> = None;
 
-    for (i, chunk_text) in chunks.iter().enumerate() {
-        let mut builder = CreateMessage::new().content(*chunk_text);
+    for (i, chunk) in chunks.iter().enumerate() {
+        let mut builder = CreateMessage::new().content(&chunk.rendered);
 
         // Reply threading.
         let should_reply = match reply_mode {
@@ -915,7 +922,8 @@ async fn deliver_reply(
                 let undelivered = if sent_ids.is_empty() {
                     None
                 } else {
-                    Some(chunks[i..].join("\n\n"))
+                    request.set_fence_context(chunks[i].incoming.clone());
+                    Some(content[chunks[i].source.start..].to_string())
                 };
                 let preserve_diary_records =
                     !sent_ids.is_empty() || !request.pending_diary_records.is_empty();

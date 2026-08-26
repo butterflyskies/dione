@@ -30,6 +30,7 @@
 
 use crate::{
     contradictionary::DiaryRecord,
+    discord::FenceContext,
     no_rly::{
         journal::{self, JournalHandle, Outcome},
         judge::{OutboundJudge, RejectReason, Verdict},
@@ -38,7 +39,10 @@ use crate::{
 };
 use camino::Utf8Path;
 use serenity::model::id::{ChannelId, MessageId};
-use std::time::{Duration, Instant};
+use std::{
+    sync::Mutex as StdMutex,
+    time::{Duration, Instant},
+};
 use thiserror::Error;
 use tokio::sync::Mutex;
 
@@ -58,6 +62,51 @@ pub struct ReplyRequest {
     /// Full-message contradictionary records pending completion after a
     /// partial chunked delivery. This is internal retry context, not wire data.
     pub(crate) pending_diary_records: Vec<DiaryRecord>,
+    /// Fence state active before `content`, retained across a partial retry.
+    pub(crate) fence_context: ReplyFenceContext,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ReplyFenceContext(StdMutex<Option<FenceContext>>);
+
+impl ReplyFenceContext {
+    fn get(&self) -> Option<FenceContext> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn set(&self, context: Option<FenceContext>) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = context;
+    }
+}
+
+impl Clone for ReplyFenceContext {
+    fn clone(&self) -> Self {
+        Self(StdMutex::new(self.get()))
+    }
+}
+
+impl PartialEq for ReplyFenceContext {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self, other) || self.get() == other.get()
+    }
+}
+
+impl Eq for ReplyFenceContext {}
+
+impl ReplyRequest {
+    pub(crate) fn fence_context(&self) -> Option<FenceContext> {
+        self.fence_context.get()
+    }
+
+    pub(crate) fn set_fence_context(&self, context: Option<FenceContext>) {
+        self.fence_context.set(context);
+    }
 }
 
 /// A failed delivery, carrying enough to make a retry an informed, idempotent
@@ -342,6 +391,7 @@ impl ConsentGate {
             reply_to_message_id: entry.payload.reply_to_message_id,
             suppress_ping: entry.payload.suppress_ping,
             pending_diary_records: entry.payload.pending_diary_records.clone(),
+            fence_context: ReplyFenceContext::default(),
         };
 
         match judge.judge(replacement) {
@@ -555,7 +605,9 @@ impl ConsentGate {
 mod tests {
     use super::*;
     use crate::{
+        config::ChunkMode,
         contradictionary::{Action, Contradictionary, Entry, MatchMode},
+        discord::{chunk_preserving_fences, chunk_preserving_fences_with_context},
         no_rly::{
             journal::{BounceRecord, JournalRecord, StatsFilter},
             judge::{AlwaysClear, ReasonEntry},
@@ -627,6 +679,7 @@ mod tests {
             channel_id: ChannelId::new(42),
             content: content.into(),
             pending_diary_records: Vec::new(),
+            fence_context: ReplyFenceContext::default(),
             reply_to_message_id: Some(MessageId::new(7)),
             suppress_ping: true,
         }
@@ -1154,6 +1207,43 @@ mod tests {
         diary_records: Option<Vec<DiaryRecord>>,
     }
 
+    /// Real chunker seam: fail after one fenced chunk, then render the typed
+    /// continuation on retry.
+    struct FencedPartialThenOk {
+        calls: StdMutex<u32>,
+        requests: StdMutex<Vec<ReplyRequest>>,
+        retry_rendered: StdMutex<Vec<String>>,
+    }
+
+    impl DeliverReply for FencedPartialThenOk {
+        async fn deliver(&self, request: &ReplyRequest) -> Result<Vec<u64>, DeliverError> {
+            self.requests.lock().unwrap().push(request.clone());
+            let mut calls = self.calls.lock().unwrap();
+            *calls += 1;
+            let chunks = chunk_preserving_fences_with_context(
+                &request.content,
+                28,
+                ChunkMode::Paragraph,
+                request.fence_context(),
+            )
+            .expect("fenced chunks");
+            if *calls == 1 {
+                let failed = &chunks[1];
+                request.set_fence_context(failed.incoming.clone());
+                Err(DeliverError {
+                    message: "chunk 1 failed".into(),
+                    sent_ids: vec![100],
+                    undelivered: Some(request.content[failed.source.start..].to_string()),
+                    diary_records: Vec::new(),
+                })
+            } else {
+                *self.retry_rendered.lock().unwrap() =
+                    chunks.iter().map(|chunk| chunk.rendered.clone()).collect();
+                Ok(vec![101])
+            }
+        }
+    }
+
     impl DeliverReply for PartialThenOk {
         async fn deliver(&self, request: &ReplyRequest) -> Result<Vec<u64>, DeliverError> {
             self.requests.lock().unwrap().push(request.clone());
@@ -1227,6 +1317,55 @@ mod tests {
             bounces[0].message, "the first half the second half",
             "the journal records the full original message, not the trailing chunk"
         );
+    }
+
+    #[tokio::test]
+    async fn partial_fenced_retry_carries_rendering_context_through_gate() {
+        let (_dir, gate) = gate();
+        let deliver = FencedPartialThenOk {
+            calls: StdMutex::new(0),
+            requests: StdMutex::new(Vec::new()),
+            retry_rendered: StdMutex::new(Vec::new()),
+        };
+        let content = "before\n```rust\none two three four five six seven\n```\nafter";
+        assert!(
+            chunk_preserving_fences(content, 28, ChunkMode::Paragraph)
+                .expect("initial chunks")
+                .len()
+                > 1
+        );
+        let now = Instant::now();
+        let ticket = gate
+            .bounce(request(content), reason(), TTL, MAX_PENDING, now)
+            .await;
+
+        assert!(matches!(
+            gate.release(&deliver, &ticket.handle, now).await,
+            Err(RejectedHandle::SendFailed { .. })
+        ));
+        gate.release(&deliver, &ticket.handle, now + Duration::from_secs(1))
+            .await
+            .expect("typed continuation completes");
+
+        let requests = deliver.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].fence_context().is_some());
+        let rendered = deliver.retry_rendered.lock().unwrap();
+        assert!(
+            rendered
+                .first()
+                .is_some_and(|chunk| chunk.starts_with("```rust\n"))
+        );
+        for chunk in rendered.iter() {
+            let mut state = None;
+            for line in chunk.split_inclusive('\n') {
+                if line.contains("after") {
+                    assert_eq!(state, None, "post-fence text must render outside code");
+                }
+                state = crate::discord::chunker::advance_fence(&state, line);
+            }
+            assert_eq!(state, None, "every retry chunk must be fence-balanced");
+        }
     }
 
     #[tokio::test]

@@ -4,4 +4,5 @@ pub mod events;
 pub(crate) mod verified_action;
 pub(crate) mod verified_action_runtime;
 
-pub use chunker::chunk;
+pub(crate) use chunker::{FenceContext, chunk_preserving_fences_with_context};
+pub use chunker::{chunk, chunk_preserving_fences};
