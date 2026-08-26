@@ -1,0 +1,222 @@
+name: Forgejo Linux Main CI
+
+# Forgejo 13 grants same-repository PR jobs a write-capable task token and
+# ignores workflow `permissions`. Keep this workflow on trusted main until the
+# platform can enforce read-only PR tokens; do not claim it as a PR gate.
+# This mirrors the Linux build from GitHub CI, but deliberately omits GitHub's
+# macOS runner and every tag, release, package-publish, and write-token step.
+on:
+  push:
+    branches: [main]
+
+# Defense in depth for a future runner that enforces this declaration. Forgejo
+# Runner 13 ignores it, so the trusted-main-only trigger above remains required.
+permissions: {}
+
+concurrency:
+  group: forgejo-linux-${{ forgejo.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  format:
+    name: Formatting
+    runs-on: docker
+    timeout-minutes: 30
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: https://github.com/dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
+        with:
+          toolchain: stable
+          components: rustfmt
+      - run: >-
+          cargo fmt --
+          --config imports_granularity=Crate
+          --config group_imports=One
+          --config format_code_in_doc_comments=true
+          --check
+
+  lint:
+    name: Clippy
+    runs-on: docker
+    timeout-minutes: 60
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: https://github.com/dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
+        with:
+          toolchain: stable
+          components: clippy
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    name: Tests
+    runs-on: docker
+    timeout-minutes: 120
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: https://github.com/dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
+        with:
+          toolchain: stable
+      - name: Install cargo-nextest
+        run: |
+          curl --fail --silent --show-error --location \
+            --connect-timeout 5 --max-time 120 --retry 3 --retry-all-errors \
+            "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.136/cargo-nextest-0.9.136-x86_64-unknown-linux-gnu.tar.gz" \
+            -o /tmp/cargo-nextest.tar.gz
+          echo "a098eed56f2dd88c7fdca1e554a6b99fa1ffbd2a7a1c41b865700112981f6f52  /tmp/cargo-nextest.tar.gz" | sha256sum -c -
+          tar xzf /tmp/cargo-nextest.tar.gz -C /usr/local/bin
+      - run: cargo nextest run --workspace --locked --no-fail-fast
+
+  package:
+    name: Public package boundary
+    runs-on: docker
+    timeout-minutes: 60
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: https://github.com/dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
+        with:
+          toolchain: stable
+      - name: Reject private and git-backed package sources
+        run: cargo test --test public_package --locked
+      - name: Verify publishable workspace packages
+        run: |
+          cargo package -p auspex-core --locked
+          auspex_version="$(scripts/workspace-package-version.sh auspex-core)"
+          auspex_crate="target/package/auspex-core-${auspex_version}.crate"
+          scripts/verify-public-package-privacy.sh "${auspex_crate}"
+
+          auspex_url="https://crates.io/api/v1/crates/auspex-core/${auspex_version}"
+          status="$(curl --silent --show-error --connect-timeout 5 --max-time 20 \
+            --user-agent 'dione-forgejo-ci/1.0 (https://forgejo.svc.echoes/lacuna/dione)' \
+            --output /dev/null --write-out '%{http_code}' "${auspex_url}")"
+          case "${status}" in
+            200)
+              for attempt in $(seq 1 12); do
+                if timeout 10s cargo info --registry crates-io "auspex-core@${auspex_version}" > /dev/null 2>&1; then
+                  break
+                fi
+                if [ "${attempt}" = 12 ]; then
+                  echo "crates.io API knows auspex-core ${auspex_version}, but Cargo's registry index cannot resolve it" >&2
+                  exit 1
+                fi
+                sleep 5
+              done
+              cargo package -p dione --locked
+              dione_version="$(scripts/workspace-package-version.sh dione)"
+              dione_crate="target/package/dione-${dione_version}.crate"
+              scripts/verify-public-package-privacy.sh "${dione_crate}"
+              ;;
+            404)
+              # Before auspex-core's first release, Cargo cannot resolve the
+              # registry form of Dione's path+version dependency. Validate the
+              # exact Dione package file set; the release workflow publishes
+              # auspex-core through the protected first-publication handoff;
+              # later release runs perform the registry-backed Dione publish.
+              cargo package -p dione --list --locked > /dev/null
+              ;;
+            *)
+              echo "crates.io returned HTTP ${status} while checking auspex-core ${auspex_version}" >&2
+              exit 1
+              ;;
+          esac
+
+  msrv:
+    name: Rust 1.95 minimum supported version
+    runs-on: docker
+    timeout-minutes: 120
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: https://github.com/dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
+        with:
+          toolchain: "1.95.0"
+      - run: cargo check --locked --all-targets
+
+  audit:
+    name: Dependency audit
+    runs-on: docker
+    timeout-minutes: 30
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: https://github.com/EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+
+  release-artifact:
+    name: Trusted main Linux release artifact
+    needs: [format, lint, test, package, msrv, audit]
+    runs-on: docker
+    timeout-minutes: 60
+    env:
+      BUILD_TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ forgejo.sha }}
+          persist-credentials: false
+      - uses: https://github.com/dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-gnu
+      - name: Build and bind release artifact to trusted main
+        env:
+          EXPECTED_COMMIT: ${{ forgejo.sha }}
+        run: |
+          set -eu
+          actual_commit="$(git rev-parse HEAD)"
+          if [ "${actual_commit}" != "${EXPECTED_COMMIT}" ]; then
+            echo "checked-out commit ${actual_commit} does not match event commit ${EXPECTED_COMMIT}" >&2
+            exit 1
+          fi
+
+          cargo build --release --locked --target "${BUILD_TARGET}"
+
+          version="$(scripts/workspace-package-version.sh dione)"
+          mkdir -p dist artifact-audit
+          install -m 0755 "target/${BUILD_TARGET}/release/dione" dist/dione
+          (cd dist && sha256sum dione > dione.sha256)
+          printf 'commit=%s\nversion=%s\n' "${actual_commit}" "${version}" \
+            > dist/build-receipt.txt
+
+          # Recompute the publishable package inputs at the exact built commit.
+          # These audit files never enter the upload allowlist.
+          cargo package -p dione --list --locked > artifact-audit/package-inputs.txt
+          cargo metadata --locked --no-deps --format-version 1 \
+            > artifact-audit/cargo-metadata.json
+          scripts/verify-public-artifact.sh \
+            dist/dione \
+            dist/dione.sha256 \
+            dist/build-receipt.txt \
+            "${actual_commit}" \
+            "${version}" \
+            artifact-audit/package-inputs.txt \
+            artifact-audit/cargo-metadata.json
+      # Forgejo requires v3 or its patched v4 artifact action:
+      # https://forgejo.org/docs/latest/user/actions/advanced-features/#artifacts
+      # Source: https://data.forgejo.org/actions/upload-artifact
+      # The ZIP transport does not preserve executable mode. Consumers verify
+      # dione.sha256, then restore mode 0755 after download.
+      - name: Upload immutable public release artifact
+        uses: https://data.forgejo.org/actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # patched v4.6.2
+        with:
+          name: dione-linux-x86_64-${{ forgejo.sha }}
+          path: |
+            dist/dione
+            dist/dione.sha256
+            dist/build-receipt.txt
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
