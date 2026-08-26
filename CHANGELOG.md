@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-08-26
+
+### Added
+- **Fenced Markdown preserved across delivery chunks.** The message chunker no
+  longer splits inside fenced code blocks: fences are closed at a chunk
+  boundary and reopened (with their info string) in the next chunk, so
+  multi-chunk messages render every block correctly. Consent (no_rly) held
+  messages carry the same fence-aware chunking. (#213, #246)
+
 ### Removed
 - **Cingulate runtime integration.** Removed the external classifier dependency,
   adapter module, and startup registration from the public package. The generic
