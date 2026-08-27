@@ -163,7 +163,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "auspex-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "sha2",
 ]
@@ -835,7 +835,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.37.1"
+version = "0.38.0"
 dependencies = [
  "aho-corasick",
  "arc-swap",

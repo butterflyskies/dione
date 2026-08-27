@@ -1,26 +1,54 @@
 use std::fmt;
 
-/// Transport-agnostic message identifier.
+/// Provider-tagged message identifier.
 ///
-/// Dione converts Discord snowflakes into this; other transports would
-/// supply their own opaque IDs. The inner value has no Discord semantics
-/// inside auspex-core.
+/// Each transport owns a distinct variant so native identifiers cannot
+/// silently collide across providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct MessageRef(u64);
+pub enum MessageRef {
+    /// A Discord message identified by its snowflake.
+    Discord { snowflake: u64 },
+}
 
 impl MessageRef {
-    pub const fn new(id: u64) -> Self {
-        Self(id)
+    /// Construct a reference to a Discord message.
+    pub const fn discord(snowflake: u64) -> Self {
+        Self::Discord { snowflake }
     }
 
-    pub fn get(self) -> u64 {
-        self.0
+    /// Return the Discord snowflake when this is a Discord message.
+    pub const fn discord_snowflake(self) -> Option<u64> {
+        match self {
+            Self::Discord { snowflake } => Some(snowflake),
+        }
     }
 }
 
 impl fmt::Display for MessageRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        match self {
+            Self::Discord { snowflake } => write!(f, "discord:{snowflake}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MessageRef;
+
+    #[test]
+    fn message_ref_preserves_discord_provider_and_snowflake() {
+        let message = MessageRef::discord(42);
+
+        assert_eq!(message, MessageRef::Discord { snowflake: 42 });
+        assert_eq!(message.discord_snowflake(), Some(42));
+    }
+
+    #[test]
+    fn message_ref_display_includes_provider_namespace() {
+        let message = MessageRef::discord(42);
+
+        assert_eq!(message.to_string(), "discord:42");
     }
 }
 

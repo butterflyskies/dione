@@ -7,9 +7,10 @@ development convenience. The plan is to extract it to its own repository
 
 ## Boundary rules
 
-- **No transport types.** Discord snowflakes, serenity types, HTTP clients,
-  MCP tools — none of these belong here. Use `MessageRef`, `ChannelRef`,
-  `PrincipalRef` (opaque u64 newtypes).
+- **No transport implementation types.** Serenity types, HTTP clients, and MCP
+  tools do not belong here. `MessageRef` provider-tags native message IDs so
+  different transports cannot silently collide; `ChannelRef` and
+  `PrincipalRef` remain opaque u64 newtypes until separately migrated.
 - **No side effects.** No logging, no network calls, no file I/O, no alerts.
   The crate returns decisions/reasons; the adapter (dione) owns effects.
 - **No async.** The kernel is synchronous. Mutex for thread safety, Instant
@@ -23,13 +24,14 @@ development convenience. The plan is to extract it to its own repository
 - `IngressLedger` — bounded in-memory record of gateway-admitted messages
 - `VerifyResult` — typed verification outcomes (Admitted, Unknown, Expired,
   ChannelMismatch, Unavailable)
-- Domain newtypes — `MessageRef`, `ChannelRef`, `PrincipalRef`, `ContentHash`
+- Domain references — provider-tagged `MessageRef`; opaque `ChannelRef`,
+  `PrincipalRef`, and `ContentHash` newtypes
 - (future) `ActivationRoot` enum and causal tree types
 - (future) `verify_activation` — the full provenance walk
 
 ## What stays in dione
 
-- Discord ↔ auspex-core type conversion (snowflake → MessageRef)
+- Discord ↔ auspex-core type conversion (message ID → `MessageRef::discord`)
 - Phantom canary alerts (transport effect)
 - Tracing/logging of verification results
 - Configuration (alert channel, TTL overrides)

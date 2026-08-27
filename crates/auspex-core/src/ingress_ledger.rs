@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn admitted_message_is_verifiable() {
         let ledger = IngressLedger::new();
-        let msg = MessageRef::new(1000);
+        let msg = MessageRef::discord(1000);
 
         ledger.note_admitted(msg, CH_A, USER, hash("hello world"));
 
@@ -227,7 +227,7 @@ mod tests {
     fn unknown_message_returns_unknown() {
         let ledger = IngressLedger::new();
         assert_eq!(
-            ledger.verify(MessageRef::new(9999), CH_A),
+            ledger.verify(MessageRef::discord(9999), CH_A),
             VerifyResult::Unknown
         );
     }
@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn channel_mismatch_detected() {
         let ledger = IngressLedger::new();
-        let msg = MessageRef::new(1000);
+        let msg = MessageRef::discord(1000);
 
         ledger.note_admitted(msg, CH_A, USER, hash("hello"));
 
@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn identical_replay_is_idempotent() {
         let ledger = IngressLedger::new();
-        let msg = MessageRef::new(1000);
+        let msg = MessageRef::discord(1000);
         let h = hash("hello");
 
         assert!(ledger.note_admitted(msg, CH_A, USER, h));
@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn conflicting_evidence_preserves_first() {
         let ledger = IngressLedger::new();
-        let msg = MessageRef::new(1000);
+        let msg = MessageRef::discord(1000);
 
         ledger.note_admitted(msg, CH_A, USER, hash("first"));
         ledger.note_admitted(msg, CH_B, USER, hash("second"));
@@ -276,7 +276,7 @@ mod tests {
     #[test]
     fn expired_entry_returns_expired() {
         let ledger = IngressLedger::with_ttl(Duration::from_millis(0));
-        let msg = MessageRef::new(1000);
+        let msg = MessageRef::discord(1000);
 
         ledger.note_admitted(msg, CH_A, USER, hash("hello"));
         std::thread::sleep(Duration::from_millis(1));
@@ -288,11 +288,11 @@ mod tests {
     fn capacity_drops_new_entry() {
         let ledger = IngressLedger::with_capacity(2);
 
-        ledger.note_admitted(MessageRef::new(1), CH_A, USER, hash("a"));
-        ledger.note_admitted(MessageRef::new(2), CH_A, USER, hash("b"));
+        ledger.note_admitted(MessageRef::discord(1), CH_A, USER, hash("a"));
+        ledger.note_admitted(MessageRef::discord(2), CH_A, USER, hash("b"));
         assert_eq!(ledger.len(), 2);
 
-        assert!(!ledger.note_admitted(MessageRef::new(3), CH_A, USER, hash("c")));
+        assert!(!ledger.note_admitted(MessageRef::discord(3), CH_A, USER, hash("c")));
         assert_eq!(ledger.len(), 2);
     }
 
@@ -300,7 +300,7 @@ mod tests {
     fn gc_removes_expired() {
         let ledger = IngressLedger::with_ttl(Duration::from_millis(0));
 
-        ledger.note_admitted(MessageRef::new(1), CH_A, USER, hash("a"));
+        ledger.note_admitted(MessageRef::discord(1), CH_A, USER, hash("a"));
         std::thread::sleep(Duration::from_millis(1));
 
         ledger.gc_expired();
@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn poisoned_lock_returns_unavailable() {
         let ledger = std::sync::Arc::new(IngressLedger::new());
-        ledger.note_admitted(MessageRef::new(1), CH_A, USER, hash("hello"));
+        ledger.note_admitted(MessageRef::discord(1), CH_A, USER, hash("hello"));
 
         let poison_target = std::sync::Arc::clone(&ledger);
         let _ = std::thread::spawn(move || {
@@ -320,7 +320,7 @@ mod tests {
         .join();
 
         assert_eq!(
-            ledger.verify(MessageRef::new(1), CH_A),
+            ledger.verify(MessageRef::discord(1), CH_A),
             VerifyResult::Unavailable
         );
     }

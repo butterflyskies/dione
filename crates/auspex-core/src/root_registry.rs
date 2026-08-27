@@ -295,7 +295,7 @@ mod tests {
 
     fn discord_root(msg_id: u64, channel: ChannelRef, content: &str) -> ActivationRoot {
         ActivationRoot::Discord(DiscordIngressReceipt {
-            message: MessageRef::new(msg_id),
+            message: MessageRef::discord(msg_id),
             channel,
             principal: USER,
             content_hash: hash(content),
@@ -311,14 +311,14 @@ mod tests {
         assert!(root_id.is_some());
         assert!(verdict.is_admitted());
 
-        let verify = reg.verify(MessageRef::new(1000), CH_A);
+        let verify = reg.verify(MessageRef::discord(1000), CH_A);
         assert!(verify.is_admitted());
     }
 
     #[test]
     fn unknown_message_with_complete_coverage() {
         let reg = RootRegistry::new();
-        let verdict = reg.verify(MessageRef::new(9999), CH_A);
+        let verdict = reg.verify(MessageRef::discord(9999), CH_A);
         assert_eq!(verdict, RootVerdict::UnknownComplete);
         assert!(verdict.is_denial());
     }
@@ -327,7 +327,7 @@ mod tests {
     fn unknown_message_with_transport_gap() {
         let reg = RootRegistry::new();
         reg.mark_transport_gap();
-        let verdict = reg.verify(MessageRef::new(9999), CH_A);
+        let verdict = reg.verify(MessageRef::discord(9999), CH_A);
         assert_eq!(verdict, RootVerdict::TransportGap);
         assert!(verdict.is_degraded());
     }
@@ -337,7 +337,7 @@ mod tests {
         let reg = RootRegistry::new();
         reg.admit_root(discord_root(1000, CH_A, "hello"));
 
-        let verdict = reg.verify(MessageRef::new(1000), CH_B);
+        let verdict = reg.verify(MessageRef::discord(1000), CH_B);
         assert!(verdict.is_denial());
         assert!(matches!(verdict, RootVerdict::ChannelMismatch { .. }));
     }
@@ -357,7 +357,7 @@ mod tests {
         reg.admit_root(discord_root(1000, CH_A, "hello"));
         std::thread::sleep(Duration::from_millis(1));
 
-        let verdict = reg.verify(MessageRef::new(1000), CH_A);
+        let verdict = reg.verify(MessageRef::discord(1000), CH_A);
         assert_eq!(verdict, RootVerdict::Expired);
     }
 
@@ -388,7 +388,7 @@ mod tests {
         let root_id = root_id.unwrap();
 
         let msg = reg.get_root(root_id);
-        assert_eq!(msg, Some(MessageRef::new(1000)));
+        assert_eq!(msg, Some(MessageRef::discord(1000)));
     }
 
     #[test]

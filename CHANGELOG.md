@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-08-27
+
+### Changed
+- **Message references are provider-tagged.** `auspex-core::MessageRef` is now
+  an exhaustive enum instead of an opaque `u64` newtype, preventing native
+  message IDs from different providers from silently colliding. The only
+  current variant is Discord; adding a future provider is intentionally a
+  breaking change for exhaustive consumers. This migration covers
+  `MessageRef` and its Auspex call sites only — `ChannelRef` and
+  `PrincipalRef` remain opaque `u64` newtypes. `auspex-core` is bumped to
+  0.3.0 for the public API break.
+
 ## [0.37.1] - 2026-08-26
 
 ### Fixed

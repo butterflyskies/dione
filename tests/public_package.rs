@@ -583,7 +583,7 @@ fn release_version_helper_reads_workspace_path_package() {
         "version helper failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0.2.0");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0.3.0");
 }
 
 #[test]
