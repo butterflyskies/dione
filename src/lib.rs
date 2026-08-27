@@ -8,6 +8,7 @@ pub mod config_watcher;
 pub mod contradictionary;
 pub mod delivery_buffer;
 pub mod discord;
+pub mod drop_ledger;
 pub(crate) mod evidence;
 pub mod gaie;
 pub mod gate;

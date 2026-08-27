@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-08-26
+
+### Added
+- **Direct replies inherit a dropped parent's suppression.** When the inbound
+  gate drops a guild message — muted guild, mention required, sender outside
+  the identity lists — direct replies to it (and their reply chains) are
+  suppressed unconditionally, without per-hop policy re-derivation. Drops are
+  tracked in a bounded in-memory ledger partitioned by configured gate scope:
+  unconfigured channels record nothing, scopes never evict one another, and a
+  restart fails open to pre-existing gate behavior. (#361)
+- **`get_presence` MCP tool.** Reads back the last presence this process
+  requested — status, activity, request timestamp, and whether a gateway sink
+  is installed (`sink_installed`; explicitly not a live connection probe).
+  `set_presence` now updates the authoritative presence store synchronously
+  and answers `"applied"`, so an immediate read-back always reflects it; the
+  queued-command fallback (status `"accepted"`) remains for transports
+  without the store.
+
+### Changed
+- **Presence state is coherent under one lock.** The desired presence and the
+  gateway sink slot live behind a single lock with sink callbacks running
+  outside it, serialized in arrival order — snapshots can never pair
+  observations from different moments, and a slow sink cannot stall reads.
+- `DioneServer` and `BotStateCtx` gained constructors with `with_*` builders;
+  optional wiring no longer breaks existing constructions when fields are
+  added.
+
 ## [0.36.0] - 2026-08-26
 
 ### Added

@@ -12,7 +12,7 @@ use crate::{
         server::DioneServer,
         tools::{
             access::{approve_access, deny_access, list_access_requests},
-            bot_state::{send_typing, set_presence},
+            bot_state::{get_presence, send_typing, set_presence},
             diagnostics::{get_version, set_stderr_level, set_trace_level},
             introspection::{
                 get_channel, get_member, get_user, list_channels, list_emojis, list_guilds,
@@ -579,6 +579,10 @@ pub(crate) async fn call_tool(
             let channel_id = parse_id(&args, "channel_id")?.channel();
             send_typing(&ctx, channel_id).await
         }
+        "get_presence" => {
+            let ctx = server.bot_state_ctx(config.clone());
+            get_presence(&ctx).await
+        }
         "set_presence" => {
             let ctx = server.bot_state_ctx(config.clone());
             let online_status = args
@@ -884,6 +888,82 @@ fn parse_hook_overrides(args: &Value) -> Result<Vec<HookName>, String> {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    /// Boundary pin for the presence tools: the round trip crosses the real
+    /// dispatch match arms and the real `DioneServer → BotStateCtx`
+    /// composition, and the server presence comes from the same production
+    /// assembly (`wire_shared_presence`) that `main` uses — the
+    /// gateway-side handle must observe every MCP-side write, so splitting
+    /// the two consumers onto different stores fails here.
+    #[tokio::test]
+    async fn presence_round_trip_crosses_dispatch_and_composition() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let state_dir =
+            camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf-8 path");
+        let (notification_tx, _notification_rx) = tokio::sync::mpsc::channel(1);
+        let (gateway_handle, server_presence) = crate::discord::events::wire_shared_presence();
+        let server_handle = server_presence
+            .clone()
+            .expect("assembly wires the MCP handle");
+        assert!(gateway_handle.is_same_authority(&server_handle));
+        let server = DioneServer::new(
+            crate::state::new_state(),
+            std::sync::Arc::new(tokio::sync::Mutex::new(crate::queue::AccessQueue::load(
+                &state_dir,
+            ))),
+            std::sync::Arc::new(serenity::http::Http::new("fake")),
+            state_dir.clone(),
+            notification_tx,
+            crate::tracing_channel::TraceLevelController::noop(),
+            crate::codex::TransportMode::ClaudeCode,
+            std::sync::Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
+            std::sync::Arc::new(crate::ingress_ledger::IngressLedger::new()),
+        )
+        .with_presence(server_presence);
+
+        fn unwrap_tool_result(response: &Value) -> Value {
+            assert!(
+                response.get("isError").is_none(),
+                "tool call must not error: {response}"
+            );
+            let text = response["content"][0]["text"]
+                .as_str()
+                .expect("tool result carries a text payload");
+            serde_json::from_str(text).expect("tool result text is JSON")
+        }
+
+        let set = call_tool(
+            &server,
+            "set_presence",
+            json!({
+                "online_status": "dnd",
+                "activity_type": "custom",
+                "activity_name": "boundary proof"
+            }),
+        )
+        .await
+        .expect("set_presence dispatches");
+        let set = unwrap_tool_result(&set);
+        assert_eq!(set["ok"], true);
+        assert_eq!(set["status"], "applied");
+
+        let get = call_tool(&server, "get_presence", json!({}))
+            .await
+            .expect("get_presence dispatches");
+        let get = unwrap_tool_result(&get);
+        assert_eq!(get["set_this_process"], true);
+        assert_eq!(get["online_status"], "dnd");
+        assert_eq!(get["activity_name"], "boundary proof");
+        assert_eq!(get["sink_installed"], false);
+
+        // The gateway-side handle observes the MCP-side write: one
+        // authority, not two stores that merely look alike.
+        let observed = gateway_handle.snapshot().await;
+        assert_eq!(
+            observed.desired.map(|d| d.status),
+            Some(serenity::model::user::OnlineStatus::DoNotDisturb)
+        );
+    }
 
     #[test]
     fn hook_override_boundary_parses_canonical_names() {

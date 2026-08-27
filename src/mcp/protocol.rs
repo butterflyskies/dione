@@ -311,6 +311,10 @@ pub(crate) fn tools_list(mode: TransportMode, evidence_markers_enabled: bool) ->
                     "user_id": { "type": "string" }
                 }
             })),
+            tool("get_presence", "Read back the last presence this process requested (what set_presence stored and replays on reconnect) — not a live Discord read-back", json!({
+                "type": "object",
+                "properties": {}
+            })),
             tool("set_presence", "Set the bot's Discord presence (online status and activity)", json!({
                 "type": "object",
                 "properties": {
@@ -564,6 +568,28 @@ mod tests {
             .find(|t| t["name"] == "fetch_messages")
             .expect("fetch_messages must be in tools list")
             .clone()
+    }
+
+    /// Boundary pin for the presence tools: deleting either from the
+    /// advertised list must fail here, not in a reviewer's client.
+    #[test]
+    fn presence_tools_are_listed_with_their_schemas() {
+        let list = tools_list(TransportMode::ClaudeCode, false);
+        let tools = list["tools"].as_array().unwrap();
+        let set = tools
+            .iter()
+            .find(|t| t["name"] == "set_presence")
+            .expect("set_presence must be in tools list");
+        for field in ["online_status", "activity_type", "activity_name"] {
+            assert!(
+                set["inputSchema"]["properties"].get(field).is_some(),
+                "set_presence schema must carry {field}"
+            );
+        }
+        assert!(
+            tools.iter().any(|t| t["name"] == "get_presence"),
+            "get_presence must be in tools list"
+        );
     }
 
     #[test]

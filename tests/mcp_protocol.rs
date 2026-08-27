@@ -94,6 +94,7 @@ fn make_server_with_http(state_dir: &camino::Utf8PathBuf, http: Arc<Http>) -> Di
         state_dir: state_dir.clone(),
         notification_tx: tx,
         discord_cmd_tx: None,
+        presence: None,
         trace_controller: TraceLevelController::noop(),
         mode: TransportMode::ClaudeCode,
         codex_queue: None,

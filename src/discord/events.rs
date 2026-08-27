@@ -47,56 +47,110 @@ impl PresenceSink for ShardMessenger {
 pub struct DesiredPresence {
     pub activity: Option<ActivityData>,
     pub status: OnlineStatus,
+    /// When this presence was requested. Replay on reconnect re-sends the
+    /// same request, so the stamp survives it: it dates the *decision*, not
+    /// the latest gateway delivery.
+    pub set_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A point-in-time read of the presence state: what was last requested, and
+/// whether a sink from the most recent gateway `ready()` is installed.
+///
+/// `sink_installed` is **not** a live connection probe: the sink is replaced
+/// on each `ready()` but never cleared on disconnect, so it reports "a shard
+/// messenger has been installed since this process last saw `ready()`" and
+/// nothing stronger.
+#[derive(Clone, Debug)]
+pub struct PresenceSnapshot {
+    pub desired: Option<DesiredPresence>,
+    pub sink_installed: bool,
+}
+
+/// The complete presence state behind one lock: the last requested presence
+/// and the live sink slot. Keeping both under a single lock means every
+/// observation is a coherent pair — a snapshot can never combine a desired
+/// state and a sink observation from two different moments.
+struct PresenceState {
+    sink: Option<Arc<dyn PresenceSink>>,
+    desired: Option<DesiredPresence>,
 }
 
 /// A replaceable presence sink that survives gateway reconnects.
 ///
-/// Bundles the live sink slot with the desired-state store. Both always
-/// travel together: `ready()`, command processing, install, and replay
-/// all take the pair. The newtype names the `Arc<RwLock<Option<Arc<…>>>>`
-/// pattern and encapsulates the lock/option dance.
+/// Bundles the live sink slot with the desired-state store under one state
+/// lock, so every observation is a coherent pair. Effects (calls into the
+/// dynamic sink) run **outside** the state lock: a slow or reentrant sink
+/// can never stall state reads or deadlock against them. Ordering of
+/// effects is preserved explicitly by the dedicated `effects` mutex, which
+/// every mutating path holds end-to-end — writers are serialized in arrival
+/// order, and the sink observes exactly that order.
+///
+/// Lock order: `effects` → `state`, never the reverse. `snapshot()` takes
+/// only the state lock and is never blocked by an in-flight sink call.
 #[derive(Clone)]
 pub struct SharedPresence {
-    sink: Arc<tokio::sync::RwLock<Option<Arc<dyn PresenceSink>>>>,
-    desired: Arc<tokio::sync::RwLock<Option<DesiredPresence>>>,
+    state: Arc<tokio::sync::RwLock<PresenceState>>,
+    effects: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl SharedPresence {
     /// Creates empty slots — no sink installed, no desired presence.
     pub fn new() -> Self {
         Self {
-            sink: Arc::new(tokio::sync::RwLock::new(None)),
-            desired: Arc::new(tokio::sync::RwLock::new(None)),
+            state: Arc::new(tokio::sync::RwLock::new(PresenceState {
+                sink: None,
+                desired: None,
+            })),
+            effects: Arc::new(tokio::sync::Mutex::new(())),
         }
+    }
+
+    /// True when `other` is a handle onto this exact state — the wiring
+    /// invariant `wire_shared_presence` establishes and tests pin.
+    pub fn is_same_authority(&self, other: &SharedPresence) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
     }
 
     /// Install a new sink and replay the stored desired presence.
     ///
-    /// Called from `ready()` on each gateway reconnect. The old sink is
-    /// replaced; the command processor reads the shared slot on each
-    /// dispatch, so it picks up the new sink immediately.
+    /// Called from `ready()` on each gateway reconnect. The whole
+    /// install-and-replay runs under the effects mutex, so no other
+    /// mutating path can interleave between the install and its replay; the
+    /// state lock itself is released before the sink callback runs.
     pub async fn install(&self, new_sink: Arc<dyn PresenceSink>) {
-        {
-            let mut slot = self.sink.write().await;
-            *slot = Some(new_sink);
+        let _effects = self.effects.lock().await;
+        let replay = {
+            let mut state = self.state.write().await;
+            let replay = state.desired.clone();
+            state.sink = Some(Arc::clone(&new_sink));
+            replay
+        };
+        if let Some(desired) = replay {
+            tracing::info!("replaying desired presence on reconnect");
+            new_sink.set_presence(desired.activity, desired.status);
         }
-        self.replay().await;
     }
 
     /// Store desired presence and dispatch to the current sink.
     ///
-    /// If no sink is available (reconnecting), the desired state is
-    /// still stored — it will be replayed when the next sink installs.
+    /// The desired state is authoritative the moment this returns: a
+    /// `snapshot()` immediately after always reflects it. If no sink is
+    /// available (reconnecting), the state is still stored and will be
+    /// replayed when the next sink installs. The effects mutex serializes
+    /// concurrent callers, so the sink observes requests in the order their
+    /// desired states were stored.
     pub async fn set_presence(&self, activity: Option<ActivityData>, status: OnlineStatus) {
-        {
-            let mut desired = self.desired.write().await;
-            *desired = Some(DesiredPresence {
+        let _effects = self.effects.lock().await;
+        let sink = {
+            let mut state = self.state.write().await;
+            state.desired = Some(DesiredPresence {
                 activity: activity.clone(),
                 status,
+                set_at: chrono::Utc::now(),
             });
-        }
-        let sink = self.sink.read().await;
-        if let Some(ref sink) = *sink {
+            state.sink.clone()
+        };
+        if let Some(sink) = sink {
             sink.set_presence(activity, status);
         } else {
             tracing::warn!(
@@ -109,16 +163,19 @@ impl SharedPresence {
     /// Read the stored desired presence (test-only).
     #[cfg(test)]
     pub(crate) async fn desired_for_test(&self) -> Option<DesiredPresence> {
-        self.desired.read().await.clone()
+        self.state.read().await.desired.clone()
     }
 
-    /// Replay the stored desired presence to the current sink, if both exist.
-    async fn replay(&self) {
-        let sink_guard = self.sink.read().await;
-        let desired_guard = self.desired.read().await;
-        if let (Some(sink), Some(desired)) = (&*sink_guard, &*desired_guard) {
-            tracing::info!("replaying desired presence on reconnect");
-            sink.set_presence(desired.activity.clone(), desired.status);
+    /// A coherent point-in-time read for `get_presence`: the last requested
+    /// presence and whether a sink is installed, observed under one lock.
+    /// `desired` with no sink means the request is stored and will replay on
+    /// the next `ready()`; a sink with no `desired` means nothing was ever
+    /// requested this process — Discord is showing the gateway default.
+    pub async fn snapshot(&self) -> PresenceSnapshot {
+        let state = self.state.read().await;
+        PresenceSnapshot {
+            desired: state.desired.clone(),
+            sink_installed: state.sink.is_some(),
         }
     }
 }
@@ -127,6 +184,18 @@ impl Default for SharedPresence {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The production presence assembly: mints ONE authority and hands the
+/// gateway handler and the MCP server handles onto the same state. `main`
+/// must obtain both handles from this function — constructing two separate
+/// `SharedPresence` values would silently split reconnect replay from MCP
+/// read/write, which is exactly the divergence
+/// [`SharedPresence::is_same_authority`] and the assembly tests pin.
+pub fn wire_shared_presence() -> (SharedPresence, Option<SharedPresence>) {
+    let authority = SharedPresence::new();
+    let server_handle = Some(authority.clone());
+    (authority, server_handle)
 }
 
 /// A display name with pronouns already resolved and appended (e.g. "paceheart (she/her)").
@@ -544,27 +613,59 @@ impl EventHandler for Handler {
 
             // Preflight: skip expensive proxy/PK resolution for ineligible messages.
             // Channel eligibility, guild mute, and mention checks are all O(1).
+            // Every preflight drop is recorded in the drop ledger, and the
+            // #361 reply-inheritance check runs before any of them, so a
+            // reply chain rooted in any dropped message stays dropped.
             if !is_webhook {
-                let Some(policy) = config.channel_policy(resolved.gate_channel_id) else {
-                    tracing::trace!(
-                        channel_id,
-                        "guild message dropped: channel not opted in (preflight)"
-                    );
-                    return;
-                };
-                if let Some(gid) = msg.guild_id.map(|g| g.get())
-                    && let Some(store) = crate::mute_store::global()
-                    && store.is_guild_muted(gid)
-                {
-                    tracing::trace!(channel_id, "guild message dropped: guild muted (preflight)");
-                    return;
-                }
-                if policy.require_mention && mention_kind.is_none() {
-                    tracing::trace!(
-                        channel_id,
-                        "guild message dropped: mention required (preflight)"
-                    );
-                    return;
+                let reply_parent_id = msg
+                    .message_reference
+                    .as_ref()
+                    .and_then(|r| r.message_id)
+                    .or_else(|| msg.referenced_message.as_deref().map(|m| m.id));
+                let policy = config.channel_policy(resolved.gate_channel_id);
+                let guild_muted = msg.guild_id.map(|g| g.get()).is_some_and(|gid| {
+                    crate::mute_store::global().is_some_and(|store| store.is_guild_muted(gid))
+                });
+                match guild_message_preflight(
+                    crate::drop_ledger::global(),
+                    ChannelId::new(resolved.gate_channel_id),
+                    msg.id,
+                    reply_parent_id,
+                    policy.is_some(),
+                    policy.is_some_and(|p| p.require_mention),
+                    guild_muted,
+                    mention_kind.is_some(),
+                ) {
+                    GuildPreflight::Proceed => {}
+                    GuildPreflight::InheritedDrop => {
+                        tracing::debug!(
+                            channel_id,
+                            parent_id = reply_parent_id.map(|id| id.get()),
+                            "guild message dropped: direct reply to a dropped message"
+                        );
+                        return;
+                    }
+                    GuildPreflight::NotOptedIn => {
+                        tracing::trace!(
+                            channel_id,
+                            "guild message dropped: channel not opted in (preflight)"
+                        );
+                        return;
+                    }
+                    GuildPreflight::GuildMuted => {
+                        tracing::trace!(
+                            channel_id,
+                            "guild message dropped: guild muted (preflight)"
+                        );
+                        return;
+                    }
+                    GuildPreflight::MentionRequired => {
+                        tracing::trace!(
+                            channel_id,
+                            "guild message dropped: mention required (preflight)"
+                        );
+                        return;
+                    }
                 }
             }
 
@@ -613,11 +714,6 @@ impl EventHandler for Handler {
                 return;
             }
 
-            // Direct human/non-provider guild messages remain on the direct gate.
-            if should_drop_bot_message(msg.author.bot, msg.author.id.get(), &config) {
-                return;
-            }
-
             // Resolve immutable topology before taking the policy snapshot.
             let thread_parent_id = resolve_thread_parent(&ctx.http, &self.state, channel_id).await;
             let config = crate::config::load_config(&self.state_dir);
@@ -632,19 +728,32 @@ impl EventHandler for Handler {
                 referenced_author_id,
                 config.mention_patterns.as_ref(),
             );
+            let reply_parent_id = msg
+                .message_reference
+                .as_ref()
+                .and_then(|r| r.message_id)
+                .or_else(|| msg.referenced_message.as_deref().map(|m| m.id));
+            let guild_muted = msg.guild_id.map(|g| g.get()).is_some_and(|gid| {
+                crate::mute_store::global().is_some_and(|store| store.is_guild_muted(gid))
+            });
 
-            let decision = InboundGate::check_guild(
+            // The single admission authority: delivery is possible only
+            // through the targeting its Deliver variant carries.
+            let admission = admit_direct_guild_message(
+                crate::drop_ledger::global(),
                 &config,
-                resolved.gate_channel_id,
-                msg.author.id.get(),
-                mention_kind.is_some(),
+                ChannelId::new(resolved.gate_channel_id),
+                msg.id,
+                reply_parent_id,
                 msg.guild_id.map(|g| g.get()),
+                guild_muted,
+                msg.author.bot,
+                msg.author.id.get(),
+                mention_kind,
             );
 
-            match decision {
-                GateDecision::Deliver => {
-                    let targeting = mention_kind
-                        .map_or(MessageTargeting::Ambient, MessageTargeting::GuildDirected);
+            match admission {
+                DirectGuildAdmission::Deliver { targeting } => {
                     let pronoun_name = self.resolve_pronoun_name(&msg).await;
                     let event = build_message_event(
                         &msg,
@@ -664,11 +773,15 @@ impl EventHandler for Handler {
                     )
                     .await;
                 }
-                GateDecision::Queue => {
+                DirectGuildAdmission::Preflight(reason) => {
+                    tracing::debug!(channel_id, ?reason, "guild message suppressed at admission");
+                }
+                DirectGuildAdmission::BotAuthor => {}
+                DirectGuildAdmission::UnexpectedQueue => {
                     // Guild messages don't queue — this case shouldn't occur from check_guild.
                     tracing::debug!(channel_id, "guild message: unexpected Queue decision");
                 }
-                GateDecision::Drop => {
+                DirectGuildAdmission::GateDrop => {
                     tracing::trace!(
                         channel_id,
                         sender_id = msg.author.id.get(),
@@ -1172,6 +1285,151 @@ async fn run_discord_commands(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Why a guild message did not proceed past the cheap preflight checks, or
+/// confirmation that it did. Every non-[`GuildPreflight::Proceed`] variant
+/// has already been recorded in the drop ledger by
+/// [`guild_message_preflight`], so direct replies inherit the drop (#361).
+#[derive(Debug, PartialEq, Eq)]
+enum GuildPreflight {
+    /// Direct reply to a recorded dropped message: inherits the drop.
+    InheritedDrop,
+    /// The gate channel is not opted in to delivery.
+    NotOptedIn,
+    /// The guild is muted.
+    GuildMuted,
+    /// The channel requires a mention and the message carries none.
+    MentionRequired,
+    /// No preflight drop applies; continue to the full gate.
+    Proceed,
+}
+
+/// The preflight authority for direct guild messages: the #361
+/// reply-inheritance check runs **before** every policy check, and every
+/// drop in a **configured** gate scope — inherited or root — is recorded in
+/// the ledger so later replies inherit it.
+///
+/// Unconfigured channels record nothing: their replies are suppressed by the
+/// same `NotOptedIn` check that suppressed the parent, and refusing to
+/// record keeps untrusted traffic from minting ledger scopes (the drop
+/// ledger's scope set is derived from trusted configuration only). If a
+/// channel is configured mid-chain, replies to pre-configuration messages
+/// fall back to the ordinary gate — the same fail-open contract as a
+/// process restart.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is one preflight fact; bundling them would hide which check consumes which fact"
+)]
+fn guild_message_preflight(
+    ledger: &crate::drop_ledger::DropLedger,
+    gate_scope: ChannelId,
+    message_id: MessageId,
+    reply_parent_id: Option<MessageId>,
+    channel_opted_in: bool,
+    require_mention: bool,
+    guild_muted: bool,
+    mentioned: bool,
+) -> GuildPreflight {
+    if ledger.reply_inherits_drop(gate_scope, reply_parent_id) {
+        ledger.record(gate_scope, message_id);
+        return GuildPreflight::InheritedDrop;
+    }
+    if !channel_opted_in {
+        return GuildPreflight::NotOptedIn;
+    }
+    if guild_muted {
+        ledger.record(gate_scope, message_id);
+        return GuildPreflight::GuildMuted;
+    }
+    if require_mention && !mentioned {
+        ledger.record(gate_scope, message_id);
+        return GuildPreflight::MentionRequired;
+    }
+    GuildPreflight::Proceed
+}
+
+/// One admission decision for a direct (non-webhook) guild message. The
+/// production handler builds a delivery **only** from the
+/// [`DirectGuildAdmission::Deliver`] variant — its `targeting` exists
+/// nowhere else — so this function's return necessarily controls delivery,
+/// and tests that drive it exercise the same authority the handler obeys.
+#[derive(Debug, PartialEq, Eq)]
+enum DirectGuildAdmission {
+    /// Deliver with the targeting derived from mention classification.
+    Deliver { targeting: MessageTargeting },
+    /// Suppressed by the preflight authority (recorded as that authority
+    /// dictates).
+    Preflight(GuildPreflight),
+    /// Bot author outside the identity allow list (recorded for reply
+    /// inheritance — the scope is configured once preflight proceeds).
+    BotAuthor,
+    /// Dropped by the inbound gate (recorded for reply inheritance).
+    GateDrop,
+    /// `check_guild` returned Queue, which guild messages never should.
+    UnexpectedQueue,
+}
+
+/// The full admission authority for direct guild messages: preflight
+/// (inheritance + policy + mute + mention), bot-author filtering, and the
+/// inbound gate, with every ledger write that reply inheritance depends on.
+/// The handler's cheap early-return pass calls [`guild_message_preflight`]
+/// first for cost; recording is idempotent, so running both is safe.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is one admission fact; bundling them would hide which check consumes which fact"
+)]
+fn admit_direct_guild_message(
+    ledger: &crate::drop_ledger::DropLedger,
+    config: &crate::config::LoadedConfig,
+    gate_scope: ChannelId,
+    message_id: MessageId,
+    reply_parent_id: Option<MessageId>,
+    guild_id: Option<u64>,
+    guild_muted: bool,
+    author_is_bot: bool,
+    author_id: u64,
+    mention_kind: Option<MentionKind>,
+) -> DirectGuildAdmission {
+    let policy = config.channel_policy(gate_scope.get());
+    let preflight = guild_message_preflight(
+        ledger,
+        gate_scope,
+        message_id,
+        reply_parent_id,
+        policy.is_some(),
+        policy.is_some_and(|p| p.require_mention),
+        guild_muted,
+        mention_kind.is_some(),
+    );
+    if preflight != GuildPreflight::Proceed {
+        return DirectGuildAdmission::Preflight(preflight);
+    }
+    if should_drop_bot_message(author_is_bot, author_id, config) {
+        // Preflight returned Proceed above, so this scope is configured:
+        // recording here cannot mint an untrusted scope. Identity-list
+        // drops are roots like any other — replies inherit them.
+        ledger.record(gate_scope, message_id);
+        return DirectGuildAdmission::BotAuthor;
+    }
+    match InboundGate::check_guild(
+        config,
+        gate_scope.get(),
+        author_id,
+        mention_kind.is_some(),
+        guild_id,
+    ) {
+        GateDecision::Deliver => DirectGuildAdmission::Deliver {
+            targeting: mention_kind
+                .map_or(MessageTargeting::Ambient, MessageTargeting::GuildDirected),
+        },
+        GateDecision::Queue => DirectGuildAdmission::UnexpectedQueue,
+        GateDecision::Drop => {
+            // #361: remember the drop so a direct reply inherits it.
+            ledger.record(gate_scope, message_id);
+            DirectGuildAdmission::GateDrop
+        }
+    }
+}
 
 /// Result of resolving a channel's thread parentage and computing the
 /// effective channel ID for gate decisions.
@@ -1839,6 +2097,330 @@ fn is_direct_dm_transport(is_dm: bool, is_webhook: bool) -> bool {
 mod tests {
     use super::*;
     use crate::config::{AccessConfig, Config, DmPolicy, LoadedConfig};
+
+    fn mid(raw: u64) -> MessageId {
+        MessageId::new(raw)
+    }
+
+    const SCOPE: u64 = 20;
+
+    fn scope() -> ChannelId {
+        ChannelId::new(SCOPE)
+    }
+
+    /// The configured drop roots — guild muted, mention required — are
+    /// recorded, and a direct reply to any of them inherits the drop even
+    /// when the reply itself would pass every policy check. Chains stay
+    /// dropped hop by hop.
+    #[test]
+    fn preflight_records_configured_drop_roots_and_replies_inherit() {
+        let ledger = crate::drop_ledger::DropLedger::new();
+        assert_eq!(
+            guild_message_preflight(&ledger, scope(), mid(2), None, true, false, true, false),
+            GuildPreflight::GuildMuted
+        );
+        assert_eq!(
+            guild_message_preflight(&ledger, scope(), mid(3), None, true, true, false, false),
+            GuildPreflight::MentionRequired
+        );
+        // Replies to each recorded root inherit, even with a mention and a
+        // fully clean policy state.
+        for parent in [2u64, 3] {
+            assert_eq!(
+                guild_message_preflight(
+                    &ledger,
+                    scope(),
+                    mid(100 + parent),
+                    Some(mid(parent)),
+                    true,
+                    false,
+                    false,
+                    true
+                ),
+                GuildPreflight::InheritedDrop,
+                "reply to dropped root {parent} must inherit the drop"
+            );
+        }
+        // A reply to an inherited-drop hop stays dropped: the chain holds.
+        assert_eq!(
+            guild_message_preflight(
+                &ledger,
+                scope(),
+                mid(201),
+                Some(mid(102)),
+                true,
+                false,
+                false,
+                true
+            ),
+            GuildPreflight::InheritedDrop
+        );
+    }
+
+    /// Unconfigured channels suppress without recording: untrusted traffic
+    /// cannot mint ledger scopes (round-2 hardening — the scope set is
+    /// derived from trusted configuration only). The reply to an
+    /// unconfigured-channel drop is suppressed by the same `NotOptedIn`
+    /// check, not by inheritance.
+    #[test]
+    fn unconfigured_channels_suppress_without_minting_scopes() {
+        let ledger = crate::drop_ledger::DropLedger::new();
+        assert_eq!(
+            guild_message_preflight(&ledger, scope(), mid(1), None, false, false, false, false),
+            GuildPreflight::NotOptedIn
+        );
+        assert!(!ledger.contains(scope(), mid(1)), "nothing recorded");
+        // Same-channel reply while unconfigured: suppressed by NotOptedIn.
+        assert_eq!(
+            guild_message_preflight(
+                &ledger,
+                scope(),
+                mid(2),
+                Some(mid(1)),
+                false,
+                false,
+                false,
+                true
+            ),
+            GuildPreflight::NotOptedIn
+        );
+        // If the channel is configured mid-chain, the reply falls back to
+        // the ordinary gate (same fail-open contract as a restart).
+        assert_eq!(
+            guild_message_preflight(
+                &ledger,
+                scope(),
+                mid(3),
+                Some(mid(1)),
+                true,
+                false,
+                false,
+                false
+            ),
+            GuildPreflight::Proceed
+        );
+    }
+
+    /// Negative space: clean messages proceed, replies to undropped parents
+    /// proceed, and proceeding records nothing — a reply to a delivered
+    /// message is judged on its own.
+    #[test]
+    fn preflight_negatives_proceed_and_record_nothing() {
+        let ledger = crate::drop_ledger::DropLedger::new();
+        assert_eq!(
+            guild_message_preflight(&ledger, scope(), mid(1), None, true, false, false, false),
+            GuildPreflight::Proceed
+        );
+        assert_eq!(
+            guild_message_preflight(
+                &ledger,
+                scope(),
+                mid(2),
+                Some(mid(999)),
+                true,
+                false,
+                false,
+                false
+            ),
+            GuildPreflight::Proceed
+        );
+        assert_eq!(
+            guild_message_preflight(&ledger, scope(), mid(3), None, true, true, false, true),
+            GuildPreflight::Proceed
+        );
+        // None of the proceeding messages were recorded: replying to them
+        // does not inherit anything.
+        assert_eq!(
+            guild_message_preflight(
+                &ledger,
+                scope(),
+                mid(4),
+                Some(mid(1)),
+                true,
+                false,
+                false,
+                false
+            ),
+            GuildPreflight::Proceed
+        );
+    }
+
+    // ── Direct-guild admission authority (round-2 seam) ─────────────────────
+
+    fn admission_config(
+        channel_id: u64,
+        require_mention: bool,
+        allow_from: Vec<&str>,
+    ) -> LoadedConfig {
+        let mut raw = Config {
+            access: AccessConfig {
+                dm_policy: DmPolicy::Queue,
+                allow_from: vec![],
+                admins: vec![],
+                admin_only_mutations: false,
+            },
+            ..Default::default()
+        };
+        raw.channels.push(crate::config::ChannelConfig {
+            id: channel_id.to_string(),
+            require_mention,
+            allow_from: allow_from.into_iter().map(String::from).collect(),
+            ..Default::default()
+        });
+        LoadedConfig::from_raw(raw)
+    }
+
+    /// The admission authority end to end with real config: every recorded
+    /// drop root produces inheriting replies, clean messages produce the
+    /// only `Deliver { targeting }` the handler can build a delivery from,
+    /// and gate drops (sender outside `allow_from`) record for inheritance.
+    #[test]
+    fn admission_authority_controls_delivery_and_inheritance() {
+        let ledger = crate::drop_ledger::DropLedger::new();
+        let open = admission_config(SCOPE, false, vec![]);
+        let restricted = admission_config(SCOPE, false, vec!["42"]);
+        let mention_gated = admission_config(SCOPE, true, vec![]);
+        let admit = |config: &LoadedConfig,
+                     ledger: &crate::drop_ledger::DropLedger,
+                     message_id: u64,
+                     reply_to: Option<u64>,
+                     muted: bool,
+                     author: u64,
+                     mentioned: bool| {
+            admit_direct_guild_message(
+                ledger,
+                config,
+                scope(),
+                mid(message_id),
+                reply_to.map(mid),
+                Some(60),
+                muted,
+                false,
+                author,
+                mentioned.then_some(MentionKind::DirectMention),
+            )
+        };
+
+        // Clean ambient message delivers; a mention delivers directed.
+        assert_eq!(
+            admit(&open, &ledger, 1, None, false, 42, false),
+            DirectGuildAdmission::Deliver {
+                targeting: MessageTargeting::Ambient
+            }
+        );
+        assert_eq!(
+            admit(&open, &ledger, 2, None, false, 42, true),
+            DirectGuildAdmission::Deliver {
+                targeting: MessageTargeting::GuildDirected(MentionKind::DirectMention)
+            }
+        );
+
+        // Gate drop: author outside allow_from is recorded; the allowed
+        // author's reply to it inherits the drop.
+        assert_eq!(
+            admit(&restricted, &ledger, 3, None, false, 7, false),
+            DirectGuildAdmission::GateDrop
+        );
+        assert_eq!(
+            admit(&restricted, &ledger, 4, Some(3), false, 42, true),
+            DirectGuildAdmission::Preflight(GuildPreflight::InheritedDrop)
+        );
+
+        // Mention-required root is recorded; the mentioning reply inherits.
+        let ledger2 = crate::drop_ledger::DropLedger::new();
+        assert_eq!(
+            admit(&mention_gated, &ledger2, 5, None, false, 42, false),
+            DirectGuildAdmission::Preflight(GuildPreflight::MentionRequired)
+        );
+        assert_eq!(
+            admit(&mention_gated, &ledger2, 6, Some(5), false, 42, true),
+            DirectGuildAdmission::Preflight(GuildPreflight::InheritedDrop)
+        );
+
+        // Muted-guild root is recorded; the post-unmute reply inherits.
+        let ledger3 = crate::drop_ledger::DropLedger::new();
+        assert_eq!(
+            admit(&open, &ledger3, 7, None, true, 42, false),
+            DirectGuildAdmission::Preflight(GuildPreflight::GuildMuted)
+        );
+        assert_eq!(
+            admit(&open, &ledger3, 8, Some(7), false, 42, true),
+            DirectGuildAdmission::Preflight(GuildPreflight::InheritedDrop)
+        );
+
+        // Unconfigured channel: suppressed, nothing recorded.
+        let ledger4 = crate::drop_ledger::DropLedger::new();
+        let unconfigured = admission_config(999, false, vec![]);
+        assert_eq!(
+            admit(&unconfigured, &ledger4, 9, None, false, 42, false),
+            DirectGuildAdmission::Preflight(GuildPreflight::NotOptedIn)
+        );
+        assert!(!ledger4.contains(scope(), mid(9)));
+
+        // Disallowed-bot root in a configured scope is recorded (round-3
+        // blocker): an allowed human replying immediately inherits the
+        // drop, and the chain holds hop by hop.
+        assert_eq!(
+            admit_direct_guild_message(
+                &ledger4,
+                &open,
+                scope(),
+                mid(10),
+                None,
+                Some(60),
+                false,
+                true,
+                999,
+                None,
+            ),
+            DirectGuildAdmission::BotAuthor
+        );
+        assert!(
+            ledger4.contains(scope(), mid(10)),
+            "configured-scope bot-author root must be recorded"
+        );
+        assert_eq!(
+            admit(&open, &ledger4, 11, Some(10), false, 42, true),
+            DirectGuildAdmission::Preflight(GuildPreflight::InheritedDrop),
+            "allowed human reply to a dropped bot message inherits"
+        );
+        assert_eq!(
+            admit(&open, &ledger4, 12, Some(11), false, 42, true),
+            DirectGuildAdmission::Preflight(GuildPreflight::InheritedDrop),
+            "the chain rooted in a bot drop stays dropped hopwise"
+        );
+    }
+
+    // ── Presence assembly (round-2 seam) ────────────────────────────────────
+
+    /// The production wiring mints one authority: both handles observe the
+    /// same state, and a write through the MCP-side handle is what the
+    /// gateway-side handle replays onto a freshly installed sink.
+    #[tokio::test]
+    async fn wired_presence_handles_share_one_authority() {
+        let (handler_handle, server_handle) = wire_shared_presence();
+        let server_handle = server_handle.expect("gateway transport wires the MCP handle");
+        assert!(handler_handle.is_same_authority(&server_handle));
+        assert!(
+            !handler_handle.is_same_authority(&SharedPresence::new()),
+            "a separately constructed store must not read as the same authority"
+        );
+
+        // Write through the MCP-side handle…
+        server_handle
+            .set_presence(None, OnlineStatus::DoNotDisturb)
+            .await;
+        // …and the gateway-side handle replays it onto a new sink.
+        let sink = Arc::new(MockPresenceSink::new());
+        handler_handle
+            .install(Arc::clone(&sink) as Arc<dyn PresenceSink>)
+            .await;
+        assert_eq!(sink.call_count(), 1, "install replays the MCP-side write");
+        assert_eq!(
+            handler_handle.snapshot().await.desired.map(|d| d.status),
+            Some(OnlineStatus::DoNotDisturb)
+        );
+    }
 
     fn config_with_allow_from(ids: Vec<&str>) -> LoadedConfig {
         let raw = Config {

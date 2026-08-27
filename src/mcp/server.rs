@@ -58,6 +58,7 @@ pub struct DioneServer {
     pub state_dir: Utf8PathBuf,
     pub notification_tx: mpsc::Sender<Value>,
     pub discord_cmd_tx: Option<mpsc::Sender<DiscordCommand>>,
+    pub presence: Option<crate::discord::events::SharedPresence>,
     pub trace_controller: TraceLevelController,
     pub mode: TransportMode,
     pub codex_queue: Option<CodexEventQueue>,
@@ -65,6 +66,77 @@ pub struct DioneServer {
     pub no_rly: Arc<ConsentGate>,
     pub event_tx: Option<mpsc::Sender<NotificationEvent>>,
     pub ingress_ledger: Arc<crate::ingress_ledger::IngressLedger>,
+}
+
+// ── Construction ──────────────────────────────────────────────────────────────
+
+impl DioneServer {
+    /// Core server with no gateway or codex wiring. Transports attach their
+    /// optional channels via the `with_*` builders, so adding optional
+    /// wiring never breaks existing constructions.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "these are the always-required core dependencies; optional wiring goes through the with_* builders instead of widening this list"
+    )]
+    pub fn new(
+        state: crate::state::State,
+        queue: Arc<Mutex<crate::queue::AccessQueue>>,
+        http: Arc<serenity::http::Http>,
+        state_dir: Utf8PathBuf,
+        notification_tx: mpsc::Sender<Value>,
+        trace_controller: TraceLevelController,
+        mode: TransportMode,
+        no_rly: Arc<ConsentGate>,
+        ingress_ledger: Arc<crate::ingress_ledger::IngressLedger>,
+    ) -> Self {
+        Self {
+            state,
+            queue,
+            http,
+            state_dir,
+            notification_tx,
+            discord_cmd_tx: None,
+            presence: None,
+            trace_controller,
+            mode,
+            codex_queue: None,
+            codex_thread_binding: None,
+            no_rly,
+            event_tx: None,
+            ingress_ledger,
+        }
+    }
+
+    pub fn with_discord_cmd_tx(mut self, tx: Option<mpsc::Sender<DiscordCommand>>) -> Self {
+        self.discord_cmd_tx = tx;
+        self
+    }
+
+    pub fn with_presence(
+        mut self,
+        presence: Option<crate::discord::events::SharedPresence>,
+    ) -> Self {
+        self.presence = presence;
+        self
+    }
+
+    pub fn with_codex_queue(mut self, codex_queue: Option<CodexEventQueue>) -> Self {
+        self.codex_queue = codex_queue;
+        self
+    }
+
+    pub fn with_codex_thread_binding(
+        mut self,
+        binding: Option<watch::Sender<Option<crate::codex::CodexThreadId>>>,
+    ) -> Self {
+        self.codex_thread_binding = binding;
+        self
+    }
+
+    pub fn with_event_tx(mut self, event_tx: Option<mpsc::Sender<NotificationEvent>>) -> Self {
+        self.event_tx = event_tx;
+        self
+    }
 }
 
 // ── Context factory methods ───────────────────────────────────────────────────
@@ -118,12 +190,9 @@ impl DioneServer {
     }
 
     pub(crate) fn bot_state_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> BotStateCtx {
-        BotStateCtx {
-            http: self.http.clone(),
-            discord_cmd_tx: self.discord_cmd_tx.clone(),
-            state: self.state.clone(),
-            config,
-        }
+        BotStateCtx::new(self.http.clone(), self.state.clone(), config)
+            .with_discord_cmd_tx(self.discord_cmd_tx.clone())
+            .with_presence(self.presence.clone())
     }
 
     pub(crate) fn diagnostics_ctx(&self) -> DiagnosticsCtx<'_> {
@@ -832,21 +901,17 @@ mod tests {
         let state_dir =
             camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf-8 path");
         let (notification_tx, _notification_rx) = mpsc::channel(1);
-        let server = DioneServer {
-            state: crate::state::new_state(),
-            queue: Arc::new(Mutex::new(crate::queue::AccessQueue::load(&state_dir))),
-            http: Arc::new(serenity::http::Http::new("fake")),
-            no_rly: Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
-            state_dir,
+        let server = DioneServer::new(
+            crate::state::new_state(),
+            Arc::new(Mutex::new(crate::queue::AccessQueue::load(&state_dir))),
+            Arc::new(serenity::http::Http::new("fake")),
+            state_dir.clone(),
             notification_tx,
-            discord_cmd_tx: None,
-            trace_controller: TraceLevelController::noop(),
-            mode: TransportMode::ClaudeCode,
-            codex_queue: None,
-            codex_thread_binding: None,
-            event_tx: None,
-            ingress_ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
-        };
+            TraceLevelController::noop(),
+            TransportMode::ClaudeCode,
+            Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
+            Arc::new(crate::ingress_ledger::IngressLedger::new()),
+        );
 
         let context = server.messaging_ctx(Arc::new(LoadedConfig::from_raw(Config::default())));
 

@@ -229,6 +229,10 @@ async fn main() -> Result<()> {
     ));
 
     // Build Discord event handler.
+    // One presence authority: the gateway handler and the MCP server must
+    // share the exact same state, so both handles come from the production
+    // assembly seam (tested in events::tests + dispatch::tests).
+    let (shared_presence, server_presence) = dione::discord::events::wire_shared_presence();
     let handler = Handler {
         state: state.clone(),
         queue: queue.clone(),
@@ -236,7 +240,7 @@ async fn main() -> Result<()> {
         state_dir: state_dir.clone(),
         bot_user_id: AtomicU64::new(0),
         discord_cmd_rx: tokio::sync::Mutex::new(Some(discord_cmd_rx)),
-        presence: dione::discord::events::SharedPresence::new(),
+        presence: shared_presence.clone(),
         pronoun_service,
         nameplate_service,
         ingress_ledger: ingress_ledger.clone(),
@@ -251,21 +255,22 @@ async fn main() -> Result<()> {
 
     // Build MCP server.
     let trace_controller = TraceLevelController::new(stderr_reload_handle, channel_reload_handle);
-    let server = DioneServer {
-        state: state.clone(),
-        queue: queue.clone(),
+    let server = DioneServer::new(
+        state.clone(),
+        queue.clone(),
         http,
-        state_dir: state_dir.clone(),
-        notification_tx: notif_tx,
-        discord_cmd_tx: Some(discord_cmd_tx),
+        state_dir.clone(),
+        notif_tx,
         trace_controller,
-        mode: cli.mode,
-        codex_queue,
-        codex_thread_binding,
-        no_rly: Arc::new(dione::no_rly::consent::ConsentGate::new(&state_dir)),
-        event_tx: Some(event_tx.clone()),
+        cli.mode,
+        Arc::new(dione::no_rly::consent::ConsentGate::new(&state_dir)),
         ingress_ledger,
-    };
+    )
+    .with_discord_cmd_tx(Some(discord_cmd_tx))
+    .with_presence(server_presence)
+    .with_codex_queue(codex_queue)
+    .with_codex_thread_binding(codex_thread_binding)
+    .with_event_tx(Some(event_tx.clone()));
 
     // Spawn the tracing-channel forwarder: converts tracing events into NotificationEvents.
     let trace_event_tx = event_tx.clone();
