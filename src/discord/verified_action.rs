@@ -245,10 +245,12 @@ where
 
 /// The sole owner of transport-proof minting.
 pub(crate) struct DiscordTransportVerifier {
-    #[expect(
-        dead_code,
-        reason = "the unread private field prevents sibling modules from constructing the sole proof-minting authority"
-    )]
+    // The unread private field prevents sibling modules from constructing the sole
+    // proof-minting authority. `allow` rather than `expect`: whether `dead_code`
+    // fires here varies by toolchain and compilation context (Rust 1.98 skips it in
+    // trybuild's compile-fail builds), and an unfulfilled expectation is itself a
+    // warning that breaks the snapshots.
+    #[allow(dead_code)]
     private: (),
 }
 
@@ -323,10 +325,11 @@ impl ResolutionSession {
 
 /// The sole owner of unresolved-to-resolved typestate transitions.
 pub(crate) struct PrincipalResolver {
-    #[expect(
-        dead_code,
-        reason = "the unread private field prevents sibling modules from constructing the sole typestate transition authority"
-    )]
+    // The unread private field prevents sibling modules from constructing the sole
+    // typestate transition authority. `allow` rather than `expect`: see
+    // `DiscordTransportVerifier::private` — expectation fulfillment is
+    // toolchain/context dependent.
+    #[allow(dead_code)]
     private: (),
 }
 
@@ -675,20 +678,20 @@ pub(crate) struct LifecycleAdmissionFacts {
     webhook_id: WebhookId,
     provider: TransportProvider,
     provenance: LifecycleProvenance,
-    #[expect(
-        dead_code,
-        reason = "retained as durable admission audit metadata even though current lifecycle decisions do not branch on it"
-    )]
+    // Retained as durable admission audit metadata even though current lifecycle
+    // decisions do not branch on it. `allow` rather than `expect`: fulfillment is
+    // toolchain/context dependent (see `DiscordTransportVerifier::private`).
+    #[allow(dead_code)]
     policy_generation: u64,
-    #[expect(
-        dead_code,
-        reason = "retained as durable admission audit metadata even though current lifecycle decisions do not branch on it"
-    )]
+    // Retained as durable admission audit metadata even though current lifecycle
+    // decisions do not branch on it. `allow` rather than `expect`: fulfillment is
+    // toolchain/context dependent (see `DiscordTransportVerifier::private`).
+    #[allow(dead_code)]
     policy_fingerprint: [u8; 32],
-    #[expect(
-        dead_code,
-        reason = "retained as durable admission audit metadata even though current lifecycle decisions do not branch on it"
-    )]
+    // Retained as durable admission audit metadata even though current lifecycle
+    // decisions do not branch on it. `allow` rather than `expect`: fulfillment is
+    // toolchain/context dependent (see `DiscordTransportVerifier::private`).
+    #[allow(dead_code)]
     admitted_at: DateTime<Utc>,
 }
 

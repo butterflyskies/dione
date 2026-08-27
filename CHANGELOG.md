@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.37.1] - 2026-08-26
+
+### Fixed
+- **Rust 1.98 toolchain compatibility.** The floating-stable CI toolchain
+  moved to 1.98.0 and turned main red without a source change. Two repairs,
+  both toolchain-portable: `build_client` carries
+  `#[allow(clippy::result_large_err)]` (the lint is new in 1.98 and
+  `serenity::Error`'s size is upstream's), and the five
+  `#[expect(dead_code)]` markers in `verified_action` became `#[allow]` with
+  their reasons preserved as comments — Rust 1.98 skips dead-code analysis in
+  trybuild's compile-fail builds, so the expectations went unfulfilled there
+  and leaked warnings into six stderr snapshots. No behavior change.
+
 ## [0.37.0] - 2026-08-26
 
 ### Added
