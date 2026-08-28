@@ -33,7 +33,7 @@ fs2 = "0.4"
 libc = "0.2"
 regex = "1"
 aho-corasick = "1"
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 chrono-tz = "0.10"
 camino = { version = "1", features = ["serde1"] }
