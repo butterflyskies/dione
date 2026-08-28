@@ -587,6 +587,97 @@ fn release_version_helper_reads_workspace_path_package() {
 }
 
 #[test]
+fn release_generated_files_are_ignored_and_excluded_from_package_inputs() {
+    let temp = tempfile::tempdir().expect("temporary repository must be created");
+    let root = temp.path();
+    fs::create_dir(root.join("src")).expect("fixture source directory must be created");
+    fs::write(root.join(".gitignore"), include_str!("../.gitignore"))
+        .expect("fixture ignore rules must be written");
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"dione\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("fixture manifest must be written");
+    fs::write(root.join("src/lib.rs"), "pub fn fixture() {}\n")
+        .expect("fixture source must be written");
+
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .expect("git must execute")
+    };
+    assert!(git(&["init", "--quiet"]).status.success());
+
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let lockfile = Command::new(&cargo)
+        .args(["generate-lockfile", "--quiet"])
+        .current_dir(root)
+        .output()
+        .expect("cargo generate-lockfile must execute");
+    assert!(
+        lockfile.status.success(),
+        "fixture lockfile generation failed: {}",
+        String::from_utf8_lossy(&lockfile.stderr)
+    );
+    assert!(git(&["add", "."]).status.success());
+    let commit = Command::new("git")
+        .args([
+            "-c",
+            "user.name=Dione Tests",
+            "-c",
+            "user.email=dione-tests@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture",
+        ])
+        .current_dir(root)
+        .output()
+        .expect("git commit must execute");
+    assert!(
+        commit.status.success(),
+        "fixture commit failed: {}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+
+    for path in ["dist/dione", "artifact-audit/package-inputs.txt"] {
+        let fixture = root.join(path);
+        fs::create_dir_all(fixture.parent().expect("fixture path must have a parent"))
+            .expect("generated fixture directory must be created");
+        fs::write(&fixture, "generated release output\n")
+            .expect("generated fixture must be written");
+
+        let ignored = git(&["check-ignore", "--quiet", "--", path]);
+        assert!(
+            ignored.status.success(),
+            "generated release path `{path}` must be ignored"
+        );
+    }
+
+    let package = Command::new(cargo)
+        .args(["package", "-p", "dione", "--list", "--locked"])
+        .current_dir(root)
+        .output()
+        .expect("cargo package must execute");
+    assert!(
+        package.status.success(),
+        "generated release files made the package tree dirty: {}",
+        String::from_utf8_lossy(&package.stderr)
+    );
+    let package_inputs = String::from_utf8(package.stdout).expect("package inputs must be UTF-8");
+    assert!(!package_inputs.lines().any(|path| path.starts_with("dist/")));
+    assert!(
+        !package_inputs
+            .lines()
+            .any(|path| path.starts_with("artifact-audit/"))
+    );
+}
+
+#[test]
 fn release_waits_for_cargo_registry_resolution() {
     let workflow = include_str!("../.github/workflows/publish-crate.yml");
     let (verify_auspex, remaining) = workflow
