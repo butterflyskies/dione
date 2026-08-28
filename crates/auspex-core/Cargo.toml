@@ -11,4 +11,4 @@ repository = "https://github.com/butterflyskies/dione"
 test-support = []
 
 [dependencies]
-sha2 = "0.10"
+sha2 = "0.11"
