@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.38.1] - 2026-08-29
+
 ### Fixed
 - **Codex live delivery stays bounded across reconnects.** The app-server
   adapter now reads summary-only thread state and, for an active thread, fetches
