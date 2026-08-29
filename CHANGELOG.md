@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Codex live delivery stays bounded across reconnects.** The app-server
+  adapter now reads summary-only thread state and, for an active thread, fetches
+  at most the newest turn with its items left unloaded before steering. It no
+  longer resumes or downloads full thread history, starts a turn when the
+  thread is idle, and fails closed when bounded current-turn state is
+  unavailable. This avoids long-lived threads eventually reaching WebSocket
+  message-size cliffs and stalling delivery.
+
 ## [0.38.0] - 2026-08-27
 
 ### Changed

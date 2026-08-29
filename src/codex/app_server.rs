@@ -15,9 +15,9 @@ const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(1);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const EVENT_WAIT: Duration = Duration::from_secs(45);
-// One delivery can spend up to four request timeouts connecting/resuming,
-// reading the thread, and starting or steering a turn. Keep the lease well
-// beyond that bound so a successfully accepted turn can still be acknowledged.
+// Connection setup and the bounded idle or active request sequence can consume
+// several request-timeout windows. Keep the lease well beyond that sequence so
+// a successfully accepted turn can still be acknowledged.
 const EVENT_LEASE: Duration = Duration::from_secs(5 * 60);
 const MAX_WEBSOCKET_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
 
@@ -95,8 +95,10 @@ pub enum CodexDeliveryError {
         #[source]
         source: Box<WebSocketError>,
     },
-    #[error("Codex thread is active but its current turn id is unavailable")]
+    #[error("codex thread is active but its current turn id is unavailable")]
     ActiveTurnUnknown,
+    #[error("codex thread status `{status}` does not support live delivery")]
+    UnsupportedThreadStatus { status: String },
     #[error(transparent)]
     Queue(#[from] CodexQueueError),
 }
@@ -144,7 +146,8 @@ impl AppServerClient {
                         "name": "dione",
                         "title": "Dione",
                         "version": env!("CARGO_PKG_VERSION")
-                    }
+                    },
+                    "capabilities": { "experimentalApi": true }
                 }),
             )
             .await?;
@@ -153,9 +156,6 @@ impl AppServerClient {
                 "initialized",
                 json!({ "method": "initialized", "params": {} }),
             )
-            .await?;
-        client
-            .request("thread/resume", json!({ "threadId": client.thread_id }))
             .await?;
         Ok(client)
     }
@@ -187,35 +187,54 @@ impl AppServerClient {
                 "thread/read",
                 json!({
                     "threadId": self.thread_id,
-                    "includeTurns": true
+                    "includeTurns": false
                 }),
             )
             .await?;
         let thread = result.get("thread").cloned().unwrap_or(Value::Null);
-        let active_turn_id = active_turn_id(&thread)?;
         let input = event_input(event, preamble);
         let client_message_id = format!("dione-{}", event.event_id);
-        if let Some(turn_id) = active_turn_id {
-            self.request(
-                "turn/steer",
-                json!({
-                    "threadId": self.thread_id,
-                    "expectedTurnId": turn_id,
-                    "clientUserMessageId": client_message_id,
-                    "input": input
-                }),
-            )
-            .await?;
-        } else {
-            self.request(
-                "turn/start",
-                json!({
-                    "threadId": self.thread_id,
-                    "clientUserMessageId": client_message_id,
-                    "input": input
-                }),
-            )
-            .await?;
+        match thread.pointer("/status/type").and_then(Value::as_str) {
+            Some("idle") => {
+                self.request(
+                    "turn/start",
+                    json!({
+                        "threadId": self.thread_id,
+                        "clientUserMessageId": client_message_id,
+                        "input": input
+                    }),
+                )
+                .await?;
+            }
+            Some("active") => {
+                let turns = self
+                    .request(
+                        "thread/turns/list",
+                        json!({
+                            "threadId": self.thread_id,
+                            "limit": 1,
+                            "sortDirection": "desc",
+                            "itemsView": "notLoaded"
+                        }),
+                    )
+                    .await?;
+                let turn_id = active_turn_id(&turns)?;
+                self.request(
+                    "turn/steer",
+                    json!({
+                        "threadId": self.thread_id,
+                        "expectedTurnId": turn_id,
+                        "clientUserMessageId": client_message_id,
+                        "input": input
+                    }),
+                )
+                .await?;
+            }
+            status => {
+                return Err(CodexDeliveryError::UnsupportedThreadStatus {
+                    status: status.unwrap_or("missing").to_owned(),
+                });
+            }
         }
         Ok(())
     }
@@ -297,9 +316,8 @@ impl AppServerClient {
 
 fn websocket_config() -> WebSocketConfig {
     WebSocketConfig {
-        // App-server responses such as `thread/resume` may contain an entire
-        // long-running thread in one frame. Tungstenite's default frame limit
-        // is 16 MiB even though its message limit is 64 MiB.
+        // Leave room for large bounded protocol responses above Tungstenite's
+        // 16 MiB frame default without accepting unbounded messages.
         max_message_size: Some(MAX_WEBSOCKET_MESSAGE_SIZE),
         max_frame_size: Some(MAX_WEBSOCKET_MESSAGE_SIZE),
         max_write_buffer_size: MAX_WEBSOCKET_MESSAGE_SIZE + 128 * 1024,
@@ -307,22 +325,16 @@ fn websocket_config() -> WebSocketConfig {
     }
 }
 
-fn active_turn_id(thread: &Value) -> Result<Option<String>, CodexDeliveryError> {
-    let active = thread.pointer("/status/type").and_then(Value::as_str) == Some("active");
-    let turn_id = thread
-        .get("turns")
+fn active_turn_id(turns: &Value) -> Result<String, CodexDeliveryError> {
+    turns
+        .get("data")
         .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .rev()
-        .find(|turn| turn.get("status").and_then(Value::as_str) == Some("inProgress"))
+        .and_then(|turns| (turns.len() == 1).then(|| &turns[0]))
+        .filter(|turn| turn.get("status").and_then(Value::as_str) == Some("inProgress"))
         .and_then(|turn| turn.get("id"))
         .and_then(Value::as_str)
-        .map(str::to_owned);
-    if active && turn_id.is_none() {
-        return Err(CodexDeliveryError::ActiveTurnUnknown);
-    }
-    Ok(turn_id)
+        .map(str::to_owned)
+        .ok_or(CodexDeliveryError::ActiveTurnUnknown)
 }
 
 fn event_input(event: &LeasedEvent, preamble: Option<&str>) -> Value {
@@ -585,21 +597,31 @@ mod tests {
 
     #[test]
     fn finds_in_progress_turn() {
-        let thread = json!({
-            "status": { "type": "active", "activeFlags": [] },
-            "turns": [
-                { "id": "done", "status": "completed" },
-                { "id": "live", "status": "inProgress" }
-            ]
+        let turns = json!({
+            "data": [{ "id": "live", "status": "inProgress" }]
         });
-        assert_eq!(active_turn_id(&thread).unwrap().as_deref(), Some("live"));
+        assert_eq!(active_turn_id(&turns).unwrap(), "live");
     }
 
     #[test]
     fn refuses_active_thread_without_turn_id() {
-        let thread = json!({ "status": { "type": "active" }, "turns": [] });
+        let turns = json!({ "data": [{ "id": "done", "status": "completed" }] });
         assert!(matches!(
-            active_turn_id(&thread),
+            active_turn_id(&turns),
+            Err(CodexDeliveryError::ActiveTurnUnknown)
+        ));
+    }
+
+    #[test]
+    fn refuses_incoherent_multi_turn_bounded_response() {
+        let turns = json!({
+            "data": [
+                { "id": "newest", "status": "inProgress" },
+                { "id": "unexpected", "status": "completed" }
+            ]
+        });
+        assert!(matches!(
+            active_turn_id(&turns),
             Err(CodexDeliveryError::ActiveTurnUnknown)
         ));
     }
@@ -658,6 +680,9 @@ mod tests {
                     continue;
                 };
                 let request: Value = serde_json::from_str(&text).unwrap();
+                if request["method"] == "initialized" {
+                    std::future::pending::<()>().await;
+                }
                 let Some(id) = request.get("id").and_then(Value::as_u64) else {
                     continue;
                 };
@@ -665,9 +690,6 @@ mod tests {
                     .send(Message::Text(json!({ "id": id, "result": {} }).to_string()))
                     .await
                     .unwrap();
-                if request["method"] == "thread/resume" {
-                    std::future::pending::<()>().await;
-                }
             }
         });
         let config = test_delivery_config(socket_path, Duration::from_secs(5));
@@ -710,6 +732,9 @@ mod tests {
                     continue;
                 };
                 let request: Value = serde_json::from_str(&text).unwrap();
+                if request["method"] == "initialized" {
+                    break;
+                }
                 let Some(id) = request.get("id").and_then(Value::as_u64) else {
                     continue;
                 };
@@ -724,9 +749,6 @@ mod tests {
                     ))
                     .await
                     .unwrap();
-                if request["method"] == "thread/resume" {
-                    break;
-                }
             }
         });
         let config = test_delivery_config(socket_path, Duration::from_secs(5));
@@ -794,16 +816,277 @@ mod tests {
             .collect();
         assert_eq!(
             methods,
+            ["initialize", "initialized", "thread/read", "turn/start"]
+        );
+        assert_eq!(
+            received[0]["params"]["capabilities"]["experimentalApi"],
+            true
+        );
+        assert_eq!(received[2]["params"]["includeTurns"], false);
+        assert_eq!(received[3]["params"]["threadId"], "thread-123");
+        assert_eq!(received[3]["params"]["clientUserMessageId"], "dione-7");
+    }
+
+    #[tokio::test]
+    async fn active_delivery_lists_only_newest_turn_without_items_and_steers_it() {
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            let mut received = Vec::new();
+            while let Some(message) = websocket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                received.push(request.clone());
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                let result = match request["method"].as_str().unwrap() {
+                    "thread/read" => {
+                        json!({ "thread": { "status": { "type": "active" } } })
+                    }
+                    "thread/turns/list" => json!({
+                        "data": [{ "id": "turn-live", "status": "inProgress" }],
+                        "nextCursor": "older",
+                        "backwardsCursor": null
+                    }),
+                    _ => json!({}),
+                };
+                websocket
+                    .send(Message::Text(
+                        json!({ "id": id, "result": result }).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                if request["method"] == "turn/steer" {
+                    return received;
+                }
+            }
+            received
+        });
+        let config = test_delivery_config(socket_path, Duration::from_secs(1));
+        let mut client =
+            AppServerClient::connect(config, CodexThreadId::parse("thread-active").unwrap())
+                .await
+                .unwrap();
+
+        client.deliver(&test_event(), None).await.unwrap();
+
+        let received = server.await.unwrap();
+        let methods: Vec<_> = received
+            .iter()
+            .filter_map(|request| request.get("method").and_then(Value::as_str))
+            .collect();
+        assert_eq!(
+            methods,
             [
                 "initialize",
                 "initialized",
-                "thread/resume",
                 "thread/read",
-                "turn/start"
+                "thread/turns/list",
+                "turn/steer"
             ]
         );
-        assert_eq!(received[4]["params"]["threadId"], "thread-123");
-        assert_eq!(received[4]["params"]["clientUserMessageId"], "dione-7");
+        assert_eq!(
+            received[3]["params"],
+            json!({
+                "threadId": "thread-active",
+                "limit": 1,
+                "sortDirection": "desc",
+                "itemsView": "notLoaded"
+            })
+        );
+        assert_eq!(received[4]["params"]["expectedTurnId"], "turn-live");
+    }
+
+    #[tokio::test]
+    async fn incoherent_bounded_state_fails_closed_before_turn_mutation() {
+        enum ExpectedError {
+            ActiveTurnUnknown,
+            UnsupportedThreadStatus(&'static str),
+        }
+
+        let cases = [
+            (
+                "missing status",
+                json!({ "thread": {} }),
+                None,
+                ExpectedError::UnsupportedThreadStatus("missing"),
+            ),
+            (
+                "unsupported status",
+                json!({ "thread": { "status": { "type": "notLoaded" } } }),
+                None,
+                ExpectedError::UnsupportedThreadStatus("notLoaded"),
+            ),
+            (
+                "active empty turn list",
+                json!({ "thread": { "status": { "type": "active" } } }),
+                Some(json!({ "data": [] })),
+                ExpectedError::ActiveTurnUnknown,
+            ),
+            (
+                "active malformed turn list",
+                json!({ "thread": { "status": { "type": "active" } } }),
+                Some(json!({ "data": [{ "status": "inProgress" }] })),
+                ExpectedError::ActiveTurnUnknown,
+            ),
+        ];
+
+        for (name, thread_result, turns_result, expected_error) in cases {
+            let dir = TempDir::new().unwrap();
+            let socket_path =
+                Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+            let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+            let expects_turn_list = turns_result.is_some();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut websocket = accept_async(stream).await.unwrap();
+                let mut received = Vec::new();
+                while let Some(message) = websocket.next().await {
+                    let Message::Text(text) = message.unwrap() else {
+                        continue;
+                    };
+                    let request: Value = serde_json::from_str(&text).unwrap();
+                    let method = request["method"].as_str().unwrap().to_owned();
+                    received.push(method.clone());
+                    let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                        continue;
+                    };
+                    let result = match method.as_str() {
+                        "thread/read" => thread_result.clone(),
+                        "thread/turns/list" => turns_result.clone().unwrap(),
+                        _ => json!({}),
+                    };
+                    websocket
+                        .send(Message::Text(
+                            json!({ "id": id, "result": result }).to_string(),
+                        ))
+                        .await
+                        .unwrap();
+                    let terminal_method = if expects_turn_list {
+                        "thread/turns/list"
+                    } else {
+                        "thread/read"
+                    };
+                    if method == terminal_method {
+                        return received;
+                    }
+                }
+                received
+            });
+            let config = test_delivery_config(socket_path, Duration::from_secs(1));
+            let mut client =
+                AppServerClient::connect(config, CodexThreadId::parse("thread-invalid").unwrap())
+                    .await
+                    .unwrap();
+
+            let error = client.deliver(&test_event(), None).await.unwrap_err();
+
+            match expected_error {
+                ExpectedError::ActiveTurnUnknown => {
+                    assert!(
+                        matches!(error, CodexDeliveryError::ActiveTurnUnknown),
+                        "{name}"
+                    );
+                }
+                ExpectedError::UnsupportedThreadStatus(expected) => assert!(
+                    matches!(
+                        error,
+                        CodexDeliveryError::UnsupportedThreadStatus { status }
+                            if status == expected
+                    ),
+                    "{name}"
+                ),
+            }
+            let received = server.await.unwrap();
+            let expected_methods = if expects_turn_list {
+                vec![
+                    "initialize",
+                    "initialized",
+                    "thread/read",
+                    "thread/turns/list",
+                ]
+            } else {
+                vec!["initialize", "initialized", "thread/read"]
+            };
+            assert_eq!(received, expected_methods, "{name}");
+            assert!(
+                !received
+                    .iter()
+                    .any(|method| method == "turn/start" || method == "turn/steer"),
+                "{name}: incoherent state must not mutate a turn"
+            );
+        }
+    }
+
+    /// Falsifies the hypothesis that delivery must load full history before it
+    /// can append to an idle thread. The fake server has a response larger than
+    /// the client's 64 MiB message bound ready behind either legacy request;
+    /// the old resume/includeTurns path reaches it and makes this test fail.
+    #[tokio::test]
+    async fn delivery_does_not_reach_available_history_larger_than_64_mib() {
+        const HISTORY_SIZE: usize = MAX_WEBSOCKET_MESSAGE_SIZE + 1024;
+
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let historical_payload = "h".repeat(HISTORY_SIZE);
+            assert!(historical_payload.len() > MAX_WEBSOCKET_MESSAGE_SIZE);
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            let mut forbidden_history_requested = false;
+            while let Some(message) = websocket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let method = request["method"].as_str().unwrap();
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                let include_full_history = method == "thread/resume"
+                    || (method == "thread/read"
+                        && request["params"]["includeTurns"].as_bool() == Some(true));
+                let result = if include_full_history {
+                    forbidden_history_requested = true;
+                    json!({
+                        "thread": {
+                            "status": { "type": "idle" },
+                            "turns": [{ "items": [{ "text": historical_payload.as_str() }] }]
+                        }
+                    })
+                } else if method == "thread/read" {
+                    json!({ "thread": { "status": { "type": "idle" } } })
+                } else {
+                    json!({})
+                };
+                websocket
+                    .send(Message::Text(
+                        json!({ "id": id, "result": result }).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                if method == "turn/start" {
+                    return forbidden_history_requested;
+                }
+            }
+            forbidden_history_requested
+        });
+        let config = test_delivery_config(socket_path, Duration::from_secs(5));
+        let mut client =
+            AppServerClient::connect(config, CodexThreadId::parse("thread-huge").unwrap())
+                .await
+                .unwrap();
+
+        client.deliver(&test_event(), None).await.unwrap();
+
+        assert!(!server.await.unwrap());
     }
 
     #[tokio::test]
