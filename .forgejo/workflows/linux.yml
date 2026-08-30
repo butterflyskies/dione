@@ -204,13 +204,17 @@ jobs:
             "${version}" \
             artifact-audit/package-inputs.txt \
             artifact-audit/cargo-metadata.json
-      # Forgejo requires v3 or its patched v4 artifact action:
+      # This Forgejo instance rejects the v4+ artifact backend
+      # (GHESNotSupportedError: @actions/artifact v2.0.0+ / upload-artifact@v4+
+      # not supported) even with Forgejo's own patched v4.6.2, so this is pinned
+      # to v3-node20 (plain v3 is node16, now EOL). Verified: the v4.6.2 pin built
+      # dist/ and passed the verifier but died at the upload step on every main run.
       # https://forgejo.org/docs/latest/user/actions/advanced-features/#artifacts
       # Source: https://data.forgejo.org/actions/upload-artifact
       # The ZIP transport does not preserve executable mode. Consumers verify
       # dione.sha256, then restore mode 0755 after download.
       - name: Upload immutable public release artifact
-        uses: https://data.forgejo.org/actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # patched v4.6.2
+        uses: https://data.forgejo.org/actions/upload-artifact@c24449f33cd45d4826c6702db7e49f7cdb9b551d # v3-node20
         with:
           name: dione-linux-x86_64-${{ forgejo.sha }}
           path: |
