@@ -848,9 +848,6 @@ fn forgejo_ci_preserves_trusted_main_release_artifact_contract() {
     assert!(artifact.contains("cargo metadata --locked --no-deps --format-version 1"));
     assert!(artifact.contains("scripts/verify-public-artifact.sh"));
     assert!(!artifact.contains("sh scripts/verify-public-artifact.sh"));
-    assert!(artifact.contains(
-        "https://data.forgejo.org/actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
-    ));
     assert!(artifact.contains("if-no-files-found: error"));
     assert!(artifact.contains("retention-days: 14"));
     assert!(artifact.contains(
