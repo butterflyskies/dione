@@ -212,7 +212,7 @@ jobs:
           curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
             --retry 3 --retry-all-errors \
             -o /usr/local/share/ca-certificates/rosie-root.pem \
-            https://ca.echoes:9443/roots.pem
+            https://step-certificates.echoes-pki.svc.cluster.local:443/roots.pem
       # This Forgejo instance rejects the v4+ artifact backend
       # (GHESNotSupportedError: @actions/artifact v2.0.0+ / upload-artifact@v4+
       # not supported) even with Forgejo's own patched v4.6.2, so this is pinned
