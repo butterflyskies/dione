@@ -292,9 +292,9 @@ pub fn sanitize_filename(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AccessConfig, ChannelConfig, Config, DmPolicy, MentionConfig};
-    use crate::principal_policy::{
-        Admission, Attention, LegacyGuildPolicyInput, LegacyPolicyTranslation,
+    use crate::{
+        config::{AccessConfig, ChannelConfig, Config, DmPolicy, MentionConfig},
+        principal_policy::{Admission, Attention, LegacyGuildPolicyInput, LegacyPolicyTranslation},
     };
     use std::collections::HashSet;
 
