@@ -293,6 +293,9 @@ pub fn sanitize_filename(name: &str) -> String {
 mod tests {
     use super::*;
     use crate::config::{AccessConfig, ChannelConfig, Config, DmPolicy, MentionConfig};
+    use crate::principal_policy::{
+        Admission, Attention, LegacyGuildPolicyInput, LegacyPolicyTranslation,
+    };
     use std::collections::HashSet;
 
     fn base_config() -> Config {
@@ -349,6 +352,31 @@ mod tests {
         assert_eq!(InboundGate::check_dm(&config, 999), GateDecision::Drop);
         // Allowed user still delivers.
         assert_eq!(InboundGate::check_dm(&config, 100), GateDecision::Deliver);
+    }
+
+    #[test]
+    fn legacy_dm_translation_matches_the_runtime_gate() {
+        for dm_policy in [DmPolicy::Queue, DmPolicy::Drop, DmPolicy::Disabled] {
+            for sender_is_allowed in [false, true] {
+                let mut raw = base_config();
+                raw.access.dm_policy = dm_policy;
+                raw.access.allow_from = sender_is_allowed
+                    .then(|| "999".to_owned())
+                    .into_iter()
+                    .collect();
+                let config = loaded(raw);
+                let legacy = InboundGate::check_dm(&config, 999);
+                let typed = LegacyPolicyTranslation::dm(dm_policy, sender_is_allowed);
+                let translated = match typed.admission {
+                    Admission::Admit => GateDecision::Deliver,
+                    Admission::Request => GateDecision::Queue,
+                    Admission::Reject => GateDecision::Drop,
+                };
+
+                assert_eq!(translated, legacy);
+                assert_eq!(typed.attention, Attention::Normal);
+            }
+        }
     }
 
     // ── Guild gate tests ──────────────────────────────────────────────────────
@@ -438,6 +466,61 @@ mod tests {
             InboundGate::check_guild(&config, 500, 999, false, None),
             GateDecision::Drop
         );
+    }
+
+    #[test]
+    fn legacy_guild_translation_matches_the_runtime_gate() {
+        for channel_is_configured in [false, true] {
+            for require_mention in [false, true] {
+                for identity_filter_is_active in [false, true] {
+                    for sender_is_allowed in [false, true] {
+                        for mentioned in [false, true] {
+                            let mut raw = base_config();
+                            raw.channels.clear();
+                            if channel_is_configured {
+                                raw.channels.push(ChannelConfig {
+                                    id: "500".to_owned(),
+                                    require_mention,
+                                    allow_from: if identity_filter_is_active && sender_is_allowed {
+                                        vec!["999".to_owned()]
+                                    } else if identity_filter_is_active {
+                                        vec!["200".to_owned()]
+                                    } else {
+                                        Vec::new()
+                                    },
+                                    ..Default::default()
+                                });
+                            }
+                            let config = loaded(raw);
+                            let legacy =
+                                InboundGate::check_guild(&config, 500, 999, mentioned, None);
+                            let typed = LegacyPolicyTranslation::guild(LegacyGuildPolicyInput {
+                                channel_is_configured,
+                                require_mention,
+                                identity_filter_is_active,
+                                sender_is_allowed,
+                            });
+                            let attention_allows = match typed.attention {
+                                Attention::Normal => true,
+                                Attention::MentionOnly => mentioned,
+                                Attention::Quiet => false,
+                            };
+                            let translated =
+                                if typed.admission == Admission::Admit && attention_allows {
+                                    GateDecision::Deliver
+                                } else {
+                                    GateDecision::Drop
+                                };
+
+                            assert_eq!(
+                                translated, legacy,
+                                "configured={channel_is_configured}, mention_required={require_mention}, identity_filter={identity_filter_is_active}, sender_allowed={sender_is_allowed}, mentioned={mentioned}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // ── Outbound gate tests ───────────────────────────────────────────────────
