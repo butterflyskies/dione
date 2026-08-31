@@ -93,7 +93,7 @@ phase: 2
 | R-13 | Outbound gate shall mirror inbound gate: only send to channels the bot would accept inbound from | UC-08, SC-01 |
 | R-14 | Permission requests shall be sent only to users in the `admins` list, not `allow_from` | UC-06, SC-04 |
 | R-15 | Permission responses shall be accepted only from users in `admins` via button interactions or text reply pattern | UC-06, SC-04 |
-| R-16 | Config shall be re-read from disk on every inbound message (hot-reload) | UC-07 |
+| R-16 | Config shall be published as an immutable in-memory snapshot; a file watcher and explicit reload refresh it after on-disk changes | UC-07 |
 | R-17 | System shall expose `list_guilds` tool returning guild names, IDs, member counts, icon URLs | UC-13 |
 | R-18 | System shall expose `list_channels` tool returning channels in a guild with type, name, ID, topic, position, parent category | UC-14 |
 | R-19 | System shall expose `get_channel` tool for lookup by ID with full metadata (topic, type, permissions, slowmode, nsfw) | UC-15, UC-25 |
@@ -115,7 +115,7 @@ phase: 2
 | R-31 | Attachment filenames shall be sanitized (strip `[\[\]\r\n;]`) in notifications | SC-02, AC-05 |
 | R-36 | Access queue shall store at most one entry per user_id (dedup) | Threat review |
 | R-37 | Access queue message preview shall be truncated to 100 characters | Threat review |
-| R-38 | Outbound gate shall re-read config on every tool call (not cache from inbound) | Threat review |
+| R-38 | Every inbound and outbound gate shall read the current published config snapshot at the decision boundary (never retain an earlier request's snapshot across calls) | Threat review |
 | R-39 | Pending permission map shall be pruned on a 5-minute sweep | Threat review |
 | R-40 | Queue persistence shall use atomic write (tmp file + rename) | Threat review |
 | R-41 | File send guard shall canonicalize paths before state-directory check | Threat review |
@@ -127,7 +127,7 @@ phase: 2
 | NF-01 | Binary shall be statically linkable and produce a single executable | Success criteria |
 | NF-02 | System shall not panic on Discord API errors; all errors logged and handled gracefully | Reliability |
 | NF-03 | Memory usage shall remain bounded (cap recent-sent-IDs set, prune expired pairings) | Reliability |
-| NF-04 | Config parsing errors shall not crash the process; fall back to defaults and log | Reliability, UC-07 |
+| NF-04 | Config parsing errors shall not crash the process; keep the last valid config and log (defaults only when the file is missing or unreadable) | Reliability, UC-07 |
 
 ### Project & CI Requirements
 
@@ -360,9 +360,11 @@ enabled = false
    - `DISCORD_BOT_TOKEN` → `token`
    - `DIONE_CONFIG_PATH` → config file location
    - `DIONE_STATE_DIR` → state directory (default `~/.claude/channels/dione/`)
-2. Config file is TOML, re-read on every inbound message
-3. Missing file → all defaults (queue policy, empty lists)
-4. Parse error → rename to `.corrupt-{timestamp}`, log error, use defaults
+2. Config file is TOML, published via an in-memory cache; a file watcher
+   reloads on change
+3. Missing file → all defaults (queue policy, empty lists); a default
+   template is written
+4. Parse error → keep last valid config, leave the file untouched, log error
 ## GAIE archive Atom 1b requirements
 
 - **GAIE-1B-R1:** One configured capture root shall include its parent and all

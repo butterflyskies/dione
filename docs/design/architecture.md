@@ -37,11 +37,20 @@ Two tasks on one tokio runtime:
 
 ### 3. Config hot-reload
 
-Config is re-read from disk (`config.toml`) at the start of every inbound
-gate check. The file is small (< 1KB typically), so this is cheap.
-`File::try_lock()` (Rust 1.89) ensures safe concurrent access if another
-process is writing. Parse errors rename the file to `.corrupt-{timestamp}`
-and fall back to defaults.
+Config is published through an in-memory `ArcSwap` cache; gate checks read
+the current snapshot without touching disk. A file watcher reloads the cache
+on `config.toml` changes, and MCP config mutations republish after
+persisting. Every producer — startup, watcher, explicit reload, MCP
+mutation, recovery — runs through the process-local single-writer
+`ConfigRuntime` pipeline (validate → persist → publish). The reader's
+`File::try_lock()` is best-effort contention detection only; Dione does not
+claim cross-process writer serialization. A parse error
+with a last-known-good on disk quarantines the bad file to `config.toml.bad`
+and restores + publishes from `config.toml.lkg`; without an LKG the last
+valid in-memory config is kept and the file is left in place. Defaults are
+used only when the file is missing or unreadable. See
+[config-runtime.md](config-runtime.md) for the contract, the recovery
+design, and implementation notes.
 
 ### 4. Access request queue
 
@@ -105,7 +114,7 @@ at boundaries, thiserror for domain).
 | `str::ceil_char_boundary` (1.91) | Message chunking at valid UTF-8 split points |
 | `BTreeMap::extract_if` (1.91) | Pruning expired access requests |
 | `VecDeque::pop_front_if` (1.93) | Queue management |
-| `File::try_lock()` (1.89) | Safe concurrent config reads |
+| `File::try_lock()` (1.89) | Best-effort detection of a concurrently locked config file; not cross-process serialization |
 | `Result::flatten()` (1.89) | API call chains |
 | `fmt::from_fn` (1.93) | Custom formatters for Discord rendering |
 | Native async traits (1.75+) | No `async-trait` crate needed |
@@ -490,7 +499,7 @@ Default `$DIONE_STATE_DIR`: `~/.claude/channels/dione/`
 | `main.rs` | `color_eyre::install()`, catch-all for setup errors |
 | Discord events | Log + continue. Never panic on API errors. |
 | MCP tool calls | Return `isError: true` with message. Never panic. |
-| Config parse | Rename corrupt file, fall back to defaults, log at error level |
+| Config parse | Keep last valid in-memory config, leave file untouched, log at warn level |
 | Queue persistence | Best-effort write; in-memory state is authoritative |
 | Shutdown | 2s timeout; force-exit if tasks don't terminate |
 ## GAIE Atom 1b backfill architecture

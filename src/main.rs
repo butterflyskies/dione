@@ -105,7 +105,17 @@ async fn main() -> Result<()> {
         .init();
 
     let state_dir = dione::config::state_dir();
-    let config = dione::config::reload_config(&state_dir).0;
+    // Boot-brick-proof startup: an invalid config with an on-disk LKG is
+    // quarantined and restored; invalid with NO LKG follows the PROVISIONAL
+    // `NoLkgPolicy::FailStartup` default (open decision #1, owner 🦋 — the
+    // owner's answer flips this one variant).
+    let (config, config_warning) = dione::config::ConfigRuntime::new(state_dir.clone())
+        .startup_load(dione::config::NoLkgPolicy::default())
+        .await
+        .wrap_err("failed to load config at startup")?;
+    if let Some(warning) = config_warning {
+        tracing::warn!(warning = %warning, "config loaded with a startup warning");
+    }
     // Keep the Observe pipeline installed for the process lifetime. Each
     // message's freshly loaded config decides whether it participates, so
     // `pre_send.enabled` hot reloads in both directions without a restart.

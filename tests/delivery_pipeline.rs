@@ -777,8 +777,8 @@ fn config_reload_updates_rate_limiter() {
 }
 
 /// TOML deserialization round trip through a temp file.
-#[test]
-fn config_toml_file_round_trip() {
+#[tokio::test]
+async fn config_toml_file_round_trip() {
     use std::fs;
     use tempfile::TempDir;
 
@@ -805,7 +805,7 @@ require_mention = true
 "#;
     fs::write(config_path.as_std_path(), toml.as_bytes()).unwrap();
 
-    let (loaded, error) = dione::config::reload_config(&state_dir);
+    let (loaded, error) = dione::config::reload_config(&state_dir).await;
     assert!(error.is_none(), "config should parse without errors");
 
     // Rate limit config.

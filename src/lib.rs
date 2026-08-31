@@ -3,6 +3,7 @@ pub mod bell_rings;
 pub mod coalesce;
 pub mod codex;
 pub mod config;
+pub(crate) mod config_candidate;
 pub mod config_store;
 pub mod config_watcher;
 pub mod contradictionary;

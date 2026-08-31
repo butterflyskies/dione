@@ -1,4 +1,4 @@
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8Path;
 use serde_json::{Value, json};
 use toml_edit::{Array, DocumentMut, Item, Table, value};
 
@@ -30,13 +30,31 @@ impl std::fmt::Display for DiscordId {
     }
 }
 
+/// Format-preserving editor over the on-disk `config.toml` document.
+///
+/// `ConfigStore` only loads and edits the TOML document. It never persists and
+/// never publishes: both belong exclusively to
+/// [`crate::config::ConfigRuntime::mutate`], the single serialization
+/// authority for tool mutations. There is deliberately no `save` here — a
+/// store that could write the file itself would be a path around the runtime's
+/// writer lock.
 pub struct ConfigStore {
     doc: DocumentMut,
-    config_path: Utf8PathBuf,
-    tmp_path: Utf8PathBuf,
 }
 
 impl ConfigStore {
+    pub(crate) fn load_blocking(state_dir: &Utf8Path) -> Result<Self, BoxError> {
+        let config_path = crate::config::config_path(state_dir);
+        let contents = match std::fs::read_to_string(&config_path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error.into()),
+        };
+        Ok(Self {
+            doc: contents.parse()?,
+        })
+    }
+
     pub async fn load(state_dir: &Utf8Path) -> Result<Self, BoxError> {
         let config_path = crate::config::config_path(state_dir);
         let contents = match tokio::fs::read_to_string(&config_path).await {
@@ -44,35 +62,14 @@ impl ConfigStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(e) => return Err(e.into()),
         };
-        let tmp_path = Utf8PathBuf::from(format!("{}.tmp", config_path));
         Ok(Self {
             doc: contents.parse()?,
-            tmp_path,
-            config_path,
         })
     }
 
-    pub async fn save(&self) -> Result<(), BoxError> {
-        let serialized = self.doc.to_string();
-
-        // Parse and build the LoadedConfig *before* touching the disk so that
-        // a parse failure leaves both the cache and the on-disk file unchanged
-        // (consistent state). toml_edit ↔ toml round-trip should always
-        // succeed, but we verify eagerly rather than racing the rename.
-        let raw: crate::config::Config = toml::from_str(&serialized)?;
-        let loaded = crate::config::LoadedConfig::try_from_raw(raw)?;
-
-        tokio::fs::write(&self.tmp_path, &serialized).await?;
-        if let Err(e) = tokio::fs::rename(&self.tmp_path, &self.config_path).await {
-            let _ = tokio::fs::remove_file(&self.tmp_path).await;
-            return Err(e.into());
-        }
-
-        // Update the in-memory ArcSwap cache so load_config() callers see
-        // the new config immediately without a redundant disk re-read.
-        crate::config::store_loaded_config(&loaded);
-
-        Ok(())
+    /// Serializes the edited document back to TOML text.
+    pub fn document(&self) -> String {
+        self.doc.to_string()
     }
 
     // ── Read-only config queries ─────────────────────────────────────────────

@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
         dione::config::set_config_path(path);
     }
     let state_dir = dione::config::state_dir();
-    let loaded = dione::config::reload_config(&state_dir).0;
+    let loaded = dione::config::reload_config(&state_dir).await.0;
     loaded
         .archive
         .validate(&loaded.channels)

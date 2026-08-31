@@ -37,43 +37,48 @@ fn temp_state_dir() -> (TempDir, camino::Utf8PathBuf) {
     (dir, path)
 }
 
-/// Serializes tests that write the process-global config cache.
-///
-/// `store_loaded_config` swaps a process-wide `ArcSwap` (`LAST_VALID_CONFIG`).
-/// Under `cargo test` all tests share one process, so two tests storing
-/// different configs in parallel clobber each other mid-flight (~1/8 flake
-/// rate on the suppress_ping gate tests). nextest masks this by running each
-/// test in its own process.
-///
-/// Any test that needs a non-default global config must go through
-/// [`set_global_config`], which takes this lock for the test's duration and
-/// restores the default config on drop so later tests see a clean slate.
-static CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[test]
+fn normal_library_surface_has_no_config_fixture_publisher() {
+    let server_source = include_str!("../src/mcp/server.rs");
+    let config_source = include_str!("../src/config.rs");
+    assert!(!server_source.contains("pub fn set_global_config"));
+    assert!(!config_source.contains("fn store_loaded_config"));
+}
 
-/// RAII guard from [`set_global_config`]: holds [`CONFIG_LOCK`] and restores
-/// the default global config when dropped.
-struct GlobalConfigGuard(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+static CONFIG_FIXTURE_LOCK: Mutex<()> = Mutex::const_new(());
 
-impl Drop for GlobalConfigGuard {
+struct ConfigFixtureGuard {
+    state_dir: camino::Utf8PathBuf,
+    #[allow(dead_code)]
+    lease: tokio::sync::MutexGuard<'static, ()>,
+}
+
+impl Drop for ConfigFixtureGuard {
     fn drop(&mut self) {
-        // Runs while the lock is still held (fields drop after the drop body).
-        dione::config::store_loaded_config(
-            &dione::config::LoadedConfig::try_from_raw(dione::config::Config::default())
-                .expect("test configuration generation"),
-        );
+        std::fs::write(self.state_dir.join("config.toml"), "").expect("reset test config on disk");
+        let state_dir = self.state_dir.clone();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("config reset runtime");
+            let (_, error) = runtime.block_on(dione::config::reload_config(&state_dir));
+            assert!(error.is_none(), "reset config fixture: {error:?}");
+        })
+        .join()
+        .expect("config reset thread");
     }
 }
 
-/// Installs `config` as the process-global config for the lifetime of the
-/// returned guard. See [`CONFIG_LOCK`] for why this must be serialized.
-fn set_global_config(config: dione::config::Config) -> GlobalConfigGuard {
-    let guard = CONFIG_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    dione::config::store_loaded_config(
-        &dione::config::LoadedConfig::try_from_raw(config).expect("test configuration generation"),
-    );
-    GlobalConfigGuard(guard)
+async fn load_config_fixture(state_dir: &camino::Utf8PathBuf, toml: &str) -> ConfigFixtureGuard {
+    let lease = CONFIG_FIXTURE_LOCK.lock().await;
+    std::fs::write(state_dir.join("config.toml"), toml).expect("write test config");
+    let (_, error) = dione::config::reload_config(state_dir).await;
+    assert!(error.is_none(), "load config fixture: {error:?}");
+    ConfigFixtureGuard {
+        state_dir: state_dir.clone(),
+        lease,
+    }
 }
 
 fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
@@ -764,9 +769,7 @@ async fn test_tools_call_render_rejects_captionless_hook_override() {
 #[tokio::test]
 async fn test_tools_call_send_dm_disabled_returns_error() {
     let (_dir, state_dir) = temp_state_dir();
-    let mut config = dione::config::Config::default();
-    config.access.dm_policy = dione::config::DmPolicy::Disabled;
-    let _config = set_global_config(config);
+    let _config = load_config_fixture(&state_dir, "[access]\ndm_policy = \"disabled\"\n").await;
     let server = make_server(&state_dir);
 
     let req = json!({
@@ -1564,10 +1567,9 @@ fn evidence_key_schema_is_bounded_on_send_surfaces_only() {
 
 #[tokio::test]
 async fn evidence_key_dispatch_rejects_noncanonical_and_numeric_inputs() {
-    let mut config = dione::config::Config::default();
-    config.delivery.evidence_markers_enabled = true;
-    let _config = set_global_config(config);
     let (_dir, state_dir) = temp_state_dir();
+    let _config =
+        load_config_fixture(&state_dir, "[delivery]\nevidence_markers_enabled = true\n").await;
     let server = make_server(&state_dir);
     let cases = [
         json!([1]),
@@ -1680,14 +1682,11 @@ async fn test_reply_suppress_ping_true_passes_gate_with_configured_channel() {
     let (_dir, state_dir) = temp_state_dir();
 
     // Configure a channel so the outbound gate allows it.
-    let mut config = dione::config::Config::default();
-    config.channels.push(dione::config::ChannelConfig {
-        id: "100100".to_string(),
-        require_mention: false,
-        allow_from: vec![],
-        ..Default::default()
-    });
-    let _config = set_global_config(config);
+    let _config = load_config_fixture(
+        &state_dir,
+        "[[channels]]\nid = \"100100\"\nrequire_mention = false\n",
+    )
+    .await;
     let server = make_server(&state_dir);
 
     // With suppress_ping=true, the reply should pass the gate but fail at the
@@ -1720,14 +1719,11 @@ async fn test_reply_suppress_ping_false_passes_gate_with_configured_channel() {
     let (_dir, state_dir) = temp_state_dir();
 
     // Configure a channel so the outbound gate allows it.
-    let mut config = dione::config::Config::default();
-    config.channels.push(dione::config::ChannelConfig {
-        id: "100101".to_string(),
-        require_mention: false,
-        allow_from: vec![],
-        ..Default::default()
-    });
-    let _config = set_global_config(config);
+    let _config = load_config_fixture(
+        &state_dir,
+        "[[channels]]\nid = \"100101\"\nrequire_mention = false\n",
+    )
+    .await;
     let server = make_server(&state_dir);
 
     // With suppress_ping=false (default behavior), same path but without
@@ -1759,21 +1755,19 @@ async fn test_reply_suppress_ping_false_passes_gate_with_configured_channel() {
 
 /// A blocking config with channel 42 permitted and "straightforward" as a
 /// block-tier tell.
-fn blocking_config() -> dione::config::Config {
-    let mut raw = dione::config::Config::default();
-    raw.channels.push(dione::config::ChannelConfig {
-        id: "42".into(),
-        ..Default::default()
-    });
-    raw.contradictionary.enabled = true;
-    raw.contradictionary.entries = vec![dione::contradictionary::Entry {
-        pattern: "straightforward".into(),
-        action: dione::contradictionary::Action::Block,
-        match_mode: dione::contradictionary::MatchMode::Word,
-        reason: Some("nothing is ever straightforward".into()),
-    }];
-    raw
-}
+const BLOCKING_CONFIG: &str = r#"
+[[channels]]
+id = "42"
+
+[contradictionary]
+enabled = true
+
+[[contradictionary.entries]]
+pattern = "straightforward"
+action = "block"
+match_mode = "word"
+reason = "nothing is ever straightforward"
+"#;
 
 /// A blocked `reply` through the real dispatch path returns the `held` bounce
 /// contract — a parseable `held.handle` and the structured reason — not a wall.
@@ -1782,7 +1776,7 @@ fn blocking_config() -> dione::config::Config {
 #[tokio::test]
 async fn test_reply_blocked_returns_parseable_held_handle() {
     let (_dir, state_dir) = temp_state_dir();
-    let _cfg = set_global_config(blocking_config());
+    let _cfg = load_config_fixture(&state_dir, BLOCKING_CONFIG).await;
     let server = make_server(&state_dir);
 
     let req = json!({
@@ -1820,7 +1814,7 @@ async fn test_reply_blocked_returns_parseable_held_handle() {
 #[tokio::test]
 async fn test_reply_no_rly_flag_is_ignored_and_still_bounces() {
     let (_dir, state_dir) = temp_state_dir();
-    let _cfg = set_global_config(blocking_config());
+    let _cfg = load_config_fixture(&state_dir, BLOCKING_CONFIG).await;
     let server = make_server(&state_dir);
 
     let req = json!({
@@ -1880,14 +1874,11 @@ async fn test_no_rly_stats_rejects_wrong_type_filter() {
 async fn test_fetch_messages_preserves_discord_missing_access_after_gate() {
     let (_dir, state_dir) = temp_state_dir();
     let channel_id = "100102";
-    let mut config = dione::config::Config::default();
-    config.channels.push(dione::config::ChannelConfig {
-        id: channel_id.to_string(),
-        require_mention: false,
-        allow_from: vec![],
-        ..Default::default()
-    });
-    let _config = set_global_config(config);
+    let _config = load_config_fixture(
+        &state_dir,
+        &format!("[[channels]]\nid = \"{channel_id}\"\nrequire_mention = false\n"),
+    )
+    .await;
     let (http, requests, mock_server) = missing_access_http().await;
     let server = make_server_with_http(&state_dir, http);
 
@@ -1930,14 +1921,11 @@ async fn test_fetch_messages_preserves_discord_missing_access_after_gate() {
 async fn test_reply_preserves_discord_missing_access_after_gate() {
     let (_dir, state_dir) = temp_state_dir();
     let channel_id = "100103";
-    let mut config = dione::config::Config::default();
-    config.channels.push(dione::config::ChannelConfig {
-        id: channel_id.to_string(),
-        require_mention: false,
-        allow_from: vec![],
-        ..Default::default()
-    });
-    let _config = set_global_config(config);
+    let _config = load_config_fixture(
+        &state_dir,
+        &format!("[[channels]]\nid = \"{channel_id}\"\nrequire_mention = false\n"),
+    )
+    .await;
     let (http, requests, mock_server) = missing_access_http().await;
     let server = make_server_with_http(&state_dir, http);
 

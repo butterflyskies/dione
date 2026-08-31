@@ -145,9 +145,9 @@ pub fn load_sidecar_entries(path: &Path) -> Result<Vec<Entry>, String> {
             path.display()
         )
     })?;
-    let value: toml::Value = toml::from_str(&contents).map_err(|e| {
+    let value: toml::Value = toml::from_str(&contents).map_err(|_error: toml::de::Error| {
         format!(
-            "failed to parse contradictionary sidecar {}: {e}",
+            "failed to parse contradictionary sidecar {}: invalid TOML syntax",
             path.display()
         )
     })?;
@@ -160,9 +160,9 @@ pub fn load_sidecar_entries(path: &Path) -> Result<Vec<Entry>, String> {
              Update the entry — this alias is a migration shim, not a supported value."
         );
     }
-    let sidecar = SidecarFile::deserialize(value).map_err(|e| {
+    let sidecar = SidecarFile::deserialize(value).map_err(|_error| {
         format!(
-            "failed to parse contradictionary sidecar {}: {e}",
+            "failed to parse contradictionary sidecar {}: invalid entry schema",
             path.display()
         )
     })?;

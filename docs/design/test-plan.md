@@ -33,7 +33,7 @@ lightweight threat model in [threat-model.md](threat-model.md).
 | TC-06a | R-04 | Unit | Message in channel with per-channel allow_from, sender not in list → Drop | Yes |
 | TC-10 | R-13 | Unit | Outbound to allowlisted DM channel → Allow | Yes |
 | TC-11 | R-13 | Unit | Outbound to non-opted guild channel → Reject | Yes |
-| TC-11a | R-38 | Unit | Outbound gate re-reads config (not cached from inbound) | Yes |
+| TC-11a | R-38 | Unit | Outbound gate reads the current published snapshot rather than retaining an inbound snapshot | Yes |
 
 ### Mention Detection (gate.rs)
 
@@ -95,9 +95,9 @@ lightweight threat model in [threat-model.md](threat-model.md).
 
 | ID | Requirement | Type | Description | Automated |
 |----|-------------|------|-------------|-----------|
-| TC-23 | NF-04 | Unit | Corrupt TOML → renamed to .corrupt-{ts}, defaults used | Yes |
+| TC-23 | NF-04 | Unit | Corrupt TOML → file left untouched, last valid config retained | Yes |
 | TC-24 | NF-04 | Unit | Missing config file → defaults (queue policy, empty lists) | Yes |
-| TC-60 | R-16 | Unit | Config re-read returns updated values after file change | Yes |
+| TC-60 | R-16 | Unit | File-watcher/explicit reload publishes updated values; gate reads observe the new snapshot without per-call disk I/O | Yes |
 | TC-61 | Config | Unit | Env var DISCORD_BOT_TOKEN overrides config file token | Yes |
 | TC-62 | Config | Unit | Empty allow_from + admins → functional (everything gated) | Yes |
 

@@ -42,6 +42,32 @@ fn check_admin_gate(config: &crate::config::LoadedConfig) -> Result<(), String> 
     }
 }
 
+fn mutation_receipt(outcome: crate::config::ConfigMutationOutcome) -> Value {
+    match outcome.durability {
+        crate::config::ConfigDurability::Durable => json!({
+            "ok": true,
+            "generation": outcome.generation,
+            "durability": "durable",
+        }),
+        crate::config::ConfigDurability::Unknown { warning } => json!({
+            "ok": true,
+            "generation": outcome.generation,
+            "durability": "unknown",
+            "warning": warning,
+        }),
+    }
+}
+
+fn mutation_receipt_with(
+    outcome: crate::config::ConfigMutationOutcome,
+    key: &str,
+    value: impl Into<Value>,
+) -> Value {
+    let mut receipt = mutation_receipt(outcome);
+    receipt[key] = value.into();
+    receipt
+}
+
 /// Dispatch a `tools/call` request to the appropriate handler.
 ///
 /// Returns an MCP tool-result `Value` on success, or a `String` error message
@@ -462,46 +488,45 @@ pub(crate) async fn call_tool(
         }
         "get_access_config" => ConfigStore::get_access(&server.state_dir),
 
-        // Config management — mutations (ConfigStore, admin-gated)
+        // Config management — mutations (serialized through ConfigRuntime, admin-gated)
         "add_channel" => {
             check_admin_gate(&config)?;
-            let id_str = parse_str(&args, "id")?;
-            DiscordId::parse(id_str)?;
+            let id = parse_str(&args, "id")?.to_owned();
+            let response_id = id.clone();
+            DiscordId::parse(&id)?;
             let require_mention = args.get("require_mention").and_then(Value::as_bool);
             let allow_from = parse_string_array(&args, "allow_from").unwrap_or_default();
             for af in &allow_from {
                 DiscordId::parse(af)?;
             }
-            match async {
-                let mut editor = ConfigStore::load(&server.state_dir).await?;
-                editor.add_channel_entry(id_str, require_mention.unwrap_or(true), allow_from)?;
-                editor.save().await
-            }
-            .await
+            match crate::config::ConfigRuntime::new(server.state_dir.clone())
+                .mutate(move |editor| {
+                    editor.add_channel_entry(&id, require_mention.unwrap_or(true), allow_from)
+                })
+                .await
             {
-                Ok(()) => json!({ "ok": true, "id": id_str }),
+                Ok(outcome) => mutation_receipt_with(outcome, "id", response_id),
                 Err(e) => json!({ "error": e.to_string() }),
             }
         }
         "remove_channel" => {
             check_admin_gate(&config)?;
-            let id_str = parse_str(&args, "id")?;
-            DiscordId::parse(id_str)?;
-            match async {
-                let mut editor = ConfigStore::load(&server.state_dir).await?;
-                editor.remove_channel_entry(id_str)?;
-                editor.save().await
-            }
-            .await
+            let id = parse_str(&args, "id")?.to_owned();
+            let response_id = id.clone();
+            DiscordId::parse(&id)?;
+            match crate::config::ConfigRuntime::new(server.state_dir.clone())
+                .mutate(move |editor| editor.remove_channel_entry(&id))
+                .await
             {
-                Ok(()) => json!({ "ok": true, "id": id_str }),
+                Ok(outcome) => mutation_receipt_with(outcome, "id", response_id),
                 Err(e) => json!({ "error": e.to_string() }),
             }
         }
         "update_channel" => {
             check_admin_gate(&config)?;
-            let id_str = parse_str(&args, "id")?;
-            DiscordId::parse(id_str)?;
+            let id = parse_str(&args, "id")?.to_owned();
+            let response_id = id.clone();
+            DiscordId::parse(&id)?;
             let require_mention = args.get("require_mention").and_then(Value::as_bool);
             let allow_from = parse_string_array(&args, "allow_from");
             if require_mention.is_none() && allow_from.is_none() {
@@ -512,63 +537,59 @@ pub(crate) async fn call_tool(
                         DiscordId::parse(entry)?;
                     }
                 }
-                match async {
-                    let mut editor = ConfigStore::load(&server.state_dir).await?;
-                    editor.update_channel_entry(id_str, require_mention, allow_from)?;
-                    editor.save().await
-                }
-                .await
+                match crate::config::ConfigRuntime::new(server.state_dir.clone())
+                    .mutate(move |editor| {
+                        editor.update_channel_entry(&id, require_mention, allow_from)
+                    })
+                    .await
                 {
-                    Ok(()) => json!({ "ok": true, "id": id_str }),
+                    Ok(outcome) => mutation_receipt_with(outcome, "id", response_id),
                     Err(e) => json!({ "error": e.to_string() }),
                 }
             }
         }
         "update_dm_policy" => {
             check_admin_gate(&config)?;
-            let policy = parse_str(&args, "policy")?;
-            if !matches!(policy, "drop" | "queue" | "disabled") {
+            let policy = parse_str(&args, "policy")?.to_owned();
+            let response_policy = policy.clone();
+            if !matches!(policy.as_str(), "drop" | "queue" | "disabled") {
                 json!({ "error": format!("invalid dm_policy: {policy}; must be one of: drop, queue, disabled") })
             } else {
-                match async {
-                    let mut editor = ConfigStore::load(&server.state_dir).await?;
-                    editor.set_dm_policy(policy);
-                    editor.save().await
-                }
-                .await
+                match crate::config::ConfigRuntime::new(server.state_dir.clone())
+                    .mutate(move |editor| {
+                        editor.set_dm_policy(&policy);
+                        Ok(())
+                    })
+                    .await
                 {
-                    Ok(()) => json!({ "ok": true, "dm_policy": policy }),
+                    Ok(outcome) => mutation_receipt_with(outcome, "dm_policy", response_policy),
                     Err(e) => json!({ "error": e.to_string() }),
                 }
             }
         }
         "add_allow_from" => {
             check_admin_gate(&config)?;
-            let user_id = parse_str(&args, "user_id")?;
-            DiscordId::parse(user_id)?;
-            match async {
-                let mut editor = ConfigStore::load(&server.state_dir).await?;
-                editor.add_to_allow_from(user_id)?;
-                editor.save().await
-            }
-            .await
+            let user_id = parse_str(&args, "user_id")?.to_owned();
+            let response_user_id = user_id.clone();
+            DiscordId::parse(&user_id)?;
+            match crate::config::ConfigRuntime::new(server.state_dir.clone())
+                .mutate(move |editor| editor.add_to_allow_from(&user_id))
+                .await
             {
-                Ok(()) => json!({ "ok": true, "user_id": user_id }),
+                Ok(outcome) => mutation_receipt_with(outcome, "user_id", response_user_id),
                 Err(e) => json!({ "error": e.to_string() }),
             }
         }
         "remove_allow_from" => {
             check_admin_gate(&config)?;
-            let user_id = parse_str(&args, "user_id")?;
-            DiscordId::parse(user_id)?;
-            match async {
-                let mut editor = ConfigStore::load(&server.state_dir).await?;
-                editor.remove_from_allow_from(user_id)?;
-                editor.save().await
-            }
-            .await
+            let user_id = parse_str(&args, "user_id")?.to_owned();
+            let response_user_id = user_id.clone();
+            DiscordId::parse(&user_id)?;
+            match crate::config::ConfigRuntime::new(server.state_dir.clone())
+                .mutate(move |editor| editor.remove_from_allow_from(&user_id))
+                .await
             {
-                Ok(()) => json!({ "ok": true, "user_id": user_id }),
+                Ok(outcome) => mutation_receipt_with(outcome, "user_id", response_user_id),
                 Err(e) => json!({ "error": e.to_string() }),
             }
         }
@@ -624,7 +645,11 @@ pub(crate) async fn call_tool(
         // Diagnostics
         "reload_config" => {
             check_admin_gate(&config)?;
-            let (_, error) = crate::config::reload_config(&server.state_dir);
+            // Async entry: serialized under the config writer, file I/O on
+            // the blocking pool — never blocks the async runtime.
+            let (_, error) = crate::config::ConfigRuntime::new(server.state_dir.clone())
+                .reload()
+                .await;
             match error {
                 Some(e) => json!({ "error": e }),
                 None => json!({ "ok": true }),

@@ -57,20 +57,17 @@ pub fn spawn(
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                     while rx.try_recv().is_ok() {}
 
+                    // The runtime's async reload serializes under the single
+                    // config writer and runs its file I/O on the blocking
+                    // pool internally.
                     let dir = state_dir.clone();
-                    let result = tokio::task::spawn_blocking(move || {
-                        crate::config::reload_config(&dir)
-                    }).await;
-
-                    match result {
-                        Ok((_, Some(error))) => {
+                    let (_, error) = crate::config::ConfigRuntime::new(dir).reload().await;
+                    match error {
+                        Some(error) => {
                             let _ = event_tx.send(NotificationEvent::ConfigError { error }).await;
                         }
-                        Ok((_, None)) => {
+                        None => {
                             tracing::debug!("config reloaded via file watcher");
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "config reload task panicked");
                         }
                     }
                 }

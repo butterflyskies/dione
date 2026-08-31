@@ -470,8 +470,8 @@ async fn release_into_a_revoked_channel_is_refused_and_keeps_the_handle() {
 
 /// Full config load with sidecar merging — the way it actually runs in prod.
 /// Inline entries merge with sidecar entries, automaton catches everything.
-#[test]
-fn full_message_flow_through_config_load() {
+#[tokio::test]
+async fn full_message_flow_through_config_load() {
     let dir = TempDir::new().unwrap();
     let state_dir = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
 
@@ -515,7 +515,7 @@ reason = "the practice that keeps us awake"
     )
     .unwrap();
 
-    let (cfg, error) = reload_config(&state_dir);
+    let (cfg, error) = reload_config(&state_dir).await;
     assert!(error.is_none(), "config load failed: {error:?}");
     let concordance = cfg
         .contradictionary
@@ -557,8 +557,8 @@ reason = "the practice that keeps us awake"
 }
 
 /// The new retention knobs load from TOML and default sensibly.
-#[test]
-fn hold_ttl_and_retention_load_from_config() {
+#[tokio::test]
+async fn hold_ttl_and_retention_load_from_config() {
     let dir = TempDir::new().unwrap();
     let state_dir = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
 
@@ -574,7 +574,7 @@ action = "block"
 "#;
     fs::write(state_dir.join("config.toml").as_std_path(), config_toml).unwrap();
 
-    let (cfg, error) = reload_config(&state_dir);
+    let (cfg, error) = reload_config(&state_dir).await;
     assert!(error.is_none(), "config load failed: {error:?}");
     assert_eq!(cfg.no_rly_hold_ttl(), std::time::Duration::from_secs(240));
     assert_eq!(cfg.raw.contradictionary.journal_raw_retention_days, 30);
@@ -586,8 +586,8 @@ action = "block"
 
 /// Case-insensitive matching through the full config path. Substrate tells
 /// don't hide behind SCREAMING CASE.
-#[test]
-fn case_insensitive_through_config() {
+#[tokio::test]
+async fn case_insensitive_through_config() {
     let dir = TempDir::new().unwrap();
     let state_dir = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
 
@@ -602,7 +602,7 @@ reason = "claudian tell — try keystone, linchpin, or just 'important'"
 "#;
     fs::write(state_dir.join("config.toml").as_std_path(), config_toml).unwrap();
 
-    let (cfg, _) = reload_config(&state_dir);
+    let (cfg, _) = reload_config(&state_dir).await;
     let concordance = cfg.contradictionary.as_ref().unwrap();
 
     // You can't hide a tell by yelling it.
@@ -640,8 +640,8 @@ fn mixed_log_and_celebrate_coexist() {
 /// sidecar parse failure skips the whole file and still installs the
 /// entry-less config as live, so one stale entry would silently disarm the
 /// seat entirely.
-#[test]
-fn retired_warn_action_survives_full_config_path() {
+#[tokio::test]
+async fn retired_warn_action_survives_full_config_path() {
     let dir = TempDir::new().unwrap();
     let state_dir = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
 
@@ -665,7 +665,7 @@ action = "celebrate"
     )
     .unwrap();
 
-    let (cfg, error) = reload_config(&state_dir);
+    let (cfg, error) = reload_config(&state_dir).await;
     assert!(
         error.is_none(),
         "a retired action must not error the load: {error:?}"

@@ -1,10 +1,20 @@
 use camino::Utf8PathBuf;
 use dione::{
+    codex::TransportMode,
     config::{Config, DmPolicy, LoadedConfig},
-    config_store::{ConfigStore, DiscordId},
+    mcp::server::{DioneServer, test_helpers},
+    no_rly::consent::ConsentGate,
+    queue::AccessQueue,
+    state::new_state,
+    tracing_channel::TraceLevelController,
 };
 use serde_json::{Value, json};
+use serenity::http::Http;
+use std::sync::Arc;
 use tempfile::TempDir;
+use tokio::sync::{Mutex, mpsc};
+
+static CONFIG_DISPATCH_LOCK: Mutex<()> = Mutex::const_new(());
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -17,9 +27,10 @@ fn temp_state_dir() -> (TempDir, Utf8PathBuf) {
 /// Load config directly from disk, bypassing the global ArcSwap cache.
 ///
 /// The global `load_config()` reads from a process-wide cache that is mutated
-/// by `ConfigStore::save()`. When tests run in parallel each test's `save()`
-/// overwrites the same cache, causing flaky assertions. This helper reads the
-/// TOML file from the test's own temp directory so each test is isolated.
+/// by `ConfigRuntime::mutate()`. When tests run in parallel each test's
+/// mutation overwrites the same cache, causing flaky assertions. This helper
+/// reads the TOML file from the test's own temp directory so each test is
+/// isolated.
 fn load_config_from_disk(state_dir: &Utf8PathBuf) -> LoadedConfig {
     let config_path = state_dir.join("config.toml");
     let contents = std::fs::read_to_string(&config_path).unwrap_or_default();
@@ -27,28 +38,28 @@ fn load_config_from_disk(state_dir: &Utf8PathBuf) -> LoadedConfig {
     LoadedConfig::try_from_raw(raw).expect("test configuration generation")
 }
 
-/// Read channel list directly from disk (bypasses global cache).
-fn list_config_channels(state_dir: &Utf8PathBuf) -> Value {
-    let config = load_config_from_disk(state_dir);
-    let channels: Vec<Value> = config
-        .raw
-        .channels
-        .iter()
-        .map(|ch| {
-            json!({
-                "id": ch.id,
-                "require_mention": ch.require_mention,
-                "allow_from": ch.allow_from,
-            })
-        })
-        .collect();
-    json!({ "channels": channels })
+fn make_server(state_dir: &Utf8PathBuf) -> DioneServer {
+    let (notification_tx, _notification_rx) = mpsc::channel(1);
+    DioneServer::new(
+        new_state(),
+        Arc::new(Mutex::new(AccessQueue::load(state_dir))),
+        Arc::new(Http::new("fake-token-for-tests")),
+        state_dir.clone(),
+        notification_tx,
+        TraceLevelController::noop(),
+        TransportMode::ClaudeCode,
+        Arc::new(ConsentGate::new(state_dir)),
+        Arc::new(dione::ingress_ledger::IngressLedger::new()),
+    )
 }
 
-/// Read access config directly from disk (bypasses global cache).
-fn get_access_config(state_dir: &Utf8PathBuf) -> Value {
-    let config = load_config_from_disk(state_dir);
+fn config_projection(config: &LoadedConfig) -> Value {
     json!({
+        "channels": config.raw.channels.iter().map(|channel| json!({
+            "id": channel.id,
+            "require_mention": channel.require_mention,
+            "allow_from": channel.allow_from,
+        })).collect::<Vec<_>>(),
         "dm_policy": match config.raw.access.dm_policy {
             DmPolicy::Queue => "queue",
             DmPolicy::Drop => "drop",
@@ -60,47 +71,126 @@ fn get_access_config(state_dir: &Utf8PathBuf) -> Value {
     })
 }
 
+async fn call_config_tool(state_dir: &Utf8PathBuf, name: &str, arguments: Value) -> Value {
+    // ArcSwap is process-global. Keep the production dispatch and its
+    // immediate disk/live oracle indivisible across parallel test cases.
+    let _config_dispatch = CONFIG_DISPATCH_LOCK.lock().await;
+    let server = make_server(state_dir);
+    let response = test_helpers::dispatch_request(
+        &server,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": name, "arguments": arguments },
+        }),
+    )
+    .await
+    .expect("tools/call response");
+    if let Some(error) = response.get("error") {
+        return json!({ "error": error["message"].as_str().unwrap_or("JSON-RPC error") });
+    }
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .expect("tool result text");
+    let result: Value = serde_json::from_str(text).expect("config tool JSON result");
+    if result["ok"] == true {
+        assert!(
+            result["generation"].is_u64(),
+            "an acknowledged mutation must identify its published generation: {result}"
+        );
+        assert_eq!(
+            result["durability"], "durable",
+            "the ordinary production path must return a typed durability receipt"
+        );
+        let disk = load_config_from_disk(state_dir);
+        let live = dione::config::load_config(state_dir);
+        assert_eq!(
+            config_projection(&disk),
+            config_projection(&live),
+            "an acknowledged production-dispatch mutation must be visible on disk and in the immediate ArcSwap snapshot"
+        );
+    }
+    result
+}
+
+#[tokio::test]
+async fn malformed_sidecar_error_from_production_dispatch_is_snippet_free() {
+    let (_dir, state_dir) = temp_state_dir();
+    std::fs::write(
+        state_dir.join("config.toml"),
+        "[contradictionary]\nenabled = true\n",
+    )
+    .unwrap();
+    std::fs::write(
+        state_dir.join("contradictionary.toml"),
+        "[[entry]]\npattern = \"sekrit-token\"\naction = [",
+    )
+    .unwrap();
+
+    let result = add_allow_from(&state_dir, "424242").await;
+    let rendered = result.to_string();
+    assert!(result.get("error").is_some(), "got: {result}");
+    assert!(
+        !rendered.contains("sekrit-token") && !rendered.contains("\\n"),
+        "MCP errors must not expose malformed sidecar source snippets: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn invalid_sidecar_semantic_value_from_production_dispatch_is_value_free() {
+    let (_dir, state_dir) = temp_state_dir();
+    std::fs::write(
+        state_dir.join("config.toml"),
+        "[contradictionary]\nenabled = true\n",
+    )
+    .unwrap();
+    std::fs::write(
+        state_dir.join("contradictionary.toml"),
+        "[[entry]]\npattern = \"ordinary\"\naction = \"sekrit-semantic-token\"\n",
+    )
+    .unwrap();
+
+    let result = add_allow_from(&state_dir, "424242").await;
+    let rendered = result.to_string();
+    assert!(result.get("error").is_some(), "got: {result}");
+    assert!(
+        !rendered.contains("sekrit-semantic-token"),
+        "MCP errors must not echo attacker-controlled semantic values: {rendered}"
+    );
+    assert!(rendered.contains("invalid entry schema"), "got: {rendered}");
+}
+
+/// Read channel list through the production MCP dispatch.
+async fn list_config_channels(state_dir: &Utf8PathBuf) -> Value {
+    call_config_tool(state_dir, "list_config_channels", json!({})).await
+}
+
+/// Read access config through the production MCP dispatch.
+async fn get_access_config(state_dir: &Utf8PathBuf) -> Value {
+    call_config_tool(state_dir, "get_access_config", json!({})).await
+}
+
 async fn add_channel(
     state_dir: &Utf8PathBuf,
     id: &str,
     require_mention: Option<bool>,
     allow_from: Option<Vec<String>>,
 ) -> Value {
-    if DiscordId::parse(id).is_err() {
-        return json!({ "error": format!("invalid channel id: {id}") });
-    }
-    let af = allow_from.unwrap_or_default();
-    for af_id in &af {
-        if DiscordId::parse(af_id).is_err() {
-            return json!({ "error": format!("invalid allow_from user id: {af_id}") });
-        }
-    }
-    match async {
-        let mut editor = ConfigStore::load(state_dir).await?;
-        editor.add_channel_entry(id, require_mention.unwrap_or(true), af)?;
-        editor.save().await
-    }
+    call_config_tool(
+        state_dir,
+        "add_channel",
+        json!({
+            "id": id,
+            "require_mention": require_mention,
+            "allow_from": allow_from,
+        }),
+    )
     .await
-    {
-        Ok(()) => json!({ "ok": true, "id": id }),
-        Err(e) => json!({ "error": e.to_string() }),
-    }
 }
 
 async fn remove_channel(state_dir: &Utf8PathBuf, id: &str) -> Value {
-    if DiscordId::parse(id).is_err() {
-        return json!({ "error": format!("invalid channel id: {id}") });
-    }
-    match async {
-        let mut editor = ConfigStore::load(state_dir).await?;
-        editor.remove_channel_entry(id)?;
-        editor.save().await
-    }
-    .await
-    {
-        Ok(()) => json!({ "ok": true, "id": id }),
-        Err(e) => json!({ "error": e.to_string() }),
-    }
+    call_config_tool(state_dir, "remove_channel", json!({ "id": id })).await
 }
 
 async fn update_channel(
@@ -109,77 +199,33 @@ async fn update_channel(
     require_mention: Option<bool>,
     allow_from: Option<Vec<String>>,
 ) -> Value {
-    if DiscordId::parse(id).is_err() {
-        return json!({ "error": format!("invalid channel id: {id}") });
-    }
-    if require_mention.is_none() && allow_from.is_none() {
-        return json!({ "error": "at least one of require_mention or allow_from must be provided" });
-    }
-    if let Some(ref af) = allow_from {
-        for af_id in af {
-            if DiscordId::parse(af_id).is_err() {
-                return json!({ "error": format!("invalid allow_from user id: {af_id}") });
-            }
-        }
-    }
-    match async {
-        let mut editor = ConfigStore::load(state_dir).await?;
-        editor.update_channel_entry(id, require_mention, allow_from)?;
-        editor.save().await
-    }
+    call_config_tool(
+        state_dir,
+        "update_channel",
+        json!({
+            "id": id,
+            "require_mention": require_mention,
+            "allow_from": allow_from,
+        }),
+    )
     .await
-    {
-        Ok(()) => json!({ "ok": true, "id": id }),
-        Err(e) => json!({ "error": e.to_string() }),
-    }
 }
 
 async fn update_dm_policy(state_dir: &Utf8PathBuf, policy: &str) -> Value {
-    if !matches!(policy, "drop" | "queue" | "disabled") {
-        return json!({ "error": format!("invalid dm_policy: {policy}; must be one of: drop, queue, disabled") });
-    }
-    match async {
-        let mut editor = ConfigStore::load(state_dir).await?;
-        editor.set_dm_policy(policy);
-        editor.save().await
-    }
-    .await
-    {
-        Ok(()) => json!({ "ok": true, "dm_policy": policy }),
-        Err(e) => json!({ "error": e.to_string() }),
-    }
+    call_config_tool(state_dir, "update_dm_policy", json!({ "policy": policy })).await
 }
 
 async fn add_allow_from(state_dir: &Utf8PathBuf, user_id: &str) -> Value {
-    if DiscordId::parse(user_id).is_err() {
-        return json!({ "error": format!("invalid user_id: {user_id}") });
-    }
-    match async {
-        let mut editor = ConfigStore::load(state_dir).await?;
-        editor.add_to_allow_from(user_id)?;
-        editor.save().await
-    }
-    .await
-    {
-        Ok(()) => json!({ "ok": true, "user_id": user_id }),
-        Err(e) => json!({ "error": e.to_string() }),
-    }
+    call_config_tool(state_dir, "add_allow_from", json!({ "user_id": user_id })).await
 }
 
 async fn remove_allow_from(state_dir: &Utf8PathBuf, user_id: &str) -> Value {
-    if DiscordId::parse(user_id).is_err() {
-        return json!({ "error": format!("invalid user_id: {user_id}") });
-    }
-    match async {
-        let mut editor = ConfigStore::load(state_dir).await?;
-        editor.remove_from_allow_from(user_id)?;
-        editor.save().await
-    }
+    call_config_tool(
+        state_dir,
+        "remove_allow_from",
+        json!({ "user_id": user_id }),
+    )
     .await
-    {
-        Ok(()) => json!({ "ok": true, "user_id": user_id }),
-        Err(e) => json!({ "error": e.to_string() }),
-    }
 }
 
 // ── Channel round-trips ─────────────────────────────────────────────────────
@@ -267,7 +313,7 @@ async fn test_add_remove_add_sequence() {
     remove_channel(&state_dir, "111").await;
     add_channel(&state_dir, "222", None, None).await;
 
-    let list = list_config_channels(&state_dir);
+    let list = list_config_channels(&state_dir).await;
     let channels = list["channels"].as_array().unwrap();
     assert_eq!(channels.len(), 1);
     assert_eq!(channels[0]["id"], "222");
@@ -431,7 +477,7 @@ async fn test_get_access_config_reflects_mutations() {
     update_dm_policy(&state_dir, "drop").await;
     add_allow_from(&state_dir, "12345").await;
 
-    let result = get_access_config(&state_dir);
+    let result = get_access_config(&state_dir).await;
     assert_eq!(result["dm_policy"], "drop");
     let allow_from = result["allow_from"].as_array().unwrap();
     assert!(allow_from.iter().any(|v| v.as_str() == Some("12345")));
@@ -443,9 +489,9 @@ async fn test_get_access_config_reflects_mutations() {
 async fn test_operations_on_empty_state_dir() {
     let (_dir, state_dir) = temp_state_dir();
 
-    let list = list_config_channels(&state_dir);
+    let list = list_config_channels(&state_dir).await;
     assert!(list["channels"].as_array().unwrap().is_empty());
 
-    let access = get_access_config(&state_dir);
+    let access = get_access_config(&state_dir).await;
     assert_eq!(access["dm_policy"], "queue");
 }
