@@ -205,14 +205,9 @@ jobs:
             artifact-audit/package-inputs.txt \
             artifact-audit/cargo-metadata.json
       # upload-artifact's Node.js process uses Node's bundled CA store, which
-      # does not include the RosiePKI private CA. Download the root PEM so
-      # NODE_EXTRA_CA_CERTS can inject it into the TLS handshake below.
-      - name: Fetch RosiePKI root CA for artifact upload
-        run: |
-          curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
-            --retry 3 --retry-all-errors \
-            -o /usr/local/share/ca-certificates/rosie-root.pem \
-            https://step-certificates.echoes-pki.svc.cluster.local:443/roots.pem
+      # does not include the RosiePKI private CA. The runner now mounts the
+      # trust bundle and injects NODE_EXTRA_CA_CERTS via runner.envs
+      # (Argo #68), so no live per-step fetch is needed here.
       # This Forgejo instance rejects the v4+ artifact backend
       # (GHESNotSupportedError: @actions/artifact v2.0.0+ / upload-artifact@v4+
       # not supported) even with Forgejo's own patched v4.6.2, so this is pinned
@@ -224,8 +219,6 @@ jobs:
       # dione.sha256, then restore mode 0755 after download.
       - name: Upload immutable public release artifact
         uses: https://data.forgejo.org/actions/upload-artifact@c24449f33cd45d4826c6702db7e49f7cdb9b551d # v3-node20
-        env:
-          NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/rosie-root.pem
         with:
           name: dione-linux-x86_64-${{ forgejo.sha }}
           path: |
