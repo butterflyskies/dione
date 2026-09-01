@@ -175,6 +175,9 @@ pub struct MuteStore {
     write_lock: Mutex<()>,
     /// Wakes the background expiry task when a new mute is created.
     expiry_notify: Notify,
+    /// Test-only: fires when the scheduler has armed its select! branch.
+    #[cfg(test)]
+    scheduler_ready: Notify,
 }
 
 impl MuteStore {
@@ -201,6 +204,8 @@ impl MuteStore {
             receipt_path,
             write_lock: Mutex::new(()),
             expiry_notify: Notify::new(),
+            #[cfg(test)]
+            scheduler_ready: Notify::new(),
         };
 
         // Reconcile expired entries — emits Expire receipts for entries
@@ -245,6 +250,8 @@ impl MuteStore {
             receipt_path: state_dir.join("guild_mute_receipts.jsonl"),
             write_lock: Mutex::new(()),
             expiry_notify: Notify::new(),
+            #[cfg(test)]
+            scheduler_ready: Notify::new(),
         }
     }
 
@@ -290,8 +297,16 @@ impl MuteStore {
                             .unwrap_or(Duration::from_secs(0));
                         // Register the notified future BEFORE the select to
                         // avoid a race where a notification fires between the
-                        // deadline calculation and the sleep.
+                        // deadline calculation and the sleep. Pin and enable
+                        // so the waiter is registered before test readiness
+                        // fires.
                         let notified = store.expiry_notify.notified();
+                        tokio::pin!(notified);
+                        #[cfg(test)]
+                        {
+                            notified.as_mut().enable();
+                            store.scheduler_ready.notify_one();
+                        }
                         tokio::select! {
                             _ = tokio::time::sleep(duration) => {
                                 // Deadline reached — reconcile expired entries.
@@ -305,7 +320,7 @@ impl MuteStore {
                                     }
                                 }
                             }
-                            _ = notified => {
+                            _ = &mut notified => {
                                 // New mute arrived — recalculate deadline.
                                 continue;
                             }
@@ -1156,6 +1171,8 @@ mod tests {
             receipt_path: camino::Utf8PathBuf::from("/nonexistent/dir/guild_mute_receipts.jsonl"),
             write_lock: Mutex::new(()),
             expiry_notify: Notify::new(),
+            #[cfg(test)]
+            scheduler_ready: Notify::new(),
         };
 
         let result = store.mute_guild(42, 60, "admin".into(), None).await;
@@ -1260,9 +1277,9 @@ mod tests {
         let store = Arc::new(MuteStore::from_state(state, path));
         let handle = store.spawn_expiry_task();
 
-        // Yield to let the spawned task enter the select! branch
+        // Wait for the spawned task to arm its select! branch
         // (sleeping until guild 42's distant deadline).
-        tokio::task::yield_now().await;
+        store.scheduler_ready.notified().await;
 
         // Inject an already-expired entry directly into the projection.
         // This simulates a mute whose deadline was earlier and has already
@@ -1288,8 +1305,13 @@ mod tests {
         // Wake the scheduler — same mechanism mute_guild uses.
         store.expiry_notify.notify_one();
 
-        // Give the scheduler time to wake, recalculate, and reconcile.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Poll until the scheduler has reconciled guild 99.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if !store.load_state().mutes.contains_key(&99) { break; }
+            assert!(tokio::time::Instant::now() < deadline, "timed out waiting for guild 99 reconciliation");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
 
         // Guild 99 (overdue) should be reconciled immediately upon wake.
         assert!(
@@ -1422,11 +1444,15 @@ mod tests {
 
         // Spawn the expiry task.
         let handle = store.spawn_expiry_task();
+        tokio::task::yield_now().await;
 
-        // Give the scheduler time to detect the overdue entry and
-        // reconcile it. The has_overdue check should fire on the first
-        // loop iteration — no Notify or sleep involved.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Poll until the scheduler has reconciled the overdue entry.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if !store.load_state().mutes.contains_key(&1) { break; }
+            assert!(tokio::time::Instant::now() < deadline, "timed out waiting for overdue reconciliation");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
 
         // The overdue entry should be reconciled.
         assert!(
