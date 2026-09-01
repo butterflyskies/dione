@@ -28,6 +28,22 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::{Mutex, Notify};
 
+// ── Clock ───────────────────────────────────────────────────────────────────
+
+/// Abstraction over the system clock so tests can use deterministic time.
+pub trait Clock: Send + Sync + 'static {
+    fn now(&self) -> DateTime<Utc>;
+}
+
+/// Production clock — delegates to `chrono::Utc::now()`.
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> DateTime<Utc> {
+        Utc::now()
+    }
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 /// Maximum allowed TTL in minutes (30 days).
@@ -48,13 +64,13 @@ pub struct GuildMute {
 
 impl GuildMute {
     /// Returns `true` if this mute is still active (not expired).
-    pub fn is_active(&self) -> bool {
-        Utc::now() < self.muted_until
+    pub fn is_active(&self, now: DateTime<Utc>) -> bool {
+        now < self.muted_until
     }
 
     /// Returns the remaining duration in seconds, or 0 if expired.
-    pub fn remaining_seconds(&self) -> i64 {
-        (self.muted_until - Utc::now()).num_seconds().max(0)
+    pub fn remaining_seconds(&self, now: DateTime<Utc>) -> i64 {
+        (self.muted_until - now).num_seconds().max(0)
     }
 }
 
@@ -62,23 +78,6 @@ impl GuildMute {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MuteState {
     pub mutes: HashMap<u64, GuildMute>,
-}
-
-impl MuteState {
-    /// Returns `true` if push delivery for the given guild is currently muted.
-    ///
-    /// Pure read — expired entries return `false` but are not removed.
-    /// Use `reconcile_expiries()` to emit `Expire` receipts and clean up.
-    pub fn is_guild_muted(&self, guild_id: u64) -> bool {
-        self.mutes
-            .get(&guild_id)
-            .is_some_and(|mute| mute.is_active())
-    }
-
-    /// Returns all currently active mutes.
-    pub fn active_mutes(&self) -> Vec<&GuildMute> {
-        self.mutes.values().filter(|m| m.is_active()).collect()
-    }
 }
 
 // ── Receipt types ───────────────────────────────────────────────────────────
@@ -175,6 +174,9 @@ pub struct MuteStore {
     write_lock: Mutex<()>,
     /// Wakes the background expiry task when a new mute is created.
     expiry_notify: Notify,
+    /// Pluggable clock — [`SystemClock`] in production, a Tokio-aware clock
+    /// in tests so `start_paused` + `advance` control time deterministically.
+    clock: Arc<dyn Clock>,
 }
 
 impl MuteStore {
@@ -188,11 +190,20 @@ impl MuteStore {
     pub async fn load(
         state_dir: &Utf8Path,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Self::load_with_clock(state_dir, Arc::new(SystemClock)).await
+    }
+
+    /// Load with a custom clock (for testing).
+    async fn load_with_clock(
+        state_dir: &Utf8Path,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let receipt_path = state_dir.join("guild_mute_receipts.jsonl");
 
         let state = Self::replay_log(&receipt_path).await?;
 
-        let active = state.mutes.values().filter(|m| m.is_active()).count();
+        let now = clock.now();
+        let active = state.mutes.values().filter(|m| m.is_active(now)).count();
         let total = state.mutes.len();
         tracing::info!(active, total, "loaded guild mute state from receipt log");
 
@@ -201,6 +212,7 @@ impl MuteStore {
             receipt_path,
             write_lock: Mutex::new(()),
             expiry_notify: Notify::new(),
+            clock,
         };
 
         // Reconcile expired entries — emits Expire receipts for entries
@@ -245,7 +257,15 @@ impl MuteStore {
             receipt_path: state_dir.join("guild_mute_receipts.jsonl"),
             write_lock: Mutex::new(()),
             expiry_notify: Notify::new(),
+            clock: Arc::new(SystemClock),
         }
+    }
+
+    /// Replace the clock (builder-style). Used in tests to inject a
+    /// Tokio-aware clock for deterministic time control.
+    #[cfg(test)]
+    pub(crate) fn with_clock(self, clock: Arc<dyn Clock>) -> Self {
+        Self { clock, ..self }
     }
 
     /// Spawn a background task that reconciles expired mutes at their
@@ -261,12 +281,13 @@ impl MuteStore {
         tokio::spawn(async move {
             loop {
                 let (next_deadline, has_overdue) = {
+                    let now = store.now();
                     let state = store.load_state();
-                    let has_overdue = state.mutes.values().any(|m| !m.is_active());
+                    let has_overdue = state.mutes.values().any(|m| !m.is_active(now));
                     let next_active = state
                         .mutes
                         .values()
-                        .filter(|m| m.is_active())
+                        .filter(|m| m.is_active(now))
                         .map(|m| m.muted_until)
                         .min();
                     (next_active, has_overdue)
@@ -285,7 +306,7 @@ impl MuteStore {
                 }
                 match next_deadline {
                     Some(deadline) => {
-                        let duration = (deadline - Utc::now())
+                        let duration = (deadline - store.now())
                             .to_std()
                             .unwrap_or(Duration::from_secs(0));
                         // Register the notified future BEFORE the select to
@@ -320,6 +341,11 @@ impl MuteStore {
         })
     }
 
+    /// Current time according to the injected clock.
+    pub fn now(&self) -> DateTime<Utc> {
+        self.clock.now()
+    }
+
     /// Lock-free read of current mute state.
     pub fn load_state(&self) -> Arc<MuteState> {
         self.state.load_full()
@@ -329,7 +355,12 @@ impl MuteStore {
     ///
     /// Pure read — does not emit receipts or modify state.
     pub fn is_guild_muted(&self, guild_id: u64) -> bool {
-        self.state.load().is_guild_muted(guild_id)
+        let now = self.now();
+        self.state
+            .load()
+            .mutes
+            .get(&guild_id)
+            .is_some_and(|m| m.is_active(now))
     }
 
     /// Mute a guild for `ttl_minutes` from now.
@@ -353,7 +384,7 @@ impl MuteStore {
             ));
         }
 
-        let now = Utc::now();
+        let now = self.now();
         let duration = chrono::Duration::try_minutes(ttl_minutes as i64)
             .ok_or_else(|| format!("ttl_minutes ({ttl_minutes}) overflows duration"))?;
         let muted_until = now + duration;
@@ -363,16 +394,18 @@ impl MuteStore {
         // Re-read state under the lock to get a consistent snapshot.
         let current = self.state.load_full();
         let is_extend = if let Some(existing) = current.mutes.get(&guild_id) {
-            if existing.is_active() && muted_until < existing.muted_until {
+            let active = existing.is_active(now);
+            if active && muted_until < existing.muted_until {
+                let remaining = existing.remaining_seconds(now);
                 return Err(format!(
                     "guild {} is already muted until {} ({} seconds remaining); \
                      new TTL would shorten the mute. Unmute first to replace.",
                     guild_id,
                     existing.muted_until.to_rfc3339(),
-                    existing.remaining_seconds(),
+                    remaining,
                 ));
             }
-            existing.is_active()
+            active
         } else {
             false
         };
@@ -439,17 +472,18 @@ impl MuteStore {
         let _guard = self.write_lock.lock().await;
 
         // Re-read state under the lock.
+        let now = self.now();
         let current = self.state.load_full();
         let existing = current
             .mutes
             .get(&guild_id)
-            .filter(|m| m.is_active())
+            .filter(|m| m.is_active(now))
             .cloned()
             .ok_or_else(|| format!("guild {guild_id} is not currently muted"))?;
 
         // Build the receipt.
         let receipt = MuteReceipt {
-            timestamp: Utc::now(),
+            timestamp: now,
             guild_id,
             operation: MuteOperation::Unmute,
             actor: existing.muted_by.clone(),
@@ -490,13 +524,14 @@ impl MuteStore {
     ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
         let _guard = self.write_lock.lock().await;
 
+        let now = self.now();
         let current = self.state.load_full();
 
         // Collect expired entries.
         let expired: Vec<GuildMute> = current
             .mutes
             .values()
-            .filter(|m| !m.is_active())
+            .filter(|m| !m.is_active(now))
             .cloned()
             .collect();
 
@@ -512,7 +547,7 @@ impl MuteStore {
 
         for mute in &expired {
             let receipt = MuteReceipt {
-                timestamp: Utc::now(),
+                timestamp: self.now(),
                 guild_id: mute.guild_id,
                 operation: MuteOperation::Expire,
                 actor: "system".into(),
@@ -562,11 +597,12 @@ impl MuteStore {
 
     /// List all currently active mutes.
     pub fn list_muted(&self) -> Vec<GuildMute> {
+        let now = self.now();
         let state = self.state.load();
         state
             .mutes
             .values()
-            .filter(|m| m.is_active())
+            .filter(|m| m.is_active(now))
             .cloned()
             .collect()
     }
@@ -619,6 +655,34 @@ pub fn global() -> Option<Arc<MuteStore>> {
 mod tests {
     use super::*;
 
+    /// Test clock that derives `DateTime<Utc>` from `tokio::time::Instant`.
+    ///
+    /// Under `#[tokio::test(start_paused = true)]`, Tokio's clock is frozen
+    /// at construction and only advances via `tokio::time::advance(...)`.
+    /// This clock captures the Tokio instant and the wall-clock time at
+    /// creation, then computes `now()` as `base_chrono + elapsed_tokio_time`.
+    struct TokioClock {
+        base_chrono: DateTime<Utc>,
+        base_instant: tokio::time::Instant,
+    }
+
+    impl TokioClock {
+        fn new() -> Self {
+            Self {
+                base_chrono: Utc::now(),
+                base_instant: tokio::time::Instant::now(),
+            }
+        }
+    }
+
+    impl Clock for TokioClock {
+        fn now(&self) -> DateTime<Utc> {
+            let elapsed = self.base_instant.elapsed();
+            self.base_chrono
+                + chrono::Duration::from_std(elapsed).expect("elapsed fits in chrono::Duration")
+        }
+    }
+
     fn empty_store(state_dir: &Utf8Path) -> MuteStore {
         MuteStore::from_state(MuteState::default(), state_dir)
     }
@@ -653,8 +717,9 @@ mod tests {
             muted_at: Utc::now() - chrono::Duration::seconds(70),
             cutoff_event_id: String::new(),
         };
-        assert!(!mute.is_active());
-        assert_eq!(mute.remaining_seconds(), 0);
+        let now = Utc::now();
+        assert!(!mute.is_active(now));
+        assert_eq!(mute.remaining_seconds(now), 0);
     }
 
     #[test]
@@ -667,8 +732,9 @@ mod tests {
             muted_at: Utc::now(),
             cutoff_event_id: String::new(),
         };
-        assert!(mute.is_active());
-        assert!(mute.remaining_seconds() > 0);
+        let now = Utc::now();
+        assert!(mute.is_active(now));
+        assert!(mute.remaining_seconds(now) > 0);
     }
 
     #[test]
@@ -869,7 +935,7 @@ mod tests {
             .mute_guild(42, 120, "admin".into(), Some("extended".into()))
             .await
             .expect("extension should succeed");
-        assert!(extended.remaining_seconds() > 60 * 10);
+        assert!(extended.remaining_seconds(store.now()) > 60 * 10);
     }
 
     #[tokio::test]
@@ -1156,6 +1222,7 @@ mod tests {
             receipt_path: camino::Utf8PathBuf::from("/nonexistent/dir/guild_mute_receipts.jsonl"),
             write_lock: Mutex::new(()),
             expiry_notify: Notify::new(),
+            clock: Arc::new(SystemClock),
         };
 
         let result = store.mute_guild(42, 60, "admin".into(), None).await;
@@ -1229,35 +1296,33 @@ mod tests {
 
     // ── Scheduler invariant tests ──────────────────────────────────────────
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn earlier_deadline_mute_wakes_scheduler() {
         // When the scheduler is sleeping until a distant deadline and a new
         // overdue entry appears, expiry_notify must wake the scheduler so it
         // recalculates and reconciles the overdue entry — rather than
         // sleeping until the original deadline.
-        //
-        // Note: tokio::time::pause cannot control chrono::Utc::now() which
-        // the store uses for is_active(). This test uses real wall-clock
-        // time with short sleeps for synchronization.
         let dir = tempfile::TempDir::new().unwrap();
         let path = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let clock = Arc::new(TokioClock::new());
 
         let mut state = MuteState::default();
-        // Guild 42: active mute expiring far in the future (10 minutes).
+        // Guild 42: active mute expiring in 10 minutes.
         // The scheduler will sleep for ~600 seconds.
+        let now = clock.now();
         state.mutes.insert(
             42,
             GuildMute {
                 guild_id: 42,
-                muted_until: Utc::now() + chrono::Duration::seconds(600),
+                muted_until: now + chrono::Duration::seconds(600),
                 muted_by: "admin".into(),
                 reason: Some("long mute".into()),
-                muted_at: Utc::now(),
+                muted_at: now,
                 cutoff_event_id: "cutoff-42".into(),
             },
         );
 
-        let store = Arc::new(MuteStore::from_state(state, path));
+        let store = Arc::new(MuteStore::from_state(state, path).with_clock(clock.clone()));
         let handle = store.spawn_expiry_task();
 
         // Yield to let the spawned task enter the select! branch
@@ -1269,16 +1334,17 @@ mod tests {
         // passed — the scheduler must wake up and reconcile it rather than
         // continuing to sleep for the original 600s.
         {
+            let now = clock.now();
             let current = store.load_state();
             let mut new_state = MuteState::clone(&current);
             new_state.mutes.insert(
                 99,
                 GuildMute {
                     guild_id: 99,
-                    muted_until: Utc::now() - chrono::Duration::seconds(1),
+                    muted_until: now - chrono::Duration::seconds(1),
                     muted_by: "admin".into(),
                     reason: Some("already expired".into()),
-                    muted_at: Utc::now() - chrono::Duration::seconds(61),
+                    muted_at: now - chrono::Duration::seconds(61),
                     cutoff_event_id: "cutoff-99".into(),
                 },
             );
@@ -1288,8 +1354,11 @@ mod tests {
         // Wake the scheduler — same mechanism mute_guild uses.
         store.expiry_notify.notify_one();
 
-        // Give the scheduler time to wake, recalculate, and reconcile.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Under start_paused, tokio::time::sleep suspends the test task
+        // and lets the runtime park — which polls the IO driver for
+        // spawn_blocking completions from the spawned task's file IO.
+        // Auto-advance then completes this sleep without wall-clock delay.
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Guild 99 (overdue) should be reconciled immediately upon wake.
         assert!(
@@ -1360,7 +1429,7 @@ mod tests {
 
         // The has_overdue check (same logic the scheduler uses) should
         // find the entry and trigger immediate reconciliation.
-        let has_overdue = post_state.mutes.values().any(|m| !m.is_active());
+        let has_overdue = post_state.mutes.values().any(|m| !m.is_active(Utc::now()));
         assert!(
             has_overdue,
             "has_overdue must be true so scheduler retries rather than parking"
@@ -1385,17 +1454,16 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn overdue_entries_trigger_immediate_reconciliation() {
         // When the projection contains expired-but-unreceipted entries
         // (e.g. from a previous failed reconciliation), spawn_expiry_task
         // must reconcile them immediately — not park on Notify (which is
         // the bug that was fixed in 7ced6a0).
-        //
-        // Uses real wall-clock time with a short sleep for synchronization,
-        // since is_active() checks chrono::Utc::now().
         let dir = tempfile::TempDir::new().unwrap();
         let path = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let clock = Arc::new(TokioClock::new());
+        let now = clock.now();
 
         let mut state = MuteState::default();
         // Pre-populate an expired entry (simulates a previous failure that
@@ -1404,15 +1472,15 @@ mod tests {
             1,
             GuildMute {
                 guild_id: 1,
-                muted_until: Utc::now() - chrono::Duration::seconds(10),
+                muted_until: now - chrono::Duration::seconds(10),
                 muted_by: "admin".into(),
                 reason: Some("overdue".into()),
-                muted_at: Utc::now() - chrono::Duration::seconds(70),
+                muted_at: now - chrono::Duration::seconds(70),
                 cutoff_event_id: "cutoff-1".into(),
             },
         );
 
-        let store = Arc::new(MuteStore::from_state(state, path));
+        let store = Arc::new(MuteStore::from_state(state, path).with_clock(clock));
 
         // Verify the overdue entry is present before spawning.
         assert!(
@@ -1423,10 +1491,10 @@ mod tests {
         // Spawn the expiry task.
         let handle = store.spawn_expiry_task();
 
-        // Give the scheduler time to detect the overdue entry and
-        // reconcile it. The has_overdue check should fire on the first
-        // loop iteration — no Notify or sleep involved.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Under start_paused, sleep suspends the test and lets the
+        // runtime park — polling the IO driver for the spawned task's
+        // file IO completions. Auto-advance completes this instantly.
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
         // The overdue entry should be reconciled.
         assert!(
@@ -1453,7 +1521,7 @@ mod tests {
         handle.abort();
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn scheduler_retries_after_failure_and_commits_on_recovery() {
         // End-to-end: the scheduler's first reconciliation fails (bad path),
         // then the path becomes writable, and the scheduler retries through
@@ -1469,29 +1537,32 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let bad_path = dir.path().join("nonexistent_subdir");
         let bad_utf8 = camino::Utf8Path::from_path(&bad_path).unwrap();
+        let clock = Arc::new(TokioClock::new());
+        let now = clock.now();
 
         let mut state = MuteState::default();
         state.mutes.insert(
             77,
             GuildMute {
                 guild_id: 77,
-                muted_until: Utc::now() - chrono::Duration::seconds(10),
+                muted_until: now - chrono::Duration::seconds(10),
                 muted_by: "admin".into(),
                 reason: Some("will-fail".into()),
-                muted_at: Utc::now() - chrono::Duration::seconds(70),
+                muted_at: now - chrono::Duration::seconds(70),
                 cutoff_event_id: "cutoff-77".into(),
             },
         );
 
-        let store = Arc::new(MuteStore::from_state(state, bad_utf8));
+        let store = Arc::new(MuteStore::from_state(state, bad_utf8).with_clock(clock));
 
         // Spawn the scheduler — it will detect the overdue entry and try
         // to reconcile, but the receipt append will fail (directory doesn't
         // exist). It should backoff and retry.
         let handle = store.spawn_expiry_task();
 
-        // Wait long enough for the first attempt + backoff start (the
-        // backoff is 5 seconds, but the attempt itself is fast).
+        // Sleep to let the scheduler attempt (and fail) reconciliation,
+        // then enter its 5-second backoff sleep. Under start_paused,
+        // auto-advance completes this without wall-clock delay.
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // The entry should STILL be in the HashMap — the failed
@@ -1510,8 +1581,8 @@ mod tests {
         // Phase 2: create the directory so the receipt path becomes writable.
         std::fs::create_dir_all(&bad_path).expect("should create directory");
 
-        // Wait for the backoff (5s) to elapse and the retry to succeed.
-        // Use 6s to give margin.
+        // Advance past the 5-second backoff so the retry fires, then
+        // sleep to let the IO complete.
         tokio::time::sleep(Duration::from_secs(6)).await;
 
         // The entry should now be reconciled.

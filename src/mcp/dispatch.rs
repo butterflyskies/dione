@@ -468,6 +468,7 @@ pub(crate) async fn call_tool(
             // alongside the channel list (channels don't carry guild_id, so
             // per-channel annotation isn't possible).
             if let Some(store) = crate::mute_store::global() {
+                let now = store.now();
                 let mutes: Vec<Value> = store
                     .list_muted()
                     .into_iter()
@@ -475,7 +476,7 @@ pub(crate) async fn call_tool(
                         json!({
                             "guild_id": m.guild_id.to_string(),
                             "muted_until": m.muted_until.to_rfc3339(),
-                            "remaining_seconds": m.remaining_seconds(),
+                            "remaining_seconds": m.remaining_seconds(now),
                             "cutoff_event_id": m.cutoff_event_id,
                         })
                     })
@@ -689,7 +690,7 @@ pub(crate) async fn call_tool(
                     "ok": true,
                     "guild_id": guild_id.to_string(),
                     "muted_until": mute.muted_until.to_rfc3339(),
-                    "remaining_seconds": mute.remaining_seconds(),
+                    "remaining_seconds": mute.remaining_seconds(store.now()),
                     "cutoff_event_id": mute.cutoff_event_id,
                 }),
                 Err(e) => json!({ "error": e }),
@@ -717,6 +718,7 @@ pub(crate) async fn call_tool(
             check_admin_gate(&config)?;
             let store = crate::mute_store::global()
                 .ok_or_else(|| "mute store not initialized".to_string())?;
+            let now = store.now();
             let mutes: Vec<Value> = store
                 .list_muted()
                 .into_iter()
@@ -727,7 +729,7 @@ pub(crate) async fn call_tool(
                         "muted_at": m.muted_at.to_rfc3339(),
                         "muted_by": m.muted_by,
                         "reason": m.reason,
-                        "remaining_seconds": m.remaining_seconds(),
+                        "remaining_seconds": m.remaining_seconds(now),
                         "cutoff_event_id": m.cutoff_event_id,
                     })
                 })
