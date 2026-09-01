@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-09-01
+
+### Added
+- **Identity-level ignore list.** A configurable `ignore_from` list drops every
+  message authored by a listed identity before delivery, statelessly — the
+  filter keys on the *authoring* principal, not on the channel or the reply
+  context. Drops are author-only (a reply to an ignored author's message is not
+  itself dropped), the ignored parent's quoted preview is redacted, and the
+  filter is enforced across all six delivery paths. Webhook/PluralKit
+  reply-parents, whose live author is not always resolvable, are resolved
+  through the ingress ledger keyed by the reply's guild and fail open, so a
+  resolution gap never drops a legitimate message. Malformed `ignore_from`
+  config entries are logged rather than silently dropped.
+
 ## [0.38.1] - 2026-08-29
 
 ### Fixed

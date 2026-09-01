@@ -161,6 +161,10 @@ impl LifecycleSnapshot {
     pub(crate) fn provider(&self) -> Option<TransportProvider> {
         self.provider
     }
+
+    pub(crate) fn provenance(&self) -> Option<&LifecycleProvenance> {
+        self.provenance.as_ref()
+    }
 }
 
 /// Borrowed lineage supplied to pure current-policy edit checks.

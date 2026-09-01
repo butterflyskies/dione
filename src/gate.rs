@@ -16,6 +16,122 @@ pub enum GateDecision {
     Drop,
 }
 
+// ── Identity-level ignore (#369) ──────────────────────────────────────────────
+
+/// FLAGGED DECISION — owned by Pace/Lain, see `SCOPE-369.md`.
+///
+/// When a message IS a reply but the parent author cannot be determined — the
+/// gateway did not inline `referenced_message` AND the bounded API fallback
+/// also failed — identity-ignore must choose between protecting the victim and
+/// delivering possibly-legitimate mail. The direction is a single constant so
+/// it can be flipped without re-reading the flow.
+///
+/// * `false` = fail **OPEN**  — treat the parent as non-ignored and admit
+///   (preserves the existing "admit unless a filter matches" default; a rare
+///   reply whose unresolvable parent might have been the ignored person slips
+///   through). This is the shipped provisional default.
+/// * `true`  = fail **CLOSED** — drop the reply (favors victim protection; also
+///   drops legitimate replies whose parent was merely deleted / un-fetchable).
+///
+/// TODO(#369): confirm the fail direction with Pace/Lain before this ships.
+pub(crate) const IGNORE_REPLY_PARENT_FAIL_CLOSED: bool = false;
+
+/// How a reply's referenced parent resolved for the identity-ignore gate.
+///
+/// Produced by the (impure, HTTP/ledger-touching) resolver in
+/// `discord::events`; consumed by the pure [`classify_reply_parent_ignore`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReplyParentResolution {
+    /// Not a reply, OR a reply whose parent author resolved and is NOT ignored.
+    /// Nothing to do — deliver with the quoted preview intact.
+    Clear,
+    /// A reply whose parent author resolved to an id on the ignore list.
+    ParentIgnored,
+    /// A reply whose parent author could not be determined (not inlined, not in
+    /// the ledger, and the bounded live fetch failed or timed out).
+    Unresolvable,
+}
+
+/// What the handler must do with a reply, given its parent resolution.
+///
+/// Key #369 v2 semantics: an ignored *parent* NEVER drops the message — only
+/// an ignored *author* does (handled by [`InboundGate::check_dm`] /
+/// [`InboundGate::check_guild`]). A reply to an ignored parent is admitted with
+/// the quoted preview stripped, because that preview is the sole content-leak
+/// vector a reply carries from the ignored person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReplyParentAction {
+    /// Deliver, keeping the quoted preview.
+    Admit,
+    /// Deliver, but force `reply_to_content_preview = None` (parent ignored, or
+    /// unresolvable under fail-open).
+    AdmitRedactPreview,
+    /// Drop the whole reply — only reachable when the parent is unresolvable
+    /// AND the flagged fail policy is fail-closed.
+    DropUnresolved,
+}
+
+impl ReplyParentAction {
+    /// Whether the quoted parent preview must be blanked before delivery.
+    pub(crate) fn redacts_preview(self) -> bool {
+        matches!(self, Self::AdmitRedactPreview)
+    }
+
+    /// Whether the handler must suppress the reply entirely.
+    pub(crate) fn drops(self) -> bool {
+        matches!(self, Self::DropUnresolved)
+    }
+}
+
+/// Decide the delivery action for a reply from how its parent resolved.
+///
+/// Pure and stateless. The fail policy is a **parameter** (`fail_closed`) — NOT
+/// a direct read of [`IGNORE_REPLY_PARENT_FAIL_CLOSED`] — so both directions are
+/// exercised by the unit tests regardless of the shipped constant. Runtime
+/// callers use [`classify_reply_parent_ignore_default`], which supplies the
+/// constant.
+pub(crate) fn classify_reply_parent_ignore(
+    resolution: ReplyParentResolution,
+    fail_closed: bool,
+) -> ReplyParentAction {
+    match resolution {
+        ReplyParentResolution::Clear => ReplyParentAction::Admit,
+        ReplyParentResolution::ParentIgnored => ReplyParentAction::AdmitRedactPreview,
+        ReplyParentResolution::Unresolvable => {
+            if fail_closed {
+                ReplyParentAction::DropUnresolved
+            } else {
+                // Fail-open still redacts: we cannot prove the parent is safe,
+                // and stripping the preview closes the only content leak while
+                // still delivering the (possibly legitimate) reply.
+                ReplyParentAction::AdmitRedactPreview
+            }
+        }
+    }
+}
+
+/// Runtime wrapper that applies the shipped flagged fail policy
+/// ([`IGNORE_REPLY_PARENT_FAIL_CLOSED`]) to [`classify_reply_parent_ignore`].
+pub(crate) fn classify_reply_parent_ignore_default(
+    resolution: ReplyParentResolution,
+) -> ReplyParentAction {
+    classify_reply_parent_ignore(resolution, IGNORE_REPLY_PARENT_FAIL_CLOSED)
+}
+
+/// Identity-level (global) ignore predicate for a message **author**.
+///
+/// Reads only the current config snapshot — never the drop-event ledger — so it
+/// is stateless, restart-proof, independent of message age, and reflects a
+/// config reload immediately. It is a blocklist and intentionally overrides
+/// `allow_from`.
+///
+/// #369 v2: only the author drops a message. A reply to an ignored *parent* is
+/// handled separately via [`classify_reply_parent_ignore`] (preview redaction),
+/// not here.
+pub(crate) fn author_ignored(config: &LoadedConfig, author_id: u64) -> bool {
+    config.is_ignored(author_id)
+}
+
 // ── Inbound gate ──────────────────────────────────────────────────────────────
 
 /// Checks inbound messages against the access policy.
@@ -23,7 +139,17 @@ pub struct InboundGate;
 
 impl InboundGate {
     /// Decides what to do with an inbound DM. O(1) allowlist check.
+    ///
+    /// #369 v2: the reply-parent is NOT consulted here — an ignored parent is
+    /// handled by the caller via preview redaction, not a drop. Only an ignored
+    /// *sender* drops the message.
     pub fn check_dm(config: &LoadedConfig, sender_id: u64) -> GateDecision {
+        // #369: identity-level ignore is a stateless blocklist that overrides
+        // `allow_from`. Drop when the sender is ignored.
+        if author_ignored(config, sender_id) {
+            tracing::debug!(sender_id, "DM dropped: sender on identity ignore list");
+            return GateDecision::Drop;
+        }
         if config.access.dm_policy == DmPolicy::Disabled {
             tracing::debug!(sender_id, "DM dropped: dm_policy=disabled");
             return GateDecision::Drop;
@@ -58,6 +184,18 @@ impl InboundGate {
         is_mentioned: bool,
         guild_id: Option<u64>,
     ) -> GateDecision {
+        // #369: identity-level ignore is a stateless blocklist that overrides
+        // channel policy. Drop when the sender is ignored — every channel, any
+        // message age, restart-proof. (#369 v2: an ignored reply-parent redacts
+        // the preview but does not drop; that is handled by the caller.)
+        if author_ignored(config, sender_id) {
+            tracing::debug!(
+                channel_id,
+                sender_id,
+                "guild message dropped: sender on identity ignore list"
+            );
+            return GateDecision::Drop;
+        }
         if let Some(gid) = guild_id
             && let Some(store) = crate::mute_store::global()
             && store.is_guild_muted(gid)
@@ -303,6 +441,7 @@ mod tests {
             access: AccessConfig {
                 dm_policy: DmPolicy::Queue,
                 allow_from: vec!["100".to_string()],
+                ignore_from: vec![],
                 admins: vec!["100".to_string()],
                 admin_only_mutations: false,
             },
@@ -377,6 +516,168 @@ mod tests {
                 assert_eq!(typed.attention, Attention::Normal);
             }
         }
+    }
+
+    // ── Identity-level ignore tests (#369) ────────────────────────────────────
+
+    /// A config where `ignored` are on the identity ignore list. The guild
+    /// channel 500 is set to deliver non-ignored senders ambiently (no mention
+    /// required, no per-channel identity filter) so an ignore drop is
+    /// unambiguous rather than shadowed by another policy.
+    fn ignore_config(ignored: &[&str]) -> LoadedConfig {
+        let mut raw = base_config();
+        raw.access.ignore_from = ignored.iter().map(|s| (*s).to_string()).collect();
+        raw.channels[0].require_mention = false;
+        loaded(raw)
+    }
+
+    #[test]
+    fn ignored_author_dropped_in_dm() {
+        let config = ignore_config(&["900"]);
+        assert_eq!(
+            InboundGate::check_dm(&config, 900),
+            GateDecision::Drop,
+            "a DM from an identity-ignored author must drop"
+        );
+    }
+
+    #[test]
+    fn ignored_author_dropped_in_guild() {
+        let config = ignore_config(&["900"]);
+        assert_eq!(
+            InboundGate::check_guild(&config, 500, 900, false, None),
+            GateDecision::Drop,
+            "a guild message from an identity-ignored author must drop"
+        );
+    }
+
+    /// #369 v2: a reply to an ignored PARENT is NOT dropped by the gate — only
+    /// an ignored author is. The parent-ignore is expressed as preview
+    /// redaction (see `classify_reply_parent_ignore`), so the gate itself
+    /// admits the reply as it would any message from a non-ignored sender.
+    #[test]
+    fn reply_to_ignored_parent_is_not_dropped_by_the_gate() {
+        let config = ignore_config(&["900"]);
+        // Sender 123 is not ignored (not allowed → Queue in DM), and the gate
+        // no longer takes the parent into account.
+        assert_eq!(
+            InboundGate::check_dm(&config, 123),
+            GateDecision::Queue,
+            "a DM from a non-ignored sender is not dropped for replying to an ignored parent"
+        );
+        // Sender 123 delivers ambiently in the guild (require_mention=false).
+        assert_eq!(
+            InboundGate::check_guild(&config, 500, 123, false, None),
+            GateDecision::Deliver,
+            "a guild reply from a non-ignored sender is not dropped for an ignored parent"
+        );
+    }
+
+    #[test]
+    fn non_ignored_author_admitted() {
+        let config = ignore_config(&["900"]);
+        // Allowed sender, no reply → deliver in both transports.
+        assert_eq!(InboundGate::check_dm(&config, 100), GateDecision::Deliver);
+        assert_eq!(
+            InboundGate::check_guild(&config, 500, 100, false, None),
+            GateDecision::Deliver
+        );
+    }
+
+    #[test]
+    fn ignore_overrides_allow_from() {
+        // User 100 is on BOTH allow_from (from base_config) and ignore_from.
+        // The blocklist must win.
+        let config = ignore_config(&["100"]);
+        assert_eq!(
+            InboundGate::check_dm(&config, 100),
+            GateDecision::Drop,
+            "ignore_from overrides allow_from in DMs"
+        );
+        assert_eq!(
+            InboundGate::check_guild(&config, 500, 100, false, None),
+            GateDecision::Drop,
+            "ignore_from overrides allow_from in guilds"
+        );
+    }
+
+    #[test]
+    fn ignore_check_is_stateless_across_reload() {
+        // Before: 100 is allowed and not ignored → deliver.
+        let before = ignore_config(&[]);
+        assert_eq!(InboundGate::check_dm(&before, 100), GateDecision::Deliver);
+        // A reload that adds 100 to ignore_from takes effect immediately — no
+        // ledger, no history, restart-proof.
+        let after = ignore_config(&["100"]);
+        assert_eq!(
+            InboundGate::check_dm(&after, 100),
+            GateDecision::Drop,
+            "newly-added ignore must apply on the very next check"
+        );
+    }
+
+    // ── Reply-parent classification (flagged fail-open/closed) ────────────────
+
+    #[test]
+    fn classify_clear_parent_admits_with_preview() {
+        let action = classify_reply_parent_ignore(ReplyParentResolution::Clear, false);
+        assert_eq!(action, ReplyParentAction::Admit);
+        assert!(!action.redacts_preview());
+        assert!(!action.drops());
+    }
+
+    /// An ignored parent ALWAYS redacts the preview and NEVER drops, regardless
+    /// of the fail policy.
+    #[test]
+    fn classify_ignored_parent_redacts_in_both_fail_directions() {
+        for fail_closed in [false, true] {
+            let action =
+                classify_reply_parent_ignore(ReplyParentResolution::ParentIgnored, fail_closed);
+            assert_eq!(action, ReplyParentAction::AdmitRedactPreview);
+            assert!(action.redacts_preview());
+            assert!(
+                !action.drops(),
+                "an ignored parent must never drop the reply"
+            );
+        }
+    }
+
+    /// The unresolvable-parent residual is the ONLY branch the flagged policy
+    /// governs. Both directions are asserted explicitly (fable P2 dead-code
+    /// fix): fail-open → admit+redact, fail-closed → drop.
+    #[test]
+    fn classify_unresolvable_parent_obeys_the_fail_parameter() {
+        assert_eq!(
+            classify_reply_parent_ignore(ReplyParentResolution::Unresolvable, false),
+            ReplyParentAction::AdmitRedactPreview,
+            "fail-OPEN admits the reply but strips the preview"
+        );
+        assert_eq!(
+            classify_reply_parent_ignore(ReplyParentResolution::Unresolvable, true),
+            ReplyParentAction::DropUnresolved,
+            "fail-CLOSED drops the reply"
+        );
+    }
+
+    /// Tripwire documenting the shipped provisional default via the const
+    /// wrapper: an unresolvable reply parent is admitted (preview redacted),
+    /// not dropped. If Pace/Lain flip `IGNORE_REPLY_PARENT_FAIL_CLOSED`, this
+    /// expectation is the intended place to update — see SCOPE-369.md.
+    #[test]
+    fn flagged_default_is_fail_open() {
+        assert_eq!(
+            classify_reply_parent_ignore_default(ReplyParentResolution::Unresolvable),
+            ReplyParentAction::AdmitRedactPreview,
+            "provisional default is fail-OPEN pending the Pace/Lain decision"
+        );
+        // And the const still matches the wrapper's behavior.
+        assert_eq!(
+            classify_reply_parent_ignore_default(ReplyParentResolution::Unresolvable),
+            classify_reply_parent_ignore(
+                ReplyParentResolution::Unresolvable,
+                IGNORE_REPLY_PARENT_FAIL_CLOSED
+            )
+        );
     }
 
     // ── Guild gate tests ──────────────────────────────────────────────────────

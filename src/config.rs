@@ -673,6 +673,13 @@ impl Default for PreSendConfig {
 pub struct AccessConfig {
     pub dm_policy: DmPolicy,
     pub allow_from: Vec<String>,
+    /// Identity-level (global) ignore list. A user whose ID appears here has
+    /// their content filtered everywhere — every channel and DM, any message
+    /// age — and a reply to one of their messages is filtered too. This is a
+    /// blocklist: it overrides `allow_from`. Mirrors `allow_from` structurally
+    /// and rides the same ConfigRuntime reload path.
+    #[serde(default)]
+    pub ignore_from: Vec<String>,
     pub admins: Vec<String>,
     #[serde(default)]
     pub admin_only_mutations: bool,
@@ -683,6 +690,7 @@ impl Default for AccessConfig {
         Self {
             dm_policy: DmPolicy::Queue,
             allow_from: Vec::new(),
+            ignore_from: Vec::new(),
             admins: Vec::new(),
             admin_only_mutations: false,
         }
@@ -982,6 +990,9 @@ pub struct LoadedConfig {
     pub raw: Config,
     /// Parsed user IDs from `access.allow_from` for O(1) membership test.
     pub allowed_ids: HashSet<u64>,
+    /// Parsed user IDs from `access.ignore_from` for O(1) membership test.
+    /// Identity-level (global) ignore list — see [`LoadedConfig::is_ignored`].
+    pub ignored_ids: HashSet<u64>,
     /// Parsed admin IDs for O(1) membership test and iteration.
     pub admin_ids: HashSet<u64>,
     /// Per-channel parsed policies. O(1) lookup by channel ID.
@@ -1070,6 +1081,7 @@ impl LoadedConfig {
 
     fn from_raw_with_generation(mut raw: Config, generation: u64) -> Self {
         let allowed_ids = parse_id_set(&raw.access.allow_from);
+        let ignored_ids = parse_ignore_id_set(&raw.access.ignore_from);
         let admin_ids = parse_id_set(&raw.access.admins);
         let channel_policies = raw
             .channels
@@ -1150,6 +1162,7 @@ impl LoadedConfig {
             generation,
             raw,
             allowed_ids,
+            ignored_ids,
             admin_ids,
             channel_policies,
             mention_patterns,
@@ -1171,6 +1184,16 @@ impl LoadedConfig {
     /// O(1) check if a user is in the allowlist.
     pub fn is_allowed(&self, user_id: u64) -> bool {
         self.allowed_ids.contains(&user_id)
+    }
+
+    /// O(1) check if a user is on the identity-level (global) ignore list.
+    ///
+    /// This is a stateless blocklist read straight from the current config
+    /// snapshot: no ledger, no history. It therefore works across restarts and
+    /// for a referenced parent of any age, and a reload that adds or removes an
+    /// ID takes effect on the very next check.
+    pub fn is_ignored(&self, user_id: u64) -> bool {
+        self.ignored_ids.contains(&user_id)
     }
 
     /// O(1) check if a user is an admin.
@@ -1254,6 +1277,33 @@ impl LoadedConfig {
 
 fn parse_id_set(ids: &[String]) -> HashSet<u64> {
     ids.iter().filter_map(|s| s.parse::<u64>().ok()).collect()
+}
+
+/// Parse the identity ignore list (`access.ignore_from`), logging each
+/// malformed entry.
+///
+/// Unlike [`parse_id_set`] (which silently drops garbage on the allow/admin
+/// lists), a rejected entry here is a **safety** failure: `ignore_from` is a
+/// victim's blocklist, and silently no-op'ing a typo would let the very person
+/// they meant to block keep reaching them. Every unparseable entry is surfaced
+/// at `error` level (mirrors [`validate_pk_uuids`]). The entry is still skipped
+/// so one bad value cannot break the rest of the list.
+fn parse_ignore_id_set(ids: &[String]) -> HashSet<u64> {
+    ids.iter()
+        .filter_map(|s| match s.parse::<u64>() {
+            Ok(id) => Some(id),
+            Err(error) => {
+                tracing::error!(
+                    field = "ignore_from",
+                    value = s.as_str(),
+                    %error,
+                    "invalid identity ignore ID in config — entry rejected; the ignore \
+                     blocklist will NOT filter this value"
+                );
+                None
+            }
+        })
+        .collect()
 }
 
 /// Validate and collect PK UUID strings, logging errors for invalid entries.
@@ -4262,6 +4312,7 @@ enabled = true
             access: AccessConfig {
                 dm_policy: DmPolicy::Queue,
                 allow_from: vec!["111".to_string(), "222".to_string()],
+                ignore_from: vec![],
                 admins: vec!["111".to_string()],
                 admin_only_mutations: false,
             },
@@ -4295,6 +4346,94 @@ enabled = true
     fn test_loaded_config_is_allowed_false_for_unknown_user() {
         let cfg = make_loaded();
         assert!(!cfg.is_allowed(9999), "unknown user must not be allowed");
+    }
+
+    // #369: ignore_from is parsed into ignored_ids and is_ignored answers O(1).
+    #[test]
+    fn test_is_ignored_true_for_ignore_listed_user() {
+        let raw = Config {
+            access: AccessConfig {
+                ignore_from: vec!["777".to_string(), "888".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let cfg = LoadedConfig::from_raw(raw);
+        assert!(cfg.is_ignored(777), "user 777 is in ignore_from");
+        assert!(cfg.is_ignored(888), "user 888 is in ignore_from");
+    }
+
+    // #369: is_ignored is false for users not on the ignore list.
+    #[test]
+    fn test_is_ignored_false_for_unlisted_user() {
+        let cfg = make_loaded(); // ignore_from empty
+        assert!(!cfg.is_ignored(111), "allow-listed user is not ignored");
+        assert!(!cfg.is_ignored(9999), "unknown user is not ignored");
+    }
+
+    // #369 (restart-proof / stateless): each config snapshot is parsed straight
+    // from the current raw config, so "reloading" with a newly-added ignore ID
+    // flips is_ignored immediately — no ledger, no history, no restart needed.
+    #[test]
+    fn test_ignore_from_reload_is_stateless() {
+        let before = LoadedConfig::from_raw(Config::default());
+        assert!(!before.is_ignored(4242), "not ignored before the reload");
+
+        // Simulate a config reload that adds the user to ignore_from.
+        let after = LoadedConfig::from_raw(Config {
+            access: AccessConfig {
+                ignore_from: vec!["4242".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert!(
+            after.is_ignored(4242),
+            "ignored immediately after the reload"
+        );
+    }
+
+    // #369 (P3): a malformed ignore_from entry is rejected (skipped) but the
+    // valid entries around it still parse — one typo must not disable the whole
+    // safety blocklist. (The rejection is also logged at error level.)
+    #[test]
+    fn test_ignore_from_skips_malformed_entries_but_keeps_valid() {
+        let raw = Config {
+            access: AccessConfig {
+                ignore_from: vec![
+                    "777".to_string(),
+                    "not-a-snowflake".to_string(),
+                    "888".to_string(),
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let cfg = LoadedConfig::from_raw(raw);
+        assert!(
+            cfg.is_ignored(777),
+            "valid entry before the bad one is kept"
+        );
+        assert!(cfg.is_ignored(888), "valid entry after the bad one is kept");
+        assert_eq!(cfg.ignored_ids.len(), 2, "the malformed entry is dropped");
+    }
+
+    // #369: ignore_from round-trips through TOML like allow_from.
+    #[test]
+    fn test_ignore_from_parses_from_toml() {
+        let _cache = config_cache_guard();
+        let (_dir, state_dir) = temp_state_dir();
+        let config_path = state_dir.join("config.toml");
+        fs::write(
+            config_path.as_std_path(),
+            b"[access]\nignore_from = [\"555\", \"666\"]\n",
+        )
+        .unwrap();
+        let cfg = reload_config(&state_dir).0;
+        assert_eq!(cfg.access.ignore_from, vec!["555", "666"]);
+        assert!(cfg.is_ignored(555));
+        assert!(cfg.is_ignored(666));
+        assert!(!cfg.is_ignored(111));
     }
 
     // is_admin returns true for configured admin.
@@ -4352,6 +4491,7 @@ enabled = true
                     "".to_string(),
                     "999".to_string(),
                 ],
+                ignore_from: vec![],
                 admins: vec!["bad-admin-id".to_string()],
                 admin_only_mutations: false,
             },
@@ -4741,6 +4881,7 @@ delivery_delay_ms = 750
             access: AccessConfig {
                 dm_policy: DmPolicy::Queue,
                 allow_from: vec![],
+                ignore_from: vec![],
                 admins: vec![],
                 admin_only_mutations: false,
             },

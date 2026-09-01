@@ -8,7 +8,10 @@ use crate::{
             BoundPrincipalResolver, VerifiedUpdateCandidate, fresh_policy_snapshot,
         },
     },
-    gate::{GateDecision, InboundGate, MentionDetector, MentionKind},
+    gate::{
+        GateDecision, InboundGate, MentionDetector, MentionKind, ReplyParentAction,
+        ReplyParentResolution, classify_reply_parent_ignore_default,
+    },
     mcp::tools::{bot_state::DiscordCommand, messaging::create_dm_channel},
     queue::AccessRequest,
     timestamp::Timestamp,
@@ -522,10 +525,27 @@ impl EventHandler for Handler {
 
         if is_dm {
             let sender_id = msg.author.id.get();
+            // #369: only an ignored SENDER drops the DM. The reply-parent is
+            // resolved lazily below, and only once we know the DM would be
+            // delivered (packet: don't fetch for a bot that would reject the
+            // sender anyway).
             let decision = InboundGate::check_dm(&config, sender_id);
 
             match decision {
                 GateDecision::Deliver => {
+                    // #369: resolve the reply-parent (3-tier) for redaction /
+                    // fail-closed drop. Short-circuits with no fetch when no ids
+                    // are ignored.
+                    let reply_parent =
+                        resolve_reply_parent_ignore(&config, &self.ingress_ledger, &ctx.http, &msg)
+                            .await;
+                    if reply_parent.drops() {
+                        tracing::trace!(
+                            sender_id,
+                            "DM dropped: reply parent unresolvable (identity-ignore fail-closed)"
+                        );
+                        return;
+                    }
                     let channel_id = msg.channel_id.get();
 
                     // Record DM channel mapping.
@@ -542,6 +562,7 @@ impl EventHandler for Handler {
                         None,
                         MessageTargeting::DirectMessage,
                         pronoun_name,
+                        reply_parent.redacts_preview(),
                     );
                     send_gateway_admitted_message(
                         &self.ingress_ledger,
@@ -698,6 +719,23 @@ impl EventHandler for Handler {
                 else {
                     return;
                 };
+                // #369: resolve the reply-parent (3-tier) for redaction /
+                // fail-closed drop on the verified path too, using the same
+                // post-wait config the admission was taken under.
+                let reply_parent = resolve_reply_parent_ignore(
+                    &plan.config,
+                    &self.ingress_ledger,
+                    &ctx.http,
+                    &delivery_msg,
+                )
+                .await;
+                if reply_parent.drops() {
+                    tracing::trace!(
+                        channel_id,
+                        "verified guild message dropped: reply parent unresolvable (identity-ignore fail-closed)"
+                    );
+                    return;
+                }
                 let pronoun_name = self.resolve_pronoun_name(&delivery_msg).await;
                 let event = build_verified_message_event(
                     &plan.admission,
@@ -707,6 +745,7 @@ impl EventHandler for Handler {
                     plan.thread_parent_id,
                     plan.targeting,
                     pronoun_name,
+                    reply_parent.redacts_preview(),
                 );
                 if let Err(error) = self.tx.send(event).await {
                     tracing::warn!(%error, "failed to send verified guild app action");
@@ -738,7 +777,10 @@ impl EventHandler for Handler {
             });
 
             // The single admission authority: delivery is possible only
-            // through the targeting its Deliver variant carries.
+            // through the targeting its Deliver variant carries. #369 v2: the
+            // author-level ignore drop lives inside this authority; the
+            // reply-parent is resolved only for an admitted message (below), so
+            // an ignored parent redacts the preview rather than dropping.
             let admission = admit_direct_guild_message(
                 crate::drop_ledger::global(),
                 &config,
@@ -754,6 +796,19 @@ impl EventHandler for Handler {
 
             match admission {
                 DirectGuildAdmission::Deliver { targeting } => {
+                    // #369: resolve the reply-parent (3-tier) for redaction /
+                    // fail-closed drop. Only reached for an admitted message,
+                    // and short-circuits with no fetch when no ids are ignored.
+                    let reply_parent =
+                        resolve_reply_parent_ignore(&config, &self.ingress_ledger, &ctx.http, &msg)
+                            .await;
+                    if reply_parent.drops() {
+                        tracing::trace!(
+                            channel_id,
+                            "guild message dropped: reply parent unresolvable (identity-ignore fail-closed)"
+                        );
+                        return;
+                    }
                     let pronoun_name = self.resolve_pronoun_name(&msg).await;
                     let event = build_message_event(
                         &msg,
@@ -762,6 +817,7 @@ impl EventHandler for Handler {
                         resolved.thread_parent_id,
                         targeting,
                         pronoun_name,
+                        reply_parent.redacts_preview(),
                     );
                     send_gateway_admitted_message(
                         &self.ingress_ledger,
@@ -786,6 +842,13 @@ impl EventHandler for Handler {
                         channel_id,
                         sender_id = msg.author.id.get(),
                         "guild message dropped by gate"
+                    );
+                }
+                DirectGuildAdmission::IdentityIgnored => {
+                    tracing::trace!(
+                        channel_id,
+                        sender_id = msg.author.id.get(),
+                        "guild message dropped: identity ignore list"
                     );
                 }
             }
@@ -980,11 +1043,29 @@ impl EventHandler for Handler {
             .guild_id
             .map_or(LifecycleContext::DirectMessage, LifecycleContext::Guild);
         let (final_config, admission) = if is_dm {
+            // #369: author-level identity ignore still applies to DM edits.
             if !matches!(
                 InboundGate::check_dm(&config, author.id.get()),
                 GateDecision::Deliver
             ) {
                 return;
+            }
+            // #369 v2: apply the reply-parent contract to the edited message
+            // too. A `MessageEdit` carries no quoted preview, so redaction is
+            // moot here; only a fail-closed *unresolvable* parent affects
+            // delivery (an ignored parent is admitted). Resolve from the full
+            // `new` message when the gateway provided it (best-effort).
+            if let Some(new_msg) = new.as_ref() {
+                let reply_parent =
+                    resolve_reply_parent_ignore(&config, &self.ingress_ledger, &ctx.http, new_msg)
+                        .await;
+                if reply_parent.drops() {
+                    tracing::trace!(
+                        channel_id,
+                        "DM edit dropped: reply parent unresolvable (identity-ignore fail-closed)"
+                    );
+                    return;
+                }
             }
             let admission = match self.ingress_ledger.transition_passive_edit(
                 event.id,
@@ -1348,6 +1429,160 @@ fn guild_message_preflight(
     GuildPreflight::Proceed
 }
 
+/// Timeout for the tier-3 live parent fetch in [`resolve_reply_parent_ignore`].
+///
+/// Bounds identity-ignore resolution so a slow or unreachable Discord API
+/// cannot stall ingest. Mirrors the deadline pattern used in
+/// `verified_action_runtime`.
+const IGNORE_PARENT_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Resolve a reply's parent author and classify the identity-ignore action
+/// (#369 v2), 3-tier ladder, first hit wins:
+///   tier1: gateway-inlined `referenced_message.author.id` (any age)
+///   tier2: ingress-ledger active snapshot for the parent (≤7d, survives a
+///          Discord-side deletion) → its `effective_user_id`
+///   tier3: one **bounded** live `get_message` on the reference's OWN channel,
+///          wrapped in a timeout
+///
+/// then [`classify_reply_parent_ignore_default`] applies the flagged fail
+/// policy to any unresolvable residual.
+///
+/// The ignore DECISION is always read from the live config snapshot
+/// (`is_ignored`), so an un-ignore takes effect on the very next message. The
+/// ledger is consulted ONLY to learn WHO authored the parent — an immutable
+/// fact — never as the ignore authority.
+///
+/// NOTE(#369): reactions from an ignored user are intentionally NOT filtered by
+/// this path (or anywhere else) — reaction filtering is out of scope for #369
+/// and tracked separately. "Everywhere" here means every *message* ingress
+/// path, not reactions.
+async fn resolve_reply_parent_ignore(
+    config: &crate::config::LoadedConfig,
+    ingress_ledger: &crate::ingress_ledger::IngressLedger,
+    http: &serenity::http::Http,
+    msg: &Message,
+) -> ReplyParentAction {
+    // Short-circuit: the feature is unused → no ledger lookup, no live fetch.
+    if config.ignored_ids.is_empty() {
+        return classify_reply_parent_ignore_default(ReplyParentResolution::Clear);
+    }
+    let resolution = resolve_reply_parent_resolution(config, ingress_ledger, http, msg).await;
+    classify_reply_parent_ignore_default(resolution)
+}
+
+/// The impure half of [`resolve_reply_parent_ignore`]: run the 3-tier ladder
+/// and report how the parent resolved (kept separate so the pure classifier
+/// stays trivially testable).
+async fn resolve_reply_parent_resolution(
+    config: &crate::config::LoadedConfig,
+    ingress_ledger: &crate::ingress_ledger::IngressLedger,
+    http: &serenity::http::Http,
+    msg: &Message,
+) -> ReplyParentResolution {
+    let ignored = |author: u64| {
+        if config.is_ignored(author) {
+            ReplyParentResolution::ParentIgnored
+        } else {
+            ReplyParentResolution::Clear
+        }
+    };
+
+    // Establish that this is a genuine reply. A forward/crosspost is decided
+    // explicitly as Unresolvable: we do not trust its reference to name an
+    // author, and it carries no quoted preview to leak.
+    match msg.message_reference.as_ref() {
+        Some(reference) if !is_reply_reference(reference) => {
+            return ReplyParentResolution::Unresolvable;
+        }
+        None if msg.referenced_message.is_none() => {
+            return ReplyParentResolution::Clear;
+        }
+        _ => {}
+    }
+
+    // tier1: gateway-inlined parent (covers replies of any age; the common case).
+    // A webhook/PK parent's `author.id` is the TRANSPORT id, not the principal.
+    // Resolve the principal from the ledger snapshot, keyed by the REPLY's guild
+    // context: Discord omits `guild_id` on the nested `referenced_message`, so the
+    // parent's own is None -- a reply is same-channel, so `msg.guild_id` matches
+    // the context the parent was admitted under. Only a Represented (proxied)
+    // snapshot yields a human principal; an AppOnly snapshot's effective id is the
+    // app itself (safe to check); an Unavailable snapshot (PK resolution failed)
+    // collapses to the transport id, which must never drive the ignore decision,
+    // so it -- and any absent/Direct snapshot -- resolves Unresolvable (fail-open
+    // redacts, never leaks).
+    if let Some(parent) = msg.referenced_message.as_deref() {
+        if parent.webhook_id.is_some() {
+            let context = msg
+                .guild_id
+                .map_or(LifecycleContext::DirectMessage, LifecycleContext::Guild);
+            return match ingress_ledger.active_snapshot(parent.id, parent.channel_id, context) {
+                Some(snapshot)
+                    if matches!(
+                        snapshot.provenance(),
+                        Some(
+                            LifecycleProvenance::Represented { .. }
+                                | LifecycleProvenance::AppOnly
+                        )
+                    ) =>
+                {
+                    ignored(snapshot.effective_user_id().get())
+                }
+                _ => ReplyParentResolution::Unresolvable,
+            };
+        }
+        return ignored(parent.author.id.get());
+    }
+
+    // Parent not inlined: we need the reference's coordinates for tiers 2/3.
+    let Some(reference) = msg.message_reference.as_ref() else {
+        return ReplyParentResolution::Unresolvable;
+    };
+    let Some(parent_id) = reference.message_id else {
+        return ReplyParentResolution::Unresolvable;
+    };
+    // Use the reference's OWN channel, not `msg.channel_id` — a cross-channel
+    // reply otherwise 404s against the wrong channel (fable P2).
+    let parent_channel = reference.channel_id;
+    let context = msg
+        .guild_id
+        .map_or(LifecycleContext::DirectMessage, LifecycleContext::Guild);
+
+    // tier2: ingress-ledger active snapshot — an immutable authorship fact,
+    // retained ≤7d, surviving a Discord-side deletion of the parent.
+    if let Some(snapshot) = ingress_ledger.active_snapshot(parent_id, parent_channel, context) {
+        return ignored(snapshot.effective_user_id().get());
+    }
+
+    // tier3: one bounded, best-effort live fetch (no retries), with a timeout.
+    match tokio::time::timeout(
+        IGNORE_PARENT_FETCH_TIMEOUT,
+        http.get_message(parent_channel, parent_id),
+    )
+    .await
+    {
+        // A live-fetched webhook/PK parent carries the transport author id, and
+        // tier2's ledger lookup already missed, so no principal is resolvable here.
+        Ok(Ok(parent)) if parent.webhook_id.is_some() => ReplyParentResolution::Unresolvable,
+        Ok(Ok(parent)) => ignored(parent.author.id.get()),
+        // Fetch error, or the timeout elapsed → parent author unknown.
+        Ok(Err(_)) | Err(_) => ReplyParentResolution::Unresolvable,
+    }
+}
+
+/// Effective Discord principal behind a verified (webhook/PK) action, mirroring
+/// [`crate::ingress_ledger::LifecycleSnapshot::effective_user_id`]: a
+/// represented (proxied) action collapses to the represented user; app-only or
+/// unavailable actions retain the observed transport author.
+fn verified_principal_id(provenance: &LifecycleProvenance, observed_author: UserId) -> u64 {
+    match provenance {
+        LifecycleProvenance::Represented {
+            discord_user_id, ..
+        } => discord_user_id.get(),
+        LifecycleProvenance::AppOnly | LifecycleProvenance::Unavailable(_) => observed_author.get(),
+    }
+}
+
 /// One admission decision for a direct (non-webhook) guild message. The
 /// production handler builds a delivery **only** from the
 /// [`DirectGuildAdmission::Deliver`] variant — its `targeting` exists
@@ -1365,6 +1600,11 @@ enum DirectGuildAdmission {
     BotAuthor,
     /// Dropped by the inbound gate (recorded for reply inheritance).
     GateDrop,
+    /// Dropped by the identity-level ignore list (#369). Deliberately **not**
+    /// recorded in the drop-event ledger: identity ignore is stateless and
+    /// re-evaluated from current config on every message, so caching it as a
+    /// reply-inheritance root would let a stale entry survive an un-ignore.
+    IdentityIgnored,
     /// `check_guild` returned Queue, which guild messages never should.
     UnexpectedQueue,
 }
@@ -1424,6 +1664,15 @@ fn admit_direct_guild_message(
         },
         GateDecision::Queue => DirectGuildAdmission::UnexpectedQueue,
         GateDecision::Drop => {
+            // #369: an identity-ignore drop is stateless — never cache it as a
+            // #361 reply-inheritance root, or un-ignoring would not take effect
+            // until the ledger entry aged out. Only non-identity gate drops
+            // (e.g. sender outside `allow_from`) are recorded as roots. #369 v2:
+            // only the AUTHOR triggers this; an ignored reply-parent redacts the
+            // preview at the delivery layer and never reaches a drop here.
+            if crate::gate::author_ignored(config, author_id) {
+                return DirectGuildAdmission::IdentityIgnored;
+            }
             // #361: remember the drop so a direct reply inherits it.
             ledger.record(gate_scope, message_id);
             DirectGuildAdmission::GateDrop
@@ -1504,12 +1753,25 @@ where
         VerifiedGateVerdict::Allow(facts) => facts,
         VerifiedGateVerdict::Deny => return None,
     };
+    // #369 (P1 fix): the identity-ignore blocklist applies to the RESOLVED
+    // PRINCIPAL behind the proxy (the represented Discord user), never the
+    // webhook transport id. Checked before the ledger record so no admitted
+    // entry is minted for content we are dropping.
+    let lifecycle = facts.into_lifecycle();
+    let principal_id = verified_principal_id(lifecycle.provenance(), msg.author.id);
+    if config.is_ignored(principal_id) {
+        tracing::trace!(
+            principal_id,
+            "verified guild create dropped: principal on identity ignore list"
+        );
+        return None;
+    }
     let webhook_id = msg.webhook_id?;
     let context = msg
         .guild_id
         .map_or(LifecycleContext::DirectMessage, LifecycleContext::Guild);
     let admission = match ledger.admit_verified_create(
-        facts.into_lifecycle(),
+        lifecycle,
         msg.id,
         msg.channel_id,
         context,
@@ -1601,11 +1863,23 @@ where
         VerifiedGateVerdict::Allow(facts) => facts,
         VerifiedGateVerdict::Deny => return None,
     };
+    // #369 (P1 fix): the identity-ignore blocklist applies to the RESOLVED
+    // PRINCIPAL behind the proxy, never the webhook transport id. An ignored
+    // principal's edit of an already-admitted message must not slip through.
+    let lifecycle = facts.into_lifecycle();
+    let principal_id = verified_principal_id(lifecycle.provenance(), author.id);
+    if config.is_ignored(principal_id) {
+        tracing::trace!(
+            principal_id,
+            "verified guild edit dropped: principal on identity ignore list"
+        );
+        return None;
+    }
     let context = event
         .guild_id
         .map_or(LifecycleContext::DirectMessage, LifecycleContext::Guild);
     let admission = match ledger.transition_verified_edit(
-        facts.into_lifecycle(),
+        lifecycle,
         event.id,
         event.channel_id,
         context,
@@ -1669,6 +1943,19 @@ fn passive_edit_policy_allows(
     mention_kind: Option<MentionKind>,
     lineage: &crate::ingress_ledger::LifecycleView<'_>,
 ) -> bool {
+    // #369 (P1 fix): identity-ignore is a stateless blocklist that also governs
+    // EDITS. An ignored author editing a previously-admitted message was a
+    // bypass — resolve the effective author (represented principal for proxied
+    // lineage, else the observed actor) and drop before any policy check.
+    let effective_author = match lineage.provenance() {
+        Some(LifecycleProvenance::Represented {
+            discord_user_id, ..
+        }) => discord_user_id.get(),
+        _ => lineage.actor_id().get(),
+    };
+    if config.is_ignored(effective_author) {
+        return false;
+    }
     if guild_id.is_some_and(|guild_id| {
         crate::mute_store::global().is_some_and(|store| store.is_guild_muted(guild_id))
     }) {
@@ -1783,12 +2070,23 @@ fn reply_context(
     };
     let preview = reply_preview(&parent.content);
     let reply_to_user_id = if parent.webhook_id.is_some() {
-        let context = parent
+        // Same resolution as tier1 of `resolve_reply_parent_resolution`: key on the
+        // REPLY's guild (the nested parent carries no `guild_id`), and trust only a
+        // Represented/AppOnly snapshot -- an Unavailable one collapses to the
+        // transport id.
+        let context = msg
             .guild_id
             .map_or(LifecycleContext::DirectMessage, LifecycleContext::Guild);
         ingress_ledger
             .active_snapshot(parent.id, parent.channel_id, context)
-            .filter(|snapshot| snapshot.provider().is_some())
+            .filter(|snapshot| {
+                matches!(
+                    snapshot.provenance(),
+                    Some(
+                        LifecycleProvenance::Represented { .. } | LifecycleProvenance::AppOnly
+                    )
+                )
+            })
             .map(|snapshot| snapshot.effective_user_id())
     } else {
         Some(parent.author.id)
@@ -1883,6 +2181,7 @@ fn build_message_event(
     thread_parent_id: Option<u64>,
     targeting: MessageTargeting,
     pronoun_display_name: Option<PronounDisplayName>,
+    redact_reply_preview: bool,
 ) -> NotificationEvent {
     build_message_event_with_coordinates(
         msg.channel_id,
@@ -1894,9 +2193,14 @@ fn build_message_event(
         thread_parent_id,
         targeting,
         pronoun_display_name,
+        redact_reply_preview,
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the verified event builder keeps immutable Discord coordinates plus the #369 redaction flag explicit at the delivery boundary"
+)]
 fn build_verified_message_event(
     admission: &crate::ingress_ledger::LifecycleSnapshot,
     msg: &Message,
@@ -1905,6 +2209,7 @@ fn build_verified_message_event(
     thread_parent_id: Option<u64>,
     targeting: MessageTargeting,
     pronoun_display_name: Option<PronounDisplayName>,
+    redact_reply_preview: bool,
 ) -> NotificationEvent {
     build_message_event_with_coordinates(
         admission.channel_id(),
@@ -1916,6 +2221,7 @@ fn build_verified_message_event(
         thread_parent_id,
         targeting,
         pronoun_display_name,
+        redact_reply_preview,
     )
 }
 
@@ -1933,6 +2239,7 @@ fn build_message_event_with_coordinates(
     thread_parent_id: Option<u64>,
     targeting: MessageTargeting,
     pronoun_display_name: Option<PronounDisplayName>,
+    redact_reply_preview: bool,
 ) -> NotificationEvent {
     let attachments = msg
         .attachments
@@ -1950,8 +2257,16 @@ fn build_message_event_with_coordinates(
         .unwrap_or(false);
 
     let reply_to_message_id = msg.message_reference.as_ref().and_then(reply_to_id);
-    let (reply_to_user_id, reply_to_user, reply_to_content_preview) =
+    let (reply_to_user_id, reply_to_user, mut reply_to_content_preview) =
         reply_context(msg, ingress_ledger);
+    // #369 v2: when the resolved parent author is ignored (or unresolvable
+    // under fail-open), strip ONLY the quoted content preview — the sole
+    // content-leak vector a reply carries from the ignored person. The parent
+    // user id/name are kept for threading (they are not the leak). Mirrors the
+    // preview-None convention in coalesce.rs.
+    if redact_reply_preview {
+        reply_to_content_preview = None;
+    }
 
     let resolved_name = pronoun_display_name
         .map(|p| p.0)
@@ -2256,6 +2571,7 @@ mod tests {
             access: AccessConfig {
                 dm_policy: DmPolicy::Queue,
                 allow_from: vec![],
+                ignore_from: vec![],
                 admins: vec![],
                 admin_only_mutations: false,
             },
@@ -2268,6 +2584,102 @@ mod tests {
             ..Default::default()
         });
         LoadedConfig::from_raw(raw)
+    }
+
+    /// An open channel (delivers non-ignored senders ambiently) with an
+    /// identity-level ignore list. #369.
+    fn admission_config_ignored(channel_id: u64, ignored: Vec<&str>) -> LoadedConfig {
+        let mut raw = Config {
+            access: AccessConfig {
+                dm_policy: DmPolicy::Queue,
+                allow_from: vec![],
+                ignore_from: ignored.into_iter().map(String::from).collect(),
+                admins: vec![],
+                admin_only_mutations: false,
+            },
+            ..Default::default()
+        };
+        raw.channels.push(crate::config::ChannelConfig {
+            id: channel_id.to_string(),
+            require_mention: false,
+            allow_from: vec![],
+            ..Default::default()
+        });
+        LoadedConfig::from_raw(raw)
+    }
+
+    /// #369: identity-ignore drops resolve to `IdentityIgnored` and are never
+    /// written to the drop-event ledger, so they cannot become stale
+    /// reply-inheritance roots. Un-ignoring takes effect on the next message.
+    #[test]
+    fn identity_ignore_drops_without_polluting_the_ledger() {
+        let ledger = crate::drop_ledger::DropLedger::new();
+        let ignored = admission_config_ignored(SCOPE, vec!["900"]);
+
+        // Ignored author → IdentityIgnored, and nothing recorded.
+        assert_eq!(
+            admit_direct_guild_message(
+                &ledger,
+                &ignored,
+                scope(),
+                mid(1),
+                None,
+                Some(60),
+                false,
+                false,
+                900,
+                None,
+            ),
+            DirectGuildAdmission::IdentityIgnored
+        );
+        assert!(
+            !ledger.contains(scope(), mid(1)),
+            "identity-ignore drops must not be recorded as reply-inheritance roots"
+        );
+
+        // #369 v2: a NON-ignored sender replying to the ignored author's
+        // message is DELIVERED (the preview is redacted at the delivery layer,
+        // not dropped here). The admission authority is author-only, so nothing
+        // is recorded either.
+        assert_eq!(
+            admit_direct_guild_message(
+                &ledger,
+                &ignored,
+                scope(),
+                mid(2),
+                Some(mid(1)),
+                Some(60),
+                false,
+                false,
+                123,
+                None,
+            ),
+            DirectGuildAdmission::Deliver {
+                targeting: MessageTargeting::Ambient
+            }
+        );
+        assert!(!ledger.contains(scope(), mid(2)));
+
+        // Statelessness proof: once 900 is un-ignored, the same author delivers
+        // — no stale ledger entry blocks it.
+        let unignored = admission_config_ignored(SCOPE, vec![]);
+        assert_eq!(
+            admit_direct_guild_message(
+                &ledger,
+                &unignored,
+                scope(),
+                mid(3),
+                None,
+                Some(60),
+                false,
+                false,
+                900,
+                None,
+            ),
+            DirectGuildAdmission::Deliver {
+                targeting: MessageTargeting::Ambient
+            }
+        );
     }
 
     /// The admission authority end to end with real config: every recorded
@@ -2427,6 +2839,7 @@ mod tests {
             access: AccessConfig {
                 dm_policy: DmPolicy::Queue,
                 allow_from: ids.into_iter().map(String::from).collect(),
+                ignore_from: vec![],
                 admins: vec![],
                 admin_only_mutations: false,
             },
@@ -3220,6 +3633,7 @@ mod tests {
             None,
             MessageTargeting::DirectMessage,
             None,
+            false,
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
 
@@ -3373,18 +3787,18 @@ mod tests {
             ),
             crate::ingress_ledger::TransitionResult::Admitted(_)
         ));
+        // The reply carries guild_id (a top-level gateway field); its inlined
+        // parent copy does NOT (Discord omits guild_id on referenced_message).
+        // Context comes from the reply, so the Guild(30) snapshot resolves.
         let mut parent = wire_message_body(999, wire_author(500, "proxy"), "parent");
-        parent["guild_id"] = serde_json::json!("30");
         parent["webhook_id"] = serde_json::json!("40");
-        let msg = wire_reply_message(
-            "reply",
-            serde_json::json!({
-                "type": 0,
-                "channel_id": "1",
-                "message_id": "999",
-            }),
-            Some(parent),
-        );
+        let mut msg = wire_message_body(100, wire_author(1, "alice"), "reply");
+        msg["guild_id"] = serde_json::json!("30");
+        msg["channel_id"] = serde_json::json!("1");
+        msg["message_reference"] =
+            serde_json::json!({ "type": 0, "channel_id": "1", "message_id": "999" });
+        msg["referenced_message"] = parent;
+        let msg = message_from_wire(msg);
 
         let (uid, _, _) = reply_context(&msg, &ledger);
         assert_eq!(uid, Some(UserId::new(600)));
@@ -3418,6 +3832,7 @@ mod tests {
             None,
             MessageTargeting::Ambient,
             None,
+            false,
         );
         let NotificationEvent::Message(MessageEvent {
             reply_to_message_id,
@@ -3443,6 +3858,452 @@ mod tests {
         assert_eq!(user, "alice");
     }
 
+    // ── #369 v2 identity-ignore: resolution, redaction, per-path enforcement ──
+
+    /// One opted-in channel plus an identity ignore list.
+    fn ignore_channel_config(
+        channel_id: u64,
+        allow_from: &[u64],
+        ignore_from: &[u64],
+        require_mention: bool,
+    ) -> LoadedConfig {
+        let mut raw = Config::default();
+        raw.channels.push(crate::config::ChannelConfig {
+            id: channel_id.to_string(),
+            require_mention,
+            allow_from: allow_from.iter().map(u64::to_string).collect(),
+            ..Default::default()
+        });
+        raw.access.ignore_from = ignore_from.iter().map(u64::to_string).collect();
+        LoadedConfig::from_raw(raw)
+    }
+
+    /// A live-token-free HTTP handle. The 3-tier resolver only touches HTTP at
+    /// tier3, so tier1/tier2/short-circuit tests never invoke the network.
+    fn unused_http() -> serenity::http::Http {
+        serenity::http::Http::new("Bot test-token-tier12-never-calls-network")
+    }
+
+    /// reply, parent ignored, resolved via the INLINE gateway copy (tier1) →
+    /// admitted with the quoted preview stripped; the parent user id is kept for
+    /// threading (it is not the leak — the content is).
+    #[tokio::test]
+    async fn reply_to_ignored_parent_inline_admits_and_redacts_preview() {
+        let config = ignore_channel_config(1, &[], &[500], false);
+        let ledger = crate::ingress_ledger::IngressLedger::new();
+        let http = unused_http();
+        let msg = wire_reply_message(
+            "my reply",
+            serde_json::json!({ "type": 0, "channel_id": "1", "message_id": "999" }),
+            Some(wire_message_body(
+                999,
+                wire_author(500, "blocked"),
+                "secret content",
+            )),
+        );
+
+        let action = resolve_reply_parent_ignore(&config, &ledger, &http, &msg).await;
+        assert_eq!(action, ReplyParentAction::AdmitRedactPreview);
+
+        let event = build_message_event(
+            &msg,
+            &config,
+            &ledger,
+            None,
+            MessageTargeting::Ambient,
+            None,
+            action.redacts_preview(),
+        );
+        let NotificationEvent::Message(m) = event else {
+            panic!("expected message event");
+        };
+        assert_eq!(
+            m.reply_to_content_preview, None,
+            "the ignored parent's quoted content must be stripped"
+        );
+        assert_eq!(
+            m.reply_to_user_id,
+            Some(UserId::new(500)),
+            "threading identity is preserved"
+        );
+    }
+
+    /// reply, parent ignored, resolved via the LEDGER (tier2 — parent not
+    /// inlined but present as an admitted record, an immutable authorship fact).
+    #[tokio::test]
+    async fn reply_to_ignored_parent_via_ledger_resolves_ignored() {
+        let config = ignore_channel_config(1, &[], &[500], false);
+        let ledger = crate::ingress_ledger::IngressLedger::new();
+        let http = unused_http();
+        // Record the parent (999, ch 1, author 500) as an admitted DM.
+        ledger.note_admitted(
+            MessageId::new(999),
+            ChannelId::new(1),
+            UserId::new(500),
+            "parent",
+        );
+        // The reply carries only a reference — no inlined referenced_message.
+        let msg = wire_reply_message(
+            "my reply",
+            serde_json::json!({ "type": 0, "channel_id": "1", "message_id": "999" }),
+            None,
+        );
+        let resolution = resolve_reply_parent_resolution(&config, &ledger, &http, &msg).await;
+        assert_eq!(
+            resolution,
+            ReplyParentResolution::ParentIgnored,
+            "tier2 ledger snapshot resolves the ignored parent author"
+        );
+    }
+
+    /// #369 (P1 fix): a reply whose INLINE parent is a webhook/PK message resolves
+    /// the parent's represented PRINCIPAL via the ledger (keyed by the REPLY's
+    /// guild, since Discord omits `guild_id` on the nested parent), never the raw
+    /// webhook TRANSPORT author id. Transport author is 500 (not ignored); the
+    /// represented principal is 77. Also pins that a resolved-but-not-ignored
+    /// principal stays Clear (not merely Unresolvable-via-fail-open).
+    #[tokio::test]
+    async fn reply_to_ignored_webhook_parent_resolves_principal_not_transport() {
+        let ledger = crate::ingress_ledger::IngressLedger::new();
+        let http = unused_http();
+
+        // The parent's own MESSAGE_CREATE carries guild_id (a top-level gateway
+        // field): admit it as represented principal 77 while 77 is NOT ignored, so
+        // the ledger records the snapshot under Guild(60).
+        let parent_msg = {
+            let mut p = wire_message_body(999, wire_author(500, "proxy"), "secret parent content");
+            p["channel_id"] = serde_json::json!("20");
+            p["guild_id"] = serde_json::json!("60");
+            p["webhook_id"] = serde_json::json!("40");
+            message_from_wire(p)
+        };
+        let create_action =
+            crate::discord::verified_action_runtime::resolve_test_create_with_sources(
+                parent_msg.clone(),
+                std::future::ready(Some(TEST_PK_CREATOR)),
+                std::future::ready(Ok(represented_test_facts(77))),
+            );
+        assert!(
+            admit_verified_create_after_wait(
+                &parent_msg,
+                999,
+                &ledger,
+                create_action,
+                std::future::ready(None),
+                || handler_policy_config(20, &[], false, &[]),
+                |_, _| false,
+            )
+            .await
+            .is_some(),
+            "parent admits while 77 is not ignored, recording its principal snapshot"
+        );
+
+        // The reply carries guild_id at the TOP level; its inlined parent copy does
+        // NOT (Discord omits guild_id on referenced_message). Context must come from
+        // the reply -- keying off the nested parent's (absent) guild_id would miss.
+        let reply = {
+            let mut r = wire_message_body(100, wire_author(1, "alice"), "my reply");
+            r["guild_id"] = serde_json::json!("60");
+            r["channel_id"] = serde_json::json!("20");
+            r["message_reference"] =
+                serde_json::json!({ "type": 0, "channel_id": "20", "message_id": "999" });
+            let mut parent_inline =
+                wire_message_body(999, wire_author(500, "proxy"), "secret parent content");
+            parent_inline["channel_id"] = serde_json::json!("20");
+            parent_inline["webhook_id"] = serde_json::json!("40");
+            // deliberately NO guild_id on the nested parent (realistic wire shape)
+            r["referenced_message"] = parent_inline;
+            message_from_wire(r)
+        };
+
+        // 77 ignored -> ParentIgnored at the resolution level (not just the fail-open
+        // action), and the action redacts the preview.
+        let ignored_cfg = ignore_channel_config(20, &[], &[77], false);
+        assert_eq!(
+            resolve_reply_parent_resolution(&ignored_cfg, &ledger, &http, &reply).await,
+            ReplyParentResolution::ParentIgnored,
+            "webhook parent's ignored PRINCIPAL (77) is resolved via the ledger, not the transport id (500)"
+        );
+        assert_eq!(
+            resolve_reply_parent_ignore(&ignored_cfg, &ledger, &http, &reply).await,
+            ReplyParentAction::AdmitRedactPreview
+        );
+
+        // Control: a non-empty ignore list WITHOUT 77 must resolve Clear -- proving
+        // the principal is actually resolved, not collapsed to Unresolvable.
+        let other_cfg = ignore_channel_config(20, &[], &[888], false);
+        assert_eq!(
+            resolve_reply_parent_resolution(&other_cfg, &ledger, &http, &reply).await,
+            ReplyParentResolution::Clear,
+            "principal 77 resolves and, not being ignored, the parent is Clear (not Unresolvable)"
+        );
+        assert_eq!(
+            resolve_reply_parent_ignore(&other_cfg, &ledger, &http, &reply).await,
+            ReplyParentAction::Admit
+        );
+    }
+
+    /// ignore_from empty → the resolver returns Admit with NO redaction, even
+    /// for a reply whose inline parent WOULD be ignored were the list populated.
+    /// (Behavioral facet of the short-circuit; the "no fetch/ledger" property is
+    /// structural — with an empty list `is_ignored` is always false regardless.)
+    #[tokio::test]
+    async fn empty_ignore_list_admits_without_redaction() {
+        let config = ignore_channel_config(1, &[], &[], false);
+        let ledger = crate::ingress_ledger::IngressLedger::new();
+        let http = unused_http();
+        let msg = wire_reply_message(
+            "my reply",
+            serde_json::json!({ "type": 0, "channel_id": "1", "message_id": "999" }),
+            Some(wire_message_body(
+                999,
+                wire_author(500, "whoever"),
+                "content",
+            )),
+        );
+        let action = resolve_reply_parent_ignore(&config, &ledger, &http, &msg).await;
+        assert_eq!(action, ReplyParentAction::Admit);
+        assert!(!action.redacts_preview());
+    }
+
+    /// forward/crosspost reference → resolved explicitly as Unresolvable (the
+    /// reference's author is not trusted; a forward carries no quoted preview).
+    #[tokio::test]
+    async fn forward_reference_is_unresolvable() {
+        let config = ignore_channel_config(1, &[], &[500], false);
+        let ledger = crate::ingress_ledger::IngressLedger::new();
+        let http = unused_http();
+        let msg = wire_reply_message(
+            "forwarded",
+            serde_json::json!({ "type": 1, "channel_id": "1", "message_id": "999" }),
+            Some(wire_message_body(
+                999,
+                wire_author(500, "blocked"),
+                "content",
+            )),
+        );
+        let resolution = resolve_reply_parent_resolution(&config, &ledger, &http, &msg).await;
+        assert_eq!(resolution, ReplyParentResolution::Unresolvable);
+    }
+
+    /// Handler-level: an unresolvable parent under fail-CLOSED yields
+    /// DropUnresolved, which every create/edit handler branches on
+    /// (`if action.drops() { return }`) to suppress delivery. The shipped const
+    /// is fail-OPEN, so the fail policy is exercised as a PARAMETER (fable P2
+    /// dead-code fix): the real ladder produces Unresolvable, and the classifier
+    /// drops under fail-closed / redacts under fail-open.
+    #[tokio::test]
+    async fn unresolvable_parent_drop_is_reachable_at_the_handler() {
+        let config = ignore_channel_config(1, &[], &[500], false);
+        let ledger = crate::ingress_ledger::IngressLedger::new();
+        let http = unused_http();
+        let msg = wire_reply_message(
+            "forwarded",
+            serde_json::json!({ "type": 1, "channel_id": "1", "message_id": "999" }),
+            None,
+        );
+        let resolution = resolve_reply_parent_resolution(&config, &ledger, &http, &msg).await;
+        assert_eq!(resolution, ReplyParentResolution::Unresolvable);
+
+        let fail_closed = crate::gate::classify_reply_parent_ignore(resolution, true);
+        assert!(
+            fail_closed.drops(),
+            "fail-closed suppresses delivery of the reply"
+        );
+        let fail_open = crate::gate::classify_reply_parent_ignore(resolution, false);
+        assert!(
+            !fail_open.drops() && fail_open.redacts_preview(),
+            "fail-open admits but redacts"
+        );
+    }
+
+    /// #369: un-ignore takes effect on the very next message — the resolver
+    /// reads live config. A reply whose parent WAS ignored (preview redacted) is,
+    /// once the id is removed, admitted with the preview intact.
+    #[tokio::test]
+    async fn un_ignore_restores_preview_on_next_reply() {
+        let ledger = crate::ingress_ledger::IngressLedger::new();
+        let http = unused_http();
+        let msg = wire_reply_message(
+            "my reply",
+            serde_json::json!({ "type": 0, "channel_id": "1", "message_id": "999" }),
+            Some(wire_message_body(
+                999,
+                wire_author(500, "formerly"),
+                "content",
+            )),
+        );
+        let ignored = ignore_channel_config(1, &[], &[500], false);
+        assert_eq!(
+            resolve_reply_parent_ignore(&ignored, &ledger, &http, &msg).await,
+            ReplyParentAction::AdmitRedactPreview
+        );
+        let unignored = ignore_channel_config(1, &[], &[], false);
+        assert_eq!(
+            resolve_reply_parent_ignore(&unignored, &ledger, &http, &msg).await,
+            ReplyParentAction::Admit,
+            "removing the id delivers the very next reply with its preview restored"
+        );
+    }
+
+    /// #369 (P1 fix): a verified/PK CREATE from an ignored PRINCIPAL is dropped —
+    /// even when that principal is also allow-listed on the channel (ignore
+    /// overrides allow_from on the webhook path too). This was a P1 bypass.
+    #[tokio::test]
+    async fn verified_create_drops_ignored_principal() {
+        // 42 is allow-listed AND ignored → must drop on the principal.
+        let config = Arc::new(ignore_channel_config(20, &[42], &[42], false));
+        let msg = verified_message(140, "hello", Some(60));
+        let action = crate::discord::verified_action_runtime::resolve_test_create_with_sources(
+            msg.clone(),
+            std::future::ready(Some(TEST_PK_CREATOR)),
+            std::future::ready(Ok(represented_test_facts(42))),
+        );
+        let plan = admit_verified_create_after_wait(
+            &msg,
+            999,
+            &crate::ingress_ledger::IngressLedger::new(),
+            action,
+            std::future::ready(None),
+            move || config,
+            |_, _| false,
+        )
+        .await;
+        assert!(
+            plan.is_none(),
+            "an ignored principal's verified create must be dropped"
+        );
+    }
+
+    /// #369 (P1 fix): a verified/PK EDIT from an ignored PRINCIPAL is dropped.
+    /// The create is admitted while the principal is NOT ignored; the principal
+    /// is then ignored and the edit of that already-admitted message must drop —
+    /// exactly the previously-unchecked bypass.
+    #[tokio::test]
+    async fn verified_edit_drops_newly_ignored_principal() {
+        let ledger = crate::ingress_ledger::IngressLedger::new();
+        let create = verified_message(150, "before", Some(60));
+        let create_action =
+            crate::discord::verified_action_runtime::resolve_test_create_with_sources(
+                create.clone(),
+                std::future::ready(Some(TEST_PK_CREATOR)),
+                std::future::ready(Ok(represented_test_facts(42))),
+            );
+        assert!(
+            admit_verified_create_after_wait(
+                &create,
+                999,
+                &ledger,
+                create_action,
+                std::future::ready(None),
+                || handler_policy_config(20, &[42], false, &[]),
+                |_, _| false,
+            )
+            .await
+            .is_some(),
+            "create admits while 42 is not ignored"
+        );
+
+        let event = verified_update_event(150, 500, Some(60), Some(40));
+        let candidate = VerifiedUpdateCandidate::from_gateway(&event, None, None)
+            .expect("consistent raw update")
+            .expect("raw update is sufficient");
+        let action = crate::discord::verified_action_runtime::resolve_test_update_with_sources(
+            candidate,
+            std::future::ready(Some(TEST_PK_CREATOR)),
+            std::future::ready(Ok(represented_test_facts(42))),
+        );
+        let config = Arc::new(ignore_channel_config(20, &[42], &[42], false));
+        let plan = admit_verified_edit_after_wait(
+            &event,
+            None,
+            None,
+            event.author.as_ref().expect("author"),
+            event.content.as_deref().expect("content"),
+            event.edited_timestamp.expect("edited timestamp"),
+            WebhookId::new(40),
+            999,
+            &ledger,
+            action,
+            std::future::ready(None),
+            move || config,
+            |_, _| false,
+        )
+        .await;
+        assert!(
+            plan.is_none(),
+            "an ignored principal's verified edit must be dropped (P1 bypass)"
+        );
+    }
+
+    /// #369 (P1 fix): the passive guild EDIT path drops an edit whose effective
+    /// (represented) author is ignored — previously unchecked. Mirrors
+    /// `passive_verified_edit_reapplies_identity_and_mention_policy` but with the
+    /// represented principal (600) on the ignore list, so even a mention-carrying
+    /// edit by an otherwise-allowed principal is rejected.
+    #[test]
+    fn passive_verified_edit_drops_ignored_represented_principal() {
+        use crate::discord::verified_action::{LifecycleProvenance, test_lifecycle_facts};
+
+        let mut raw = Config::default();
+        raw.channels.push(crate::config::ChannelConfig {
+            id: "100".to_owned(),
+            require_mention: true,
+            allow_from: vec!["600".to_owned()],
+            ..Default::default()
+        });
+        // The represented principal 600 is on the ignore blocklist.
+        raw.access.ignore_from = vec!["600".to_owned()];
+        let config = LoadedConfig::from_raw(raw);
+        let ledger = crate::ingress_ledger::IngressLedger::new();
+        let facts = test_lifecycle_facts(
+            MessageId::new(10),
+            ChannelId::new(100),
+            GuildId::new(200),
+            WebhookId::new(400),
+            LifecycleProvenance::Represented {
+                discord_user_id: UserId::new(600),
+                system_id: None,
+                member_id: None,
+            },
+        );
+        assert!(matches!(
+            ledger.admit_verified_create(
+                facts,
+                MessageId::new(10),
+                ChannelId::new(100),
+                LifecycleContext::Guild(GuildId::new(200)),
+                WebhookId::new(400),
+                UserId::new(500),
+                None,
+                "one",
+                serenity::model::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            ),
+            crate::ingress_ledger::TransitionResult::Admitted(_)
+        ));
+        // Even a mention-satisfying edit is rejected because 600 is ignored;
+        // without the is_ignored guard in passive_edit_policy_allows this would
+        // ADMIT (channel allow_from lists 600, and the mention is present).
+        assert_eq!(
+            ledger.transition_passive_edit(
+                MessageId::new(10),
+                ChannelId::new(100),
+                LifecycleContext::Guild(GuildId::new(200)),
+                UserId::new(500),
+                "two",
+                serenity::model::Timestamp::parse("2026-01-01T00:00:01Z").unwrap(),
+                |lineage| passive_edit_policy_allows(
+                    &config,
+                    100,
+                    Some(200),
+                    Some(MentionKind::DirectMention),
+                    lineage,
+                ),
+            ),
+            crate::ingress_ledger::TransitionResult::Rejected
+        );
+    }
+
     #[test]
     fn represented_and_direct_messages_share_the_same_construct_envelope_shape() {
         use crate::mcp::notifications::IntoNotification;
@@ -3457,6 +4318,7 @@ mod tests {
             None,
             MessageTargeting::Ambient,
             None,
+            false,
         )
         .into_notification();
 
@@ -3499,6 +4361,7 @@ mod tests {
             None,
             MessageTargeting::Ambient,
             None,
+            false,
         )
         .into_notification();
 
