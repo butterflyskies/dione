@@ -1,0 +1,64 @@
+name: Release Hygiene
+
+# Forgejo 13 grants same-repository PR jobs a write-capable task token and
+# ignores workflow `permissions` (see linux.yml), so this cannot yet run as a
+# PR gate. Until the platform enforces read-only PR tokens, this is a
+# trusted-main tripwire: it fails the main build immediately after a merge
+# that changed src/ without bumping the Cargo.toml version and adding a
+# matching CHANGELOG.md entry. When the platform gate lands (Forgejo 16
+# migration), move the trigger to pull_request and this becomes the pre-merge
+# check it is shaped to be. GitHub CI's changelog.yml covers the mirror's PR
+# surface but checks only the changelog, not the version, and does not run
+# where PRs actually merge.
+on:
+  push:
+    branches: [main]
+
+# Defense in depth for a future runner that enforces this declaration.
+permissions: {}
+
+concurrency:
+  group: release-hygiene-${{ forgejo.ref }}
+  cancel-in-progress: false
+
+jobs:
+  hygiene:
+    name: Version + changelog accompany source changes
+    runs-on: docker
+    timeout-minutes: 10
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Require version bump + changelog entry when src/ changes
+        run: |
+          set -eu
+          BEFORE="${{ forgejo.event.before }}"
+          AFTER="${{ forgejo.sha }}"
+          # New-branch pushes and unreachable before-SHAs (force push, shallow
+          # history): fall back to the first parent so the check still runs
+          # over the landed merge instead of silently passing.
+          case "$BEFORE" in
+            ''|0000000000000000000000000000000000000000)
+              BEFORE="$(git rev-parse "${AFTER}^" 2>/dev/null || echo "$AFTER")" ;;
+          esac
+          if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            BEFORE="$(git rev-parse "${AFTER}^" 2>/dev/null || echo "$AFTER")"
+          fi
+          changed="$(git diff --name-only "$BEFORE" "$AFTER")"
+          if ! printf '%s\n' "$changed" | grep -q '^src/'; then
+            echo "No src/ changes in ${BEFORE}..${AFTER} — release hygiene not required."
+            exit 0
+          fi
+          old_version="$(git show "${BEFORE}:Cargo.toml" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)"
+          new_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          if [ "$old_version" = "$new_version" ]; then
+            echo "::error::src/ changed in ${BEFORE}..${AFTER} but Cargo.toml version stayed at ${new_version}. Bump the version and add a CHANGELOG.md entry."
+            exit 1
+          fi
+          if ! grep -q "^## \[${new_version}\]" CHANGELOG.md; then
+            echo "::error::Version bumped to ${new_version} but CHANGELOG.md has no '## [${new_version}]' entry."
+            exit 1
+          fi
+          echo "src/ changed; version ${old_version} -> ${new_version} with a matching changelog entry. ✅"
