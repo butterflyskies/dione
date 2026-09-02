@@ -13,7 +13,7 @@
 //! on timing or content similarity.
 
 use crate::discord::verified_action::{
-    LifecycleAdmissionFacts, LifecycleContext, LifecycleProvenance, TransportProvider,
+    LifecycleAdmissionFacts, LifecycleContext, LifecycleProvenance,
 };
 use auspex_core::{ChannelRef, ContentHash};
 use serenity::model::{
@@ -126,7 +126,6 @@ pub(crate) struct LifecycleSnapshot {
     context: LifecycleContext,
     actor_id: UserId,
     thread_parent_id: Option<ChannelId>,
-    provider: Option<TransportProvider>,
     provenance: Option<LifecycleProvenance>,
 }
 
@@ -681,11 +680,9 @@ impl IngressLedger {
     }
 
     fn snapshot(message_id: MessageId, record: &ActiveRecord) -> LifecycleSnapshot {
-        let (provider, provenance) = match &record.lineage {
-            StoredLineage::Direct => (None, None),
-            StoredLineage::Verified(facts) => {
-                (Some(facts.provider()), Some(facts.provenance().clone()))
-            }
+        let provenance = match &record.lineage {
+            StoredLineage::Direct => None,
+            StoredLineage::Verified(facts) => Some(facts.provenance().clone()),
         };
         LifecycleSnapshot {
             channel_id: record.channel_id,
@@ -693,7 +690,6 @@ impl IngressLedger {
             context: record.context,
             actor_id: record.actor_id,
             thread_parent_id: record.thread_parent_id,
-            provider,
             provenance,
         }
     }

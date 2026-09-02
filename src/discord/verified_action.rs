@@ -712,10 +712,6 @@ impl LifecycleAdmissionFacts {
         self.webhook_id
     }
 
-    pub(crate) fn provider(&self) -> TransportProvider {
-        self.provider
-    }
-
     pub(crate) fn provenance(&self) -> &LifecycleProvenance {
         &self.provenance
     }
