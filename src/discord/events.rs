@@ -1521,8 +1521,7 @@ async fn resolve_reply_parent_resolution(
                     if matches!(
                         snapshot.provenance(),
                         Some(
-                            LifecycleProvenance::Represented { .. }
-                                | LifecycleProvenance::AppOnly
+                            LifecycleProvenance::Represented { .. } | LifecycleProvenance::AppOnly
                         )
                     ) =>
                 {
@@ -2082,9 +2081,7 @@ fn reply_context(
             .filter(|snapshot| {
                 matches!(
                     snapshot.provenance(),
-                    Some(
-                        LifecycleProvenance::Represented { .. } | LifecycleProvenance::AppOnly
-                    )
+                    Some(LifecycleProvenance::Represented { .. } | LifecycleProvenance::AppOnly)
                 )
             })
             .map(|snapshot| snapshot.effective_user_id())

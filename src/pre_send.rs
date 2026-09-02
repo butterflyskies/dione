@@ -176,11 +176,6 @@ impl HookContext {
         self.author_id = author_id;
         self
     }
-
-    pub fn with_guild_id(mut self, guild_id: Option<GuildId>) -> Self {
-        self.guild_id = guild_id;
-        self
-    }
 }
 
 /// One observation produced by a pre-send hook.
