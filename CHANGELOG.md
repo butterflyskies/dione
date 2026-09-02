@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.39.1] - 2026-09-02
+
+### Fixed
+- **Reactions from identity-ignored users are now dropped.** `reaction_add`
+  gated guild mutes but never consulted the reactor's identity, so a reaction
+  was the one inbound ingress the `ignore_from` list left open — messages,
+  edits, and webhook/PluralKit proxies dropped, while a reaction still reached
+  the construct. A new `InboundGate::check_reaction` closes it symmetrically
+  with the message path, consulted before the authorship lookup so an ignored
+  reactor costs no network fetch. This gates identity-ignore only; full
+  reaction policy parity and rate-limiting are tracked separately (#404). (#400)
+
 ## [0.39.0] - 2026-09-01
 
 ### Added

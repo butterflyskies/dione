@@ -875,6 +875,29 @@ impl EventHandler for Handler {
             return;
         };
 
+        // #400: an identity-ignored user's reaction must drop, exactly as their
+        // messages do. Reactions were the one inbound ingress the ignore never
+        // closed — the guild-mute check above suppressed muted-guild reactions,
+        // but nothing consulted the reactor's identity. Checked here, before the
+        // authorship lookup, so an ignored reactor costs no network fetch.
+        //
+        // The DECISION (check_reaction) is unit-tested in gate.rs; this call
+        // site — the wiring — is NOT integration-testable (reaction_add needs a
+        // live serenity Context), same residual class as #334. Do not delete or
+        // reorder this block without an integration harness for reaction_add:
+        // no unit test will catch its removal.
+        let config = crate::config::load_config(&self.state_dir);
+        if matches!(
+            crate::gate::InboundGate::check_reaction(&config, user_id.get()),
+            crate::gate::GateDecision::Drop
+        ) {
+            tracing::debug!(
+                user_id = user_id.get(),
+                "reaction dropped: reactor on identity ignore list (#400)"
+            );
+            return;
+        }
+
         let cached = {
             let state = self.state.read().await;
             if state.recent_sent_ids.contains(&message_id) {
@@ -1452,10 +1475,10 @@ const IGNORE_PARENT_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::fr
 /// ledger is consulted ONLY to learn WHO authored the parent — an immutable
 /// fact — never as the ignore authority.
 ///
-/// NOTE(#369): reactions from an ignored user are intentionally NOT filtered by
-/// this path (or anywhere else) — reaction filtering is out of scope for #369
-/// and tracked separately. "Everywhere" here means every *message* ingress
-/// path, not reactions.
+/// NOTE(#369/#400): this path is the *message*-ingress ignore. Reaction ignore
+/// is separate and has landed — see [`crate::gate::InboundGate::check_reaction`],
+/// consulted in `reaction_add` (#400). "Everywhere" below refers to every
+/// *message* ingress path; reactions are gated in their own handler, not here.
 async fn resolve_reply_parent_ignore(
     config: &crate::config::LoadedConfig,
     ingress_ledger: &crate::ingress_ledger::IngressLedger,

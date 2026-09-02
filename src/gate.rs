@@ -236,6 +236,41 @@ impl InboundGate {
 
         GateDecision::Deliver
     }
+
+    /// Decides what to do with an inbound reaction on the **identity-ignore
+    /// axis only**. O(1) ignore-list check: an identity-ignored reactor drops,
+    /// exactly as a message from them would ([`check_dm`] / [`check_guild`]);
+    /// everyone else delivers.
+    ///
+    /// #400: reactions were the one inbound ingress the identity ignore never
+    /// closed. `reaction_add` gated guild mutes but not the reactor's identity,
+    /// so an ignored user's reaction still reached the construct. Guild mute
+    /// stays in the caller (it reads the live mute store); this closes the
+    /// identity-ignore half symmetrically with the message path.
+    ///
+    /// SCOPE — deliberate, and narrower than the message gate: this consults
+    /// ONLY identity ignore. Channel opt-in, `require_mention`, `dm_policy`, and
+    /// per-channel `allow_from` are intentionally NOT checked, so a
+    /// non-ignored-but-unauthorized user (revoked from `allow_from`, or under
+    /// `dm_policy=drop`) can still surface a reaction on a bot-authored message.
+    /// Exposure is bounded because a reaction only reaches `reaction_add` for a
+    /// message the bot itself authored — but this is NOT full policy parity, and
+    /// reactions are not rate-limited (`message_rate_limit_key` covers only
+    /// `Message` events). Full reaction policy parity + rate-limiting is a
+    /// separate, larger scope outside #400.
+    ///
+    /// [`check_dm`]: Self::check_dm
+    /// [`check_guild`]: Self::check_guild
+    pub(crate) fn check_reaction(config: &LoadedConfig, reactor_id: u64) -> GateDecision {
+        if author_ignored(config, reactor_id) {
+            tracing::debug!(
+                reactor_id,
+                "reaction dropped: reactor on identity ignore list"
+            );
+            return GateDecision::Drop;
+        }
+        GateDecision::Deliver
+    }
 }
 
 // ── Outbound gate ─────────────────────────────────────────────────────────────
@@ -548,6 +583,31 @@ mod tests {
             InboundGate::check_guild(&config, 500, 900, false, None),
             GateDecision::Drop,
             "a guild message from an identity-ignored author must drop"
+        );
+    }
+
+    /// #400: a reaction from an identity-ignored user must drop, exactly as a
+    /// message from them would — reactions were the one inbound ingress the
+    /// ignore never closed.
+    #[test]
+    fn ignored_reactor_reaction_dropped() {
+        let config = ignore_config(&["900"]);
+        assert_eq!(
+            InboundGate::check_reaction(&config, 900),
+            GateDecision::Drop,
+            "a reaction from an identity-ignored user must drop"
+        );
+    }
+
+    /// A reaction from a non-ignored user is delivered — the ignore gate must
+    /// not over-drop.
+    #[test]
+    fn non_ignored_reactor_reaction_delivered() {
+        let config = ignore_config(&["900"]);
+        assert_eq!(
+            InboundGate::check_reaction(&config, 123),
+            GateDecision::Deliver,
+            "a reaction from a non-ignored user must be delivered"
         );
     }
 
