@@ -3,8 +3,8 @@ use crate::{
     contradictionary::{Action, BlockOutcome, DiaryRecord, append_diary_record},
     discord::{chunk, chunk_preserving_fences_with_context, events::NotificationEvent},
     evidence::{
-        EvidenceKeys, EvidenceTransport, append_markers, locator_metadata, parse_evidence_locators,
-        project_evidence,
+        SentexHandles, SentexRole, SentexTransport, append_markers, has_terminal_sentex_syntax,
+        locator_metadata, parse_sentex_locators, project_sentexes,
     },
     gate::OutboundGate,
     ingress_ledger::IngressLedger,
@@ -38,7 +38,7 @@ use tokio::sync::mpsc;
 
 /// Self-react emoji for contradictionary celebrate hits (✨ — sparkles).
 const CONTRADICTIONARY_CELEBRATE_REACT: &str = "\u{2728}";
-static NO_EVIDENCE: EvidenceKeys = EvidenceKeys::empty();
+static NO_SENTEX_HANDLES: SentexHandles = SentexHandles::empty();
 
 /// Fire-and-forget phantom canary alert to the configured alert channel.
 pub(crate) fn phantom_canary_alert(
@@ -328,7 +328,7 @@ struct OutboundDraft<'a> {
     text: &'a str,
     reply_to: Option<MessageId>,
     pre_send: PreSendOptions<'a>,
-    evidence_keys: &'a EvidenceKeys,
+    sentex_handles: &'a SentexHandles,
 }
 
 impl<'a> OutboundDraft<'a> {
@@ -343,7 +343,7 @@ impl<'a> OutboundDraft<'a> {
             text,
             reply_to,
             pre_send,
-            evidence_keys: &NO_EVIDENCE,
+            sentex_handles: &NO_SENTEX_HANDLES,
         }
     }
 
@@ -353,12 +353,12 @@ impl<'a> OutboundDraft<'a> {
             text,
             reply_to: None,
             pre_send,
-            evidence_keys: &NO_EVIDENCE,
+            sentex_handles: &NO_SENTEX_HANDLES,
         }
     }
 
-    fn with_evidence(mut self, evidence_keys: &'a EvidenceKeys) -> Self {
-        self.evidence_keys = evidence_keys;
+    fn with_sentex_handles(mut self, sentex_handles: &'a SentexHandles) -> Self {
+        self.sentex_handles = sentex_handles;
         self
     }
 }
@@ -394,11 +394,12 @@ async fn prepare_outbound(
     ctx: &MessagingCtx,
     draft: OutboundDraft<'_>,
 ) -> Result<PreparedOutbound, Value> {
-    let disabled_evidence = EvidenceKeys::empty();
-    let evidence_keys = if ctx.config.delivery.evidence_markers_enabled {
-        draft.evidence_keys
+    reject_raw_sentex_locators(draft.text)?;
+    let disabled_handles = SentexHandles::empty();
+    let sentex_handles = if ctx.config.delivery.evidence_markers_enabled {
+        draft.sentex_handles
     } else {
-        &disabled_evidence
+        &disabled_handles
     };
     let prepared_pipeline = match ctx.pre_send_pipeline.clone() {
         Some(pipeline) => {
@@ -420,7 +421,7 @@ async fn prepare_outbound(
     let Some((pipeline, no_rly)) = prepared_pipeline else {
         return Ok(PreparedOutbound {
             destination: draft.destination,
-            text: append_markers(draft.text, evidence_keys),
+            text: append_markers(draft.text, sentex_handles),
             reply_to: draft.reply_to,
             surface: draft.pre_send.surface,
         });
@@ -452,13 +453,19 @@ async fn prepare_outbound(
     .with_author_id(ctx.author_id)
     .with_reply_to(draft.reply_to)
     .with_metadata("outbound_surface", draft.pre_send.surface.as_str());
-    if !evidence_keys.is_empty() {
-        hook_context = hook_context
-            .with_metadata("evidence_locators", locator_metadata(evidence_keys))
-            .with_metadata(
-                "evidence_transport",
-                EvidenceTransport::TerminalVisibleSuffixV1AfterHooks.as_str(),
-            );
+    if !sentex_handles.is_empty() {
+        let claim_locators = locator_metadata(sentex_handles.claims(), SentexRole::Claim);
+        let citation_locators = locator_metadata(sentex_handles.citations(), SentexRole::Citation);
+        if !claim_locators.is_empty() {
+            hook_context = hook_context.with_metadata("claim_locators", claim_locators);
+        }
+        if !citation_locators.is_empty() {
+            hook_context = hook_context.with_metadata("citation_locators", citation_locators);
+        }
+        hook_context = hook_context.with_metadata(
+            "sentex_transport",
+            SentexTransport::TerminalVisibleRoleSuffixV2AfterHooks.as_str(),
+        );
     }
     let outcome =
         match tokio::task::spawn_blocking(move || pipeline.run(&hook_context, &no_rly)).await {
@@ -508,12 +515,23 @@ async fn prepare_outbound(
         HookDecision::Continue | HookDecision::Rewrite { .. } => {}
     }
 
+    let final_text = outcome.final_text().unwrap_or(draft.text);
+    reject_raw_sentex_locators(final_text)?;
     Ok(PreparedOutbound {
         destination,
-        text: append_markers(outcome.final_text().unwrap_or(draft.text), evidence_keys),
+        text: append_markers(final_text, sentex_handles),
         reply_to,
         surface: draft.pre_send.surface,
     })
+}
+
+fn reject_raw_sentex_locators(content: &str) -> Result<(), Value> {
+    if !has_terminal_sentex_syntax(content) {
+        return Ok(());
+    }
+    Err(json!({
+        "error": "raw terminal sentex locators are not accepted in content; use structured handles on reply or send_dm"
+    }))
 }
 
 /// Applies the same pre-send seam to text before a voice backend performs TTS.
@@ -575,7 +593,7 @@ pub async fn reply_with_hook_overrides(
         ReplyToolOptions {
             suppress_ping,
             no_rly_hooks,
-            evidence_keys: &NO_EVIDENCE,
+            sentex_handles: &NO_SENTEX_HANDLES,
         },
     )
     .await
@@ -584,7 +602,7 @@ pub async fn reply_with_hook_overrides(
 pub(crate) struct ReplyToolOptions<'a> {
     pub(crate) suppress_ping: bool,
     pub(crate) no_rly_hooks: &'a [HookName],
-    pub(crate) evidence_keys: &'a EvidenceKeys,
+    pub(crate) sentex_handles: &'a SentexHandles,
 }
 
 pub(crate) async fn reply_with_evidence_and_hook_overrides(
@@ -622,7 +640,7 @@ pub(crate) async fn reply_with_evidence_and_hook_overrides(
                 bypasses: options.no_rly_hooks,
             },
         )
-        .with_evidence(options.evidence_keys),
+        .with_sentex_handles(options.sentex_handles),
     )
     .await
     {
@@ -630,11 +648,11 @@ pub(crate) async fn reply_with_evidence_and_hook_overrides(
         Err(error) => return error,
     };
     if ctx.config.delivery.evidence_markers_enabled
-        && !options.evidence_keys.is_empty()
-        && parse_evidence_locators(&prepared.text).is_empty()
+        && !options.sentex_handles.is_empty()
+        && parse_sentex_locators(&prepared.text).is_empty()
     {
         return json!({
-            "error": "evidence markers cannot be attached inside quoted or fenced content"
+            "error": "sentex locators cannot be attached inside quoted or fenced content"
         });
     }
     deliver_prepared_reply(
@@ -682,10 +700,10 @@ async fn deliver_prepared_reply(
         && let Verdict::Bounce(reason) = judge.judge(&content)
     {
         if ctx.config.delivery.evidence_markers_enabled
-            && !parse_evidence_locators(&content).is_empty()
+            && !parse_sentex_locators(&content).is_empty()
         {
             return json!({
-                "error": "evidence-bearing messages cannot enter the no_rly hold lifecycle; revise and send a fresh evidence-bearing reply"
+                "error": "sentex-bearing messages cannot enter the no_rly hold lifecycle; revise and send a fresh sentex-bearing reply"
             });
         }
         let ticket = ctx
@@ -714,14 +732,24 @@ async fn deliver_prepared_reply(
     match deliver_reply(ctx, &request).await {
         Ok(sent_ids) => {
             let mut response = json!({ "ok": true, "message_ids": sent_ids });
-            let locators = parse_evidence_locators(&content);
+            let locators = parse_sentex_locators(&content);
             if ctx.config.delivery.evidence_markers_enabled && !locators.is_empty() {
-                response["evidence_locators"] = json!(
-                    locators
-                        .iter()
-                        .map(crate::evidence::EvidenceLocator::as_str)
-                        .collect::<Vec<_>>()
-                );
+                let claim_locators = locators
+                    .iter()
+                    .filter(|locator| locator.role() == SentexRole::Claim)
+                    .map(crate::evidence::SentexLocator::as_str)
+                    .collect::<Vec<_>>();
+                let citation_locators = locators
+                    .iter()
+                    .filter(|locator| locator.role() == SentexRole::Citation)
+                    .map(crate::evidence::SentexLocator::as_str)
+                    .collect::<Vec<_>>();
+                if !claim_locators.is_empty() {
+                    response["claim_locators"] = json!(claim_locators);
+                }
+                if !citation_locators.is_empty() {
+                    response["citation_locators"] = json!(citation_locators);
+                }
             }
             response
         }
@@ -733,7 +761,7 @@ fn validate_evidence_chunking(config: &LoadedConfig, content: &str) -> Result<()
     if !config.delivery.evidence_markers_enabled {
         return Ok(());
     }
-    if parse_evidence_locators(content).is_empty() {
+    if parse_sentex_locators(content).is_empty() {
         return Ok(());
     }
     let limit = config.delivery.text_chunk_limit;
@@ -746,7 +774,7 @@ fn validate_evidence_chunking(config: &LoadedConfig, content: &str) -> Result<()
     let effective_limit = if limit == 0 { 2000 } else { limit };
     if chunk(content, effective_limit, effective_mode).len() > 1 {
         return Err(json!({
-            "error": "evidence-bearing messages must fit in one Discord message"
+            "error": "sentex-bearing messages must fit in one Discord message"
         }));
     }
     Ok(())
@@ -1031,11 +1059,8 @@ pub async fn rephrase_held(ctx: &MessagingCtx, handle: &str, content: &str) -> V
     if content.trim().is_empty() {
         return json!({ "error": "rephrase content must not be empty" });
     }
-    if ctx.config.delivery.evidence_markers_enabled && !parse_evidence_locators(content).is_empty()
-    {
-        return json!({
-            "error": "evidence-bearing replacements are not supported by rephrase; send a fresh evidence-bearing reply"
-        });
+    if let Err(error) = reject_raw_sentex_locators(content) {
+        return error;
     }
     let handle = HoldHandle::new(handle);
     let ttl = ctx.config.no_rly_hold_ttl();
@@ -1330,7 +1355,7 @@ pub(crate) fn message_json(config: &LoadedConfig, m: &Message) -> Value {
         })).collect::<Vec<_>>(),
     });
     if config.delivery.evidence_markers_enabled {
-        project_evidence(&mut message, &m.content, m.author.id);
+        project_sentexes(&mut message, &m.content, m.author.id);
     }
     message
 }
@@ -1579,8 +1604,14 @@ pub async fn send_dm_with_hook_overrides(
     content: &str,
     no_rly_hooks: &[HookName],
 ) -> Value {
-    send_dm_with_evidence_and_hook_overrides(ctx, user_id, content, no_rly_hooks, &NO_EVIDENCE)
-        .await
+    send_dm_with_evidence_and_hook_overrides(
+        ctx,
+        user_id,
+        content,
+        no_rly_hooks,
+        &NO_SENTEX_HANDLES,
+    )
+    .await
 }
 
 pub(crate) async fn send_dm_with_evidence_and_hook_overrides(
@@ -1588,7 +1619,7 @@ pub(crate) async fn send_dm_with_evidence_and_hook_overrides(
     user_id: UserId,
     content: &str,
     no_rly_hooks: &[HookName],
-    evidence_keys: &EvidenceKeys,
+    sentex_handles: &SentexHandles,
 ) -> Value {
     if ctx.config.access.dm_policy == DmPolicy::Disabled {
         return json!({ "error": "dm_policy is set to disabled; cannot initiate DMs" });
@@ -1604,7 +1635,7 @@ pub(crate) async fn send_dm_with_evidence_and_hook_overrides(
                 bypasses: no_rly_hooks,
             },
         )
-        .with_evidence(evidence_keys),
+        .with_sentex_handles(sentex_handles),
     )
     .await
     {
@@ -1613,11 +1644,11 @@ pub(crate) async fn send_dm_with_evidence_and_hook_overrides(
     };
 
     if ctx.config.delivery.evidence_markers_enabled
-        && !evidence_keys.is_empty()
-        && parse_evidence_locators(&prepared.text).is_empty()
+        && !sentex_handles.is_empty()
+        && parse_sentex_locators(&prepared.text).is_empty()
     {
         return json!({
-            "error": "evidence markers cannot be attached inside quoted or fenced content"
+            "error": "sentex locators cannot be attached inside quoted or fenced content"
         });
     }
     if let Err(error) = validate_evidence_chunking(&ctx.config, &prepared.text) {
@@ -1826,6 +1857,8 @@ mod tests {
 
     struct MetadataRewriteHook(Arc<std::sync::Mutex<Option<HookContext>>>);
 
+    struct RawSentexRewriteHook(&'static str);
+
     struct ContextAuditSink(Arc<std::sync::Mutex<Option<HookContext>>>);
 
     struct QuietFeedbackSink;
@@ -1880,6 +1913,22 @@ mod tests {
                 },
                 ConstructFeedback::default(),
                 AuditTrail::new(vec![Assessment::new("receipt", 1.0, "rewritten")]),
+            )
+        }
+    }
+
+    impl PreSendHook for RawSentexRewriteHook {
+        fn name(&self) -> HookName {
+            HookName::parse("raw-sentex-rewrite").unwrap()
+        }
+
+        fn execute(&self, _context: &HookContext) -> HookOutput {
+            HookOutput::new(
+                HookDecision::Rewrite {
+                    text: format!("rewritten {}", self.0),
+                },
+                ConstructFeedback::default(),
+                AuditTrail::default(),
             )
         }
     }
@@ -1993,9 +2042,9 @@ mod tests {
         LoadedConfig::from_raw(raw)
     }
 
-    fn blocking_test_config() -> LoadedConfig {
+    fn blocking_test_config_with_evidence_markers(enabled: bool) -> LoadedConfig {
         let mut raw = Config::default();
-        raw.delivery.evidence_markers_enabled = true;
+        raw.delivery.evidence_markers_enabled = enabled;
         raw.channels.push(ChannelConfig {
             id: "42".into(),
             ..Default::default()
@@ -2008,6 +2057,10 @@ mod tests {
             reason: Some("nothing is ever straightforward".into()),
         });
         LoadedConfig::from_raw(raw)
+    }
+
+    fn blocking_test_config() -> LoadedConfig {
+        blocking_test_config_with_evidence_markers(true)
     }
 
     fn configured_ingress_test_config() -> LoadedConfig {
@@ -2294,7 +2347,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ordered_evidence_metadata_and_transport_reach_hooks_and_final_audit_context() {
+    async fn ordered_sentex_metadata_and_transport_reach_hooks_and_final_audit_context() {
         let hook_context = Arc::new(std::sync::Mutex::new(None));
         let audit_context = Arc::new(std::sync::Mutex::new(None));
         let pipeline = PreSendPipeline::new(vec![Box::new(MetadataRewriteHook(Arc::clone(
@@ -2315,9 +2368,11 @@ mod tests {
         });
         let ctx =
             messaging_ctx(LoadedConfig::from_raw(raw)).with_pre_send_pipeline(Arc::new(pipeline));
-        let keys =
-            crate::evidence::parse_tool_evidence_keys(&json!({ "evidence_keys": ["34", "12"] }))
-                .unwrap();
+        let handles = crate::evidence::parse_tool_sentex_handles(&json!({
+            "claim_handles": ["34"],
+            "citation_handles": ["12"]
+        }))
+        .unwrap();
 
         let prepared = prepare_outbound(
             &ctx,
@@ -2330,7 +2385,7 @@ mod tests {
                     bypasses: &[],
                 },
             )
-            .with_evidence(&keys),
+            .with_sentex_handles(&handles),
         )
         .await
         .unwrap();
@@ -2338,32 +2393,192 @@ mod tests {
         let hook_context = hook_context.lock().unwrap().clone().unwrap();
         assert_eq!(hook_context.text(), "original");
         assert_eq!(
-            hook_context.metadata("evidence_locators"),
-            Some("v1:AAAAAAAAACI,v1:AAAAAAAAAAw")
+            hook_context.metadata("claim_locators"),
+            Some("v2:claim:AAAAAAAAACI")
         );
         assert_eq!(
-            hook_context.metadata("evidence_transport"),
-            Some("terminal-visible-suffix-v1-after-hooks")
+            hook_context.metadata("citation_locators"),
+            Some("v2:citation:AAAAAAAAAAw")
+        );
+        assert_eq!(
+            hook_context.metadata("sentex_transport"),
+            Some("terminal-visible-role-suffix-v2-after-hooks")
         );
 
         let audit_context = audit_context.lock().unwrap().clone().unwrap();
         assert_eq!(audit_context.text(), "rewritten");
         assert_eq!(
-            audit_context.metadata("evidence_locators"),
-            Some("v1:AAAAAAAAACI,v1:AAAAAAAAAAw")
+            audit_context.metadata("claim_locators"),
+            Some("v2:claim:AAAAAAAAACI")
         );
         assert_eq!(
-            audit_context.metadata("evidence_transport"),
-            Some(EvidenceTransport::TerminalVisibleSuffixV1AfterHooks.as_str())
+            audit_context.metadata("citation_locators"),
+            Some("v2:citation:AAAAAAAAAAw")
+        );
+        assert_eq!(
+            audit_context.metadata("sentex_transport"),
+            Some(SentexTransport::TerminalVisibleRoleSuffixV2AfterHooks.as_str())
         );
         assert_eq!(
             prepared.text,
-            "rewritten [🔍=v1:AAAAAAAAACI] [🔍=v1:AAAAAAAAAAw]"
+            "rewritten [🔍=v2:claim:AAAAAAAAACI] [🔍=v2:citation:AAAAAAAAAAw]"
         );
     }
 
     #[tokio::test]
-    async fn evidence_bearing_multi_chunk_reply_fails_before_discord_delivery() {
+    async fn raw_terminal_sentex_locators_cannot_bypass_structured_handle_input() {
+        for enabled in [false, true] {
+            let mut raw = Config::default();
+            raw.delivery.evidence_markers_enabled = enabled;
+            raw.channels.push(ChannelConfig {
+                id: "42".into(),
+                ..Default::default()
+            });
+            let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
+
+            for marker in [
+                "[🔍=v1:AAAAAAAAAAw]",
+                "[🔍=v2:claim:AAAAAAAAAAw]",
+                "[🔍=v2:citation:AAAAAAAAAAw]",
+                "[🔍=v2:claim:garbage]",
+                concat!(
+                    "[🔍=v2:claim:AAAAAAAAAAE] ",
+                    "[🔍=v2:claim:AAAAAAAAAAI] ",
+                    "[🔍=v2:claim:AAAAAAAAAAM] ",
+                    "[🔍=v2:claim:AAAAAAAAAAQ] ",
+                    "[🔍=v2:claim:AAAAAAAAAAU]"
+                ),
+            ] {
+                let content = format!("raw {marker}");
+                let error = prepare_outbound(
+                    &ctx,
+                    OutboundDraft::channel(
+                        ChannelId::new(42),
+                        &content,
+                        None,
+                        PreSendOptions {
+                            surface: OutboundSurface::Reply,
+                            bypasses: &[],
+                        },
+                    ),
+                )
+                .await
+                .unwrap_err();
+                assert_eq!(
+                    error["error"],
+                    "raw terminal sentex locators are not accepted in content; use structured handles on reply or send_dm"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_terminal_sentex_locators_are_rejected_before_hooks_run() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let pipeline = PreSendPipeline::new(vec![Box::new(CountingDecisionHook {
+            decision: HookDecision::Rewrite {
+                text: "raw locator removed".to_owned(),
+            },
+            calls: calls.clone(),
+        })])
+        .expect("pipeline")
+        .with_mode(PipelineMode::Enforce);
+        let ctx = messaging_ctx(test_config()).with_pre_send_pipeline(Arc::new(pipeline));
+
+        let error = prepare_outbound(
+            &ctx,
+            OutboundDraft::channel(
+                ChannelId::new(42),
+                "raw [🔍=v2:claim:AAAAAAAAAAw]",
+                None,
+                PreSendOptions {
+                    surface: OutboundSurface::Reply,
+                    bypasses: &[],
+                },
+            ),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error["error"],
+            "raw terminal sentex locators are not accepted in content; use structured handles on reply or send_dm"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn mid_message_sentex_prose_before_an_unrelated_bracket_is_allowed() {
+        let ctx = messaging_ctx(blocking_test_config());
+        let content = "discussion [🔍=v2:claim:garbage] (see appendix [A])";
+
+        let prepared = prepare_outbound(
+            &ctx,
+            OutboundDraft::channel(
+                ChannelId::new(42),
+                content,
+                None,
+                PreSendOptions {
+                    surface: OutboundSurface::Reply,
+                    bypasses: &[],
+                },
+            ),
+        )
+        .await
+        .expect("mid-message sentex prose is not a terminal locator");
+
+        assert_eq!(prepared.text, content);
+    }
+
+    #[tokio::test]
+    async fn pre_send_rewrite_cannot_inject_an_unaudited_sentex_locator() {
+        for marker in [
+            "[🔍=v2:claim:AAAAAAAAAAw]",
+            "[🔍=v2:claim:garbage]",
+            concat!(
+                "[🔍=v2:claim:AAAAAAAAAAE] ",
+                "[🔍=v2:claim:AAAAAAAAAAI] ",
+                "[🔍=v2:claim:AAAAAAAAAAM] ",
+                "[🔍=v2:claim:AAAAAAAAAAQ] ",
+                "[🔍=v2:claim:AAAAAAAAAAU]"
+            ),
+        ] {
+            let mut raw = Config::default();
+            raw.delivery.evidence_markers_enabled = true;
+            raw.channels.push(ChannelConfig {
+                id: "42".into(),
+                ..Default::default()
+            });
+            let pipeline = PreSendPipeline::new(vec![Box::new(RawSentexRewriteHook(marker))])
+                .expect("pipeline")
+                .with_mode(PipelineMode::Enforce);
+            let ctx = messaging_ctx(LoadedConfig::from_raw(raw))
+                .with_pre_send_pipeline(Arc::new(pipeline));
+
+            let error = prepare_outbound(
+                &ctx,
+                OutboundDraft::channel(
+                    ChannelId::new(42),
+                    "plain",
+                    None,
+                    PreSendOptions {
+                        surface: OutboundSurface::Reply,
+                        bypasses: &[],
+                    },
+                ),
+            )
+            .await
+            .unwrap_err();
+
+            assert_eq!(
+                error["error"],
+                "raw terminal sentex locators are not accepted in content; use structured handles on reply or send_dm"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sentex_bearing_multi_chunk_reply_fails_before_discord_delivery() {
         let mut raw = Config::default();
         raw.delivery.evidence_markers_enabled = true;
         raw.channels.push(ChannelConfig {
@@ -2372,8 +2587,9 @@ mod tests {
         });
         raw.delivery.text_chunk_limit = 8;
         let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
-        let keys = crate::evidence::parse_tool_evidence_keys(&json!({ "evidence_keys": ["12"] }))
-            .expect("valid bridge key");
+        let handles =
+            crate::evidence::parse_tool_sentex_handles(&json!({ "claim_handles": ["12"] }))
+                .expect("valid sentex handle");
 
         let response = reply_with_evidence_and_hook_overrides(
             &ctx,
@@ -2383,27 +2599,28 @@ mod tests {
             ReplyToolOptions {
                 suppress_ping: false,
                 no_rly_hooks: &[],
-                evidence_keys: &keys,
+                sentex_handles: &handles,
             },
         )
         .await;
 
         assert_eq!(
             response["error"],
-            "evidence-bearing messages must fit in one Discord message"
+            "sentex-bearing messages must fit in one Discord message"
         );
     }
 
     #[tokio::test]
-    async fn disabled_outbound_evidence_is_a_text_no_op() {
+    async fn disabled_outbound_sentexes_are_a_text_no_op() {
         let mut raw = Config::default();
         raw.channels.push(ChannelConfig {
             id: "42".into(),
             ..Default::default()
         });
         let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
-        let keys =
-            crate::evidence::parse_tool_evidence_keys(&json!({ "evidence_keys": ["12"] })).unwrap();
+        let handles =
+            crate::evidence::parse_tool_sentex_handles(&json!({ "claim_handles": ["12"] }))
+                .unwrap();
 
         let prepared = prepare_outbound(
             &ctx,
@@ -2416,7 +2633,7 @@ mod tests {
                     bypasses: &[],
                 },
             )
-            .with_evidence(&keys),
+            .with_sentex_handles(&handles),
         )
         .await
         .unwrap();
@@ -2425,12 +2642,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn evidence_bearing_reply_cannot_enter_held_lifecycle() {
+    async fn sentex_bearing_reply_cannot_enter_held_lifecycle() {
         let ctx = messaging_ctx(blocking_test_config());
-        let keys = crate::evidence::parse_tool_evidence_keys(&json!({
-            "evidence_keys": ["12"]
+        let handles = crate::evidence::parse_tool_sentex_handles(&json!({
+            "citation_handles": ["12"]
         }))
-        .expect("valid bridge key");
+        .expect("valid sentex handle");
 
         let response = reply_with_evidence_and_hook_overrides(
             &ctx,
@@ -2440,38 +2657,52 @@ mod tests {
             ReplyToolOptions {
                 suppress_ping: false,
                 no_rly_hooks: &[],
-                evidence_keys: &keys,
+                sentex_handles: &handles,
             },
         )
         .await;
 
         assert_eq!(
             response["error"],
-            "evidence-bearing messages cannot enter the no_rly hold lifecycle; revise and send a fresh evidence-bearing reply"
+            "sentex-bearing messages cannot enter the no_rly hold lifecycle; revise and send a fresh sentex-bearing reply"
         );
         assert_eq!(ctx.no_rly.pending().await, 0);
     }
 
     #[tokio::test]
-    async fn evidence_bearing_rephrase_is_refused_without_consuming_handle() {
-        let ctx = messaging_ctx(blocking_test_config());
-        let bounce = reply(&ctx, ChannelId::new(42), "straightforward", None, false).await;
-        let handle = bounce["held"]["handle"]
-            .as_str()
-            .expect("ordinary blocked reply should return a handle");
-        assert_eq!(ctx.no_rly.pending().await, 1);
+    async fn sentex_bearing_rephrase_is_refused_without_consuming_handle() {
+        for enabled in [false, true] {
+            let ctx = messaging_ctx(blocking_test_config_with_evidence_markers(enabled));
+            let bounce = reply(&ctx, ChannelId::new(42), "straightforward", None, false).await;
+            let handle = bounce["held"]["handle"]
+                .as_str()
+                .expect("ordinary blocked reply should return a handle");
+            assert_eq!(ctx.no_rly.pending().await, 1);
 
-        let response = rephrase_held(&ctx, handle, "grounded [🔍=v1:AAAAAAAAAAw]").await;
+            for marker in [
+                "[🔍=v2:claim:AAAAAAAAAAw]",
+                "[🔍=v2:claim:garbage]",
+                concat!(
+                    "[🔍=v2:claim:AAAAAAAAAAE] ",
+                    "[🔍=v2:claim:AAAAAAAAAAI] ",
+                    "[🔍=v2:claim:AAAAAAAAAAM] ",
+                    "[🔍=v2:claim:AAAAAAAAAAQ] ",
+                    "[🔍=v2:claim:AAAAAAAAAAU]"
+                ),
+            ] {
+                let response = rephrase_held(&ctx, handle, &format!("grounded {marker}")).await;
 
-        assert_eq!(
-            response["error"],
-            "evidence-bearing replacements are not supported by rephrase; send a fresh evidence-bearing reply"
-        );
-        assert_eq!(ctx.no_rly.pending().await, 1);
+                assert_eq!(
+                    response["error"],
+                    "raw terminal sentex locators are not accepted in content; use structured handles on reply or send_dm"
+                );
+                assert_eq!(ctx.no_rly.pending().await, 1);
+            }
+        }
     }
 
     #[tokio::test]
-    async fn first_contact_dm_branch_preserves_ordered_evidence_receipt() {
+    async fn first_contact_dm_branch_preserves_role_separated_sentex_receipt() {
         let (http, requests, server) = fake_discord_http().await;
         let ctx = MessagingCtx::new(
             http,
@@ -2481,13 +2712,20 @@ mod tests {
             Arc::new(ConsentGate::new(camino::Utf8Path::new("/tmp"))),
             Arc::new(crate::ingress_ledger::IngressLedger::new()),
         );
-        let keys =
-            crate::evidence::parse_tool_evidence_keys(&json!({ "evidence_keys": ["34", "12"] }))
-                .expect("valid bridge keys");
+        let handles = crate::evidence::parse_tool_sentex_handles(&json!({
+            "claim_handles": ["34"],
+            "citation_handles": ["12"]
+        }))
+        .expect("valid sentex handles");
 
-        let result =
-            send_dm_with_evidence_and_hook_overrides(&ctx, UserId::new(77), "grounded", &[], &keys)
-                .await;
+        let result = send_dm_with_evidence_and_hook_overrides(
+            &ctx,
+            UserId::new(77),
+            "grounded",
+            &[],
+            &handles,
+        )
+        .await;
         server.abort();
 
         assert_eq!(
@@ -2496,7 +2734,8 @@ mod tests {
                 "ok": true,
                 "channel_id": "4242",
                 "message_ids": [9001],
-                "evidence_locators": ["v1:AAAAAAAAACI", "v1:AAAAAAAAAAw"],
+                "claim_locators": ["v2:claim:AAAAAAAAACI"],
+                "citation_locators": ["v2:citation:AAAAAAAAAAw"],
             })
         );
         let requests = requests.lock().expect("request capture lock");
@@ -2513,13 +2752,13 @@ mod tests {
             .expect("the first-contact branch must send the prepared message");
         assert_eq!(
             serde_json::from_str::<Value>(sent_body).unwrap()["content"],
-            "grounded [🔍=v1:AAAAAAAAACI] [🔍=v1:AAAAAAAAAAw]"
+            "grounded [🔍=v2:claim:AAAAAAAAACI] [🔍=v2:citation:AAAAAAAAAAw]"
         );
     }
 
     #[test]
-    fn get_message_and_fetch_share_evidence_projection() {
-        let content = "grounded [🔍=v1:AAAAAAAAAAw]";
+    fn get_message_and_fetch_share_role_separated_sentex_projection() {
+        let content = "grounded [🔍=v2:claim:AAAAAAAAAAw] [🔍=v1:AAAAAAAAACI]";
         let messages = from_wire(json!([wire_message(
             3001,
             content,
@@ -2529,14 +2768,29 @@ mod tests {
 
         let fetched = message_json(&test_config(), &messages[0]);
         let single = get_message_json(&test_config(), &messages[0]);
+        let expected_claims = json!([{
+            "locator": "v2:claim:AAAAAAAAAAw",
+            "author_id": "210987654321098765",
+        }]);
+        let expected_citations = json!([{
+            "locator": "v1:AAAAAAAAACI",
+            "author_id": "210987654321098765",
+        }]);
         assert_eq!(single["content"], fetched["content"]);
-        assert_eq!(single["evidence"], fetched["evidence"]);
+        assert_eq!(single["claim_locators"], expected_claims);
+        assert_eq!(single["citation_locators"], expected_citations);
+        assert_eq!(fetched["claim_locators"], expected_claims);
+        assert_eq!(fetched["citation_locators"], expected_citations);
+        assert_eq!(single["claim_locators"], fetched["claim_locators"]);
+        assert_eq!(single["citation_locators"], fetched["citation_locators"]);
         assert_eq!(single["author_id"], fetched["author_id"]);
+        assert!(single.get("evidence").is_none());
+        assert!(fetched.get("evidence").is_none());
     }
 
     #[test]
-    fn message_projection_is_absent_when_evidence_markers_are_disabled() {
-        let content = "grounded [🔍=v1:AAAAAAAAAAw]";
+    fn sentex_projection_is_absent_when_evidence_markers_are_disabled() {
+        let content = "grounded [🔍=v2:claim:AAAAAAAAAAw]";
         let messages = from_wire(json!([wire_message(
             3001,
             content,
@@ -2547,7 +2801,8 @@ mod tests {
 
         let projected = message_json(&disabled, &messages[0]);
         assert_eq!(projected["content"], content);
-        assert!(projected.get("evidence").is_none());
+        assert!(projected.get("claim_locators").is_none());
+        assert!(projected.get("citation_locators").is_none());
     }
 
     // ── Contradictionary self-react notifications ─────────────────────────

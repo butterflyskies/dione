@@ -6,7 +6,7 @@
 
 use crate::{
     discord::events::{MessageEvent, NotificationEvent},
-    evidence::project_evidence,
+    evidence::project_sentexes,
 };
 use serde_json::{Value, json};
 
@@ -92,7 +92,7 @@ impl IntoNotification for NotificationEvent {
                     meta["bells_status"] = json!(status.as_str());
                 }
                 if evidence_markers_enabled {
-                    project_evidence(&mut meta, &content, user_id);
+                    project_sentexes(&mut meta, &content, user_id);
                 }
                 json!({
                     "jsonrpc": "2.0",
@@ -194,7 +194,7 @@ impl IntoNotification for NotificationEvent {
                     meta["reply_to_message_id"] = json!(reply_id.get().to_string());
                 }
                 if evidence_markers_enabled {
-                    project_evidence(&mut meta, &new_content, user_id);
+                    project_sentexes(&mut meta, &new_content, user_id);
                 }
                 json!({
                     "jsonrpc": "2.0",
@@ -285,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn message_edit_projects_current_evidence_and_removal_clears_it() {
+    fn message_edit_projects_legacy_evidence_as_citations_and_removal_clears_it() {
         let edit = |new_content: &str| NotificationEvent::MessageEdit {
             chat_id: ChannelId::new(100),
             message_id: MessageId::new(200),
@@ -299,15 +299,17 @@ mod tests {
 
         let added = edit("edited [🔍=v1:AAAAAAAAAAw]").into_notification();
         assert_eq!(
-            added["params"]["meta"]["evidence"],
+            added["params"]["meta"]["citation_locators"],
             json!([{
                 "locator": "v1:AAAAAAAAAAw",
                 "author_id": "300",
             }])
         );
+        assert!(added["params"]["meta"].get("claim_locators").is_none());
 
         let removed = edit("edited").into_notification();
-        assert!(removed["params"]["meta"].get("evidence").is_none());
+        assert!(removed["params"]["meta"].get("claim_locators").is_none());
+        assert!(removed["params"]["meta"].get("citation_locators").is_none());
     }
 
     #[test]
@@ -326,6 +328,8 @@ mod tests {
         let json = event.into_notification_with_evidence(false);
         assert_eq!(json["params"]["content"], "edited [🔍=v1:AAAAAAAAAAw]");
         assert!(json["params"]["meta"].get("evidence").is_none());
+        assert!(json["params"]["meta"].get("claim_locators").is_none());
+        assert!(json["params"]["meta"].get("citation_locators").is_none());
     }
 
     #[test]

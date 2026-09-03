@@ -378,6 +378,7 @@ impl DurableInbox {
             if event.discord_message_id.is_none() {
                 event.discord_message_id = discord_message_id(&event.payload);
             }
+            migrate_legacy_evidence_projection(&mut event.payload);
         }
         let message_ids = state
             .entries
@@ -1025,6 +1026,41 @@ fn discord_message_id(payload: &Value) -> Option<DiscordMessageId> {
         .map(DiscordMessageId)
 }
 
+/// Renames the pre-v2 structured projection on queued notifications.
+///
+/// Existing v2 citations keep their order. Any distinct legacy citations are
+/// appended, so a mixed-version payload loses neither representation while the
+/// retired field name disappears from consumer-visible delivery.
+fn migrate_legacy_evidence_projection(payload: &mut Value) -> bool {
+    let Some(meta) = payload
+        .pointer_mut("/params/meta")
+        .and_then(Value::as_object_mut)
+    else {
+        return false;
+    };
+    let Some(legacy) = meta.remove("evidence") else {
+        return false;
+    };
+
+    match meta.entry("citation_locators") {
+        serde_json::map::Entry::Vacant(entry) => {
+            entry.insert(legacy);
+        }
+        serde_json::map::Entry::Occupied(mut entry) => {
+            if let (Some(current), Some(legacy)) =
+                (entry.get_mut().as_array_mut(), legacy.as_array())
+            {
+                for citation in legacy {
+                    if !current.contains(citation) {
+                        current.push(citation.clone());
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
 pub fn timeout_response() -> Value {
     json!({ "event": null, "timed_out": true })
 }
@@ -1058,9 +1094,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn durable_payload_preserves_optional_evidence_projection() {
+    async fn durable_payload_migrates_legacy_evidence_projection_to_citations() {
         let dir = TempDir::new().unwrap();
-        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
         let consumer = primary_consumer(&queue).await;
         let mut payload = message("1", "claim [🔍=v1:AAAAAAAAAAw]");
         payload["params"]["meta"]["evidence"] = json!([{
@@ -1068,13 +1105,65 @@ mod tests {
             "author_id": "300"
         }]);
 
-        assert!(queue.enqueue(payload.clone()).await.unwrap());
-        let leased = queue
+        assert!(queue.enqueue(payload).await.unwrap());
+        drop(queue);
+
+        let reloaded = CodexEventQueue::load(&path).unwrap();
+        let leased = reloaded
             .next_event(&consumer, Duration::ZERO, DEFAULT_LEASE)
             .await
             .unwrap()
             .expect("leased event");
-        assert_eq!(leased.event, payload);
+        assert!(leased.event["params"]["meta"].get("evidence").is_none());
+        assert_eq!(
+            leased.event["params"]["meta"]["citation_locators"],
+            json!([{
+                "locator": "v1:AAAAAAAAAAw",
+                "author_id": "300"
+            }])
+        );
+        assert!(
+            leased.event["params"]["meta"]
+                .get("claim_locators")
+                .is_none()
+        );
+
+        drop(reloaded);
+        let persisted: Value =
+            serde_json::from_slice(&std::fs::read(path.join(INBOX_FILE_NAME)).unwrap()).unwrap();
+        assert!(
+            persisted["entries"][0]["payload"]["params"]["meta"]
+                .get("evidence")
+                .is_none()
+        );
+        assert_eq!(
+            persisted["entries"][0]["payload"]["params"]["meta"]["citation_locators"],
+            leased.event["params"]["meta"]["citation_locators"]
+        );
+    }
+
+    #[test]
+    fn legacy_evidence_projection_merges_without_overwriting_v2_citations() {
+        let mut payload = message("1", "mixed");
+        payload["params"]["meta"]["citation_locators"] = json!([
+            { "locator": "v2:citation:AAAAAAAAAAI", "author_id": "300" },
+            { "locator": "v1:AAAAAAAAAAw", "author_id": "300" }
+        ]);
+        payload["params"]["meta"]["evidence"] = json!([
+            { "locator": "v1:AAAAAAAAAAw", "author_id": "300" },
+            { "locator": "v1:AAAAAAAAAAQ", "author_id": "300" }
+        ]);
+
+        assert!(migrate_legacy_evidence_projection(&mut payload));
+        assert!(payload["params"]["meta"].get("evidence").is_none());
+        assert_eq!(
+            payload["params"]["meta"]["citation_locators"],
+            json!([
+                { "locator": "v2:citation:AAAAAAAAAAI", "author_id": "300" },
+                { "locator": "v1:AAAAAAAAAAw", "author_id": "300" },
+                { "locator": "v1:AAAAAAAAAAQ", "author_id": "300" }
+            ])
+        );
     }
 
     #[tokio::test]

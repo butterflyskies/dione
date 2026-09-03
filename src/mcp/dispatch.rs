@@ -6,7 +6,7 @@ use crate::{
         wait_duration,
     },
     config_store::{ConfigStore, DiscordId},
-    evidence::{EvidenceKeys, parse_tool_evidence_keys},
+    evidence::{SentexHandles, parse_tool_sentex_handles},
     mcp::{
         ids::Snowflake,
         server::DioneServer,
@@ -227,11 +227,8 @@ pub(crate) async fn call_tool(
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             let no_rly_hooks = parse_hook_overrides(&args)?;
-            let evidence_keys = if config.delivery.evidence_markers_enabled {
-                parse_tool_evidence_keys(&args)?
-            } else {
-                EvidenceKeys::empty()
-            };
+            let sentex_handles =
+                parse_enabled_sentex_handles(&args, config.delivery.evidence_markers_enabled)?;
             reply_with_evidence_and_hook_overrides(
                 &ctx,
                 channel_id,
@@ -240,7 +237,7 @@ pub(crate) async fn call_tool(
                 ReplyToolOptions {
                     suppress_ping,
                     no_rly_hooks: &no_rly_hooks,
-                    evidence_keys: &evidence_keys,
+                    sentex_handles: &sentex_handles,
                 },
             )
             .await
@@ -361,17 +358,14 @@ pub(crate) async fn call_tool(
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing content".to_string())?;
             let no_rly_hooks = parse_hook_overrides(&args)?;
-            let evidence_keys = if config.delivery.evidence_markers_enabled {
-                parse_tool_evidence_keys(&args)?
-            } else {
-                EvidenceKeys::empty()
-            };
+            let sentex_handles =
+                parse_enabled_sentex_handles(&args, config.delivery.evidence_markers_enabled)?;
             send_dm_with_evidence_and_hook_overrides(
                 &ctx,
                 user_id,
                 content,
                 &no_rly_hooks,
-                &evidence_keys,
+                &sentex_handles,
             )
             .await
         }
@@ -768,6 +762,22 @@ pub(crate) async fn call_tool(
         response["isError"] = json!(true);
     }
     Ok(response)
+}
+
+fn parse_enabled_sentex_handles(
+    args: &Value,
+    evidence_markers_enabled: bool,
+) -> Result<SentexHandles, String> {
+    let handles = parse_tool_sentex_handles(args)?;
+    if evidence_markers_enabled {
+        return Ok(handles);
+    }
+    if args.get("claim_handles").is_some() || args.get("citation_handles").is_some() {
+        return Err(
+            "claim_handles and citation_handles require evidence_markers_enabled".to_string(),
+        );
+    }
+    Ok(SentexHandles::empty())
 }
 
 // ── Parameter parsing helpers ─────────────────────────────────────────────────

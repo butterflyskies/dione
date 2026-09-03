@@ -1061,14 +1061,19 @@ mod tests {
                 leased.event["params"]["content"],
                 format!("claim-{index} [🔍=v1:AAAAAAAAAAw] [🔍=v1:AAAAAAAAACI]")
             );
-            let evidence = leased.event["params"]["meta"]["evidence"]
+            let citations = leased.event["params"]["meta"]["citation_locators"]
                 .as_array()
-                .expect("structured evidence must survive final delivery");
-            assert_eq!(evidence.len(), 2);
-            assert_eq!(evidence[0]["locator"], "v1:AAAAAAAAAAw");
-            assert_eq!(evidence[1]["locator"], "v1:AAAAAAAAACI");
-            assert_eq!(evidence[0]["author_id"], (200 + index).to_string());
-            assert_eq!(evidence[1]["author_id"], (200 + index).to_string());
+                .expect("legacy evidence must survive final delivery as citations");
+            assert!(
+                leased.event["params"]["meta"]
+                    .get("claim_locators")
+                    .is_none()
+            );
+            assert_eq!(citations.len(), 2);
+            assert_eq!(citations[0]["locator"], "v1:AAAAAAAAAAw");
+            assert_eq!(citations[1]["locator"], "v1:AAAAAAAAACI");
+            assert_eq!(citations[0]["author_id"], (200 + index).to_string());
+            assert_eq!(citations[1]["author_id"], (200 + index).to_string());
             queue
                 .acknowledge(&consumer, &leased.delivery_token)
                 .await
@@ -1110,6 +1115,16 @@ mod tests {
             .unwrap();
         assert_eq!(leased.event["params"]["content"], expected_content);
         assert!(leased.event["params"]["meta"].get("evidence").is_none());
+        assert!(
+            leased.event["params"]["meta"]
+                .get("claim_locators")
+                .is_none()
+        );
+        assert!(
+            leased.event["params"]["meta"]
+                .get("citation_locators")
+                .is_none()
+        );
     }
 
     #[test]

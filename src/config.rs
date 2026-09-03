@@ -829,7 +829,7 @@ pub struct DeliveryConfig {
     /// Global default coalescing delay for channel events (milliseconds).
     /// Per-channel `delivery_delay_ms` overrides this. Default: 0 (no buffering).
     pub delivery_delay_ms: u64,
-    /// Enable Vaelii evidence markers on inbound and outbound messages.
+    /// Enable role-preserving Vaelii sentex locators on inbound and outbound messages.
     ///
     /// Default-off while the tracer bullet is being validated in production.
     pub evidence_markers_enabled: bool,

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-09-03
+
+### Changed
+- **Vaelii references now preserve whether a message asserts or cites them.**
+  The `reply` and `send_dm` MCP tools replace the ambiguous `evidence_keys`
+  input with role-separated `claim_handles` and `citation_handles`, carried as
+  terminal v2 sentex locators and projected as `claim_locators` and
+  `citation_locators` on every receive surface. The old input is rejected
+  rather than aliased. Already-published v1 markers and queued Codex events
+  remain readable as citations, while raw terminal locators in outbound text
+  are rejected so they cannot bypass structured validation or hook auditing.
+
 ## [0.39.1] - 2026-09-02
 
 ### Fixed

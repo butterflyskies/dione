@@ -53,7 +53,8 @@ pub(crate) fn tools_list(mode: TransportMode, evidence_markers_enabled: bool) ->
                     "reply_to_message_id": { "type": "string", "description": "Optional message ID to reply to" },
                     "suppress_ping": { "type": "boolean", "description": "When true, the reply will not ping the user being replied to (default: false)" },
                     "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for this send. Every bypass is audited. This does not bypass the contradictionary; use the no_rly(handle) tool for that." },
-                    "evidence_keys": evidence_keys_schema()
+                    "claim_handles": sentex_handles_schema("Claims asserted by this message"),
+                    "citation_handles": sentex_handles_schema("Claims cited as support or context")
                 }
             })),
             tool("no_rly", "Release a message held by the contradictionary: sends the byte-identical held text with its original addressing. Handles are single-use — they die on release, rephrase, or expiry (default 3 minutes) and cannot be replayed; only a failed send leaves the handle live for a retry. Ordering: the message lands when released, not at its original position in the conversation.", json!({
@@ -210,7 +211,8 @@ pub(crate) fn tools_list(mode: TransportMode, evidence_markers_enabled: bool) ->
                     "user_id": { "type": "string", "description": "Discord user ID to send the DM to" },
                     "content": { "type": "string", "description": "Message content to send" },
                     "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass; every bypass is audited." },
-                    "evidence_keys": evidence_keys_schema()
+                    "claim_handles": sentex_handles_schema("Claims asserted by this message"),
+                    "citation_handles": sentex_handles_schema("Claims cited as support or context")
                 }
             })),
             tool("list_guilds", "List guilds the bot is in", json!({
@@ -523,7 +525,11 @@ pub(crate) fn tools_list(mode: TransportMode, evidence_markers_enabled: bool) ->
                 tool["inputSchema"]["properties"]
                     .as_object_mut()
                     .expect("tool properties is an object")
-                    .remove("evidence_keys");
+                    .remove("claim_handles");
+                tool["inputSchema"]["properties"]
+                    .as_object_mut()
+                    .expect("tool properties is an object")
+                    .remove("citation_handles");
             }
         }
     }
@@ -538,19 +544,19 @@ pub(crate) fn tool(name: &str, description: &str, input_schema: Value) -> Value 
     })
 }
 
-fn evidence_keys_schema() -> Value {
+fn sentex_handles_schema(role_description: &str) -> Value {
     json!({
         "type": "array",
-        "maxItems": crate::evidence::MAX_EVIDENCE_REFS,
+        "maxItems": crate::evidence::MAX_SENTEX_REFS,
         "items": {
             "type": "string",
             "pattern": "^[1-9][0-9]*$",
             "maxLength": 20
         },
         "description": format!(
-            "Canonical positive decimal u64 strings naming opaque keys into the Vaelii evidence bridge. JSON numbers are rejected to avoid precision loss. Dione encodes each as exactly eight big-endian bytes using unpadded base64url and appends terminal [🔍=v1:<token>] markers; at most {} references and {} aggregate marker bytes. A locator is author-offered evidence, not verification.",
-            crate::evidence::MAX_EVIDENCE_REFS,
-            crate::evidence::MAX_EVIDENCE_MARKER_BYTES,
+            "{role_description}. Canonical positive decimal u64 strings naming opaque Vaelii sentex handles; JSON numbers are rejected to avoid precision loss. Dione transports the role and handle in terminal [🔍=v2:<role>:<token>] locators after pre-send hooks. At most {} claim and citation handles combined and {} aggregate marker bytes. A locator is author-offered metadata, not verification or truth.",
+            crate::evidence::MAX_SENTEX_REFS,
+            crate::evidence::MAX_SENTEX_MARKER_BYTES,
         )
     })
 }
@@ -593,7 +599,7 @@ mod tests {
     }
 
     #[test]
-    fn evidence_keys_schema_is_exposed_only_when_enabled() {
+    fn claim_and_citation_handle_schemas_are_exposed_only_when_enabled() {
         for enabled in [false, true] {
             let list = tools_list(TransportMode::Codex, enabled);
             for name in ["reply", "send_dm"] {
@@ -603,12 +609,17 @@ mod tests {
                     .iter()
                     .find(|tool| tool["name"] == name)
                     .unwrap();
-                assert_eq!(
-                    tool["inputSchema"]["properties"]
-                        .get("evidence_keys")
-                        .is_some(),
-                    enabled,
-                    "{name} evidence schema must follow the config gate"
+                let properties = &tool["inputSchema"]["properties"];
+                for field in ["claim_handles", "citation_handles"] {
+                    assert_eq!(
+                        properties.get(field).is_some(),
+                        enabled,
+                        "{name} {field} schema must follow the config gate"
+                    );
+                }
+                assert!(
+                    properties.get("evidence_keys").is_none(),
+                    "{name} must not advertise the removed evidence_keys alias"
                 );
             }
         }

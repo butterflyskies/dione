@@ -1,4 +1,4 @@
-//! Visible author-offered evidence locators carried in Discord message content.
+//! Visible, role-preserving Vaelii sentex locators carried in Discord messages.
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
@@ -8,20 +8,22 @@ use std::{
     num::NonZeroU64,
 };
 
-const MARKER_PREFIX: &str = "[🔍=v1:";
+const LEGACY_CITATION_MARKER_PREFIX: &str = "[🔍=v1:";
+const CLAIM_MARKER_PREFIX: &str = "[🔍=v2:claim:";
+const CITATION_MARKER_PREFIX: &str = "[🔍=v2:citation:";
 const MARKER_SUFFIX: &str = "]";
-const ENCODED_KEY_LEN: usize = 11;
+const LOCATOR_TOKEN_LEN: usize = 11;
 
-/// Maximum number of evidence references accepted on one message.
-pub(crate) const MAX_EVIDENCE_REFS: usize = 4;
-/// Maximum UTF-8 bytes occupied by the complete appended marker suffix.
-pub(crate) const MAX_EVIDENCE_MARKER_BYTES: usize = 88;
+/// Maximum total number of claim and citation handles accepted on one message.
+pub(crate) const MAX_SENTEX_REFS: usize = 4;
+/// Maximum UTF-8 bytes occupied by the complete appended v2 marker suffix.
+pub(crate) const MAX_SENTEX_MARKER_BYTES: usize = 124;
 
-/// An opaque, nonzero key into the external Vaelii evidence bridge.
+/// An opaque, nonzero handle naming one Vaelii sentex.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct VaeliiEvidenceKey(NonZeroU64);
+pub(crate) struct VaeliiSentexHandle(NonZeroU64);
 
-impl VaeliiEvidenceKey {
+impl VaeliiSentexHandle {
     fn parse_decimal(value: &str) -> Option<Self> {
         if !matches!(value.as_bytes().first(), Some(b'1'..=b'9'))
             || !value.bytes().all(|byte| byte.is_ascii_digit())
@@ -36,16 +38,16 @@ impl VaeliiEvidenceKey {
     }
 
     fn from_locator_token(token: &str) -> Option<Self> {
-        if token.len() != ENCODED_KEY_LEN {
+        if token.len() != LOCATOR_TOKEN_LEN {
             return None;
         }
         let decoded = URL_SAFE_NO_PAD.decode(token).ok()?;
         let bytes: [u8; 8] = decoded.try_into().ok()?;
-        let key = NonZeroU64::new(u64::from_be_bytes(bytes))?;
+        let handle = NonZeroU64::new(u64::from_be_bytes(bytes))?;
         if URL_SAFE_NO_PAD.encode(bytes) != token {
             return None;
         }
-        Some(Self(key))
+        Some(Self(handle))
     }
 
     fn locator_token(self) -> String {
@@ -53,132 +55,234 @@ impl VaeliiEvidenceKey {
     }
 }
 
-/// A validated, bounded sequence of opaque Vaelii keys.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct EvidenceKeys(Vec<VaeliiEvidenceKey>);
+/// The role a sentex plays in the containing Discord message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SentexRole {
+    Claim,
+    Citation,
+}
 
-impl EvidenceKeys {
+impl SentexRole {
+    const fn marker_prefix(self) -> &'static str {
+        match self {
+            Self::Claim => CLAIM_MARKER_PREFIX,
+            Self::Citation => CITATION_MARKER_PREFIX,
+        }
+    }
+}
+
+/// Validated, bounded Vaelii handles partitioned by message role.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SentexHandles {
+    claims: Vec<VaeliiSentexHandle>,
+    citations: Vec<VaeliiSentexHandle>,
+}
+
+impl SentexHandles {
     pub(crate) const fn empty() -> Self {
-        Self(Vec::new())
+        Self {
+            claims: Vec::new(),
+            citations: Vec::new(),
+        }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.claims.is_empty() && self.citations.is_empty()
     }
 
-    fn iter(&self) -> impl Iterator<Item = &VaeliiEvidenceKey> {
-        self.0.iter()
+    pub(crate) fn claims(&self) -> &[VaeliiSentexHandle] {
+        &self.claims
+    }
+
+    pub(crate) fn citations(&self) -> &[VaeliiSentexHandle] {
+        &self.citations
     }
 
     fn len(&self) -> usize {
-        self.0.len()
+        self.claims.len() + self.citations.len()
     }
 }
 
-/// The only supported visible evidence transport.
+/// The visible sentex transport emitted by current Dione versions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EvidenceTransport {
-    TerminalVisibleSuffixV1AfterHooks,
+pub(crate) enum SentexTransport {
+    TerminalVisibleRoleSuffixV2AfterHooks,
 }
 
-impl EvidenceTransport {
+impl SentexTransport {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
-            Self::TerminalVisibleSuffixV1AfterHooks => "terminal-visible-suffix-v1-after-hooks",
+            Self::TerminalVisibleRoleSuffixV2AfterHooks => {
+                "terminal-visible-role-suffix-v2-after-hooks"
+            }
         }
     }
 }
 
-/// A canonical versioned locator projected to Dione consumers.
+/// A canonical, versioned, role-bearing locator projected to Dione consumers.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct EvidenceLocator(String);
+pub(crate) struct SentexLocator {
+    role: SentexRole,
+    encoded: String,
+}
 
-impl EvidenceLocator {
-    fn from_key(key: VaeliiEvidenceKey) -> Self {
-        Self(format!("v1:{}", key.locator_token()))
+impl SentexLocator {
+    fn current(role: SentexRole, handle: VaeliiSentexHandle) -> Self {
+        let role_name = match role {
+            SentexRole::Claim => "claim",
+            SentexRole::Citation => "citation",
+        };
+        Self {
+            role,
+            encoded: format!("v2:{role_name}:{}", handle.locator_token()),
+        }
+    }
+
+    fn legacy_citation(handle: VaeliiSentexHandle) -> Self {
+        Self {
+            role: SentexRole::Citation,
+            encoded: format!("v1:{}", handle.locator_token()),
+        }
     }
 
     pub(crate) fn as_str(&self) -> &str {
-        &self.0
+        &self.encoded
+    }
+
+    pub(crate) const fn role(&self) -> SentexRole {
+        self.role
     }
 }
 
-impl fmt::Display for EvidenceLocator {
+impl fmt::Display for SentexLocator {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
+        self.encoded.fmt(formatter)
     }
 }
 
-/// Evidence offered by the Discord author of the containing message.
+/// A role-bearing sentex reference offered by the Discord message author.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OfferedEvidence {
-    pub(crate) locator: EvidenceLocator,
+pub(crate) struct OfferedSentex {
+    pub(crate) locator: SentexLocator,
     pub(crate) author_id: UserId,
 }
 
-/// Parses the bounded `evidence_keys` tool argument.
-pub(crate) fn parse_tool_evidence_keys(args: &Value) -> Result<EvidenceKeys, String> {
-    let Some(value) = args.get("evidence_keys") else {
-        return Ok(EvidenceKeys::empty());
-    };
-    let values = value
-        .as_array()
-        .ok_or_else(|| "evidence_keys must be an array".to_string())?;
-    if values.len() > MAX_EVIDENCE_REFS {
+/// Parses the role-separated `claim_handles` and `citation_handles` arguments.
+/// The removed `evidence_keys` name is rejected rather than silently ignored.
+pub(crate) fn parse_tool_sentex_handles(args: &Value) -> Result<SentexHandles, String> {
+    if args.get("evidence_keys").is_some() {
+        return Err(
+            "evidence_keys was removed; use claim_handles and/or citation_handles".to_string(),
+        );
+    }
+    let claim_values = handle_array(args, "claim_handles")?;
+    let citation_values = handle_array(args, "citation_handles")?;
+    let total = claim_values
+        .len()
+        .checked_add(citation_values.len())
+        .ok_or_else(|| "sentex handle count overflowed".to_string())?;
+    if total > MAX_SENTEX_REFS {
         return Err(format!(
-            "evidence_keys supports at most {MAX_EVIDENCE_REFS} references"
+            "claim_handles and citation_handles support at most {MAX_SENTEX_REFS} total references"
         ));
     }
-
-    let mut keys = Vec::with_capacity(values.len());
-    for value in values {
-        let key = value.as_str().and_then(VaeliiEvidenceKey::parse_decimal);
-        let key = key.ok_or_else(|| {
-            "evidence keys must be canonical positive decimal u64 strings".to_string()
-        })?;
-        keys.push(key);
-    }
-
-    validate_marker_bytes(&keys)?;
-    Ok(EvidenceKeys(keys))
+    let claims = parse_handle_array(claim_values, "claim_handles")?;
+    let citations = parse_handle_array(citation_values, "citation_handles")?;
+    let handles = SentexHandles { claims, citations };
+    validate_marker_bytes(&handles)?;
+    Ok(handles)
 }
 
-/// Canonical comma-separated locators used in pre-send and audit metadata.
-pub(crate) fn locator_metadata(keys: &EvidenceKeys) -> String {
+fn handle_array<'a>(args: &'a Value, field: &str) -> Result<&'a [Value], String> {
+    let Some(value) = args.get(field) else {
+        return Ok(&[]);
+    };
+    value
+        .as_array()
+        .map(Vec::as_slice)
+        .ok_or_else(|| format!("{field} must be an array"))
+}
+
+fn parse_handle_array(values: &[Value], field: &str) -> Result<Vec<VaeliiSentexHandle>, String> {
+    let mut handles = Vec::with_capacity(values.len());
+    for value in values {
+        let handle = value.as_str().and_then(VaeliiSentexHandle::parse_decimal);
+        let handle = handle.ok_or_else(|| {
+            format!("{field} must contain canonical positive decimal u64 strings")
+        })?;
+        handles.push(handle);
+    }
+    Ok(handles)
+}
+
+/// Whether content ends in unquoted sentex marker syntax, including malformed
+/// or over-limit sequences that the read-side parser intentionally ignores.
+pub(crate) fn has_terminal_sentex_syntax(content: &str) -> bool {
+    if !content.ends_with(MARKER_SUFFIX) {
+        return false;
+    }
+    let Some((start, _, _, _)) = marker_start(content) else {
+        return false;
+    };
+    if start > 0 && content.as_bytes()[start - 1] != b' ' {
+        return false;
+    }
+    let before_final_suffix = &content[start..content.len() - MARKER_SUFFIX.len()];
+    if before_final_suffix.contains(MARKER_SUFFIX) {
+        return false;
+    }
+    !marker_is_in_quote_or_code(content, start)
+}
+
+/// Canonical comma-separated role-bearing locators for hook/audit metadata.
+pub(crate) fn locator_metadata(handles: &[VaeliiSentexHandle], role: SentexRole) -> String {
     let mut metadata = String::new();
-    for (index, key) in keys.iter().enumerate() {
+    for (index, handle) in handles.iter().enumerate() {
         if index > 0 {
             metadata.push(',');
         }
-        write!(metadata, "{}", EvidenceLocator::from_key(key.clone()))
+        write!(metadata, "{}", SentexLocator::current(role, handle.clone()))
             .expect("writing to a String cannot fail");
     }
     metadata
 }
 
 /// Appends exact terminal markers after all rewrite hooks have run.
-pub(crate) fn append_markers(content: &str, keys: &EvidenceKeys) -> String {
-    if keys.is_empty() {
+pub(crate) fn append_markers(content: &str, handles: &SentexHandles) -> String {
+    if handles.is_empty() {
         return content.to_owned();
     }
-    let mut output = String::with_capacity(content.len() + marker_bytes(keys.len()));
+    let mut output = String::with_capacity(content.len() + marker_bytes(handles));
     output.push_str(content);
-    for (index, key) in keys.iter().enumerate() {
+    for (index, (role, handle)) in handles
+        .claims()
+        .iter()
+        .map(|handle| (SentexRole::Claim, handle))
+        .chain(
+            handles
+                .citations()
+                .iter()
+                .map(|handle| (SentexRole::Citation, handle)),
+        )
+        .enumerate()
+    {
         if index > 0 || !content.is_empty() {
             output.push(' ');
         }
         write!(
             output,
-            "{MARKER_PREFIX}{}{MARKER_SUFFIX}",
-            key.clone().locator_token()
+            "{}{}{MARKER_SUFFIX}",
+            role.marker_prefix(),
+            handle.clone().locator_token()
         )
         .expect("writing to a String cannot fail");
     }
     output
 }
 
-/// Parses only a complete, bounded sequence of exact terminal locators.
-pub(crate) fn parse_evidence_locators(content: &str) -> Vec<EvidenceLocator> {
+/// Parses only a complete, bounded sequence of exact terminal sentex locators.
+/// Legacy v1 evidence markers remain readable and project as citations.
+pub(crate) fn parse_sentex_locators(content: &str) -> Vec<SentexLocator> {
     let mut end = content.len();
     let mut reversed = Vec::new();
     let mut suffix_start = end;
@@ -188,20 +292,25 @@ pub(crate) fn parse_evidence_locators(content: &str) -> Vec<EvidenceLocator> {
         if !candidate.ends_with(MARKER_SUFFIX) {
             break;
         }
-        let Some(start) = candidate.rfind(MARKER_PREFIX) else {
+        let Some((start, prefix, role, legacy)) = marker_start(candidate) else {
             return Vec::new();
         };
         if start > 0 && candidate.as_bytes()[start - 1] != b' ' {
             return Vec::new();
         }
-        let token_start = start + MARKER_PREFIX.len();
+        let token_start = start + prefix.len();
         let token_end = end - MARKER_SUFFIX.len();
-        let Some(key) = VaeliiEvidenceKey::from_locator_token(&content[token_start..token_end])
+        let Some(handle) = VaeliiSentexHandle::from_locator_token(&content[token_start..token_end])
         else {
             return Vec::new();
         };
-        reversed.push(key);
-        if reversed.len() > MAX_EVIDENCE_REFS {
+        let locator = if legacy {
+            SentexLocator::legacy_citation(handle)
+        } else {
+            SentexLocator::current(role, handle)
+        };
+        reversed.push(locator);
+        if reversed.len() > MAX_SENTEX_REFS {
             return Vec::new();
         }
         suffix_start = start;
@@ -211,46 +320,58 @@ pub(crate) fn parse_evidence_locators(content: &str) -> Vec<EvidenceLocator> {
         end = start - 1;
     }
 
-    if reversed.is_empty()
-        || marker_bytes(reversed.len()) > MAX_EVIDENCE_MARKER_BYTES
-        || marker_is_in_quote_or_code(content, suffix_start)
-    {
+    if reversed.is_empty() || marker_is_in_quote_or_code(content, suffix_start) {
         return Vec::new();
     }
 
-    reversed
-        .into_iter()
-        .rev()
-        .map(EvidenceLocator::from_key)
-        .collect()
+    reversed.into_iter().rev().collect()
+}
+
+fn marker_start(candidate: &str) -> Option<(usize, &'static str, SentexRole, bool)> {
+    [
+        (CLAIM_MARKER_PREFIX, SentexRole::Claim, false),
+        (CITATION_MARKER_PREFIX, SentexRole::Citation, false),
+        (LEGACY_CITATION_MARKER_PREFIX, SentexRole::Citation, true),
+    ]
+    .into_iter()
+    .filter_map(|(prefix, role, legacy)| {
+        candidate
+            .rfind(prefix)
+            .map(|start| (start, prefix, role, legacy))
+    })
+    .max_by_key(|(start, _, _, _)| *start)
 }
 
 /// Binds author-free parsed locators to Discord's system-derived author.
-pub(crate) fn parse_offered_evidence(content: &str, author_id: UserId) -> Vec<OfferedEvidence> {
-    parse_evidence_locators(content)
+pub(crate) fn parse_offered_sentexes(content: &str, author_id: UserId) -> Vec<OfferedSentex> {
+    parse_sentex_locators(content)
         .into_iter()
-        .map(|locator| OfferedEvidence { locator, author_id })
+        .map(|locator| OfferedSentex { locator, author_id })
         .collect()
 }
 
-/// Projects parsed evidence into the common MCP JSON shape.
-pub(crate) fn offered_evidence_json(content: &str, author_id: UserId) -> Vec<Value> {
-    parse_offered_evidence(content, author_id)
+fn offered_sentex_json(content: &str, author_id: UserId, role: SentexRole) -> Vec<Value> {
+    parse_offered_sentexes(content, author_id)
         .into_iter()
-        .map(|evidence| {
+        .filter(|sentex| sentex.locator.role() == role)
+        .map(|sentex| {
             json!({
-                "locator": evidence.locator.as_str(),
-                "author_id": evidence.author_id.get().to_string(),
+                "locator": sentex.locator.as_str(),
+                "author_id": sentex.author_id.get().to_string(),
             })
         })
         .collect()
 }
 
-/// Adds the optional evidence projection without changing legacy empty shapes.
-pub(crate) fn project_evidence(target: &mut Value, content: &str, author_id: UserId) {
-    let evidence = offered_evidence_json(content, author_id);
-    if !evidence.is_empty() {
-        target["evidence"] = json!(evidence);
+/// Adds role-separated projections without changing legacy empty shapes.
+pub(crate) fn project_sentexes(target: &mut Value, content: &str, author_id: UserId) {
+    let claims = offered_sentex_json(content, author_id, SentexRole::Claim);
+    let citations = offered_sentex_json(content, author_id, SentexRole::Citation);
+    if !claims.is_empty() {
+        target["claim_locators"] = json!(claims);
+    }
+    if !citations.is_empty() {
+        target["citation_locators"] = json!(citations);
     }
 }
 
@@ -412,20 +533,22 @@ fn scan_inline_delimiters(line: &str, delimiter: &mut Option<usize>) {
     }
 }
 
-fn validate_marker_bytes(keys: &[VaeliiEvidenceKey]) -> Result<(), String> {
-    let bytes = marker_bytes(keys.len());
-    if bytes > MAX_EVIDENCE_MARKER_BYTES {
+fn validate_marker_bytes(handles: &SentexHandles) -> Result<(), String> {
+    let bytes = marker_bytes(handles);
+    if bytes > MAX_SENTEX_MARKER_BYTES {
         return Err(format!(
-            "evidence marker suffix exceeds {MAX_EVIDENCE_MARKER_BYTES} bytes"
+            "sentex marker suffix exceeds {MAX_SENTEX_MARKER_BYTES} bytes"
         ));
     }
     Ok(())
 }
 
-const fn marker_bytes(count: usize) -> usize {
-    count * (MARKER_PREFIX.len() + ENCODED_KEY_LEN + MARKER_SUFFIX.len())
-        + count.saturating_sub(1)
-        + if count > 0 { 1 } else { 0 }
+fn marker_bytes(handles: &SentexHandles) -> usize {
+    let marker_content = handles.claims().len()
+        * (CLAIM_MARKER_PREFIX.len() + LOCATOR_TOKEN_LEN + MARKER_SUFFIX.len())
+        + handles.citations().len()
+            * (CITATION_MARKER_PREFIX.len() + LOCATOR_TOKEN_LEN + MARKER_SUFFIX.len());
+    marker_content + handles.len().saturating_sub(1) + usize::from(!handles.is_empty())
 }
 
 #[cfg(test)]
@@ -434,17 +557,31 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn terminal_markers_parse_in_original_order_with_discord_author() {
+    fn legacy_terminal_markers_parse_as_citations_with_discord_author() {
         let content = "claim [🔍=v1:AAAAAAAAAAw] [🔍=v1:AAAAAAAAACI]";
-        let evidence = parse_offered_evidence(content, UserId::new(99));
-        assert_eq!(evidence.len(), 2);
-        assert_eq!(evidence[0].locator.as_str(), "v1:AAAAAAAAAAw");
-        assert_eq!(evidence[1].locator.as_str(), "v1:AAAAAAAAACI");
+        let sentexes = parse_offered_sentexes(content, UserId::new(99));
+        assert_eq!(sentexes.len(), 2);
+        assert_eq!(sentexes[0].locator.as_str(), "v1:AAAAAAAAAAw");
+        assert_eq!(sentexes[1].locator.as_str(), "v1:AAAAAAAAACI");
         assert!(
-            evidence
-                .iter()
-                .all(|item| item.author_id == UserId::new(99))
+            sentexes.iter().all(|item| item.author_id == UserId::new(99)
+                && item.locator.role() == SentexRole::Citation)
         );
+    }
+
+    #[test]
+    fn v2_terminal_markers_preserve_roles_and_original_order() {
+        let content = concat!(
+            "claim ",
+            "[🔍=v2:citation:AAAAAAAAACI] ",
+            "[🔍=v2:claim:AAAAAAAAAAw]"
+        );
+        let sentexes = parse_offered_sentexes(content, UserId::new(99));
+        assert_eq!(sentexes.len(), 2);
+        assert_eq!(sentexes[0].locator.role(), SentexRole::Citation);
+        assert_eq!(sentexes[0].locator.as_str(), "v2:citation:AAAAAAAAACI");
+        assert_eq!(sentexes[1].locator.role(), SentexRole::Claim);
+        assert_eq!(sentexes[1].locator.as_str(), "v2:claim:AAAAAAAAAAw");
     }
 
     #[test]
@@ -463,7 +600,7 @@ mod tests {
             "```\ncode example [🔍=v1:AAAAAAAAAAw]",
             "```rust\nlet marker = \"example\"; [🔍=v1:AAAAAAAAAAw]",
         ] {
-            assert_eq!(parse_offered_evidence(content, UserId::new(99)), vec![]);
+            assert_eq!(parse_offered_sentexes(content, UserId::new(99)), vec![]);
         }
     }
 
@@ -477,7 +614,7 @@ mod tests {
             "example ```claim [🔍=v1:AAAAAAAAAAw]",
             "example ````claim [🔍=v1:AAAAAAAAAAw]",
         ] {
-            assert!(parse_evidence_locators(content).is_empty());
+            assert!(parse_sentex_locators(content).is_empty());
         }
     }
 
@@ -488,24 +625,21 @@ mod tests {
             "```\n    ```\nstill code\n```\nclaim [🔍=v1:AAAAAAAAAAw]",
             "`inline\n>>> code example\nclosed` claim [🔍=v1:AAAAAAAAAAw]",
         ] {
-            assert_eq!(
-                parse_evidence_locators(content)[0].as_str(),
-                "v1:AAAAAAAAAAw"
-            );
+            assert_eq!(parse_sentex_locators(content)[0].as_str(), "v1:AAAAAAAAAAw");
         }
     }
 
     #[test]
     fn four_space_indented_backticks_do_not_close_an_open_fence() {
         let content = "```\n    ```\nstill code [🔍=v1:AAAAAAAAAAw]";
-        assert!(parse_evidence_locators(content).is_empty());
+        assert!(parse_sentex_locators(content).is_empty());
     }
 
     #[test]
     fn four_space_indented_backticks_do_not_poison_a_later_claim() {
         // Indented code block after a blank line — backticks are literal.
         let content = "    ```\nclaim [🔍=v1:AAAAAAAAAAw]";
-        let locators = parse_evidence_locators(content);
+        let locators = parse_sentex_locators(content);
         assert_eq!(locators.len(), 1);
         assert_eq!(locators[0].as_str(), "v1:AAAAAAAAAAw");
     }
@@ -523,7 +657,7 @@ mod tests {
             "paragraph text\n    ``unclosed span\nclaim [🔍=v1:AAAAAAAAAAw]",
         ] {
             assert!(
-                parse_evidence_locators(content).is_empty(),
+                parse_sentex_locators(content).is_empty(),
                 "paragraph-continuation indented backtick must poison: {content:?}"
             );
         }
@@ -534,7 +668,7 @@ mod tests {
         // Blank line before indented line — genuine indented code block.
         // Backtick is literal code content, should NOT open an inline span.
         let content = "paragraph text\n\n    `indented code\nclaim [🔍=v1:AAAAAAAAAAw]";
-        let locators = parse_evidence_locators(content);
+        let locators = parse_sentex_locators(content);
         assert_eq!(locators.len(), 1);
         assert_eq!(locators[0].as_str(), "v1:AAAAAAAAAAw");
     }
@@ -549,7 +683,7 @@ mod tests {
             "paragraph\n\n    claim [🔍=v1:AAAAAAAAAAw]",
         ] {
             assert!(
-                parse_evidence_locators(content).is_empty(),
+                parse_sentex_locators(content).is_empty(),
                 "marker on indented code line must be rejected: {content:?}"
             );
         }
@@ -563,7 +697,7 @@ mod tests {
             "paragraph\n\n    line 1\n    `line 2\nclaim [🔍=v1:AAAAAAAAAAw]",
             "\n    line 1\n    line 2\n    line 3\nclaim [🔍=v1:AAAAAAAAAAw]",
         ] {
-            let locators = parse_evidence_locators(content);
+            let locators = parse_sentex_locators(content);
             assert_eq!(
                 locators.len(),
                 1,
@@ -578,7 +712,7 @@ mod tests {
         // without a blank line. A marker there is in code.
         let content = "# Heading\n    claim [🔍=v1:AAAAAAAAAAw]";
         assert!(
-            parse_evidence_locators(content).is_empty(),
+            parse_sentex_locators(content).is_empty(),
             "marker in indented code after heading must be rejected"
         );
     }
@@ -589,7 +723,7 @@ mod tests {
         // paragraph continuation).
         let content = "```\ncode\n```\n    claim [🔍=v1:AAAAAAAAAAw]";
         assert!(
-            parse_evidence_locators(content).is_empty(),
+            parse_sentex_locators(content).is_empty(),
             "marker in indented code after fence close must be rejected"
         );
     }
@@ -601,7 +735,7 @@ mod tests {
         let content =
             "paragraph\n\n    code line\n\nparagraph 2\n    `backtick\nclaim [🔍=v1:AAAAAAAAAAw]";
         assert!(
-            parse_evidence_locators(content).is_empty(),
+            parse_sentex_locators(content).is_empty(),
             "backtick on paragraph continuation after code block must poison"
         );
     }
@@ -612,7 +746,7 @@ mod tests {
         // are continuations.
         let content = "\n    code\nparagraph\n    `backtick\nclaim [🔍=v1:AAAAAAAAAAw]";
         assert!(
-            parse_evidence_locators(content).is_empty(),
+            parse_sentex_locators(content).is_empty(),
             "backtick on paragraph continuation after exiting code must poison"
         );
     }
@@ -627,78 +761,146 @@ mod tests {
             "example ```inline``` claim [🔍=v1:AAAAAAAAAAw]",
             "example ````inline\nexample```` claim [🔍=v1:AAAAAAAAAAw]",
         ] {
-            assert_eq!(
-                parse_evidence_locators(content)[0].as_str(),
-                "v1:AAAAAAAAAAw"
-            );
+            assert_eq!(parse_sentex_locators(content)[0].as_str(), "v1:AAAAAAAAAAw");
         }
     }
 
     #[test]
     fn locator_requires_exact_nonzero_eight_byte_canonical_payload() {
-        assert!(VaeliiEvidenceKey::from_locator_token("AAAAAAAAAAA").is_none());
-        assert!(VaeliiEvidenceKey::from_locator_token("AAAAAAAAAAw=").is_none());
-        assert!(VaeliiEvidenceKey::from_locator_token("AAAAAAAAAA").is_none());
-        assert!(VaeliiEvidenceKey::from_locator_token("AAAAAAAAAAAA").is_none());
+        assert!(VaeliiSentexHandle::from_locator_token("AAAAAAAAAAA").is_none());
+        assert!(VaeliiSentexHandle::from_locator_token("AAAAAAAAAAw=").is_none());
+        assert!(VaeliiSentexHandle::from_locator_token("AAAAAAAAAA").is_none());
+        assert!(VaeliiSentexHandle::from_locator_token("AAAAAAAAAAAA").is_none());
         assert_eq!(
-            VaeliiEvidenceKey::from_locator_token("__________8"),
-            Some(VaeliiEvidenceKey(NonZeroU64::new(u64::MAX).unwrap()))
+            VaeliiSentexHandle::from_locator_token("__________8"),
+            Some(VaeliiSentexHandle(NonZeroU64::new(u64::MAX).unwrap()))
         );
     }
 
     #[test]
-    fn tool_input_is_optional_and_bounded() {
-        assert!(parse_tool_evidence_keys(&json!({})).unwrap().is_empty());
-        assert!(parse_tool_evidence_keys(&json!({ "evidence_keys": [1] })).is_err());
+    fn tool_input_is_role_separated_canonical_and_combined_bounded() {
+        assert!(parse_tool_sentex_handles(&json!({})).unwrap().is_empty());
+        assert!(parse_tool_sentex_handles(&json!({ "evidence_keys": ["1"] })).is_err());
+        for field in ["claim_handles", "citation_handles"] {
+            for invalid in [
+                json!([1]),
+                json!([9_007_199_254_740_993u64]),
+                json!(["0"]),
+                json!(["01"]),
+                json!(["-1"]),
+                json!(["abc"]),
+                json!(["18446744073709551616"]),
+                json!("1"),
+            ] {
+                assert!(
+                    parse_tool_sentex_handles(&json!({ field: invalid })).is_err(),
+                    "{field} accepted a noncanonical handle"
+                );
+            }
+        }
         assert!(
-            parse_tool_evidence_keys(&json!({ "evidence_keys": [9_007_199_254_740_993u64] }))
-                .is_err()
+            parse_tool_sentex_handles(&json!({
+                "claim_handles": ["1", "2"],
+                "citation_handles": ["3", "4"]
+            }))
+            .is_ok()
         );
-        assert!(parse_tool_evidence_keys(&json!({ "evidence_keys": ["0"] })).is_err());
-        assert!(parse_tool_evidence_keys(&json!({ "evidence_keys": ["abc"] })).is_err());
         assert!(
-            parse_tool_evidence_keys(&json!({ "evidence_keys": ["1", "2", "3", "4", "5"] }))
-                .is_err()
+            parse_tool_sentex_handles(&json!({
+                "claim_handles": ["1", "2"],
+                "citation_handles": ["3", "4", "5"]
+            }))
+            .is_err()
+        );
+        let oversized_invalid = vec![Value::Null; MAX_SENTEX_REFS + 1];
+        assert_eq!(
+            parse_tool_sentex_handles(&json!({ "claim_handles": oversized_invalid })).unwrap_err(),
+            "claim_handles and citation_handles support at most 4 total references"
         );
     }
 
     #[test]
-    fn appending_markers_uses_canonical_big_endian_base64url() {
-        let keys = parse_tool_evidence_keys(&json!({ "evidence_keys": ["12", "34"] })).unwrap();
+    fn terminal_sentex_syntax_distinguishes_absent_from_invalid() {
+        assert!(!has_terminal_sentex_syntax("ordinary prose"));
+        assert!(!has_terminal_sentex_syntax(
+            "quoted `[🔍=v2:claim:garbage]`"
+        ));
+        assert!(!has_terminal_sentex_syntax(
+            "discussion [🔍=v2:claim:garbage] (see appendix [A])"
+        ));
+        assert!(has_terminal_sentex_syntax(
+            "malformed [🔍=v2:claim:garbage]"
+        ));
+        assert!(has_terminal_sentex_syntax(concat!(
+            "over limit ",
+            "[🔍=v2:claim:AAAAAAAAAAE] ",
+            "[🔍=v2:claim:AAAAAAAAAAI] ",
+            "[🔍=v2:claim:AAAAAAAAAAM] ",
+            "[🔍=v2:claim:AAAAAAAAAAQ] ",
+            "[🔍=v2:claim:AAAAAAAAAAU]"
+        )));
+    }
+
+    #[test]
+    fn appending_markers_uses_role_preserving_v2_big_endian_base64url() {
+        let handles = parse_tool_sentex_handles(&json!({
+            "claim_handles": ["12"],
+            "citation_handles": ["34"]
+        }))
+        .unwrap();
         assert_eq!(
-            append_markers("claim", &keys),
-            "claim [🔍=v1:AAAAAAAAAAw] [🔍=v1:AAAAAAAAACI]"
+            append_markers("claim", &handles),
+            "claim [🔍=v2:claim:AAAAAAAAAAw] [🔍=v2:citation:AAAAAAAAACI]"
         );
     }
 
     #[test]
     fn u64_max_string_round_trips_through_the_canonical_locator() {
-        let keys =
-            parse_tool_evidence_keys(&json!({ "evidence_keys": [u64::MAX.to_string()] })).unwrap();
-        let content = append_markers("claim", &keys);
-        assert_eq!(content, "claim [🔍=v1:__________8]");
+        let handles =
+            parse_tool_sentex_handles(&json!({ "claim_handles": [u64::MAX.to_string()] })).unwrap();
+        let content = append_markers("claim", &handles);
+        assert_eq!(content, "claim [🔍=v2:claim:__________8]");
         assert_eq!(
-            parse_evidence_locators(&content)[0].as_str(),
-            "v1:__________8"
+            parse_sentex_locators(&content)[0].as_str(),
+            "v2:claim:__________8"
         );
     }
 
     #[test]
-    fn locator_metadata_is_canonical_and_ordered() {
-        let keys = parse_tool_evidence_keys(&json!({ "evidence_keys": ["12", "34"] })).unwrap();
-        assert_eq!(locator_metadata(&keys), "v1:AAAAAAAAAAw,v1:AAAAAAAAACI");
+    fn locator_metadata_is_role_preserving_canonical_and_ordered() {
+        let handles = parse_tool_sentex_handles(&json!({
+            "claim_handles": ["12", "34"],
+            "citation_handles": ["56"]
+        }))
+        .unwrap();
+        assert_eq!(
+            locator_metadata(handles.claims(), SentexRole::Claim),
+            "v2:claim:AAAAAAAAAAw,v2:claim:AAAAAAAAACI"
+        );
+        assert_eq!(
+            locator_metadata(handles.citations(), SentexRole::Citation),
+            "v2:citation:AAAAAAAAADg"
+        );
     }
 
     #[test]
     fn marker_byte_bound_covers_the_largest_allowed_suffix() {
-        let keys = std::iter::repeat_with(|| VaeliiEvidenceKey(NonZeroU64::new(u64::MAX).unwrap()))
-            .take(MAX_EVIDENCE_REFS)
-            .collect::<Vec<_>>();
-        assert_eq!(marker_bytes(keys.len()), MAX_EVIDENCE_MARKER_BYTES);
-        assert!(validate_marker_bytes(&keys).is_ok());
-        let over_limit = std::iter::repeat_with(|| VaeliiEvidenceKey(NonZeroU64::new(1).unwrap()))
-            .take(MAX_EVIDENCE_REFS + 1)
-            .collect::<Vec<_>>();
+        let largest = SentexHandles {
+            claims: Vec::new(),
+            citations: std::iter::repeat_with(|| {
+                VaeliiSentexHandle(NonZeroU64::new(u64::MAX).unwrap())
+            })
+            .take(MAX_SENTEX_REFS)
+            .collect(),
+        };
+        assert_eq!(marker_bytes(&largest), MAX_SENTEX_MARKER_BYTES);
+        assert!(validate_marker_bytes(&largest).is_ok());
+        let over_limit = SentexHandles {
+            claims: Vec::new(),
+            citations: std::iter::repeat_with(|| VaeliiSentexHandle(NonZeroU64::new(1).unwrap()))
+                .take(MAX_SENTEX_REFS + 1)
+                .collect(),
+        };
         assert!(validate_marker_bytes(&over_limit).is_err());
     }
 }

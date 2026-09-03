@@ -315,10 +315,10 @@ impl NotificationEvent {
     pub(crate) fn has_offered_evidence(&self) -> bool {
         match self {
             Self::Message(message) => {
-                !crate::evidence::parse_evidence_locators(&message.content).is_empty()
+                !crate::evidence::parse_sentex_locators(&message.content).is_empty()
             }
             Self::MessageEdit { new_content, .. } => {
-                !crate::evidence::parse_evidence_locators(new_content).is_empty()
+                !crate::evidence::parse_sentex_locators(new_content).is_empty()
             }
             _ => false,
         }

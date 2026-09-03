@@ -1534,66 +1534,81 @@ fn test_reply_tool_schema_includes_suppress_ping() {
 }
 
 #[test]
-fn evidence_key_schema_is_bounded_on_send_surfaces_only() {
+fn evidence_handle_schema_is_role_separated_and_bounded_on_send_surfaces_only() {
     let list = test_helpers::get_tools_list_with_evidence();
     let tools = list["tools"].as_array().expect("tools array");
-    for name in ["reply", "send_dm"] {
+    let send_surfaces = ["reply", "send_dm"];
+    for name in send_surfaces {
         let tool = tools
             .iter()
             .find(|tool| tool["name"] == name)
             .expect("send tool");
-        let schema = &tool["inputSchema"]["properties"]["evidence_keys"];
-        assert_eq!(schema["type"], "array");
-        assert_eq!(schema["maxItems"], 4);
-        assert_eq!(schema["items"]["type"], "string");
-        assert!(
-            schema["description"]
-                .as_str()
-                .unwrap()
-                .contains("not verification")
-        );
+        let properties = &tool["inputSchema"]["properties"];
+        for field in ["claim_handles", "citation_handles"] {
+            let schema = &properties[field];
+            assert_eq!(schema["type"], "array");
+            assert_eq!(schema["maxItems"], 4);
+            assert_eq!(schema["items"]["type"], "string");
+            assert_eq!(schema["items"]["pattern"], "^[1-9][0-9]*$");
+            assert_eq!(schema["items"]["maxLength"], 20);
+            assert!(
+                schema["description"]
+                    .as_str()
+                    .unwrap()
+                    .contains("not verification")
+            );
+        }
+        assert!(properties.get("evidence_keys").is_none());
     }
 
-    let edit = tools
-        .iter()
-        .find(|tool| tool["name"] == "edit_message")
-        .expect("edit tool");
-    assert!(
-        edit["inputSchema"]["properties"]
-            .get("evidence_keys")
-            .is_none()
-    );
+    for tool in tools {
+        let name = tool["name"].as_str().expect("tool name");
+        let properties = &tool["inputSchema"]["properties"];
+        assert!(
+            properties.get("evidence_keys").is_none(),
+            "{name} must not advertise the removed evidence_keys field"
+        );
+        if !send_surfaces.contains(&name) {
+            assert!(
+                properties.get("claim_handles").is_none()
+                    && properties.get("citation_handles").is_none(),
+                "{name} must not advertise sentex handles"
+            );
+        }
+    }
 }
 
 #[tokio::test]
-async fn evidence_key_dispatch_rejects_noncanonical_and_numeric_inputs() {
+async fn evidence_handle_dispatch_rejects_legacy_noncanonical_and_over_limit_inputs() {
     let (_dir, state_dir) = temp_state_dir();
     let _config =
         load_config_fixture(&state_dir, "[delivery]\nevidence_markers_enabled = true\n").await;
     let server = make_server(&state_dir);
     let cases = [
-        json!([1]),
-        json!([9_007_199_254_740_993u64]),
-        json!(["0"]),
-        json!(["01"]),
-        json!(["-1"]),
-        json!(["18446744073709551616"]),
-        json!(["1", "2", "3", "4", "5"]),
-        json!("1"),
+        ("evidence_keys", json!(["1"])),
+        ("claim_handles", json!([1])),
+        ("claim_handles", json!([9_007_199_254_740_993u64])),
+        ("claim_handles", json!(["0"])),
+        ("claim_handles", json!(["01"])),
+        ("claim_handles", json!(["-1"])),
+        ("claim_handles", json!(["18446744073709551616"])),
+        ("claim_handles", json!(["1", "2", "3", "4", "5"])),
+        ("citation_handles", json!("1")),
     ];
 
-    for (index, evidence_keys) in cases.into_iter().enumerate() {
+    for (index, (field, handles)) in cases.into_iter().enumerate() {
+        let mut arguments = json!({
+            "channel_id": "999999",
+            "content": "claim"
+        });
+        arguments[field] = handles;
         let request = json!({
             "jsonrpc": "2.0",
             "id": 900 + index,
             "method": "tools/call",
             "params": {
                 "name": "reply",
-                "arguments": {
-                    "channel_id": "999999",
-                    "content": "claim",
-                    "evidence_keys": evidence_keys
-                }
+                "arguments": arguments
             }
         });
         let response = test_helpers::dispatch_request(&server, request)
@@ -1601,8 +1616,73 @@ async fn evidence_key_dispatch_rejects_noncanonical_and_numeric_inputs() {
             .expect("JSON-RPC response");
         let message = response["error"]["message"].as_str().unwrap_or_default();
         assert!(
-            message.contains("evidence_keys") || message.contains("evidence keys"),
-            "case {index} must fail at evidence key parsing, got: {response}"
+            message.contains(field)
+                || message.contains("claim_handles and citation_handles support at most"),
+            "case {index} must fail at {field} parsing, got: {response}"
+        );
+    }
+
+    let combined_over_limit = json!({
+        "jsonrpc": "2.0",
+        "id": 950,
+        "method": "tools/call",
+        "params": {
+            "name": "reply",
+            "arguments": {
+                "channel_id": "999999",
+                "content": "claim",
+                "claim_handles": ["1", "2"],
+                "citation_handles": ["3", "4", "5"]
+            }
+        }
+    });
+    let response = test_helpers::dispatch_request(&server, combined_over_limit)
+        .await
+        .expect("JSON-RPC response");
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("at most 4 total references")
+    );
+}
+
+#[tokio::test]
+async fn disabled_evidence_markers_reject_present_handle_fields_even_when_empty() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir);
+
+    for (index, (tool, destination_field, destination, handle_field)) in [
+        ("reply", "channel_id", "999999", "claim_handles"),
+        ("reply", "channel_id", "999999", "citation_handles"),
+        ("send_dm", "user_id", "999999", "claim_handles"),
+        ("send_dm", "user_id", "999999", "citation_handles"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut arguments = json!({
+            "content": "claim",
+        });
+        arguments[destination_field] = json!(destination);
+        arguments[handle_field] = json!([]);
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 960 + index,
+            "method": "tools/call",
+            "params": {
+                "name": tool,
+                "arguments": arguments,
+            }
+        });
+
+        let response = test_helpers::dispatch_request(&server, request)
+            .await
+            .expect("JSON-RPC response");
+        assert_eq!(
+            response["error"]["message"],
+            "claim_handles and citation_handles require evidence_markers_enabled",
+            "{tool} must reject present {handle_field} while evidence markers are disabled"
         );
     }
 }
