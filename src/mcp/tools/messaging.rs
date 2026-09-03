@@ -62,6 +62,16 @@ pub(crate) fn phantom_canary_alert(
 /// reported directly without a phantom alert. `Expired` and `Unavailable` log
 /// but allow the operation to proceed (legitimate edge cases).
 ///
+/// `own_send` exempts one specific `Unknown` case: a target this seat itself
+/// authored. Our own sends are (correctly) absent from the ingress ledger,
+/// whose domain is *received* messages, so acting on one — reacting to, replying
+/// to, or deleting our own message — otherwise trips the canary on our own hand
+/// (dione#334). The exemption is centralized here so react/reply/pin/delete all
+/// inherit it. It keys on the caller's *authenticated* own-send signal
+/// (`SharedState::is_own_send`), never a target's claimed-author field, so a
+/// spoofed inbound claiming our identity is still quarantined. It applies **only**
+/// to `Unknown`; `ChannelMismatch`, `Expired`, and `Unavailable` are unaffected.
+///
 /// `operation` names the egress path for tracing and alerts (e.g. "react",
 /// "pin_message").
 pub(crate) fn verify_message_target(
@@ -71,6 +81,7 @@ pub(crate) fn verify_message_target(
     message_id: MessageId,
     channel_id: ChannelId,
     operation: &str,
+    own_send: bool,
 ) -> Result<(), Value> {
     verify_message_target_with_alert(
         ledger,
@@ -78,6 +89,7 @@ pub(crate) fn verify_message_target(
         message_id,
         channel_id,
         operation,
+        own_send,
         |alert_channel, content| phantom_canary_alert(http, alert_channel, &content),
     )
 }
@@ -88,10 +100,24 @@ fn verify_message_target_with_alert(
     message_id: MessageId,
     channel_id: ChannelId,
     operation: &str,
+    own_send: bool,
     mut alert: impl FnMut(ChannelId, String),
 ) -> Result<(), Value> {
     match ledger.verify(message_id, channel_id) {
         crate::ingress_ledger::VerifyResult::Admitted { .. } => Ok(()),
+        crate::ingress_ledger::VerifyResult::Unknown if own_send => {
+            // The acting seat authored this target. It is correctly absent from
+            // the received-message ingress ledger, so its `Unknown` is expected,
+            // not suspicious. Exempt from the phantom canary — proven our own
+            // hand by an authenticated own-send record, not a claimed author.
+            tracing::debug!(
+                message_id = message_id.get(),
+                channel_id = channel_id.get(),
+                operation,
+                "egress: own-authored target absent from ingress ledger (expected); phantom canary exempt"
+            );
+            Ok(())
+        }
         crate::ingress_ledger::VerifyResult::Unknown => {
             tracing::warn!(
                 message_id = message_id.get(),
@@ -616,17 +642,19 @@ pub(crate) async fn reply_with_evidence_and_hook_overrides(
         return error;
     }
 
-    if let Some(ref_id) = reply_to_message_id
-        && let Err(error) = verify_message_target(
+    if let Some(ref_id) = reply_to_message_id {
+        let own_send = ctx.state.read().await.is_own_send(ref_id.get());
+        if let Err(error) = verify_message_target(
             &ctx.ingress_ledger,
             &ctx.http,
             &ctx.config,
             ref_id,
             channel_id,
             "reply_to",
-        )
-    {
-        return error;
+            own_send,
+        ) {
+            return error;
+        }
     }
 
     let prepared = match prepare_outbound(
@@ -1185,6 +1213,7 @@ pub async fn react(
         return e;
     }
 
+    let own_send = ctx.state.read().await.is_own_send(message_id.get());
     if let Err(e) = verify_message_target(
         &ctx.ingress_ledger,
         &ctx.http,
@@ -1192,6 +1221,7 @@ pub async fn react(
         message_id,
         channel_id,
         "react",
+        own_send,
     ) {
         return e;
     }
@@ -2091,6 +2121,7 @@ mod tests {
             MessageId::new(7),
             ChannelId::new(42),
             "react",
+            false,
             |channel, content| alerts.push((channel, content)),
         )
         .expect_err("a channel mismatch must be blocked");
@@ -2117,6 +2148,7 @@ mod tests {
             MessageId::new(8),
             ChannelId::new(42),
             "react",
+            false,
             |channel, content| alerts.push((channel, content)),
         )
         .expect_err("an unknown target must be blocked");
@@ -2128,6 +2160,83 @@ mod tests {
         assert_eq!(alerts[0].0, ChannelId::new(99));
         assert!(alerts[0].1.contains("PHANTOM CANARY"));
         assert!(alerts[0].1.contains("Unknown"));
+    }
+
+    /// dione#334: the acting seat's own-authored targets are exempt from the
+    /// phantom canary, and nothing else is. Each assertion is a mutation guard —
+    /// the comment names the change that turns it red.
+    #[test]
+    fn own_send_exemption_covers_unknown_and_never_a_spoof() {
+        let config = configured_ingress_test_config();
+        let ledger = IngressLedger::new();
+        let mut alerts = Vec::new();
+
+        // (1) known-mine: an own-authored target is (correctly) absent from the
+        // received-message ledger, so its `Unknown` is expected — exempt, no
+        // alert, no block. RED if the `Unknown if own_send` arm is deleted.
+        verify_message_target_with_alert(
+            &ledger,
+            &config,
+            MessageId::new(500),
+            ChannelId::new(42),
+            "react",
+            true, // authenticated own-send
+            |channel, content| alerts.push((channel, content)),
+        )
+        .expect("an own-authored target must be exempt from the phantom canary");
+        assert!(
+            alerts.is_empty(),
+            "own-send exemption must not page the phantom canary"
+        );
+
+        // (2) spoof guard (Ari's guard — security-critical): the SAME target id
+        // with own_send=false — an inbound merely *claiming* our identity, which
+        // never passed a send path — must still alert and block. This is also
+        // the fail-closed case: no authenticated own-send evidence => not exempt.
+        // RED if the arm is weakened to `Unknown =>` (drops the `if own_send`).
+        let spoof = verify_message_target_with_alert(
+            &ledger,
+            &config,
+            MessageId::new(500),
+            ChannelId::new(42),
+            "react",
+            false, // no authenticated own-send record
+            |channel, content| alerts.push((channel, content)),
+        )
+        .expect_err("a target with no authenticated own-send record must be blocked");
+        assert!(spoof["error"].as_str().is_some_and(|error| {
+            error.contains("possible phantom") && error.contains("react blocked")
+        }));
+        assert_eq!(alerts.len(), 1, "the spoof case must page exactly once");
+        assert_eq!(alerts[0].0, ChannelId::new(99));
+        assert!(alerts[0].1.contains("PHANTOM CANARY"));
+
+        // (3) scope: own_send must NOT rescue a channel mismatch — the exemption
+        // is `Unknown`-only. Admitted in channel 41, claimed in 42, own_send=true
+        // still blocks as a mismatch with no page. RED if the exemption is
+        // broadened past the `Unknown` arm.
+        ledger.note_admitted(
+            MessageId::new(7),
+            ChannelId::new(41),
+            UserId::new(100),
+            "known message",
+        );
+        let mismatch = verify_message_target_with_alert(
+            &ledger,
+            &config,
+            MessageId::new(7),
+            ChannelId::new(42),
+            "react",
+            true,
+            |channel, content| alerts.push((channel, content)),
+        )
+        .expect_err("own_send must not exempt a channel mismatch");
+        assert_eq!(mismatch["reason"], "channel_mismatch");
+        assert_eq!(
+            alerts.len(),
+            1,
+            "a channel mismatch must not page even when own_send is set"
+        );
     }
 
     #[tokio::test]
@@ -2204,6 +2313,67 @@ mod tests {
         assert!(
             requests.lock().expect("request capture lock").is_empty(),
             "neither rejection may reach the Discord HTTP boundary"
+        );
+        server.abort();
+    }
+
+    /// dione#334 end-to-end through the real `react` call site: a recorded
+    /// own-send is exempt and reaches Discord; a non-own unknown target is
+    /// blocked before the boundary. This pins the caller wiring the private
+    /// `verify_message_target_with_alert` unit test cannot — it fails if `react`
+    /// drops/inverts `own_send`, or if `is_own_send` stops consulting state.
+    #[tokio::test]
+    async fn react_exempts_recorded_own_send_and_blocks_non_own() {
+        let (http, requests, server) = fake_discord_http().await;
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        raw.phantom_canary.alert_channel_id = "99".into();
+        // Empty ledger: every target verifies as Unknown, so only the own-send
+        // signal can distinguish exempt from blocked.
+        let ledger = Arc::new(IngressLedger::new());
+        let ctx = MessagingCtx::new(
+            http,
+            new_state(),
+            Arc::new(LoadedConfig::from_raw(raw)),
+            "/tmp".into(),
+            Arc::new(ConsentGate::new(camino::Utf8Path::new("/tmp"))),
+            ledger,
+        );
+
+        // Non-own target: blocked by the canary before any Discord mutation.
+        let blocked = react(&ctx, ChannelId::new(42), MessageId::new(8), "✅").await;
+        assert!(
+            blocked["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("possible phantom")),
+            "a non-own unknown target must trip the canary; got {blocked}"
+        );
+
+        // Own send recorded via note_sent: exempt, reaction reaches Discord.
+        ctx.state.write().await.note_sent(500);
+        let exempt = react(&ctx, ChannelId::new(42), MessageId::new(500), "✅").await;
+        assert!(
+            !exempt["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("possible phantom"),
+            "our own recorded message must be exempt from the canary; got {exempt}"
+        );
+
+        let seen = requests.lock().expect("request capture lock");
+        assert!(
+            seen.iter()
+                .any(|(path, _)| path.contains("/messages/500/reactions")),
+            "the exempt own-send reaction must reach the Discord boundary; saw {seen:?}"
+        );
+        assert!(
+            !seen
+                .iter()
+                .any(|(path, _)| path.contains("/messages/8/reactions")),
+            "the blocked non-own reaction must not reach the Discord boundary; saw {seen:?}"
         );
         server.abort();
     }

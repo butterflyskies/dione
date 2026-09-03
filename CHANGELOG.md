@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.40.1] - 2026-09-03
+
+### Fixed
+- **The phantom-canary no longer fires on a seat's own outbound messages.**
+  `verify_message_target` exempts targets whose IDs appear in the
+  authenticated `recent_sent_ids` egress record before classifying an
+  ingress-ledger miss as suspicious, closing the false-positive class where
+  replying or reacting to your own message tripped the canary (#334). Targets
+  merely *claiming* own authorship are still quarantined: the exemption keys
+  on the authenticated send record, never on the payload's author field.
+
 ## [0.40.0] - 2026-09-03
 
 ### Changed

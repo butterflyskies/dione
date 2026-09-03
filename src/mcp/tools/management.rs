@@ -43,6 +43,7 @@ pub async fn pin_message(
     if let Err(e) = check_outbound(ctx, channel_id).await {
         return e;
     }
+    let own_send = ctx.state.read().await.is_own_send(message_id.get());
     if let Err(e) = verify_message_target(
         &ctx.ingress_ledger,
         &ctx.http,
@@ -50,6 +51,7 @@ pub async fn pin_message(
         message_id,
         channel_id,
         "pin_message",
+        own_send,
     ) {
         return e;
     }
@@ -69,6 +71,7 @@ pub async fn unpin_message(
     if let Err(e) = check_outbound(ctx, channel_id).await {
         return e;
     }
+    let own_send = ctx.state.read().await.is_own_send(message_id.get());
     if let Err(e) = verify_message_target(
         &ctx.ingress_ledger,
         &ctx.http,
@@ -76,6 +79,7 @@ pub async fn unpin_message(
         message_id,
         channel_id,
         "unpin_message",
+        own_send,
     ) {
         return e;
     }
@@ -96,17 +100,19 @@ pub async fn create_thread(
     if let Err(e) = check_outbound(ctx, channel_id).await {
         return e;
     }
-    if let Some(mid) = message_id
-        && let Err(e) = verify_message_target(
+    if let Some(mid) = message_id {
+        let own_send = ctx.state.read().await.is_own_send(mid.get());
+        if let Err(e) = verify_message_target(
             &ctx.ingress_ledger,
             &ctx.http,
             &ctx.config,
             mid,
             channel_id,
             "create_thread",
-        )
-    {
-        return e;
+            own_send,
+        ) {
+            return e;
+        }
     }
 
     let thread_builder = CreateThread::new(name).kind(ChannelType::PublicThread);
@@ -152,6 +158,7 @@ pub async fn delete_message(
     if let Err(e) = check_outbound(ctx, channel_id).await {
         return e;
     }
+    let own_send = ctx.state.read().await.is_own_send(message_id.get());
     if let Err(e) = verify_message_target(
         &ctx.ingress_ledger,
         &ctx.http,
@@ -159,6 +166,7 @@ pub async fn delete_message(
         message_id,
         channel_id,
         "delete_message",
+        own_send,
     ) {
         return e;
     }
@@ -239,5 +247,35 @@ mod tests {
             check_outbound(&ctx, ChannelId::new(thread)).await.is_err(),
             "thread whose parent is absent from config must be denied"
         );
+    }
+
+    /// dione#334: every management call site must consult the own-send signal.
+    /// With an empty ledger and empty `recent_sent_ids`, `own_send` is false and
+    /// every target is Unknown, so the phantom canary must block before any
+    /// Discord call. This goes red if any site hardcodes `own_send = true`
+    /// (the exact mutation that otherwise survives the whole suite) — or drops
+    /// the check entirely.
+    #[tokio::test]
+    async fn management_ops_block_non_own_unknown_targets() {
+        let ctx = ctx(config_with_channel(42));
+        let ch = ChannelId::new(42);
+        let target = MessageId::new(8);
+        let cases = [
+            ("delete_message", delete_message(&ctx, ch, target).await),
+            ("pin_message", pin_message(&ctx, ch, target).await),
+            ("unpin_message", unpin_message(&ctx, ch, target).await),
+            (
+                "create_thread",
+                create_thread(&ctx, ch, Some(target), "t").await,
+            ),
+        ];
+        for (op, result) in cases {
+            assert!(
+                result["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("possible phantom")),
+                "{op} on a non-own unknown target must trip the phantom canary; got {result}"
+            );
+        }
     }
 }

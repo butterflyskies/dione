@@ -95,9 +95,39 @@ impl SharedState {
     }
 
     /// Records a sent message ID and auto-prunes if the set exceeds `cap`.
+    ///
+    /// **Contract — authenticated ids only.** Only ids proven bot-authored may
+    /// be recorded: a Discord send-response id, or an id whose `author.id` a
+    /// `get_message` confirmed equals the bot. Never a claimed/inbound author
+    /// field. `is_own_send` and the phantom-canary own-send exemption trust this
+    /// set as *proof* of own authorship — an unauthenticated id recorded here
+    /// would let a spoof claiming our identity borrow the exemption.
     pub fn note_sent(&mut self, id: u64) {
         self.recent_sent_ids.insert(id);
         self.prune_sent_ids(SENT_IDS_CAP);
+    }
+
+    /// Returns whether `id` is a recently sent bot-authored message.
+    ///
+    /// `recent_sent_ids` is populated only from the message IDs Discord returns
+    /// for our own sends (and permission-prompt DMs), plus reaction-target
+    /// lookups that confirmed `author.id == bot_id` — never from a claimed
+    /// author field (see `note_sent`'s contract). It is therefore an
+    /// *authenticated* own-authorship signal, safe for the phantom-canary
+    /// own-send exemption: a spoofed inbound claiming our identity never passed
+    /// through a send path, so its id is never present here.
+    ///
+    /// The check is by message id only, not `(channel, id)` — an own-send id is
+    /// globally unique, so the channel is not needed to authenticate authorship.
+    ///
+    /// This set is in-memory and capped (`SENT_IDS_CAP`). Eviction past the cap,
+    /// and a process restart (which empties it), only weaken the exemption
+    /// toward a false phantom alert on an *old* own message — never toward
+    /// admitting a spoof. Fully eliminating that residual would need an
+    /// authenticated fallback (fetch the target, exempt iff `author.id ==
+    /// bot_id`); see SCOPE-334.md.
+    pub fn is_own_send(&self, id: u64) -> bool {
+        self.recent_sent_ids.contains(&id)
     }
 
     /// Records a message ID confirmed not authored by the bot.
@@ -291,6 +321,24 @@ mod tests {
             state.recent_sent_ids.len() <= SENT_IDS_CAP,
             "sent IDs exceeded cap: {}",
             state.recent_sent_ids.len()
+        );
+    }
+
+    #[test]
+    fn is_own_send_reads_only_recorded_ids() {
+        // Guards the phantom-canary own-send exemption: is_own_send must be a
+        // real lookup, not a constant. A mutation to `true` fails the first and
+        // last asserts; a mutation to `false` fails the middle one.
+        let mut state = SharedState::new();
+        assert!(
+            !state.is_own_send(500),
+            "unrecorded id must not read as own"
+        );
+        state.note_sent(500);
+        assert!(state.is_own_send(500), "a recorded send must read as own");
+        assert!(
+            !state.is_own_send(501),
+            "an unrelated id must not read as own"
         );
     }
 
