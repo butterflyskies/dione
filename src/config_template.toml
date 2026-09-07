@@ -22,6 +22,15 @@ max_run_download_bytes = 262144000
 enabled = true
 construct_id = "dione"
 
+# Optional. When configured, an explicit `get_message` call records a compact
+# six-sentex tool receipt in Vaelii. Incidental delivery and catch-up reads do
+# not write receipts. The URL is the Vaelii daemon base URL (or its `/op` URL).
+# Authentication, when required, comes from VAELII_API_TOKEN.
+[vaelii]
+# server_url = "http://127.0.0.1:4200"
+# actor_term = "Syne"
+timeout_ms = 3000
+
 # Memory recall evaluation. Shadow logs only; live injects bells metadata.
 [bell_rings]
 enabled = false

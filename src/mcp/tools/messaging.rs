@@ -1807,7 +1807,35 @@ pub async fn get_message(
     }
 
     match ctx.http.get_message(channel_id, message_id).await {
-        Ok(m) => get_message_json(&ctx.config, &m),
+        Ok(m) => {
+            let mut projected = get_message_json(&ctx.config, &m);
+            if ctx.config.vaelii.is_enabled() {
+                match crate::vaelii::write_get_message_receipt(
+                    &ctx.config.vaelii,
+                    message_id.get(),
+                    ctx.construct_id.as_str(),
+                )
+                .await
+                {
+                    Ok(Some(receipt)) => {
+                        projected["vaelii_receipt"] = json!({
+                            "ok": true,
+                            "invocation": receipt.invocation,
+                            "receipt": receipt.receipt,
+                        });
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::warn!(%error, message_id = message_id.get(), "Vaelii receipt write failed");
+                        projected["vaelii_receipt"] = json!({
+                            "ok": false,
+                            "error": error.to_string(),
+                        });
+                    }
+                }
+            }
+            projected
+        }
         Err(e) => json!({ "error": e.to_string() }),
     }
 }
@@ -2379,8 +2407,15 @@ mod tests {
     }
 
     fn messaging_ctx(config: LoadedConfig) -> MessagingCtx {
+        messaging_ctx_with_http(config, Arc::new(serenity::http::Http::new("fake")))
+    }
+
+    fn messaging_ctx_with_http(
+        config: LoadedConfig,
+        http: Arc<serenity::http::Http>,
+    ) -> MessagingCtx {
         MessagingCtx::new(
-            Arc::new(serenity::http::Http::new("fake")),
+            http,
             new_state(),
             Arc::new(config),
             "/tmp".into(),
@@ -2467,7 +2502,29 @@ mod tests {
                     )
                 } else if path.ends_with("/typing") {
                     ("204 No Content", String::new())
-                } else if path.ends_with("/messages") {
+                } else if request_line.starts_with("GET ") && path.contains("/messages/") {
+                    (
+                        "200 OK",
+                        wire_message(
+                            9001,
+                            "explicit read",
+                            "2026-08-15T09:00:00.000000+00:00",
+                            json!([]),
+                        )
+                        .to_string(),
+                    )
+                } else if request_line.starts_with("GET ") && path.contains("/messages?") {
+                    (
+                        "200 OK",
+                        json!([wire_message(
+                            9002,
+                            "incidental fetch",
+                            "2026-08-15T09:00:01.000000+00:00",
+                            json!([]),
+                        )])
+                        .to_string(),
+                    )
+                } else if request_line.starts_with("POST ") && path.ends_with("/messages") {
                     let content = serde_json::from_str::<Value>(body)
                         .ok()
                         .and_then(|body| body["content"].as_str().map(str::to_owned))
@@ -2500,6 +2557,156 @@ mod tests {
             .ratelimiter_disabled(true)
             .build();
         (Arc::new(http), requests, server)
+    }
+
+    async fn fake_vaelii_http(
+        status: &'static str,
+    ) -> (
+        String,
+        Arc<std::sync::Mutex<Option<String>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake Vaelii API");
+        let address = listener.local_addr().expect("fake Vaelii API address");
+        let captured = Arc::new(std::sync::Mutex::new(None));
+        let request_slot = Arc::clone(&captured);
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept Vaelii request");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let read = stream.read(&mut buffer).await.expect("read Vaelii request");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n")
+                else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                    })
+                    .unwrap_or_default();
+                if request.len() >= header_end + 4 + content_length {
+                    break;
+                }
+            }
+            *request_slot.lock().expect("request capture lock") =
+                Some(String::from_utf8(request).expect("HTTP request is UTF-8"));
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/edn\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{{:ok true}}"
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("write Vaelii response");
+        });
+        (format!("http://{address}"), captured, server)
+    }
+
+    #[tokio::test]
+    async fn explicit_get_message_writes_receipt_only_when_vaelii_url_is_configured() {
+        let (discord_http, _discord_requests, discord_server) = fake_discord_http().await;
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), discord_http);
+
+        let projected = get_message(&ctx, ChannelId::new(42), MessageId::new(9001)).await;
+        assert_eq!(projected["content"], "explicit read");
+        assert!(projected.get("vaelii_receipt").is_none());
+        discord_server.abort();
+
+        let (discord_http, _discord_requests, discord_server) = fake_discord_http().await;
+        let (server_url, vaelii_request, vaelii_server) = fake_vaelii_http("200 OK").await;
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        raw.vaelii.server_url = Some(server_url);
+        raw.vaelii.actor_term = Some("Syne".to_owned());
+        let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), discord_http);
+
+        let projected = get_message(&ctx, ChannelId::new(42), MessageId::new(9001)).await;
+        assert_eq!(projected["content"], "explicit read");
+        assert_eq!(projected["vaelii_receipt"]["ok"], true);
+        assert_eq!(projected["vaelii_receipt"]["invocation"], "Check9001");
+        vaelii_server.await.unwrap();
+        let request = vaelii_request
+            .lock()
+            .expect("Vaelii request capture lock")
+            .clone()
+            .expect("Vaelii request was sent");
+        assert!(request.starts_with("POST /op HTTP/1.1\r\n"));
+        discord_server.abort();
+    }
+
+    #[tokio::test]
+    async fn configured_receipt_failure_preserves_the_retrieved_message() {
+        let (discord_http, _discord_requests, discord_server) = fake_discord_http().await;
+        let (server_url, _vaelii_request, vaelii_server) =
+            fake_vaelii_http("500 Internal Server Error").await;
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        raw.vaelii.server_url = Some(server_url);
+        raw.vaelii.actor_term = Some("Syne".to_owned());
+        let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), discord_http);
+
+        let projected = get_message(&ctx, ChannelId::new(42), MessageId::new(9001)).await;
+        assert_eq!(projected["content"], "explicit read");
+        assert_eq!(projected["vaelii_receipt"]["ok"], false);
+        assert_eq!(
+            projected["vaelii_receipt"]["error"],
+            "Vaelii receipt write returned HTTP 500 Internal Server Error"
+        );
+        vaelii_server.await.unwrap();
+        discord_server.abort();
+    }
+
+    #[tokio::test]
+    async fn incidental_fetch_does_not_write_a_vaelii_receipt() {
+        let (discord_http, _discord_requests, discord_server) = fake_discord_http().await;
+        let vaelii_listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind receipt tripwire");
+        let vaelii_address = vaelii_listener
+            .local_addr()
+            .expect("receipt tripwire address");
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        raw.vaelii.server_url = Some(format!("http://{vaelii_address}"));
+        raw.vaelii.actor_term = Some("Syne".to_owned());
+        let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), discord_http);
+
+        let projected = fetch_messages(&ctx, ChannelId::new(42), None, None, 10).await;
+        assert_eq!(projected["messages"][0]["content"], "incidental fetch");
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                vaelii_listener.accept()
+            )
+            .await
+            .is_err(),
+            "fetch_messages must not connect to Vaelii"
+        );
+        discord_server.abort();
     }
 
     fn messaging_ctx_with_halt_pipeline(

@@ -151,6 +151,34 @@ max_pending = 50
 notify_cooldown_seconds = 60
 ```
 
+### Explicit-read Vaelii receipts
+
+An explicit `get_message` call can record a compact provenance receipt in
+Vaelii. The bridge is disabled unless `[vaelii].server_url` is configured;
+ambient delivery, `fetch_messages`, and restart recovery do not write. The
+receipt contains the message snowflake and tool/actor terms, never message
+content or a claim that the message is true.
+
+```toml
+[vaelii]
+server_url = "http://127.0.0.1:4200"
+actor_term = "Syne" # defaults to pre_send.construct_id
+timeout_ms = 3000
+```
+
+Set `VAELII_API_TOKEN` when the endpoint requires a bearer token. A configured
+write failure is reported in the `get_message` result without discarding the
+retrieved Discord message. The six assertions are sent atomically to `CxWell`
+and use deterministic `Check<ID>` / `Receipt<ID>` terms, so repeating the same
+explicit read does not invent a second identity.
+
+The companion vocabulary in
+`resources/vaelii/dione-bridge-overlap.ke` carries the accepted `arg1`/`arg2`/
+`arg3` bridge plus experimental KB-invariant declarations. Dione validates a
+`naked_term` assertion batch before sending it, but that client-side check sees
+only the outbound batch: whole-KB enforcement still belongs at Vaelii's atomic
+write boundary.
+
 ### Vaelii sentex locators
 
 When `delivery.evidence_markers_enabled` is true, `reply` and `send_dm` accept

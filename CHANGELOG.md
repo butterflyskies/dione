@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-09-07
+
+### Added
+- **Explicit Discord message reads can emit provenance-only Vaelii receipts.**
+  When a Vaelii server URL is configured, `get_message` records exactly six
+  deterministic sentexes in one atomic edit: the tool invocation, tool,
+  message-ID argument, actor, receipt, and their relationship. Ambient
+  delivery, catch-up reads, and restart recovery remain inert; message content
+  is never asserted. A failed receipt write is surfaced without discarding the
+  retrieved Discord message.
+
 ## [0.40.1] - 2026-09-03
 
 ### Fixed

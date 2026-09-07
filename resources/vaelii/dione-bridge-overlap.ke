@@ -1,0 +1,61 @@
+;; Dione/Vaelii bridge overlap.
+;;
+;; arg1/arg2/arg3 are the accepted binary projections from vaelii/vaelii#74.
+;; Keep them here while deployed Vaelii remains on 0.15.1; remove this overlap
+;; only after the upstream vocabulary is present in the deployed base KB.
+
+(comment arg1
+ "(arg1 ?predicate ?type) means that argument 1 of ?predicate has ?type.")
+(binary_predicate arg1)
+(arg arg1 1 predicate)
+(genlArg arg1 2 thing)
+(implies (and (arg1 ?reln ?type)) (arg ?reln 1 ?type))
+(implies (and (arg ?reln 1 ?type)) (arg1 ?reln ?type))
+
+(comment arg2
+ "(arg2 ?predicate ?type) means that argument 2 of ?predicate has ?type.")
+(binary_predicate arg2)
+(arg arg2 1 predicate)
+(genlArg arg2 2 thing)
+(implies (and (arg2 ?reln ?type)) (arg ?reln 2 ?type))
+(implies (and (arg ?reln 2 ?type)) (arg2 ?reln ?type))
+
+(comment arg3
+ "(arg3 ?predicate ?type) means that argument 3 of ?predicate has ?type.")
+(binary_predicate arg3)
+(arg arg3 1 predicate)
+(genlArg arg3 2 thing)
+(implies (and (arg3 ?reln ?type)) (arg ?reln 3 ?type))
+(implies (and (arg ?reln 3 ?type)) (arg3 ?reln ?type))
+
+;; A term-retirement tombstone. Dione's assertion client enforces:
+;; If TERM is a naked_term, this must be the only asserted sentex mentioning it.
+(unary_predicate naked_term)
+
+;; Declarative arity preservation for the predicate-specialization hierarchy.
+;; `interArgBinary` says that when either endpoint of a binary relation belongs
+;; to TYPE, the other endpoint must belong to TYPE too.  Applying it to `genl`
+;; for each fixed-arity predicate class prevents, for example, a binary
+;; predicate from specializing the unary predicate `thing`.
+(comment interArgBinary
+ "(interArgBinary BINPRED TYPE) means that if either argument of BINPRED is a TYPE, its other argument must also be a TYPE.")
+(binary_predicate interArgBinary)
+(arg interArgBinary 1 binary_predicate)
+(arg interArgBinary 2 unary_predicate)
+(implies
+ (interArgBinary ?binpred ?type)
+ (and
+  (interArg ?binpred 1 ?type 2 ?type)
+  (interArg ?binpred 2 ?type 1 ?type)))
+
+(comment predicateTypeByArity
+ "(predicateTypeByArity TYPE ARITY) means that TYPE classifies predicates whose sentexes take ARITY arguments.")
+(binary_predicate predicateTypeByArity)
+(arg predicateTypeByArity 1 unary_predicate)
+(arg predicateTypeByArity 2 positive_integer)
+(predicateTypeByArity unary_predicate 1)
+(predicateTypeByArity binary_predicate 2)
+(predicateTypeByArity ternary_predicate 3)
+(implies
+ (predicateTypeByArity ?type ?arity)
+ (interArgBinary genl ?type))

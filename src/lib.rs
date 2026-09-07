@@ -34,3 +34,4 @@ pub mod state;
 pub mod timestamp;
 pub mod tracing_channel;
 pub mod util;
+pub mod vaelii;

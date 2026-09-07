@@ -112,6 +112,8 @@ pub struct Config {
     pub rate_limit: RateLimitTomlConfig,
     pub contradictionary: ContradictionaryConfig,
     pub pre_send: PreSendConfig,
+    /// Optional Vaelii receipt writer for explicit message reads.
+    pub vaelii: crate::vaelii::VaeliiConfig,
     /// Inbound memory-bell shadow evaluation.
     pub bell_rings: BellRingsConfig,
     /// Restart-only, one-shot GAIE archive configuration.
