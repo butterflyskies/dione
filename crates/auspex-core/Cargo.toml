@@ -2,7 +2,7 @@
 name = "auspex-core"
 version = "0.3.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.98"
 license = "MIT OR Apache-2.0"
 description = "Auspex provenance verification kernel — ingress ledger, activation roots, verify results"
 repository = "https://github.com/butterflyskies/dione"

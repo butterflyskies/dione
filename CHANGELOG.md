@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- Raise the minimum supported Rust version to 1.98 and pin CI formatting,
+  linting, tests, packaging, and MSRV checks to that exact toolchain.
+
 ### Fixed
 - Retry Codex live delivery once when `turn/steer` explicitly rejects a stale
   active-turn ID and names the current turn. Preserve the thread, message ID,

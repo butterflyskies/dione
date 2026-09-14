@@ -1,16 +1,17 @@
-name: Forgejo Linux Main CI
+name: Forgejo Linux CI
 
-# Forgejo 13 grants same-repository PR jobs a write-capable task token and
-# ignores workflow `permissions`. Keep this workflow on trusted main until the
-# platform can enforce read-only PR tokens; do not claim it as a PR gate.
+# Forgejo pull-request runs execute only the non-mutating checks below. The
+# release artifact remains a trusted-main job and is guarded at the job boundary.
 # This mirrors the Linux build from GitHub CI, but deliberately omits GitHub's
 # macOS runner and every tag, release, package-publish, and write-token step.
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
-# Defense in depth for a future runner that enforces this declaration. Forgejo
-# Runner 13 ignores it, so the trusted-main-only trigger above remains required.
+# Checkout credentials are discarded before repository code runs. Every
+# repository-mutating step remains outside the pull-request path.
 permissions: {}
 
 concurrency:
@@ -31,14 +32,9 @@ jobs:
           persist-credentials: false
       - uses: https://github.com/dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
         with:
-          toolchain: stable
+          toolchain: "1.98.0"
           components: rustfmt
-      - run: >-
-          cargo fmt --
-          --config imports_granularity=Crate
-          --config group_imports=One
-          --config format_code_in_doc_comments=true
-          --check
+      - run: cargo fmt -- --check
 
   lint:
     name: Clippy
@@ -50,7 +46,7 @@ jobs:
           persist-credentials: false
       - uses: https://github.com/dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
         with:
-          toolchain: stable
+          toolchain: "1.98.0"
           components: clippy
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
@@ -64,7 +60,7 @@ jobs:
           persist-credentials: false
       - uses: https://github.com/dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
         with:
-          toolchain: stable
+          toolchain: "1.98.0"
       - name: Install cargo-nextest
         run: |
           curl --fail --silent --show-error --location \
@@ -85,7 +81,7 @@ jobs:
           persist-credentials: false
       - uses: https://github.com/dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
         with:
-          toolchain: stable
+          toolchain: "1.98.0"
       - name: Reject private and git-backed package sources
         run: cargo test --test public_package --locked
       - name: Verify publishable workspace packages
@@ -131,7 +127,7 @@ jobs:
           esac
 
   msrv:
-    name: Rust 1.95 minimum supported version
+    name: Rust 1.98 minimum supported version
     runs-on: docker
     timeout-minutes: 120
     steps:
@@ -140,8 +136,8 @@ jobs:
           persist-credentials: false
       - uses: https://github.com/dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
         with:
-          toolchain: "1.95.0"
-      - run: cargo check --locked --all-targets
+          toolchain: "1.98.0"
+      - run: cargo +1.98.0 check --workspace --all-targets --locked
 
   audit:
     name: Dependency audit
@@ -157,6 +153,7 @@ jobs:
 
   release-artifact:
     name: Trusted main Linux release artifact
+    if: ${{ forgejo.event_name == 'push' && forgejo.ref == 'refs/heads/main' }}
     needs: [format, lint, test, package, msrv, audit]
     runs-on: docker
     timeout-minutes: 60
@@ -169,7 +166,7 @@ jobs:
           persist-credentials: false
       - uses: https://github.com/dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
         with:
-          toolchain: stable
+          toolchain: "1.98.0"
           targets: x86_64-unknown-linux-gnu
       - name: Build and bind release artifact to trusted main
         env:

@@ -43,6 +43,68 @@ fn private_dependency_name() -> String {
     ["cingu", "late"].concat()
 }
 
+fn git_output(root: &Path, args: &[&str]) -> Output {
+    Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .expect("git must execute")
+}
+
+fn commit_fixture(root: &Path, message: &str) -> String {
+    assert!(git_output(root, &["add", "."]).status.success());
+    let commit = Command::new("git")
+        .args([
+            "-c",
+            "user.name=Dione Tests",
+            "-c",
+            "user.email=dione-tests@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "-m",
+            message,
+        ])
+        .current_dir(root)
+        .output()
+        .expect("git commit must execute");
+    assert!(
+        commit.status.success(),
+        "fixture commit failed: {}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+    let revision = git_output(root, &["rev-parse", "HEAD"]);
+    assert!(revision.status.success());
+    String::from_utf8(revision.stdout)
+        .expect("git revision must be UTF-8")
+        .trim()
+        .to_owned()
+}
+
+fn run_release_hygiene(
+    root: &Path,
+    event_name: &str,
+    pr_base: &str,
+    pr_head: &str,
+    push_before: &str,
+    push_after: &str,
+) -> Output {
+    Command::new("sh")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.forgejo/scripts/release-hygiene.sh"
+        ))
+        .env("EVENT_NAME", event_name)
+        .env("PR_BASE", pr_base)
+        .env("PR_HEAD", pr_head)
+        .env("PUSH_BEFORE", push_before)
+        .env("PUSH_AFTER", push_after)
+        .current_dir(root)
+        .output()
+        .expect("release-hygiene script must execute")
+}
+
 fn compile_patterns(source: &str) -> Vec<(String, Regex)> {
     let private_name = private_dependency_name();
     let long_canary = ["Mir", "anda"].concat();
@@ -762,15 +824,51 @@ fn release_waits_for_cargo_registry_resolution() {
 }
 
 #[test]
-fn forgejo_ci_preserves_trusted_main_release_artifact_contract() {
+fn forgejo_ci_gates_pull_requests_and_preserves_trusted_main_release_artifact() {
     let workflow = include_str!("../.forgejo/workflows/linux.yml");
+    let release_hygiene = include_str!("../.forgejo/workflows/release-hygiene.yml");
+    let release_hygiene_script = include_str!("../.forgejo/scripts/release-hygiene.sh");
+    let semver_helper = include_str!("../scripts/semver-is-greater.sh");
+    let rust_toolchain = include_str!("../rust-toolchain.toml");
     let github_ci = include_str!("../.github/workflows/build.yml");
     let github_release = include_str!("../.github/workflows/release.yml");
 
-    assert!(workflow.contains("on:\n  push:\n    branches: [main]\n"));
+    let forgejo_triggers =
+        "on:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\n";
+    assert!(workflow.contains(forgejo_triggers));
+    assert!(release_hygiene.contains(forgejo_triggers));
     assert!(workflow.contains("\npermissions: {}\n"));
-    assert!(!workflow.contains("\n  pull_request:"));
+    assert!(release_hygiene.contains("\npermissions: {}\n"));
     assert!(!workflow.contains("\n  workflow_dispatch:"));
+    assert!(!release_hygiene.contains("\n  workflow_dispatch:"));
+    assert_eq!(workflow.matches("toolchain: \"1.98.0\"").count(), 6);
+    assert!(!workflow.contains("1.95.0"));
+    assert!(workflow.contains("cargo +1.98.0 check --workspace --all-targets --locked"));
+    assert!(!workflow.contains("toolchain: stable"));
+    assert!(workflow.contains("run: cargo fmt -- --check"));
+    assert!(!workflow.contains("--config imports_granularity"));
+    assert!(rust_toolchain.contains("channel = \"1.98.0\""));
+    assert!(rust_toolchain.contains("components = [\"clippy\", \"rustfmt\"]"));
+
+    assert!(release_hygiene.contains("EVENT_NAME: ${{ forgejo.event_name }}"));
+    assert!(release_hygiene.contains("PR_BASE: ${{ forgejo.event.pull_request.base.sha }}"));
+    assert!(release_hygiene.contains("PR_HEAD: ${{ forgejo.event.pull_request.head.sha }}"));
+    assert!(release_hygiene.contains("PUSH_BEFORE: ${{ forgejo.event.before }}"));
+    assert!(release_hygiene.contains("PUSH_AFTER: ${{ forgejo.sha }}"));
+    assert!(release_hygiene.contains("run: sh .forgejo/scripts/release-hygiene.sh"));
+    assert!(release_hygiene_script.contains("git merge-base \"$PR_BASE\" \"$PR_HEAD\""));
+    assert!(release_hygiene_script.contains("VERSION_BASE=\"$PR_BASE\""));
+    assert!(release_hygiene_script.contains("AFTER=\"$PR_HEAD\""));
+    assert!(release_hygiene_script.contains("CHANGE_BASE=\"$PUSH_BEFORE\""));
+    assert!(release_hygiene_script.contains("VERSION_BASE=\"$CHANGE_BASE\""));
+    assert!(release_hygiene_script.contains("AFTER=\"$PUSH_AFTER\""));
+    assert!(release_hygiene_script.contains("sh scripts/semver-is-greater.sh"));
+    assert!(semver_helper.contains("if (!valid_semver(left) || !valid_semver(right)) exit 2"));
+    assert!(release_hygiene_script.contains("git diff --name-only \"$CHANGE_BASE\" \"$AFTER\""));
+    assert!(release_hygiene_script.contains("git show \"${VERSION_BASE}:Cargo.toml\""));
+    assert!(release_hygiene_script.contains("git show \"${AFTER}:Cargo.toml\""));
+    assert!(release_hygiene_script.contains("git show \"${AFTER}:CHANGELOG.md\""));
+    assert!(release_hygiene_script.contains("grep -F -x -q \"## [${new_version}]\""));
 
     let package = workflow
         .split_once("\n  package:")
@@ -829,11 +927,17 @@ fn forgejo_ci_preserves_trusted_main_release_artifact_contract() {
         .split_once("\n  release-artifact:")
         .expect("Forgejo CI must retain its trusted-main release artifact job")
         .1;
+    assert!(artifact.starts_with(
+        "\n    name: Trusted main Linux release artifact\n    if: ${{ forgejo.event_name == 'push' && forgejo.ref == 'refs/heads/main' }}"
+    ));
     assert!(artifact.contains("needs: [format, lint, test, package, msrv, audit]"));
     assert!(artifact.contains("ref: ${{ forgejo.sha }}"));
     assert_eq!(artifact.matches("persist-credentials: false").count(), 1);
     assert!(!artifact.contains("token:"));
     assert!(!artifact.contains("contents: write"));
+    assert!(!workflow.contains("cargo publish"));
+    assert!(!workflow.contains("git tag"));
+    assert!(!workflow.contains("git push"));
     assert!(artifact.contains("cargo build --release --locked --target \"${BUILD_TARGET}\""));
     assert!(artifact.contains("actual_commit=\"$(git rev-parse HEAD)\""));
     assert!(artifact.contains("EXPECTED_COMMIT: ${{ forgejo.sha }}"));
@@ -882,11 +986,313 @@ fn forgejo_ci_preserves_trusted_main_release_artifact_contract() {
         .split_once("\n  audit:")
         .expect("MSRV must remain a separate gate")
         .0;
-    assert!(msrv.contains("toolchain: \"1.95.0\""));
-    assert!(msrv.contains("cargo check --locked --all-targets"));
+    assert!(msrv.contains("toolchain: \"1.98.0\""));
+    assert!(msrv.contains("cargo +1.98.0 check --workspace --all-targets --locked"));
     assert!(msrv.contains("persist-credentials: false"));
-    assert!(github_ci.contains("toolchain: \"1.95.0\""));
-    assert!(github_ci.contains("cargo check --locked --all-targets"));
+    assert!(github_ci.contains("toolchain: \"1.98.0\""));
+    assert!(github_ci.contains("key: msrv-1.98"));
+    assert!(github_ci.contains("cargo +1.98.0 check --workspace --all-targets --locked"));
+}
+
+#[test]
+fn every_ci_workflow_pins_rust_toolchains_exactly() {
+    let floating_stable = Regex::new(r#"(?m)^\s*toolchain:\s*[\"']?stable[\"']?\s*$"#)
+        .expect("floating-stable detector must compile");
+
+    for directory in [".github/workflows", ".forgejo/workflows"] {
+        for entry in fs::read_dir(directory).expect("workflow directory must be readable") {
+            let path = entry.expect("workflow entry must be readable").path();
+            if !matches!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("yml" | "yaml")
+            ) {
+                continue;
+            }
+            let workflow = fs::read_to_string(&path).expect("workflow must be readable as UTF-8");
+            assert!(
+                !floating_stable.is_match(&workflow),
+                "{} contains a floating stable Rust toolchain",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn release_hygiene_checks_the_event_change_set_in_real_git_dags() {
+    let temp = tempfile::tempdir().expect("temporary repository must be created");
+    let root = temp.path();
+    fs::create_dir(root.join("src")).expect("fixture source directory must be created");
+    fs::create_dir(root.join("scripts")).expect("fixture scripts directory must be created");
+    fs::write(
+        root.join("scripts/semver-is-greater.sh"),
+        include_str!("../scripts/semver-is-greater.sh"),
+    )
+    .expect("SemVer helper fixture must be written");
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("fixture manifest must be written");
+    fs::write(root.join("CHANGELOG.md"), "## [0.1.0]\n\nInitial.\n")
+        .expect("fixture changelog must be written");
+    fs::write(root.join("src/lib.rs"), "pub fn initial() {}\n")
+        .expect("fixture source must be written");
+    fs::write(root.join("README.md"), "fixture\n").expect("fixture readme must be written");
+    assert!(git_output(root, &["init", "--quiet"]).status.success());
+    let common_base = commit_fixture(root, "base");
+
+    assert!(
+        git_output(
+            root,
+            &["checkout", "--quiet", "-b", "unbumped-pr", &common_base]
+        )
+        .status
+        .success()
+    );
+    fs::write(root.join("src/lib.rs"), "pub fn unbumped() {}\n")
+        .expect("unbumped source must be written");
+    let unbumped_pr = commit_fixture(root, "unbumped source PR");
+
+    assert!(
+        git_output(
+            root,
+            &["checkout", "--quiet", "-b", "advanced-main", &common_base]
+        )
+        .status
+        .success()
+    );
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.2.0\"\n",
+    )
+    .expect("advanced manifest must be written");
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "## [0.2.0]\n\nMain release.\n\n## [0.1.0]\n\nInitial.\n",
+    )
+    .expect("advanced changelog must be written");
+    let advanced_main = commit_fixture(root, "main release");
+
+    let behind_main =
+        run_release_hygiene(root, "pull_request", &advanced_main, &unbumped_pr, "", "");
+    assert_eq!(
+        behind_main.status.code(),
+        Some(1),
+        "behind-main check returned stdout={} stderr={}",
+        String::from_utf8_lossy(&behind_main.stdout),
+        String::from_utf8_lossy(&behind_main.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&behind_main.stdout)
+            .contains("version 0.1.0 is not greater than current base version 0.2.0")
+    );
+
+    assert!(
+        git_output(
+            root,
+            &["checkout", "--quiet", "-b", "colliding-pr", &common_base]
+        )
+        .status
+        .success()
+    );
+    fs::write(root.join("src/lib.rs"), "pub fn colliding() {}\n")
+        .expect("colliding source must be written");
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.2.0\"\n",
+    )
+    .expect("colliding manifest must be written");
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "## [0.2.0]\n\nPR release.\n\n## [0.1.0]\n\nInitial.\n",
+    )
+    .expect("colliding changelog must be written");
+    let colliding_pr = commit_fixture(root, "colliding source PR");
+    let collision =
+        run_release_hygiene(root, "pull_request", &advanced_main, &colliding_pr, "", "");
+    assert_eq!(collision.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&collision.stdout)
+            .contains("version 0.2.0 is not greater than current base version 0.2.0")
+    );
+
+    assert!(
+        git_output(
+            root,
+            &["checkout", "--quiet", "-b", "downgrade-pr", &advanced_main]
+        )
+        .status
+        .success()
+    );
+    fs::write(root.join("src/lib.rs"), "pub fn downgraded() {}\n")
+        .expect("downgraded source must be written");
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("downgraded manifest must be written");
+    let downgrade_pr = commit_fixture(root, "downgraded source PR");
+    let downgrade =
+        run_release_hygiene(root, "pull_request", &advanced_main, &downgrade_pr, "", "");
+    assert_eq!(downgrade.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&downgrade.stdout)
+            .contains("version 0.1.0 is not greater than current base version 0.2.0")
+    );
+
+    assert!(
+        git_output(
+            root,
+            &["checkout", "--quiet", "-b", "invalid-pr", &advanced_main]
+        )
+        .status
+        .success()
+    );
+    fs::write(root.join("src/lib.rs"), "pub fn invalid() {}\n")
+        .expect("invalid-version source must be written");
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"banana\"\n",
+    )
+    .expect("invalid manifest must be written");
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "## [banana]\n\nInvalid release.\n\n## [0.2.0]\n\nMain release.\n",
+    )
+    .expect("invalid-version changelog must be written");
+    let invalid_pr = commit_fixture(root, "invalid-version source PR");
+    let invalid = run_release_hygiene(root, "pull_request", &advanced_main, &invalid_pr, "", "");
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&invalid.stdout).contains("must be valid SemVer"));
+
+    assert!(
+        git_output(
+            root,
+            &["checkout", "--quiet", "-b", "near-match-pr", &advanced_main]
+        )
+        .status
+        .success()
+    );
+    fs::write(root.join("src/lib.rs"), "pub fn near_match() {}\n")
+        .expect("near-match source must be written");
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"1.2.3\"\n",
+    )
+    .expect("near-match manifest must be written");
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "## [1x2y3]\n\nNot the requested release.\n\n## [0.2.0]\n\nMain release.\n",
+    )
+    .expect("near-match changelog must be written");
+    let near_match_pr = commit_fixture(root, "near-match changelog PR");
+    let near_match =
+        run_release_hygiene(root, "pull_request", &advanced_main, &near_match_pr, "", "");
+    assert_eq!(near_match.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&near_match.stdout)
+            .contains("CHANGELOG.md has no '## [1.2.3]' entry")
+    );
+
+    assert!(
+        git_output(
+            root,
+            &[
+                "checkout",
+                "--quiet",
+                "-b",
+                "prerelease-near-match-pr",
+                &advanced_main,
+            ]
+        )
+        .status
+        .success()
+    );
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn prerelease_near_match() {}\n",
+    )
+    .expect("prerelease near-match source must be written");
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"1.2.3-rc.1\"\n",
+    )
+    .expect("prerelease near-match manifest must be written");
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "## [1.2.3-rcX1]\n\nNot the requested prerelease.\n\n## [0.2.0]\n\nMain release.\n",
+    )
+    .expect("prerelease near-match changelog must be written");
+    let prerelease_near_match_pr = commit_fixture(root, "prerelease near-match changelog PR");
+    let prerelease_near_match = run_release_hygiene(
+        root,
+        "pull_request",
+        &advanced_main,
+        &prerelease_near_match_pr,
+        "",
+        "",
+    );
+    assert_eq!(prerelease_near_match.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&prerelease_near_match.stdout)
+            .contains("CHANGELOG.md has no '## [1.2.3-rc.1]' entry")
+    );
+
+    assert!(
+        git_output(
+            root,
+            &["checkout", "--quiet", "-b", "valid-pr", &advanced_main]
+        )
+        .status
+        .success()
+    );
+    fs::write(root.join("src/lib.rs"), "pub fn valid() {}\n")
+        .expect("valid source must be written");
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.3.0\"\n",
+    )
+    .expect("valid manifest must be written");
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "## [0.3.0]\n\nPR release.\n\n## [0.2.0]\n\nMain release.\n",
+    )
+    .expect("valid changelog must be written");
+    let valid_pr = commit_fixture(root, "valid source PR");
+    assert!(
+        run_release_hygiene(root, "pull_request", &advanced_main, &valid_pr, "", "")
+            .status
+            .success()
+    );
+
+    assert!(
+        git_output(
+            root,
+            &["checkout", "--quiet", "-b", "metadata-pr", &advanced_main]
+        )
+        .status
+        .success()
+    );
+    fs::write(root.join("README.md"), "metadata only\n")
+        .expect("metadata-only change must be written");
+    let metadata_pr = commit_fixture(root, "metadata-only PR");
+    assert!(
+        run_release_hygiene(root, "pull_request", &advanced_main, &metadata_pr, "", "")
+            .status
+            .success()
+    );
+
+    assert!(
+        !run_release_hygiene(root, "push", "", "", &common_base, &unbumped_pr)
+            .status
+            .success()
+    );
+    assert!(
+        run_release_hygiene(root, "push", "", "", &advanced_main, &valid_pr)
+            .status
+            .success()
+    );
 }
 
 #[test]

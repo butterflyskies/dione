@@ -29,7 +29,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
         with:
-          toolchain: stable
+          toolchain: "1.98.0"
       - name: Verify Auspex package and namespace
         id: package
         run: |
@@ -82,7 +82,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
         with:
-          toolchain: stable
+          toolchain: "1.98.0"
       - name: Recheck Auspex without executing package code
         id: preflight
         run: |
@@ -130,7 +130,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
         with:
-          toolchain: stable
+          toolchain: "1.98.0"
       - name: Reconcile exact Auspex registry state
         run: |
           set -euo pipefail
@@ -172,7 +172,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
         with:
-          toolchain: stable
+          toolchain: "1.98.0"
       - name: Verify registry-backed Dione package
         id: package
         run: |
@@ -230,7 +230,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
         with:
-          toolchain: stable
+          toolchain: "1.98.0"
       - name: Recheck exact Dione package state
         id: preflight
         run: |
@@ -283,7 +283,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
         with:
-          toolchain: stable
+          toolchain: "1.98.0"
       - name: Reconcile exact Dione registry state
         run: |
           set -euo pipefail

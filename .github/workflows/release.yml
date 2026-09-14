@@ -55,7 +55,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
         with:
-          toolchain: stable
+          toolchain: "1.98.0"
           targets: ${{ matrix.target == 'universal-apple-darwin' && 'aarch64-apple-darwin,x86_64-apple-darwin' || matrix.target }}
       - name: Install cargo-auditable
         run: cargo install cargo-auditable@0.7.4 --locked
