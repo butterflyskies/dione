@@ -732,7 +732,7 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
     assert!(release_hygiene.contains("\npermissions: {}\n"));
     assert!(!workflow.contains("\n  workflow_dispatch:"));
     assert!(!release_hygiene.contains("\n  workflow_dispatch:"));
-    assert_eq!(workflow.matches("toolchain: \"1.98.0\"").count(), 5);
+    assert_eq!(workflow.matches("toolchain: \"1.98.0\"").count(), 6);
     assert!(!workflow.contains("1.95.0"));
     assert!(workflow.contains("cargo +1.98.0 check --workspace --all-targets --locked"));
     assert!(!workflow.contains("toolchain: stable"));
@@ -827,6 +827,10 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
     assert!(release_tag.contains("EXPECTED_COMMIT: ${{ forgejo.sha }}"));
     assert!(release_tag.contains("PUSH_BEFORE: ${{ forgejo.event.before }}"));
     assert!(release_tag.contains("run: sh scripts/tag-qualified-release.sh"));
+    assert!(release_tag.contains(
+        "uses: https://github.com/dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9"
+    ));
+    assert!(release_tag.contains("toolchain: \"1.98.0\""));
 
     let tagger = include_str!("../scripts/tag-qualified-release.sh");
     assert!(

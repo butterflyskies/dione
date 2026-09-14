@@ -180,6 +180,21 @@ mod unix {
         assert!(release_tag.contains("EXPECTED_COMMIT: ${{ forgejo.sha }}"));
         assert!(release_tag.contains("PUSH_BEFORE: ${{ forgejo.event.before }}"));
         assert!(release_tag.contains("run: sh scripts/tag-qualified-release.sh"));
+        assert!(release_tag.contains(
+            "uses: https://github.com/dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9"
+        ));
+        assert!(release_tag.contains("toolchain: \"1.98.0\""));
+        let toolchain_step = release_tag
+            .find("dtolnay/rust-toolchain")
+            .expect("release tag job must install Rust");
+        let checkout_step = release_tag
+            .find("data.forgejo.org/actions/checkout")
+            .expect("release tag job must check out its exact event commit");
+        let tagger_step = release_tag
+            .find("run: sh scripts/tag-qualified-release.sh")
+            .expect("release tag job must invoke the tagger");
+        assert!(toolchain_step < checkout_step);
+        assert!(checkout_step < tagger_step);
         assert_eq!(workflow.matches("persist-credentials: true").count(), 1);
         assert_eq!(workflow.matches("persist-credentials: false").count(), 6);
         assert!(!workflow.contains("\n  release-artifact:"));
