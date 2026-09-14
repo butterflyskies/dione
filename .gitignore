@@ -3,5 +3,3 @@
 *.rlib
 docs/design/rate-limiter/states/
 .claude/worktrees/
-/dist
-/artifact-audit

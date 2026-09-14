@@ -146,63 +146,6 @@ fn member_patterns() -> Vec<(String, Regex)> {
     ))
 }
 
-fn run_public_artifact_verifier(
-    root: &Path,
-    binary_contents: &[u8],
-    receipt: &[u8],
-    checksum_suffix: &[u8],
-    package_inputs: &str,
-    metadata: &str,
-    path_prefix: Option<&Path>,
-) -> Output {
-    let binary = root.join("dione");
-    let checksum = root.join("dione.sha256");
-    let receipt_path = root.join("build-receipt.txt");
-    let package_inputs_path = root.join("package-inputs.txt");
-    let metadata_path = root.join("cargo-metadata.json");
-    fs::write(&binary, binary_contents).expect("binary fixture must be written");
-    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))
-        .expect("binary fixture must be executable");
-    let digest = Command::new("sha256sum")
-        .arg(&binary)
-        .output()
-        .expect("sha256sum must execute");
-    let digest = String::from_utf8(digest.stdout).expect("sha256 output must be UTF-8");
-    let digest = digest
-        .split_whitespace()
-        .next()
-        .expect("sha256 output must contain a digest");
-    let mut checksum_contents = format!("{digest}  dione\n").into_bytes();
-    checksum_contents.extend_from_slice(checksum_suffix);
-    fs::write(&checksum, checksum_contents).expect("checksum fixture must be written");
-    fs::write(&receipt_path, receipt).expect("receipt fixture must be written");
-    fs::write(&package_inputs_path, package_inputs).expect("package input fixture must be written");
-    fs::write(&metadata_path, metadata).expect("metadata fixture must be written");
-
-    let mut command = Command::new("scripts/verify-public-artifact.sh");
-    if let Some(prefix) = path_prefix {
-        command.env(
-            "PATH",
-            format!(
-                "{}:{}",
-                prefix.display(),
-                std::env::var("PATH").expect("test PATH must be set")
-            ),
-        );
-    }
-    command
-        .arg(&binary)
-        .arg(&checksum)
-        .arg(&receipt_path)
-        .arg("0123456789abcdef0123456789abcdef01234567")
-        .arg("0.1.0")
-        .arg(&package_inputs_path)
-        .arg(&metadata_path)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("artifact verifier must execute")
-}
-
 fn assert_public_tree(
     directory: &Path,
     patterns: &[(String, Regex)],
@@ -719,97 +662,6 @@ fn release_version_helper_reads_dione_package() {
 }
 
 #[test]
-fn release_generated_files_are_ignored_and_excluded_from_package_inputs() {
-    let temp = tempfile::tempdir().expect("temporary repository must be created");
-    let root = temp.path();
-    fs::create_dir(root.join("src")).expect("fixture source directory must be created");
-    fs::write(root.join(".gitignore"), include_str!("../.gitignore"))
-        .expect("fixture ignore rules must be written");
-    fs::write(
-        root.join("Cargo.toml"),
-        "[package]\nname = \"dione\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-    )
-    .expect("fixture manifest must be written");
-    fs::write(root.join("src/lib.rs"), "pub fn fixture() {}\n")
-        .expect("fixture source must be written");
-
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .args(args)
-            .current_dir(root)
-            .output()
-            .expect("git must execute")
-    };
-    assert!(git(&["init", "--quiet"]).status.success());
-
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let lockfile = Command::new(&cargo)
-        .args(["generate-lockfile", "--quiet"])
-        .current_dir(root)
-        .output()
-        .expect("cargo generate-lockfile must execute");
-    assert!(
-        lockfile.status.success(),
-        "fixture lockfile generation failed: {}",
-        String::from_utf8_lossy(&lockfile.stderr)
-    );
-    assert!(git(&["add", "."]).status.success());
-    let commit = Command::new("git")
-        .args([
-            "-c",
-            "user.name=Dione Tests",
-            "-c",
-            "user.email=dione-tests@example.invalid",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "--quiet",
-            "-m",
-            "fixture",
-        ])
-        .current_dir(root)
-        .output()
-        .expect("git commit must execute");
-    assert!(
-        commit.status.success(),
-        "fixture commit failed: {}",
-        String::from_utf8_lossy(&commit.stderr)
-    );
-
-    for path in ["dist/dione", "artifact-audit/package-inputs.txt"] {
-        let fixture = root.join(path);
-        fs::create_dir_all(fixture.parent().expect("fixture path must have a parent"))
-            .expect("generated fixture directory must be created");
-        fs::write(&fixture, "generated release output\n")
-            .expect("generated fixture must be written");
-
-        let ignored = git(&["check-ignore", "--quiet", "--", path]);
-        assert!(
-            ignored.status.success(),
-            "generated release path `{path}` must be ignored"
-        );
-    }
-
-    let package = Command::new(cargo)
-        .args(["package", "-p", "dione", "--list", "--locked"])
-        .current_dir(root)
-        .output()
-        .expect("cargo package must execute");
-    assert!(
-        package.status.success(),
-        "generated release files made the package tree dirty: {}",
-        String::from_utf8_lossy(&package.stderr)
-    );
-    let package_inputs = String::from_utf8(package.stdout).expect("package inputs must be UTF-8");
-    assert!(!package_inputs.lines().any(|path| path.starts_with("dist/")));
-    assert!(
-        !package_inputs
-            .lines()
-            .any(|path| path.starts_with("artifact-audit/"))
-    );
-}
-
-#[test]
 fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     let workflow = include_str!("../.github/workflows/publish-crate.yml");
     let (verify_dione, remaining) = workflow
@@ -863,7 +715,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
 }
 
 #[test]
-fn forgejo_ci_gates_pull_requests_and_preserves_trusted_main_release_artifact() {
+fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
     let workflow = include_str!("../.forgejo/workflows/linux.yml");
     let release_hygiene = include_str!("../.forgejo/workflows/release-hygiene.yml");
     let release_hygiene_script = include_str!("../.forgejo/scripts/release-hygiene.sh");
@@ -880,7 +732,7 @@ fn forgejo_ci_gates_pull_requests_and_preserves_trusted_main_release_artifact() 
     assert!(release_hygiene.contains("\npermissions: {}\n"));
     assert!(!workflow.contains("\n  workflow_dispatch:"));
     assert!(!release_hygiene.contains("\n  workflow_dispatch:"));
-    assert_eq!(workflow.matches("toolchain: \"1.98.0\"").count(), 6);
+    assert_eq!(workflow.matches("toolchain: \"1.98.0\"").count(), 5);
     assert!(!workflow.contains("1.95.0"));
     assert!(workflow.contains("cargo +1.98.0 check --workspace --all-targets --locked"));
     assert!(!workflow.contains("toolchain: stable"));
@@ -954,61 +806,62 @@ fn forgejo_ci_gates_pull_requests_and_preserves_trusted_main_release_artifact() 
         "cargo package -p dione --locked\n          dione_version=\"$(scripts/workspace-package-version.sh dione)\"\n          dione_crate=\"target/package/dione-${dione_version}.crate\"\n          scripts/verify-public-package-privacy.sh \"${dione_crate}\""
     ));
 
-    let artifact = workflow
-        .split_once("\n  release-artifact:")
-        .expect("Forgejo CI must retain its trusted-main release artifact job")
+    let release_tag = workflow
+        .split_once("\n  release-tag:")
+        .expect("Forgejo CI must retain its trusted-main release tag job")
         .1;
-    assert!(artifact.starts_with(
-        "\n    name: Trusted main Linux release artifact\n    if: ${{ forgejo.event_name == 'push' && forgejo.ref == 'refs/heads/main' }}"
+    assert!(release_tag.starts_with(
+        "\n    name: Annotated release tag\n    if: ${{ forgejo.event_name == 'push' && forgejo.ref == 'refs/heads/main' }}"
     ));
-    assert!(artifact.contains("needs: [format, lint, test, package, msrv, audit]"));
-    assert!(artifact.contains("ref: ${{ forgejo.sha }}"));
-    assert_eq!(artifact.matches("persist-credentials: false").count(), 1);
-    assert!(!artifact.contains("token:"));
-    assert!(!artifact.contains("contents: write"));
+    assert!(release_tag.contains("needs: [format, lint, test, package, msrv, audit]"));
+    assert!(release_tag.contains("fetch-depth: 0"));
+    assert!(release_tag.contains("ref: ${{ forgejo.sha }}"));
+    assert_eq!(release_tag.matches("persist-credentials: true").count(), 1);
+    assert_eq!(workflow.matches("persist-credentials: true").count(), 1);
+    assert_eq!(workflow.matches("persist-credentials: false").count(), 6);
+    assert!(!release_tag.contains("token:"));
+    assert!(!release_tag.contains("contents: write"));
     assert!(!workflow.contains("cargo publish"));
-    assert!(!workflow.contains("git tag"));
-    assert!(!workflow.contains("git push"));
-    assert!(artifact.contains("cargo build --release --locked --target \"${BUILD_TARGET}\""));
-    assert!(artifact.contains("actual_commit=\"$(git rev-parse HEAD)\""));
-    assert!(artifact.contains("EXPECTED_COMMIT: ${{ forgejo.sha }}"));
-    assert!(artifact.contains("scripts/workspace-package-version.sh dione"));
-    assert!(artifact.contains("(cd dist && sha256sum dione > dione.sha256)"));
-    assert!(artifact.contains("commit=%s\\n"));
-    assert!(artifact.contains("version=%s\\n"));
-    assert!(!artifact.contains("binary_sha256=%s\\n"));
-    assert!(!artifact.contains("rustc=%s\\n"));
-    assert!(!artifact.contains("cargo=%s\\n"));
-    assert!(artifact.contains("cargo package -p dione --list --locked"));
-    assert!(artifact.contains("cargo metadata --locked --no-deps --format-version 1"));
-    assert!(artifact.contains("scripts/verify-public-artifact.sh"));
-    assert!(!artifact.contains("sh scripts/verify-public-artifact.sh"));
-    assert!(artifact.contains("if-no-files-found: error"));
-    assert!(artifact.contains("retention-days: 14"));
-    assert!(artifact.contains(
-        "path: |\n            dist/dione\n            dist/dione.sha256\n            dist/build-receipt.txt"
-    ));
-    assert!(!artifact.contains("path: dist/"));
-    assert!(!artifact.contains("target/${BUILD_TARGET}/release/\n"));
-    assert!(!artifact.contains("artifact-audit/\n"));
-    assert!(!artifact.contains("tar czf"));
+    assert!(!workflow.contains("release-artifact"));
+    assert!(!workflow.contains("upload-artifact"));
+    assert!(release_tag.contains("EXPECTED_COMMIT: ${{ forgejo.sha }}"));
+    assert!(release_tag.contains("PUSH_BEFORE: ${{ forgejo.event.before }}"));
+    assert!(release_tag.contains("run: sh scripts/tag-qualified-release.sh"));
+
+    let tagger = include_str!("../scripts/tag-qualified-release.sh");
+    assert!(
+        tagger.contains("git merge-base --is-ancestor \"${PUSH_BEFORE}\" \"${actual_commit}\"")
+    );
+    assert!(
+        tagger.contains("git diff --quiet \"${PUSH_BEFORE}\" \"${actual_commit}\" -- Cargo.toml")
+    );
+    assert!(tagger.contains("sh scripts/semver-is-greater.sh"));
+    assert!(tagger.contains("bootstrap_untagged_version=0.42.0"));
+    assert!(tagger.contains("pre-automation untagged bootstrap version; not backfilling"));
+    assert!(!tagger.contains("${PUSH_BEFORE}:scripts/tag-qualified-release.sh"));
+    assert!(tagger.contains("awk -v heading=\"## [${version}]\""));
+    assert!(tagger.contains("$0 == heading { found = 1 }"));
+    assert!(tagger.contains("index($0, heading \" - \") == 1"));
+    assert!(tagger.contains("git tag --annotate \"${tag}\""));
+    let pushes = tagger
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("git push"))
+        .collect::<Vec<_>>();
+    assert_eq!(pushes, ["git push origin \"refs/tags/${tag}\""]);
+    assert!(!tagger.contains("--force"));
+    assert!(!tagger.contains("--tags"));
+    assert!(!tagger.contains("+refs/"));
+
+    assert!(!std::path::Path::new(".github/workflows/tag-release.yml").exists());
+    assert!(github_release.contains("gh release create \"$TAG_NAME\" --verify-tag"));
 
     assert!(github_ci.contains("cross-compile:"));
     assert!(github_ci.contains("target: x86_64-unknown-linux-gnu"));
     assert!(github_ci.contains("cargo build --release"));
     assert!(github_release.contains("dione-${TAG_NAME}-${{ matrix.target }}"));
-    assert!(artifact.contains("BUILD_TARGET: x86_64-unknown-linux-gnu"));
     assert!(!workflow.contains("macos-latest"));
     assert!(!workflow.contains("universal-apple-darwin"));
-    assert_ne!(
-        fs::metadata("scripts/verify-public-artifact.sh")
-            .expect("artifact verifier must be present")
-            .permissions()
-            .mode()
-            & 0o111,
-        0,
-        "artifact verifier must remain directly executable"
-    );
 
     let msrv = workflow
         .split_once("\n  msrv:")
@@ -1407,229 +1260,6 @@ fn release_hygiene_checks_the_event_change_set_in_real_git_dags() {
         run_release_hygiene(root, "push", "", "", &advanced_main, &valid_pr)
             .status
             .success()
-    );
-}
-
-#[test]
-fn public_artifact_verifier_accepts_only_the_minimal_public_receipt() {
-    let temp = tempfile::tempdir().expect("temporary directory must be created");
-    let output = run_public_artifact_verifier(
-        temp.path(),
-        b"safe public dione binary fixture",
-        b"commit=0123456789abcdef0123456789abcdef01234567\nversion=0.1.0\n",
-        b"",
-        "Cargo.toml\nsrc/main.rs\n",
-        r#"{"packages":[{"name":"dione","version":"0.1.0"}]}"#,
-        None,
-    );
-    assert!(
-        output.status.success(),
-        "safe public artifact must pass: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        fs::read_dir(temp.path())
-            .expect("fixture directory must remain readable")
-            .all(|entry| !entry
-                .expect("fixture entry must be readable")
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".expected-")),
-        "byte-comparison scratch files must be cleaned up"
-    );
-}
-
-#[test]
-fn public_artifact_verifier_does_not_confuse_canary_substrings_with_bare_names() {
-    let temp = tempfile::tempdir().expect("temporary directory must be created");
-    let output = run_public_artifact_verifier(
-        temp.path(),
-        b"admiral mirage MIRAGE ADMIRAL",
-        b"commit=0123456789abcdef0123456789abcdef01234567\nversion=0.1.0\n",
-        b"",
-        "Cargo.toml\nsrc/main.rs\n",
-        r#"{"packages":[{"name":"dione"}]}"#,
-        None,
-    );
-    assert!(
-        output.status.success(),
-        "only bare case-insensitive canary names should fail: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn public_artifact_verifier_rejects_authorized_canaries_and_receipt_growth() {
-    let canaries = [
-        ["Mir", "anda"].concat(),
-        ["Mi", "ra"].concat(),
-        ["mIr", "AnDa"].concat(),
-        ["mI", "rA"].concat(),
-    ];
-    for canary in canaries {
-        let temp = tempfile::tempdir().expect("temporary directory must be created");
-        let output = run_public_artifact_verifier(
-            temp.path(),
-            format!("safe-prefix {canary} safe-suffix").as_bytes(),
-            b"commit=0123456789abcdef0123456789abcdef01234567\nversion=0.1.0\n",
-            b"",
-            "Cargo.toml\nsrc/main.rs\n",
-            r#"{"packages":[{"name":"dione"}]}"#,
-            None,
-        );
-        assert!(
-            !output.status.success(),
-            "case-insensitive authorized canary must fail closed"
-        );
-    }
-
-    for (package_inputs, metadata) in [
-        (
-            ["Cargo.toml\ncrates/", "Mi", "ra", "/src/lib.rs\n"].concat(),
-            r#"{"packages":[{"name":"dione"}]}"#.to_owned(),
-        ),
-        (
-            "Cargo.toml\nsrc/main.rs\n".to_owned(),
-            [r#"{"packages":[{"name":""#, "mIr", "AnDa", r#""}]}"#].concat(),
-        ),
-    ] {
-        let temp = tempfile::tempdir().expect("temporary directory must be created");
-        let output = run_public_artifact_verifier(
-            temp.path(),
-            b"safe public dione binary fixture",
-            b"commit=0123456789abcdef0123456789abcdef01234567\nversion=0.1.0\n",
-            b"",
-            &package_inputs,
-            &metadata,
-            None,
-        );
-        assert!(
-            !output.status.success(),
-            "authorized canary in package inputs must fail closed"
-        );
-    }
-
-    let temp = tempfile::tempdir().expect("temporary directory must be created");
-    let output = run_public_artifact_verifier(
-        temp.path(),
-        b"safe public dione binary fixture",
-        b"commit=0123456789abcdef0123456789abcdef01234567\nversion=0.1.0\nrunner=private\n",
-        b"",
-        "Cargo.toml\nsrc/main.rs\n",
-        r#"{"packages":[{"name":"dione"}]}"#,
-        None,
-    );
-    assert!(
-        !output.status.success(),
-        "expanded receipt must fail closed"
-    );
-}
-
-#[test]
-fn public_artifact_verifier_compares_receipt_and_checksum_as_exact_bytes() {
-    let exact_receipt = b"commit=0123456789abcdef0123456789abcdef01234567\nversion=0.1.0\n";
-    let receipt_variants = [
-        exact_receipt[..exact_receipt.len() - 1].to_vec(),
-        [exact_receipt.as_slice(), b"\n".as_slice()].concat(),
-        [exact_receipt.as_slice(), b"\0".as_slice()].concat(),
-    ];
-    for receipt in receipt_variants {
-        let temp = tempfile::tempdir().expect("temporary directory must be created");
-        let output = run_public_artifact_verifier(
-            temp.path(),
-            b"safe public dione binary fixture",
-            &receipt,
-            b"",
-            "Cargo.toml\nsrc/main.rs\n",
-            r#"{"packages":[{"name":"dione"}]}"#,
-            None,
-        );
-        assert!(
-            !output.status.success(),
-            "missing newline, extra newline, and NUL receipt bytes must fail"
-        );
-    }
-
-    for checksum_suffix in [b"\n".as_slice(), b"\0".as_slice(), b"x".as_slice()] {
-        let temp = tempfile::tempdir().expect("temporary directory must be created");
-        let output = run_public_artifact_verifier(
-            temp.path(),
-            b"safe public dione binary fixture",
-            exact_receipt,
-            checksum_suffix,
-            "Cargo.toml\nsrc/main.rs\n",
-            r#"{"packages":[{"name":"dione"}]}"#,
-            None,
-        );
-        assert!(
-            !output.status.success(),
-            "extra newline, NUL, and ordinary checksum bytes must fail"
-        );
-    }
-}
-
-#[test]
-fn public_artifact_verifier_fails_closed_when_canary_scan_errors() {
-    let temp = tempfile::tempdir().expect("temporary directory must be created");
-    let mock_bin = temp.path().join("mock-bin");
-    fs::create_dir(&mock_bin).expect("mock binary directory must be created");
-    let mock_grep = mock_bin.join("grep");
-    fs::write(&mock_grep, "#!/bin/sh\nexit 2\n").expect("mock grep must be written");
-    fs::set_permissions(&mock_grep, fs::Permissions::from_mode(0o755))
-        .expect("mock grep must be executable");
-
-    let output = run_public_artifact_verifier(
-        temp.path(),
-        b"safe public dione binary fixture",
-        b"commit=0123456789abcdef0123456789abcdef01234567\nversion=0.1.0\n",
-        b"",
-        "Cargo.toml\nsrc/main.rs\n",
-        r#"{"packages":[{"name":"dione"}]}"#,
-        Some(&mock_bin),
-    );
-    assert!(!output.status.success(), "grep status 2 must fail closed");
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("canary scan failed"),
-        "scan failure must remain distinguishable from a canary match"
-    );
-}
-
-#[test]
-fn public_artifact_verifier_fails_closed_when_binary_hashing_errors() {
-    let temp = tempfile::tempdir().expect("temporary directory must be created");
-    let mock_bin = temp.path().join("mock-bin");
-    fs::create_dir(&mock_bin).expect("mock binary directory must be created");
-    let mock_sha256sum = mock_bin.join("sha256sum");
-    fs::write(&mock_sha256sum, "#!/bin/sh\nexit 2\n").expect("mock sha256sum must be written");
-    fs::set_permissions(&mock_sha256sum, fs::Permissions::from_mode(0o755))
-        .expect("mock sha256sum must be executable");
-
-    let output = run_public_artifact_verifier(
-        temp.path(),
-        b"safe public dione binary fixture",
-        b"commit=0123456789abcdef0123456789abcdef01234567\nversion=0.1.0\n",
-        b"",
-        "Cargo.toml\nsrc/main.rs\n",
-        r#"{"packages":[{"name":"dione"}]}"#,
-        Some(&mock_bin),
-    );
-    assert!(
-        !output.status.success(),
-        "sha256sum failure must fail closed"
-    );
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("binary hashing failed"),
-        "hash failure must remain distinguishable from a checksum mismatch"
-    );
-    assert!(
-        fs::read_dir(temp.path())
-            .expect("fixture directory must remain readable")
-            .all(|entry| {
-                let name = entry.expect("fixture entry must be readable").file_name();
-                let name = name.to_string_lossy();
-                !name.starts_with(".expected-") && !name.starts_with(".actual-")
-            }),
-        "hashing failure must clean up all scratch files"
     );
 }
 

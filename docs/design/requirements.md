@@ -138,7 +138,7 @@ phase: 2
 | P-03 | CI pipeline: `cargo fmt --check` → `cargo clippy -- -D warnings` → `cargo nextest run` → cross-compile check → MSRV check → cargo-deny | Convention |
 | P-04 | PR titles enforce conventional commits (feat, fix, chore, docs, refactor, revert, test, ci, perf, build) | Convention |
 | P-05 | All GitHub Actions pinned to full commit SHA with version comment | Convention |
-| P-06 | Release pipeline: tag-release (workflow_run on CI) → release (cargo-auditable, macOS universal via lipo, SHA256 checksums, OIDC trusted publishing, git-cliff release notes) | Convention |
+| P-06 | Release pipeline: Forgejo CI is the sole automated tag writer; GitHub consumes the mirrored tag to create the release (cargo-auditable, macOS universal via lipo, SHA256 checksums, OIDC trusted publishing, git-cliff release notes) | Convention |
 | P-07 | Dependabot: weekly Friday, grouped Rust deps (minor+patch), grouped actions (all), conventional commit prefixes | Convention |
 | P-08 | deny.toml: standard license allowlist, advisory ignore with rationale, deny unknown registries/git | Convention |
 | P-09 | Release profile: `lto = true`, `strip = true`, `codegen-units = 1` | Convention |

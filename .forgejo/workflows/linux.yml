@@ -1,9 +1,10 @@
 name: Forgejo Linux CI
 
 # Forgejo pull-request runs execute only the non-mutating checks below. The
-# release artifact remains a trusted-main job and is guarded at the job boundary.
+# release tag remains a trusted-main job and is guarded at the job boundary.
 # This mirrors the Linux build from GitHub CI, but deliberately omits GitHub's
-# macOS runner and every tag, release, package-publish, and write-token step.
+# macOS runner, release creation, and package publishing. After all six gates
+# pass, a version-and-changelog bump is bound to an annotated exact-head tag.
 on:
   push:
     branches: [main]
@@ -116,77 +117,22 @@ jobs:
         with:
           command: check
 
-  release-artifact:
-    name: Trusted main Linux release artifact
+  release-tag:
+    name: Annotated release tag
     if: ${{ forgejo.event_name == 'push' && forgejo.ref == 'refs/heads/main' }}
     needs: [format, lint, test, package, msrv, audit]
     runs-on: docker
-    timeout-minutes: 60
-    env:
-      BUILD_TARGET: x86_64-unknown-linux-gnu
+    timeout-minutes: 15
     steps:
       - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          fetch-depth: 0
           ref: ${{ forgejo.sha }}
-          persist-credentials: false
-      - uses: https://github.com/dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
-        with:
-          toolchain: "1.98.0"
-          targets: x86_64-unknown-linux-gnu
-      - name: Build and bind release artifact to trusted main
+          # This trusted-main job retains Forgejo's task credential for its
+          # sole write: a non-force annotated tag push.
+          persist-credentials: true
+      - name: Tag a qualified version and changelog bump
         env:
           EXPECTED_COMMIT: ${{ forgejo.sha }}
-        run: |
-          set -eu
-          actual_commit="$(git rev-parse HEAD)"
-          if [ "${actual_commit}" != "${EXPECTED_COMMIT}" ]; then
-            echo "checked-out commit ${actual_commit} does not match event commit ${EXPECTED_COMMIT}" >&2
-            exit 1
-          fi
-
-          cargo build --release --locked --target "${BUILD_TARGET}"
-
-          version="$(scripts/workspace-package-version.sh dione)"
-          mkdir -p dist artifact-audit
-          install -m 0755 "target/${BUILD_TARGET}/release/dione" dist/dione
-          (cd dist && sha256sum dione > dione.sha256)
-          printf 'commit=%s\nversion=%s\n' "${actual_commit}" "${version}" \
-            > dist/build-receipt.txt
-
-          # Recompute the publishable package inputs at the exact built commit.
-          # These audit files never enter the upload allowlist.
-          cargo package -p dione --list --locked > artifact-audit/package-inputs.txt
-          cargo metadata --locked --no-deps --format-version 1 \
-            > artifact-audit/cargo-metadata.json
-          scripts/verify-public-artifact.sh \
-            dist/dione \
-            dist/dione.sha256 \
-            dist/build-receipt.txt \
-            "${actual_commit}" \
-            "${version}" \
-            artifact-audit/package-inputs.txt \
-            artifact-audit/cargo-metadata.json
-      # upload-artifact's Node.js process uses Node's bundled CA store, which
-      # does not include the RosiePKI private CA. The runner now mounts the
-      # trust bundle and injects NODE_EXTRA_CA_CERTS via runner.envs
-      # (Argo #68), so no live per-step fetch is needed here.
-      # This Forgejo instance rejects the v4+ artifact backend
-      # (GHESNotSupportedError: @actions/artifact v2.0.0+ / upload-artifact@v4+
-      # not supported) even with Forgejo's own patched v4.6.2, so this is pinned
-      # to v3-node20 (plain v3 is node16, now EOL). Verified: the v4.6.2 pin built
-      # dist/ and passed the verifier but died at the upload step on every main run.
-      # https://forgejo.org/docs/latest/user/actions/advanced-features/#artifacts
-      # Source: https://data.forgejo.org/actions/upload-artifact
-      # The ZIP transport does not preserve executable mode. Consumers verify
-      # dione.sha256, then restore mode 0755 after download.
-      - name: Upload immutable public release artifact
-        uses: https://data.forgejo.org/actions/upload-artifact@c24449f33cd45d4826c6702db7e49f7cdb9b551d # v3-node20
-        with:
-          name: dione-linux-x86_64-${{ forgejo.sha }}
-          path: |
-            dist/dione
-            dist/dione.sha256
-            dist/build-receipt.txt
-          if-no-files-found: error
-          retention-days: 14
-          compression-level: 0
+          PUSH_BEFORE: ${{ forgejo.event.before }}
+        run: sh scripts/tag-qualified-release.sh
