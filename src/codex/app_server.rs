@@ -103,6 +103,47 @@ pub enum CodexDeliveryError {
     Queue(#[from] CodexQueueError),
 }
 
+#[derive(Debug, Error)]
+enum AppServerRequestError {
+    #[error(transparent)]
+    Delivery(#[from] CodexDeliveryError),
+    #[error("Codex app-server rejected `{method}`: {rendered}")]
+    Rejected {
+        method: &'static str,
+        rendered: String,
+        code: Option<i64>,
+        rpc_message: Option<String>,
+    },
+}
+
+impl AppServerRequestError {
+    fn rejected(method: &'static str, error: &Value) -> Self {
+        Self::Rejected {
+            method,
+            rendered: error.to_string(),
+            code: error.get("code").and_then(Value::as_i64),
+            rpc_message: error
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        }
+    }
+}
+
+impl From<AppServerRequestError> for CodexDeliveryError {
+    fn from(error: AppServerRequestError) -> Self {
+        match error {
+            AppServerRequestError::Delivery(error) => error,
+            AppServerRequestError::Rejected {
+                method, rendered, ..
+            } => CodexDeliveryError::Rejected {
+                method,
+                message: rendered,
+            },
+        }
+    }
+}
+
 struct AppServerClient {
     stream: WebSocketStream<UnixStream>,
     next_request_id: u64,
@@ -219,16 +260,19 @@ impl AppServerClient {
                     )
                     .await?;
                 let turn_id = active_turn_id(&turns)?;
-                self.request(
-                    "turn/steer",
-                    json!({
-                        "threadId": self.thread_id,
-                        "expectedTurnId": turn_id,
-                        "clientUserMessageId": client_message_id,
-                        "input": input
-                    }),
-                )
-                .await?;
+                let mut params = json!({
+                    "threadId": self.thread_id,
+                    "expectedTurnId": turn_id,
+                    "clientUserMessageId": client_message_id,
+                    "input": input
+                });
+                if let Err(error) = self.request("turn/steer", params.clone()).await {
+                    let Some(current_turn_id) = stale_turn_mismatch(&error, &turn_id) else {
+                        return Err(error.into());
+                    };
+                    params["expectedTurnId"] = Value::String(current_turn_id);
+                    self.request("turn/steer", params).await?;
+                }
             }
             status => {
                 return Err(CodexDeliveryError::UnsupportedThreadStatus {
@@ -243,7 +287,7 @@ impl AppServerClient {
         &mut self,
         method: &'static str,
         params: Value,
-    ) -> Result<Value, CodexDeliveryError> {
+    ) -> Result<Value, AppServerRequestError> {
         let request_id = self.next_request_id;
         self.next_request_id = self.next_request_id.saturating_add(1);
         self.send(
@@ -255,27 +299,48 @@ impl AppServerClient {
         tokio::time::timeout(self.config.request_timeout, async {
             loop {
                 let Some(message) = self.stream.next().await else {
-                    return Err(CodexDeliveryError::Disconnected { method });
+                    return Err(AppServerRequestError::from(
+                        CodexDeliveryError::Disconnected { method },
+                    ));
                 };
-                match message.map_err(|source| CodexDeliveryError::Protocol {
-                    method,
-                    source: Box::new(source),
+                match message.map_err(|source| {
+                    AppServerRequestError::from(CodexDeliveryError::Protocol {
+                        method,
+                        source: Box::new(source),
+                    })
                 })? {
                     Message::Text(text) => {
                         let message: Value = serde_json::from_str(&text).map_err(|source| {
-                            CodexDeliveryError::Rejected {
+                            AppServerRequestError::from(CodexDeliveryError::Rejected {
                                 method,
                                 message: format!("invalid JSON response: {source}"),
-                            }
+                            })
                         })?;
                         if message.get("id").and_then(Value::as_u64) != Some(request_id) {
                             continue;
                         }
                         if let Some(error) = message.get("error") {
-                            return Err(CodexDeliveryError::Rejected {
-                                method,
-                                message: error.to_string(),
-                            });
+                            let rejection = AppServerRequestError::rejected(method, error);
+                            if let AppServerRequestError::Rejected {
+                                method: "turn/steer",
+                                code: Some(-32600),
+                                rpc_message,
+                                ..
+                            } = &rejection
+                                && rpc_message.as_deref() != Some("no active turn to steer")
+                                && params
+                                    .get("expectedTurnId")
+                                    .and_then(Value::as_str)
+                                    .and_then(|expected| stale_turn_mismatch(&rejection, expected))
+                                    .is_none()
+                            {
+                                tracing::warn!(
+                                    method,
+                                    code = -32600,
+                                    "unrecognized Codex steer rejection; check delivery error for changed server wording"
+                                );
+                            }
+                            return Err(rejection);
                         }
                         return Ok(message.get("result").cloned().unwrap_or(Value::Null));
                     }
@@ -283,17 +348,23 @@ impl AppServerClient {
                         .stream
                         .send(Message::Pong(payload))
                         .await
-                        .map_err(|source| CodexDeliveryError::Protocol {
-                            method,
-                            source: Box::new(source),
+                        .map_err(|source| {
+                            AppServerRequestError::from(CodexDeliveryError::Protocol {
+                                method,
+                                source: Box::new(source),
+                            })
                         })?,
-                    Message::Close(_) => return Err(CodexDeliveryError::Disconnected { method }),
+                    Message::Close(_) => {
+                        return Err(AppServerRequestError::from(
+                            CodexDeliveryError::Disconnected { method },
+                        ));
+                    }
                     Message::Binary(_) | Message::Pong(_) | Message::Frame(_) => {}
                 }
             }
         })
         .await
-        .map_err(|_| CodexDeliveryError::Timeout { method })?
+        .map_err(|_| AppServerRequestError::from(CodexDeliveryError::Timeout { method }))?
     }
 
     async fn send(
@@ -335,6 +406,28 @@ fn active_turn_id(turns: &Value) -> Result<String, CodexDeliveryError> {
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or(CodexDeliveryError::ActiveTurnUnknown)
+}
+
+fn stale_turn_mismatch(error: &AppServerRequestError, expected_turn_id: &str) -> Option<String> {
+    let AppServerRequestError::Rejected {
+        method: "turn/steer",
+        code,
+        rpc_message,
+        ..
+    } = error
+    else {
+        return None;
+    };
+    if *code != Some(-32600) {
+        return None;
+    }
+    let message = rpc_message.as_deref()?;
+    let prefix = format!("expected active turn id `{expected_turn_id}` but found `");
+    let current_turn_id = message.strip_prefix(&prefix)?.strip_suffix('`')?;
+    (!current_turn_id.is_empty()
+        && !current_turn_id.contains('`')
+        && current_turn_id != expected_turn_id)
+        .then(|| current_turn_id.to_owned())
 }
 
 fn event_input(event: &LeasedEvent, preamble: Option<&str>) -> Value {
@@ -595,6 +688,14 @@ mod tests {
         }
     }
 
+    fn rejected_error(
+        method: &'static str,
+        code: i64,
+        message: impl Into<String>,
+    ) -> AppServerRequestError {
+        AppServerRequestError::rejected(method, &json!({ "code": code, "message": message.into() }))
+    }
+
     #[test]
     fn finds_in_progress_turn() {
         let turns = json!({
@@ -624,6 +725,61 @@ mod tests {
             active_turn_id(&turns),
             Err(CodexDeliveryError::ActiveTurnUnknown)
         ));
+    }
+
+    #[test]
+    fn stale_turn_mismatch_discriminator_fails_closed() {
+        let canonical = rejected_error(
+            "turn/steer",
+            -32600,
+            "expected active turn id `turn-stale` but found `turn-current`",
+        );
+        assert_eq!(
+            stale_turn_mismatch(&canonical, "turn-stale").as_deref(),
+            Some("turn-current")
+        );
+
+        let near_misses = [
+            rejected_error(
+                "turn/steer",
+                -32602,
+                "expected active turn id `turn-stale` but found `turn-current`",
+            ),
+            rejected_error(
+                "turn/start",
+                -32600,
+                "expected active turn id `turn-stale` but found `turn-current`",
+            ),
+            rejected_error("turn/steer", -32600, "no active turn to steer"),
+            rejected_error(
+                "turn/steer",
+                -32600,
+                "expected active turn id `turn-stale` but found `turn-current",
+            ),
+            rejected_error(
+                "turn/steer",
+                -32600,
+                "expected active turn id `turn-other` but found `turn-current`",
+            ),
+            rejected_error(
+                "turn/steer",
+                -32600,
+                "expected active turn id `turn-stale` but found ``",
+            ),
+            rejected_error(
+                "turn/steer",
+                -32600,
+                "expected active turn id `turn-stale` but found `turn-stale`",
+            ),
+            rejected_error("turn/steer", -32600, "unrelated rejection"),
+            AppServerRequestError::from(CodexDeliveryError::Rejected {
+                method: "turn/steer",
+                message: "not JSON".to_owned(),
+            }),
+        ];
+        for error in near_misses {
+            assert_eq!(stale_turn_mismatch(&error, "turn-stale"), None);
+        }
     }
 
     #[test]
@@ -901,6 +1057,169 @@ mod tests {
             })
         );
         assert_eq!(received[4]["params"]["expectedTurnId"], "turn-live");
+    }
+
+    #[tokio::test]
+    async fn stale_active_turn_retries_once_with_server_reported_turn() {
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            let mut steer_requests = Vec::new();
+            while let Some(message) = websocket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                let response = match request["method"].as_str().unwrap() {
+                    "thread/read" => {
+                        json!({ "id": id, "result": { "thread": { "status": { "type": "active" } } } })
+                    }
+                    "thread/turns/list" => json!({
+                        "id": id,
+                        "result": {
+                            "data": [{ "id": "turn-stale", "status": "inProgress" }]
+                        }
+                    }),
+                    "turn/steer" => {
+                        steer_requests.push(request.clone());
+                        if steer_requests.len() == 1 {
+                            json!({
+                                "id": id,
+                                "error": {
+                                    "code": -32600,
+                                    "message": "expected active turn id `turn-stale` but found `turn-current`"
+                                }
+                            })
+                        } else {
+                            json!({ "id": id, "result": {} })
+                        }
+                    }
+                    _ => json!({ "id": id, "result": {} }),
+                };
+                websocket
+                    .send(Message::Text(response.to_string()))
+                    .await
+                    .unwrap();
+                if steer_requests.len() == 2 {
+                    return steer_requests;
+                }
+            }
+            steer_requests
+        });
+        let config = test_delivery_config(socket_path, Duration::from_secs(1));
+        let mut client =
+            AppServerClient::connect(config, CodexThreadId::parse("thread-stale-turn").unwrap())
+                .await
+                .unwrap();
+
+        client.deliver(&test_event(), None).await.unwrap();
+
+        let steer_requests = tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("timed out waiting for stale-turn retry")
+            .unwrap();
+        assert_eq!(steer_requests.len(), 2);
+        assert_eq!(steer_requests[0]["params"]["expectedTurnId"], "turn-stale");
+        assert_eq!(
+            steer_requests[1]["params"]["expectedTurnId"],
+            "turn-current"
+        );
+        let expected_input = event_input(&test_event(), None);
+        for request in &steer_requests {
+            assert_eq!(request["params"]["clientUserMessageId"], "dione-99");
+            assert_eq!(request["params"]["input"], expected_input);
+        }
+    }
+
+    #[tokio::test]
+    async fn second_stale_turn_mismatch_fails_closed_after_one_retry() {
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            let mut steer_requests = Vec::new();
+            while let Some(message) = websocket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                let response = match request["method"].as_str().unwrap() {
+                    "thread/read" => {
+                        json!({ "id": id, "result": { "thread": { "status": { "type": "active" } } } })
+                    }
+                    "thread/turns/list" => json!({
+                        "id": id,
+                        "result": {
+                            "data": [{ "id": "turn-stale", "status": "inProgress" }]
+                        }
+                    }),
+                    "turn/steer" => {
+                        steer_requests.push(request.clone());
+                        let (expected, current) = if steer_requests.len() == 1 {
+                            ("turn-stale", "turn-current")
+                        } else {
+                            ("turn-current", "turn-newer")
+                        };
+                        json!({
+                            "id": id,
+                            "error": {
+                                "code": -32600,
+                                "message": format!(
+                                    "expected active turn id `{expected}` but found `{current}`"
+                                )
+                            }
+                        })
+                    }
+                    _ => json!({ "id": id, "result": {} }),
+                };
+                websocket
+                    .send(Message::Text(response.to_string()))
+                    .await
+                    .unwrap();
+                if steer_requests.len() == 2 {
+                    return steer_requests;
+                }
+            }
+            steer_requests
+        });
+        let config = test_delivery_config(socket_path, Duration::from_secs(1));
+        let mut client = AppServerClient::connect(
+            config,
+            CodexThreadId::parse("thread-second-stale-turn").unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let error = client.deliver(&test_event(), None).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            CodexDeliveryError::Rejected {
+                method: "turn/steer",
+                ..
+            }
+        ));
+        let steer_requests = tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("timed out waiting for bounded stale-turn retry")
+            .unwrap();
+        assert_eq!(steer_requests.len(), 2);
+        assert_eq!(steer_requests[0]["params"]["expectedTurnId"], "turn-stale");
+        assert_eq!(
+            steer_requests[1]["params"]["expectedTurnId"],
+            "turn-current"
+        );
     }
 
     #[tokio::test]

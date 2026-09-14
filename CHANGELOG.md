@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Retry Codex live delivery once when `turn/steer` explicitly rejects a stale
+  active-turn ID and names the current turn. Preserve the thread, message ID,
+  and payload; do not retry uncertain transport failures through this path.
+  Warn when an invalid-request steer rejection matches neither known message.
+
 ## [0.41.0] - 2026-09-07
 
 ### Added
