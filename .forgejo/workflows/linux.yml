@@ -84,47 +84,12 @@ jobs:
           toolchain: "1.98.0"
       - name: Reject private and git-backed package sources
         run: cargo test --test public_package --locked
-      - name: Verify publishable workspace packages
+      - name: Verify publishable Dione package
         run: |
-          cargo package -p auspex-core --locked
-          auspex_version="$(scripts/workspace-package-version.sh auspex-core)"
-          auspex_crate="target/package/auspex-core-${auspex_version}.crate"
-          scripts/verify-public-package-privacy.sh "${auspex_crate}"
-
-          auspex_url="https://crates.io/api/v1/crates/auspex-core/${auspex_version}"
-          status="$(curl --silent --show-error --connect-timeout 5 --max-time 20 \
-            --user-agent 'dione-forgejo-ci/1.0 (https://forgejo.svc.echoes/lacuna/dione)' \
-            --output /dev/null --write-out '%{http_code}' "${auspex_url}")"
-          case "${status}" in
-            200)
-              for attempt in $(seq 1 12); do
-                if timeout 10s cargo info --registry crates-io "auspex-core@${auspex_version}" > /dev/null 2>&1; then
-                  break
-                fi
-                if [ "${attempt}" = 12 ]; then
-                  echo "crates.io API knows auspex-core ${auspex_version}, but Cargo's registry index cannot resolve it" >&2
-                  exit 1
-                fi
-                sleep 5
-              done
-              cargo package -p dione --locked
-              dione_version="$(scripts/workspace-package-version.sh dione)"
-              dione_crate="target/package/dione-${dione_version}.crate"
-              scripts/verify-public-package-privacy.sh "${dione_crate}"
-              ;;
-            404)
-              # Before auspex-core's first release, Cargo cannot resolve the
-              # registry form of Dione's path+version dependency. Validate the
-              # exact Dione package file set; the release workflow publishes
-              # auspex-core through the protected first-publication handoff;
-              # later release runs perform the registry-backed Dione publish.
-              cargo package -p dione --list --locked > /dev/null
-              ;;
-            *)
-              echo "crates.io returned HTTP ${status} while checking auspex-core ${auspex_version}" >&2
-              exit 1
-              ;;
-          esac
+          cargo package -p dione --locked
+          dione_version="$(scripts/workspace-package-version.sh dione)"
+          dione_crate="target/package/dione-${dione_version}.crate"
+          scripts/verify-public-package-privacy.sh "${dione_crate}"
 
   msrv:
     name: Rust 1.98 minimum supported version

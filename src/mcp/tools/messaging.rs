@@ -3391,12 +3391,12 @@ mod tests {
             ledger.take_observed_verifications(),
             vec![
                 crate::ingress_ledger::VerifyResult::Admitted {
-                    channel: auspex_core::ChannelRef::new(42),
+                    channel: crate::ingress_ledger::ChannelRef::new(42),
                 },
                 crate::ingress_ledger::VerifyResult::Unknown,
                 crate::ingress_ledger::VerifyResult::ChannelMismatch {
-                    admitted_channel: auspex_core::ChannelRef::new(41),
-                    claimed_channel: auspex_core::ChannelRef::new(42),
+                    admitted_channel: crate::ingress_ledger::ChannelRef::new(41),
+                    claimed_channel: crate::ingress_ledger::ChannelRef::new(42),
                 },
             ]
         );

@@ -43,6 +43,10 @@ fn private_dependency_name() -> String {
     ["cingu", "late"].concat()
 }
 
+fn extracted_dependency_name() -> String {
+    ["auspex", "-core"].concat()
+}
+
 fn git_output(root: &Path, args: &[&str]) -> Output {
     Command::new("git")
         .args(args)
@@ -260,6 +264,72 @@ fn public_package_graph_has_no_private_adapter_dependency() {
             "{name} contains a private package-graph reference"
         );
     }
+}
+
+#[test]
+fn dione_no_longer_resolves_or_packages_the_extracted_crate() {
+    let extracted = extracted_dependency_name();
+    for (name, contents) in [
+        ("Cargo.toml", include_str!("../Cargo.toml")),
+        ("Cargo.lock", include_str!("../Cargo.lock")),
+        (
+            ".forgejo/workflows/linux.yml",
+            include_str!("../.forgejo/workflows/linux.yml"),
+        ),
+        (
+            ".github/workflows/publish-crate.yml",
+            include_str!("../.github/workflows/publish-crate.yml"),
+        ),
+    ] {
+        assert!(
+            !contents.contains(&extracted),
+            "{name} still resolves or packages the extracted crate"
+        );
+    }
+
+    let metadata = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+        .args(["metadata", "--locked", "--format-version", "1"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("cargo metadata must execute");
+    assert!(
+        metadata.status.success(),
+        "cargo metadata failed: {}",
+        String::from_utf8_lossy(&metadata.stderr)
+    );
+    let graph: serde_json::Value =
+        serde_json::from_slice(&metadata.stdout).expect("cargo metadata must be JSON");
+    assert!(
+        graph["packages"]
+            .as_array()
+            .expect("metadata packages must be an array")
+            .iter()
+            .all(|package| package["name"] != extracted),
+        "the resolved package graph still contains the extracted crate"
+    );
+
+    let package = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+        .args([
+            "package",
+            "-p",
+            "dione",
+            "--list",
+            "--locked",
+            "--allow-dirty",
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("cargo package --list must execute");
+    assert!(
+        package.status.success(),
+        "cargo package --list failed: {}",
+        String::from_utf8_lossy(&package.stderr)
+    );
+    let removed_path = ["crates/", &extracted].concat();
+    assert!(
+        !String::from_utf8_lossy(&package.stdout).contains(&removed_path),
+        "Dione's package still contains the extracted crate"
+    );
 }
 
 #[test]
@@ -632,10 +702,10 @@ fn package_privacy_verifier_fails_closed_for_missing_or_empty_marker_source() {
 }
 
 #[test]
-fn release_version_helper_reads_workspace_path_package() {
+fn release_version_helper_reads_dione_package() {
     let output = Command::new("sh")
         .arg("scripts/workspace-package-version.sh")
-        .arg("auspex-core")
+        .arg("dione")
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .expect("version helper must execute");
@@ -645,7 +715,7 @@ fn release_version_helper_reads_workspace_path_package() {
         "version helper failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0.3.0");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0.42.0");
 }
 
 #[test]
@@ -740,25 +810,15 @@ fn release_generated_files_are_ignored_and_excluded_from_package_inputs() {
 }
 
 #[test]
-fn release_waits_for_cargo_registry_resolution() {
+fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     let workflow = include_str!("../.github/workflows/publish-crate.yml");
-    let (verify_auspex, remaining) = workflow
-        .split_once("\n  publish-auspex:")
-        .expect("release workflow must separate Auspex verification from publication");
-    let (publish_auspex, remaining) = remaining
-        .split_once("\n  reconcile-auspex:")
-        .expect("release workflow must reconcile Auspex outside the OIDC job");
-    let (reconcile_auspex, remaining) = remaining
-        .split_once("\n  verify-dione:")
-        .expect("release workflow must re-enter an unprivileged Dione verification job");
-    let (verify_dione, remaining) = remaining
+    let (verify_dione, remaining) = workflow
         .split_once("\n  publish-crate:")
         .expect("release workflow must separate Dione verification from publication");
     let (publish_dione, reconcile_dione) = remaining
         .split_once("\n  reconcile-dione:")
         .expect("release workflow must reconcile Dione outside the OIDC job");
 
-    assert!(workflow.contains("scripts/workspace-package-version.sh auspex-core"));
     assert_eq!(
         workflow
             .matches("scripts/verify-public-package-privacy.sh")
@@ -766,61 +826,40 @@ fn release_waits_for_cargo_registry_resolution() {
         workflow.matches("cargo package -p").count(),
         "every exact package archive must cross the privacy verifier"
     );
-    assert!(workflow.contains("cargo info --registry crates-io"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh auspex-core"));
-    assert!(workflow.contains("${auspex_crate}\" --ignore-vcs-info"));
     assert!(workflow.contains("scripts/crates-io-package-state.sh dione"));
-    assert!(workflow.contains("scripts/verify-crates-io-owners.sh auspex-core"));
     assert!(workflow.contains("scripts/verify-crates-io-owners.sh dione"));
     assert!(workflow.contains("github:butterflyskies:lacuna-blinkers"));
     assert!(workflow.contains("github:butterflyskies:superadmins"));
-    assert!(workflow.contains("needs its protected first publication"));
-    assert!(!verify_auspex.contains("CARGO_REGISTRY_TOKEN"));
-    assert!(!verify_auspex.contains("id-token: write"));
     assert!(!verify_dione.contains("CARGO_REGISTRY_TOKEN"));
     assert!(!verify_dione.contains("id-token: write"));
-    assert!(!reconcile_auspex.contains("CARGO_REGISTRY_TOKEN"));
-    assert!(!reconcile_auspex.contains("id-token: write"));
     assert!(!reconcile_dione.contains("CARGO_REGISTRY_TOKEN"));
     assert!(!reconcile_dione.contains("id-token: write"));
-    assert!(reconcile_auspex.contains("needs: [verify-auspex, publish-auspex]"));
-    assert!(reconcile_auspex.contains(
-        "always() &&\n      needs.verify-auspex.result == 'success' &&\n      (needs.publish-auspex.result == 'success' || needs.publish-auspex.result == 'skipped')"
-    ));
     assert!(reconcile_dione.contains("needs: [verify-dione, publish-crate]"));
     assert!(reconcile_dione.contains(
         "always() &&\n      needs.verify-dione.result == 'success' &&\n      (needs.publish-crate.result == 'success' || needs.publish-crate.result == 'skipped')"
     ));
-    assert!(publish_auspex.contains("id-token: write"));
     assert!(publish_dione.contains("id-token: write"));
     assert!(workflow.contains("group: publish-crate-${{ inputs.tag }}"));
-    assert!(publish_auspex.contains("cargo package -p auspex-core --locked --no-verify"));
-    assert!(!publish_auspex.contains("cargo package -p auspex-core --locked\n"));
-    assert!(publish_auspex.contains("cargo publish -p auspex-core --locked --no-verify"));
     assert!(publish_dione.contains("cargo package -p dione --locked --no-verify"));
     assert!(!publish_dione.contains("cargo package -p dione --locked\n"));
     assert!(publish_dione.contains("cargo publish -p dione --locked --no-verify"));
-    assert!(reconcile_auspex.contains("Reconcile exact Auspex registry state"));
-    assert!(reconcile_auspex.contains("cargo package -p auspex-core --locked\n"));
     assert!(reconcile_dione.contains("Reconcile exact Dione registry state"));
     assert!(reconcile_dione.contains("cargo package -p dione --locked\n"));
 
-    for job in [publish_auspex, publish_dione] {
-        let upload_step = job
-            .split_once("- name: Upload pre-verified")
-            .expect("publish workflow must have a privileged upload step")
-            .1;
-        let (upload_command, upload_env) = upload_step
-            .split_once("\n        env:")
-            .expect("upload step must scope its token in an env block");
-        assert!(upload_command.contains("continue-on-error: true"));
-        assert!(upload_command.contains("run: cargo publish"));
-        assert!(upload_env.contains("CARGO_REGISTRY_TOKEN"));
-        assert!(!upload_command.contains("scripts/crates-io-package-state.sh"));
-        assert!(!upload_command.contains("cargo package"));
-        assert!(!upload_env.contains("scripts/crates-io-package-state.sh"));
-        assert!(!upload_env.contains("cargo package"));
-    }
+    let upload_step = publish_dione
+        .split_once("- name: Upload pre-verified")
+        .expect("publish workflow must have a privileged upload step")
+        .1;
+    let (upload_command, upload_env) = upload_step
+        .split_once("\n        env:")
+        .expect("upload step must scope its token in an env block");
+    assert!(upload_command.contains("continue-on-error: true"));
+    assert!(upload_command.contains("run: cargo publish"));
+    assert!(upload_env.contains("CARGO_REGISTRY_TOKEN"));
+    assert!(!upload_command.contains("scripts/crates-io-package-state.sh"));
+    assert!(!upload_command.contains("cargo package"));
+    assert!(!upload_env.contains("scripts/crates-io-package-state.sh"));
+    assert!(!upload_env.contains("cargo package"));
 }
 
 #[test]
@@ -868,7 +907,9 @@ fn forgejo_ci_gates_pull_requests_and_preserves_trusted_main_release_artifact() 
     assert!(release_hygiene_script.contains("git show \"${VERSION_BASE}:Cargo.toml\""));
     assert!(release_hygiene_script.contains("git show \"${AFTER}:Cargo.toml\""));
     assert!(release_hygiene_script.contains("git show \"${AFTER}:CHANGELOG.md\""));
-    assert!(release_hygiene_script.contains("grep -F -x -q \"## [${new_version}]\""));
+    assert!(release_hygiene_script.contains("awk -v heading=\"## [${new_version}]\""));
+    assert!(release_hygiene_script.contains("$0 == heading { found = 1 }"));
+    assert!(release_hygiene_script.contains("index($0, heading \" - \") == 1"));
 
     let package = workflow
         .split_once("\n  package:")
@@ -877,12 +918,6 @@ fn forgejo_ci_gates_pull_requests_and_preserves_trusted_main_release_artifact() 
         .split_once("\n  msrv:")
         .expect("the package boundary must remain separate from MSRV")
         .0;
-    assert_eq!(
-        package
-            .matches("cargo package -p auspex-core --locked\n")
-            .count(),
-        1
-    );
     assert_eq!(
         package.matches("cargo package -p dione --locked\n").count(),
         1
@@ -893,7 +928,7 @@ fn forgejo_ci_gates_pull_requests_and_preserves_trusted_main_release_artifact() 
         .enumerate()
         .filter(|(_, line)| line.starts_with("cargo package -p ") && !line.contains(" --list"))
         .collect::<Vec<_>>();
-    assert_eq!(archive_package_calls.len(), 2);
+    assert_eq!(archive_package_calls.len(), 1);
     assert_eq!(
         package
             .matches("scripts/verify-public-package-privacy.sh")
@@ -916,12 +951,8 @@ fn forgejo_ci_gates_pull_requests_and_preserves_trusted_main_release_artifact() 
         );
     }
     assert!(package.contains(
-        "cargo package -p auspex-core --locked\n          auspex_version=\"$(scripts/workspace-package-version.sh auspex-core)\"\n          auspex_crate=\"target/package/auspex-core-${auspex_version}.crate\"\n          scripts/verify-public-package-privacy.sh \"${auspex_crate}\""
+        "cargo package -p dione --locked\n          dione_version=\"$(scripts/workspace-package-version.sh dione)\"\n          dione_crate=\"target/package/dione-${dione_version}.crate\"\n          scripts/verify-public-package-privacy.sh \"${dione_crate}\""
     ));
-    assert!(package.contains(
-        "cargo package -p dione --locked\n              dione_version=\"$(scripts/workspace-package-version.sh dione)\"\n              dione_crate=\"target/package/dione-${dione_version}.crate\"\n              scripts/verify-public-package-privacy.sh \"${dione_crate}\""
-    ));
-    assert!(package.contains("cargo package -p dione --list --locked > /dev/null"));
 
     let artifact = workflow
         .split_once("\n  release-artifact:")
@@ -1237,6 +1268,90 @@ fn release_hygiene_checks_the_event_change_set_in_real_git_dags() {
     assert!(
         String::from_utf8_lossy(&prerelease_near_match.stdout)
             .contains("CHANGELOG.md has no '## [1.2.3-rc.1]' entry")
+    );
+
+    assert!(
+        git_output(
+            root,
+            &[
+                "checkout",
+                "--quiet",
+                "-b",
+                "malformed-date-pr",
+                &advanced_main,
+            ]
+        )
+        .status
+        .success()
+    );
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn malformed_release_date() {}\n",
+    )
+    .expect("malformed release date source must be written");
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"1.2.4\"\n",
+    )
+    .expect("malformed release date manifest must be written");
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "## [1.2.4] - eventually\n\nNot a canonical dated release.\n\n## [0.2.0]\n\nMain release.\n",
+    )
+    .expect("malformed release date changelog must be written");
+    let malformed_date_pr = commit_fixture(root, "malformed release date PR");
+    let malformed_date = run_release_hygiene(
+        root,
+        "pull_request",
+        &advanced_main,
+        &malformed_date_pr,
+        "",
+        "",
+    );
+    assert_eq!(malformed_date.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&malformed_date.stdout)
+            .contains("CHANGELOG.md has no '## [1.2.4]' entry")
+    );
+
+    assert!(
+        git_output(
+            root,
+            &[
+                "checkout",
+                "--quiet",
+                "-b",
+                "dated-release-pr",
+                &advanced_main,
+            ]
+        )
+        .status
+        .success()
+    );
+    fs::write(root.join("src/lib.rs"), "pub fn dated_release() {}\n")
+        .expect("dated release source must be written");
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.3.1\"\n",
+    )
+    .expect("dated release manifest must be written");
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "## [0.3.1] - 2026-09-14\n\nDated release.\n\n## [0.2.0]\n\nMain release.\n",
+    )
+    .expect("dated release changelog must be written");
+    let dated_release_pr = commit_fixture(root, "dated release PR");
+    assert!(
+        run_release_hygiene(
+            root,
+            "pull_request",
+            &advanced_main,
+            &dated_release_pr,
+            "",
+            "",
+        )
+        .status
+        .success()
     );
 
     assert!(

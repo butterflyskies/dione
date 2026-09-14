@@ -1,0 +1,3 @@
+[[profile.default.overrides]]
+filter = 'test(=codex::app_server::tests::reset_peer_reacquires_expired_lease_and_retries_before_later_events) | test(=codex::app_server::tests::transient_rejection_retries_same_event_before_later_events)'
+threads-required = "num-cpus"

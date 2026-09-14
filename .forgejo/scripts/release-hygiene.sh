@@ -50,8 +50,15 @@ if [ "$comparison_status" -ne 0 ]; then
   echo "::error::src/ changed in ${CHANGE_BASE}..${AFTER} but Cargo.toml version ${new_version} is not greater than current base version ${old_version}."
   exit 1
 fi
-if ! git show "${AFTER}:CHANGELOG.md" | grep -F -x -q "## [${new_version}]"; then
-  echo "::error::Version bumped to ${new_version} but CHANGELOG.md has no '## [${new_version}]' entry."
+if ! git show "${AFTER}:CHANGELOG.md" | awk -v heading="## [${new_version}]" '
+  $0 == heading { found = 1 }
+  index($0, heading " - ") == 1 {
+    date = substr($0, length(heading) + 4)
+    if (date ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) found = 1
+  }
+  END { exit found ? 0 : 1 }
+'; then
+  echo "::error::Version bumped to ${new_version} but CHANGELOG.md has no '## [${new_version}]' entry (bare or followed by ' - YYYY-MM-DD')."
   exit 1
 fi
 echo "src/ changed; version ${old_version} -> ${new_version} with a matching changelog entry. ✅"

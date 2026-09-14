@@ -15,13 +15,14 @@
 use crate::discord::verified_action::{
     LifecycleAdmissionFacts, LifecycleContext, LifecycleProvenance,
 };
-use auspex_core::{ChannelRef, ContentHash};
 use serenity::model::{
     Timestamp,
     id::{ChannelId, MessageId, UserId, WebhookId},
 };
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
+    fmt,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -30,6 +31,32 @@ const ACTIVE_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const TOMBSTONE_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 const DEFAULT_MAX_ACTIVE: usize = 16_384;
 const DEFAULT_MAX_TOMBSTONES: usize = 16_384;
+
+/// Transport-agnostic channel/destination identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ChannelRef(u64);
+
+impl ChannelRef {
+    /// Creates a channel reference from its transport-independent identifier.
+    pub const fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    /// Returns the transport-independent channel identifier.
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl fmt::Display for ChannelRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// SHA-256 hash of message content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ContentHash([u8; 32]);
 
 trait Clock: Send + Sync {
     fn now(&self) -> Instant;
@@ -227,7 +254,7 @@ impl IngressLedger {
     }
 
     fn hash_content(content: &str) -> ContentHash {
-        auspex_core::ingress_ledger::IngressLedger::hash_content(content)
+        ContentHash(Sha256::digest(content.as_bytes()).into())
     }
 
     /// Compatibility constructor for direct admitted Discord messages.
@@ -712,6 +739,14 @@ mod tests {
     use proptest::prelude::*;
     use serenity::model::id::GuildId;
     use uuid::Uuid;
+
+    #[test]
+    fn channel_ref_preserves_and_displays_the_channel_id() {
+        let channel = ChannelRef::new(42);
+
+        assert_eq!(channel.get(), 42);
+        assert_eq!(channel.to_string(), "42");
+    }
 
     #[derive(Clone)]
     struct ManualClock(Arc<Mutex<Instant>>);

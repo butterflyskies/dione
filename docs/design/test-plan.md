@@ -159,8 +159,8 @@ lightweight threat model in [threat-model.md](threat-model.md).
 ## Public package privacy
 
 The release workflow runs `scripts/verify-public-package-privacy.sh` against the
-exact `.crate` archive produced by every `cargo package` invocation for both
-`auspex-core` and `dione`. Integration fixtures independently prove that each
+exact `.crate` archive produced by every `cargo package` invocation for Dione.
+Integration fixtures independently prove that each
 structural private-dependency class is rejected, that binary payloads are
 skipped, and that the public historical Cingulate name remains allowed. A
 separate synthetic fixture proves that an external forbidden marker is

@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-09-14
+
 ### Changed
+- Bring Dione's ingress-ledger channel reference and content hashing in-tree,
+  removing the embedded `auspex-core` crate and its release dependency. The
+  public `VerifyResult` channel type now lives at `dione::ingress_ledger::ChannelRef`.
 - Raise the minimum supported Rust version to 1.98 and pin CI formatting,
   linting, tests, packaging, and MSRV checks to that exact toolchain.
 
