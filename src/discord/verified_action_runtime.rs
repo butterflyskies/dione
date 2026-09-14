@@ -281,20 +281,45 @@ impl<'a> BoundPrincipalResolver<'a> {
     }
 
     /// Consumes one verified action and returns exactly one sealed outcome.
-    pub(crate) async fn resolve(
+    async fn resolve(
         &self,
         action: VerifiedAppAction<Unresolved>,
     ) -> super::verified_action::VerifiedAppAction<super::verified_action::Resolved> {
         let session = self.transition.begin(action);
-        let facts = match session.provider() {
-            TransportProvider::PluralKit => {
-                self.pluralkit
-                    .resolve_verified_facts(session.binding())
-                    .await
-            }
-        };
+        debug_assert_eq!(session.provider(), TransportProvider::PluralKit);
+        let facts = self
+            .pluralkit
+            .resolve_verified_facts(session.binding())
+            .await;
 
         resolve_from_facts(&self.transition, session, facts)
+    }
+}
+
+fn resolve_generic_action(
+    action: VerifiedAppAction<Unresolved>,
+) -> super::verified_action::VerifiedAppAction<super::verified_action::Resolved> {
+    let transition = PrincipalResolver::new();
+    let session = transition.begin(action);
+    transition.finish_app_only(session)
+}
+
+/// Resolves one verified webhook action against an optionally configured
+/// PluralKit fact source.
+///
+/// Generic webhooks resolve app-only without a resolver; PluralKit messages
+/// still require one and stay dropped (`None`) when it is absent, so a
+/// missing resolver can never widen what a proxy message is allowed to do.
+pub(crate) async fn resolve_webhook_action(
+    pluralkit: Option<&PkResolver>,
+    action: VerifiedAppAction<Unresolved>,
+) -> Option<super::verified_action::VerifiedAppAction<super::verified_action::Resolved>> {
+    match (action.provider(), pluralkit) {
+        (TransportProvider::GenericWebhook, _) => Some(resolve_generic_action(action)),
+        (TransportProvider::PluralKit, Some(pluralkit)) => {
+            Some(BoundPrincipalResolver::new(pluralkit).resolve(action).await)
+        }
+        (TransportProvider::PluralKit, None) => None,
     }
 }
 
@@ -332,9 +357,25 @@ where
 {
     let verifier = DiscordTransportVerifier::new();
     let action = verifier.verify_observed_create(event, creator.await)?;
-    let transition = PrincipalResolver::new();
-    let session = transition.begin(action);
-    Some(resolve_from_facts(&transition, session, facts.await))
+    resolve_test_action_with_sources(action, facts).await
+}
+
+#[cfg(test)]
+async fn resolve_test_action_with_sources<FF>(
+    action: VerifiedAppAction<Unresolved>,
+    facts: FF,
+) -> Option<super::verified_action::VerifiedAppAction<super::verified_action::Resolved>>
+where
+    FF: std::future::Future<Output = Result<VerifiedPkFacts, PkResolveError>>,
+{
+    match action.provider() {
+        TransportProvider::GenericWebhook => Some(resolve_generic_action(action)),
+        TransportProvider::PluralKit => {
+            let transition = PrincipalResolver::new();
+            let session = transition.begin(action);
+            Some(resolve_from_facts(&transition, session, facts.await))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -349,9 +390,7 @@ where
 {
     let verifier = DiscordTransportVerifier::new();
     let action = verifier.verify_observed_update(candidate, creator.await)?;
-    let transition = PrincipalResolver::new();
-    let session = transition.begin(action);
-    Some(resolve_from_facts(&transition, session, facts.await))
+    resolve_test_action_with_sources(action, facts).await
 }
 
 fn classify_pk_error(error: PkResolveError) -> ResolutionFailureClass {
@@ -412,6 +451,64 @@ mod tests {
             value["webhook_id"] = webhook;
         }
         serde_json::from_value(value).expect("valid update")
+    }
+
+    fn app_only_policy(restricted: bool) -> FreshPolicySnapshot {
+        FreshPolicySnapshot::from_parts(
+            restricted,
+            HashSet::new(),
+            HashSet::new(),
+            HashSet::new(),
+            7,
+            [9; 32],
+            Utc::now(),
+        )
+    }
+
+    #[tokio::test]
+    async fn generic_webhook_resolves_app_only_without_consulting_pk() {
+        use super::super::verified_action::{VerifiedActionGate, VerifiedGateVerdict};
+
+        let mint = |id: u64| {
+            DiscordTransportVerifier::new()
+                .verify_observed_create(message(id, 20, Some(30), Some(40)), Some(999))
+                .expect("non-PK creator mints a generic webhook action")
+        };
+
+        let pluralkit = PkResolver::with_defaults();
+        let unrestricted = mint(10);
+        assert_eq!(unrestricted.provider(), TransportProvider::GenericWebhook);
+        let resolved = resolve_webhook_action(Some(&pluralkit), unrestricted)
+            .await
+            .expect("generic webhooks resolve with a configured PluralKit resolver");
+        assert!(matches!(
+            VerifiedActionGate::evaluate(resolved, app_only_policy(false)),
+            VerifiedGateVerdict::Allow(_)
+        ));
+
+        let restricted = resolve_webhook_action(Some(&pluralkit), mint(11))
+            .await
+            .expect("resolution is independent of channel policy");
+        assert!(matches!(
+            VerifiedActionGate::evaluate(restricted, app_only_policy(true)),
+            VerifiedGateVerdict::Deny
+        ));
+        assert_eq!(
+            pluralkit.verified_fact_resolution_attempts(),
+            0,
+            "generic provider dispatch must not consult PluralKit"
+        );
+    }
+
+    #[tokio::test]
+    async fn pluralkit_without_resolver_stays_dropped() {
+        let action = DiscordTransportVerifier::new()
+            .mint_verified(
+                message(12, 20, Some(30), Some(40)),
+                TransportProvider::PluralKit,
+            )
+            .expect("webhook binding mints");
+        assert!(resolve_webhook_action(None, action).await.is_none());
     }
 
     #[test]

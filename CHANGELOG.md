@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-09-14
+
+### Added
+- Deliver Discord webhooks from observed non-PluralKit creators as app-only
+  notifications in unrestricted channels. Identity-restricted channels remain
+  closed, and PluralKit messages still require represented-principal resolution.
+
 ## [0.42.0] - 2026-09-14
 
 ### Changed

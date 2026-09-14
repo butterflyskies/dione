@@ -345,6 +345,8 @@ pub struct PkResolver {
     semaphore: Arc<Semaphore>,
     /// Facts-only cache used exclusively by the verified-action boundary.
     verified_facts_cache: RwLock<VerifiedFactsCache>,
+    #[cfg(test)]
+    verified_fact_resolution_attempts: std::sync::atomic::AtomicUsize,
 }
 
 impl Default for PkResolver {
@@ -532,6 +534,8 @@ impl PkResolver {
             config,
             semaphore,
             verified_facts_cache: RwLock::new(VerifiedFactsCache::new(CACHE_CAP)),
+            #[cfg(test)]
+            verified_fact_resolution_attempts: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
@@ -550,7 +554,16 @@ impl PkResolver {
         &self,
         binding: &VerifiedEventBinding,
     ) -> Result<VerifiedPkFacts, PkResolveError> {
+        #[cfg(test)]
+        self.verified_fact_resolution_attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.resolve_verified_facts_for(binding).await
+    }
+
+    #[cfg(test)]
+    pub(crate) fn verified_fact_resolution_attempts(&self) -> usize {
+        self.verified_fact_resolution_attempts
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     async fn resolve_verified_facts_for(

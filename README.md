@@ -130,8 +130,9 @@ allow_from = []               # empty = any member (subject to require_mention)
 allow_pk_systems = []         # PK system UUIDs (8-4-4-4-12 hex or 5-char short ID)
 allow_pk_members = []         # PK member UUIDs — OR semantics with allow_from
 # Identity filter: if ANY list is non-empty, only matching identities pass.
-# PK resolution failure on a filtered channel → fail closed (drop).
-# Unverified webhooks are always dropped regardless of filter state.
+# Missing or failed webhook-creator observation → drop.
+# Observed non-PK creator → app-only; admitted only on unrestricted channels.
+# PK creator → resolver-bound; restricted channels require an allowed identity.
 
 [mentions]
 patterns = ["(?i)\\bdione\\b"]

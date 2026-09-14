@@ -658,7 +658,7 @@ fn release_version_helper_reads_dione_package() {
         "version helper failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0.42.0");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0.43.0");
 }
 
 #[test]

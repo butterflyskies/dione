@@ -79,7 +79,9 @@ admins = []             # Discord user IDs that receive access requests
 # allow_pk_members = [] # PluralKit member UUIDs (8-4-4-4-12 hex) or 5-char short IDs
 # # Identity semantics: if ANY list is non-empty, only matching identities are
 # # admitted. PK system/member selectors use OR logic — any match admits.
-# # Unverified webhooks are always dropped regardless of filter configuration.
+# # Missing or failed webhook-creator observation -> drop.
+# # Observed non-PK creator -> app-only; admitted only on unrestricted channels.
+# # PK creator -> resolver-bound; restricted channels require an allowed identity.
 
 [delivery]
 text_chunk_limit = 2000

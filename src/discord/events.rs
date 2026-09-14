@@ -5,7 +5,7 @@ use crate::{
             LifecycleContext, LifecycleProvenance, VerifiedActionGate, VerifiedGateVerdict,
         },
         verified_action_runtime::{
-            BoundPrincipalResolver, VerifiedUpdateCandidate, fresh_policy_snapshot,
+            VerifiedUpdateCandidate, fresh_policy_snapshot, resolve_webhook_action,
         },
     },
     gate::{
@@ -696,12 +696,7 @@ impl EventHandler for Handler {
                     let action = crate::discord::verified_action::DiscordTransportVerifier::new()
                         .verify(&ctx.http, &self.state, msg)
                         .await?;
-                    let pk_resolver = self.pk_resolver.as_deref()?;
-                    Some(
-                        BoundPrincipalResolver::new(pk_resolver)
-                            .resolve(action)
-                            .await,
-                    )
+                    resolve_webhook_action(self.pk_resolver.as_deref(), action).await
                 };
                 let Some(plan) = admit_verified_create_after_wait(
                     &delivery_msg,
@@ -1113,12 +1108,7 @@ impl EventHandler for Handler {
                 let action = crate::discord::verified_action::DiscordTransportVerifier::new()
                     .verify_update(&ctx.http, &self.state, candidate)
                     .await?;
-                let pk_resolver = self.pk_resolver.as_deref()?;
-                Some(
-                    BoundPrincipalResolver::new(pk_resolver)
-                        .resolve(action)
-                        .await,
-                )
+                resolve_webhook_action(self.pk_resolver.as_deref(), action).await
             };
             let Some(plan) = admit_verified_edit_after_wait(
                 &event,
@@ -3114,7 +3104,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unsupported_creator_and_fresh_envelope_changes_fail_closed() {
+    async fn webhook_creator_and_fresh_envelope_admission_boundaries() {
         async fn attempt(
             id: u64,
             creator: Option<u64>,
@@ -3140,11 +3130,22 @@ mod tests {
             .is_some()
         }
 
+        // Generic (non-PK) webhook creators deliver app-only on unrestricted
+        // channels (#363) and still fail closed where identity is required.
+        assert!(
+            attempt(
+                119,
+                Some(1),
+                handler_policy_config(20, &[], false, &[]),
+                false
+            )
+            .await
+        );
         assert!(
             !attempt(
                 120,
                 Some(1),
-                handler_policy_config(20, &[], false, &[]),
+                handler_policy_config(20, &[7], false, &[]),
                 false
             )
             .await
@@ -3259,6 +3260,65 @@ mod tests {
         assert!(
             VerifiedUpdateCandidate::from_gateway(&conflict, None, Some(&conflicting_new)).is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn generic_webhook_edit_stays_app_only_under_fresh_policy() {
+        async fn attempt(id: u64, restricted: bool) -> bool {
+            let ledger = crate::ingress_ledger::IngressLedger::new();
+            let create = verified_message(id, "before", Some(60));
+            let create_action =
+                crate::discord::verified_action_runtime::resolve_test_create_with_sources(
+                    create.clone(),
+                    std::future::ready(Some(1)),
+                    std::future::ready(Ok(represented_test_facts(42))),
+                );
+            assert!(
+                admit_verified_create_after_wait(
+                    &create,
+                    999,
+                    &ledger,
+                    create_action,
+                    std::future::ready(None),
+                    || handler_policy_config(20, &[], false, &[]),
+                    |_, _| false,
+                )
+                .await
+                .is_some()
+            );
+
+            let event = verified_update_event(id, 500, Some(60), Some(40));
+            let candidate = VerifiedUpdateCandidate::from_gateway(&event, None, None)
+                .expect("consistent raw update")
+                .expect("raw update is sufficient");
+            let action = crate::discord::verified_action_runtime::resolve_test_update_with_sources(
+                candidate,
+                std::future::ready(Some(1)),
+                // Generic webhooks must ignore represented-principal facts.
+                std::future::ready(Ok(represented_test_facts(42))),
+            );
+            let allow_from = if restricted { &[42][..] } else { &[] };
+            admit_verified_edit_after_wait(
+                &event,
+                None,
+                None,
+                event.author.as_ref().expect("author"),
+                event.content.as_deref().expect("content"),
+                event.edited_timestamp.expect("edited timestamp"),
+                WebhookId::new(40),
+                999,
+                &ledger,
+                action,
+                std::future::ready(None),
+                || handler_policy_config(20, allow_from, false, &[]),
+                |_, _| false,
+            )
+            .await
+            .is_some()
+        }
+
+        assert!(attempt(131, false).await);
+        assert!(!attempt(132, true).await);
     }
 
     #[tokio::test]

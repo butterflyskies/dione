@@ -309,8 +309,9 @@ id = "912345678901234567"
 require_mention = false
 allow_from = ["184695080709324800", "221773638772129792"]
 # Identity filter: if ANY list is non-empty, only matching identities pass.
-# PK resolution failure on a filtered channel -> fail closed (drop).
-# Unverified webhooks are always dropped regardless of filter state.
+# Missing or failed webhook-creator observation -> drop.
+# Observed non-PK creator -> app-only; admitted only on unrestricted channels.
+# PK creator -> resolver-bound; restricted channels require an allowed identity.
 
 # --- Mention Detection -----------------------------------------------------
 

@@ -80,13 +80,18 @@ impl EventBinding {
 pub(crate) enum TransportProvider {
     /// The official PluralKit Discord application.
     PluralKit,
+    /// A webhook whose observed creator is not a recognized proxy provider.
+    /// Carries no represented principal: resolution is always app-only, so
+    /// restricted channels fail closed on these messages.
+    GenericWebhook,
 }
 
 impl TransportProvider {
     pub(super) fn from_creator_user_id(creator_user_id: Option<u64>) -> Option<Self> {
         match creator_user_id {
             Some(PLURALKIT_APPLICATION_ID) => Some(Self::PluralKit),
-            Some(_) | None => None,
+            Some(_) => Some(Self::GenericWebhook),
+            None => None,
         }
     }
 }
@@ -808,7 +813,10 @@ mod tests {
             TransportProvider::from_creator_user_id(Some(PLURALKIT_APPLICATION_ID)),
             Some(TransportProvider::PluralKit)
         );
-        assert_eq!(TransportProvider::from_creator_user_id(Some(1)), None);
+        assert_eq!(
+            TransportProvider::from_creator_user_id(Some(1)),
+            Some(TransportProvider::GenericWebhook)
+        );
         assert_eq!(TransportProvider::from_creator_user_id(None), None);
     }
 
