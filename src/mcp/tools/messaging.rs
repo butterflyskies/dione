@@ -1384,6 +1384,21 @@ pub(crate) fn message_json(config: &LoadedConfig, m: &Message) -> Value {
             "size": a.size,
         })).collect::<Vec<_>>(),
     });
+    // Reply linkage, mirroring the push-notification meta: prefer the
+    // `message_reference` id (present even when the referenced message was
+    // deleted), fall back to the resolved `referenced_message`. Keys are
+    // omitted for non-replies so existing output stays byte-identical.
+    let reply_to_message_id = m
+        .message_reference
+        .as_ref()
+        .and_then(|r| r.message_id)
+        .or_else(|| m.referenced_message.as_deref().map(|r| r.id));
+    if let Some(reply_id) = reply_to_message_id {
+        message["reply_to_message_id"] = json!(reply_id.get().to_string());
+    }
+    if let Some(referenced) = m.referenced_message.as_deref() {
+        message["reply_to_user_id"] = json!(referenced.author.id.get().to_string());
+    }
     if config.delivery.evidence_markers_enabled {
         project_sentexes(&mut message, &m.content, m.author.id);
     }
@@ -3830,6 +3845,42 @@ mod tests {
                 .expect("string timestamp")
                 .starts_with("2026-06-09T12:00:00"),
             "timestamp must round-trip from the wire payload"
+        );
+    }
+
+    #[test]
+    fn message_json_carries_reply_linkage_only_for_replies() {
+        let mut reply = wire_message(
+            3002,
+            "replying",
+            "2026-06-09T12:01:00.000000+00:00",
+            json!([]),
+        );
+        reply["type"] = json!(19);
+        reply["message_reference"] = json!({
+            "message_id": "3001",
+            "channel_id": "1080000000000000001"
+        });
+        let mut parent = wire_message(
+            3001,
+            "original",
+            "2026-06-09T12:00:00.000000+00:00",
+            json!([]),
+        );
+        parent["author"]["id"] = json!("333333333333333333");
+        reply["referenced_message"] = parent;
+        let plain = wire_message(3003, "plain", "2026-06-09T12:02:00.000000+00:00", json!([]));
+        let messages = from_wire(json!([reply, plain]));
+
+        let reply_json = message_json(&test_config(), &messages[0]);
+        assert_eq!(reply_json["reply_to_message_id"], "3001");
+        assert_eq!(reply_json["reply_to_user_id"], "333333333333333333");
+
+        let plain_json = message_json(&test_config(), &messages[1]);
+        assert!(
+            plain_json.get("reply_to_message_id").is_none()
+                && plain_json.get("reply_to_user_id").is_none(),
+            "non-replies must not carry reply keys"
         );
     }
 

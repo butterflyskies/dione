@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.43.1] - 2026-09-14
+
+### Added
+- Carry reply linkage (`reply_to_message_id`, `reply_to_user_id`) in the
+  per-message objects returned by `fetch_messages`, `fetch_new_since`,
+  `get_message`, and `search_messages`, matching what push notifications
+  already emit. Keys are omitted for non-replies.
+
 ## [0.43.0] - 2026-09-14
 
 ### Added
