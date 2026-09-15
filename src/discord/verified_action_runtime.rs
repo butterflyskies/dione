@@ -9,6 +9,7 @@ use super::verified_action::{
     VerifiedAppAction,
 };
 use crate::{
+    config::TrustedWebhookCreators,
     pluralkit::{PkResolveError, PkResolver, VerifiedPkFacts},
     state::{State, observe_webhook_creator},
 };
@@ -104,39 +105,64 @@ impl VerifiedUpdateCandidate {
     }
 }
 
+/// Selects the provider for an observed creator under the current trust list.
+///
+/// Trust admits a creator to provider selection; it does not invent a
+/// provider. A creator on `access.trusted_webhook_creators` maps through
+/// [`TransportProvider::from_creator_user_id`], so a trusted PluralKit
+/// creator gets represented-principal resolution. Every other observed
+/// creator — untrusted, or trusted but unknown to any resolver — is a
+/// [`TransportProvider::GenericWebhook`] and resolves app-only (#363).
+/// An unobserved creator is never verified.
+fn trusted_provider(
+    trusted: &TrustedWebhookCreators,
+    creator_user_id: Option<u64>,
+) -> Option<TransportProvider> {
+    let creator_user_id = creator_user_id?;
+    if trusted.contains(creator_user_id) {
+        TransportProvider::from_creator_user_id(Some(creator_user_id))
+    } else {
+        Some(TransportProvider::GenericWebhook)
+    }
+}
+
 impl DiscordTransportVerifier {
     fn verify_observed_create(
         &self,
+        trusted: &TrustedWebhookCreators,
         event: Message,
         creator_user_id: Option<u64>,
     ) -> Option<VerifiedAppAction<Unresolved>> {
-        let provider = TransportProvider::from_creator_user_id(creator_user_id)?;
+        let provider = trusted_provider(trusted, creator_user_id)?;
         self.mint_verified(event, provider)
     }
 
     fn verify_observed_update(
         &self,
+        trusted: &TrustedWebhookCreators,
         candidate: VerifiedUpdateCandidate,
         creator_user_id: Option<u64>,
     ) -> Option<VerifiedAppAction<Unresolved>> {
-        let provider = TransportProvider::from_creator_user_id(creator_user_id)?;
+        let provider = trusted_provider(trusted, creator_user_id)?;
         Some(self.mint_verified_update(candidate.binding, provider))
     }
 
     /// Verifies one Discord webhook event and binds proof to its exact coordinates.
     ///
-    /// The creator cache stores only positive Discord facts. Provider
-    /// classification is repeated for each event so cached observations cannot
-    /// become durable authorization verdicts.
+    /// The creator cache stores only positive Discord facts. Trust and provider
+    /// classification are repeated for each event under the supplied config
+    /// snapshot so cached observations cannot become durable authorization
+    /// verdicts and a reload of `trusted_webhook_creators` applies at once.
     pub(crate) async fn verify(
         &self,
         http: &Http,
         state: &State,
+        trusted: &TrustedWebhookCreators,
         event: Message,
     ) -> Option<VerifiedAppAction<Unresolved>> {
         tokio::time::timeout(
             DISCORD_VERIFICATION_DEADLINE,
-            self.verify_within_deadline(http, state, event),
+            self.verify_within_deadline(http, state, trusted, event),
         )
         .await
         .ok()
@@ -147,6 +173,7 @@ impl DiscordTransportVerifier {
         &self,
         http: &Http,
         state: &State,
+        trusted: &TrustedWebhookCreators,
         event: Message,
     ) -> Option<VerifiedAppAction<Unresolved>> {
         let webhook_id = event.webhook_id?;
@@ -160,7 +187,7 @@ impl DiscordTransportVerifier {
 
         let creator_user_id = observe_webhook_creator(http, state, webhook_id).await?;
 
-        self.verify_observed_create(event, Some(creator_user_id))
+        self.verify_observed_create(trusted, event, Some(creator_user_id))
     }
 
     /// Verifies a complete cross-checked gateway update candidate.
@@ -168,12 +195,13 @@ impl DiscordTransportVerifier {
         &self,
         http: &Http,
         state: &State,
+        trusted: &TrustedWebhookCreators,
         candidate: VerifiedUpdateCandidate,
     ) -> Option<VerifiedAppAction<Unresolved>> {
         tokio::time::timeout(DISCORD_VERIFICATION_DEADLINE, async {
             let creator_user_id =
                 observe_webhook_creator(http, state, candidate.binding.webhook_id()).await?;
-            self.verify_observed_update(candidate, Some(creator_user_id))
+            self.verify_observed_update(trusted, candidate, Some(creator_user_id))
         })
         .await
         .ok()
@@ -356,7 +384,11 @@ where
     FF: std::future::Future<Output = Result<VerifiedPkFacts, PkResolveError>>,
 {
     let verifier = DiscordTransportVerifier::new();
-    let action = verifier.verify_observed_create(event, creator.await)?;
+    let action = verifier.verify_observed_create(
+        &TrustedWebhookCreators::default(),
+        event,
+        creator.await,
+    )?;
     resolve_test_action_with_sources(action, facts).await
 }
 
@@ -389,7 +421,11 @@ where
     FF: std::future::Future<Output = Result<VerifiedPkFacts, PkResolveError>>,
 {
     let verifier = DiscordTransportVerifier::new();
-    let action = verifier.verify_observed_update(candidate, creator.await)?;
+    let action = verifier.verify_observed_update(
+        &TrustedWebhookCreators::default(),
+        candidate,
+        creator.await,
+    )?;
     resolve_test_action_with_sources(action, facts).await
 }
 
@@ -471,7 +507,11 @@ mod tests {
 
         let mint = |id: u64| {
             DiscordTransportVerifier::new()
-                .verify_observed_create(message(id, 20, Some(30), Some(40)), Some(999))
+                .verify_observed_create(
+                    &TrustedWebhookCreators::default(),
+                    message(id, 20, Some(30), Some(40)),
+                    Some(999),
+                )
                 .expect("non-PK creator mints a generic webhook action")
         };
 
@@ -534,6 +574,124 @@ mod tests {
             VerifiedUpdateCandidate::from_gateway(&event, None, None)
                 .expect("consistent")
                 .is_some()
+        );
+    }
+
+    // #323: trust comes from `access.trusted_webhook_creators`, not from a
+    // hardcoded list. Trust selects the provider; it never drops a creator
+    // outright, because #363 gives every observed creator the app-only
+    // generic provider.
+    #[test]
+    fn trusted_creator_gate_consults_config_list() {
+        use super::super::verified_action::PLURALKIT_APPLICATION_ID;
+
+        let shipped = TrustedWebhookCreators::default();
+        assert_eq!(
+            trusted_provider(&shipped, Some(PLURALKIT_APPLICATION_ID)),
+            Some(TransportProvider::PluralKit),
+            "the shipped list trusts PluralKit"
+        );
+        assert_eq!(
+            trusted_provider(&shipped, Some(1)),
+            Some(TransportProvider::GenericWebhook),
+            "an untrusted creator is generic (app-only), not dropped"
+        );
+        assert_eq!(trusted_provider(&shipped, None), None);
+
+        let distrusts_pk = TrustedWebhookCreators::from_ids([1]);
+        assert_eq!(
+            trusted_provider(&distrusts_pk, Some(PLURALKIT_APPLICATION_ID)),
+            Some(TransportProvider::GenericWebhook),
+            "a list without PluralKit demotes PluralKit webhooks to app-only"
+        );
+        assert_eq!(
+            trusted_provider(&distrusts_pk, Some(1)),
+            Some(TransportProvider::GenericWebhook),
+            "a trusted creator with no resolver stays generic (app-only)"
+        );
+
+        let verifier = DiscordTransportVerifier::new();
+        assert_eq!(
+            verifier
+                .verify_observed_create(
+                    &TrustedWebhookCreators::from_ids([PLURALKIT_APPLICATION_ID, 1]),
+                    message(10, 20, Some(30), Some(40)),
+                    Some(PLURALKIT_APPLICATION_ID),
+                )
+                .map(|action| action.provider()),
+            Some(TransportProvider::PluralKit)
+        );
+        assert_eq!(
+            verifier
+                .verify_observed_create(
+                    &TrustedWebhookCreators::from_ids([]),
+                    message(10, 20, Some(30), Some(40)),
+                    Some(PLURALKIT_APPLICATION_ID),
+                )
+                .map(|action| action.provider()),
+            Some(TransportProvider::GenericWebhook),
+            "an empty trust list leaves PluralKit with no resolver: app-only"
+        );
+    }
+
+    // #323 boundary: trust admits a creator to provider resolution only. The
+    // represented principal still passes the ordinary verified-action gate, so
+    // a trusted creator's webhook whose human is not in `allow_from` is denied.
+    #[test]
+    fn trusted_creator_does_not_bypass_represented_principal_gate() {
+        use super::super::verified_action::PLURALKIT_APPLICATION_ID;
+        use super::super::verified_action::{VerifiedActionGate, VerifiedGateVerdict};
+
+        let mut raw = crate::config::Config::default();
+        raw.access.trusted_webhook_creators =
+            vec![PLURALKIT_APPLICATION_ID.to_string(), "1".to_string()];
+        raw.channels.push(crate::config::ChannelConfig {
+            id: "20".into(),
+            require_mention: false,
+            allow_from: vec!["42".into()],
+            ..Default::default()
+        });
+        let config = crate::config::LoadedConfig::from_raw(raw);
+        assert!(config.is_trusted_webhook_creator(1));
+
+        let verifier = DiscordTransportVerifier::new();
+        let resolver = PrincipalResolver::new();
+        let verify_and_resolve = |message_id: u64, represented_user: u64| {
+            let action = verifier
+                .verify_observed_create(
+                    &config.trusted_webhook_creators,
+                    message(message_id, 20, Some(30), Some(40)),
+                    Some(PLURALKIT_APPLICATION_ID),
+                )
+                .expect("trusted creator verifies");
+            resolver.finish_represented(
+                resolver.begin(action),
+                RepresentedPrincipal::from_verified_facts(
+                    serenity::model::id::UserId::new(represented_user),
+                    None,
+                    None,
+                ),
+            )
+        };
+
+        let denied = verify_and_resolve(10, 43);
+        let policy = fresh_policy_snapshot(&config, 20).expect("configured channel");
+        assert!(
+            matches!(
+                VerifiedActionGate::evaluate(denied, policy),
+                VerifiedGateVerdict::Deny
+            ),
+            "a trusted creator's webhook whose human is not in allow_from is denied"
+        );
+
+        let allowed = verify_and_resolve(11, 42);
+        let policy = fresh_policy_snapshot(&config, 20).expect("configured channel");
+        assert!(
+            matches!(
+                VerifiedActionGate::evaluate(allowed, policy),
+                VerifiedGateVerdict::Allow(_)
+            ),
+            "the same webhook is admitted when its human is in allow_from"
         );
     }
 

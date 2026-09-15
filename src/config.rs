@@ -2,6 +2,7 @@ use crate::{
     config_candidate::{compose_candidate, resolve_sidecar_path},
     config_store::{BoxError, ConfigStore},
     contradictionary::{Contradictionary, ContradictionaryConfig, Entry, load_sidecar_entries},
+    discord::verified_action::PLURALKIT_APPLICATION_ID,
     pre_send::ConstructId,
     timestamp::Timestamp,
 };
@@ -685,6 +686,20 @@ pub struct AccessConfig {
     pub admins: Vec<String>,
     #[serde(default)]
     pub admin_only_mutations: bool,
+    /// Bot user IDs whose webhooks are eligible for provider resolution (proxy
+    /// bots such as PluralKit). Eligibility grants no authority: the resolved
+    /// principal still passes the ordinary `allow_from` gate. A webhook whose Discord
+    /// creator is not on this list is a generic webhook: it resolves app-only
+    /// and is admitted only on unrestricted channels (#363). Ships with
+    /// PluralKit; setting an explicit empty list demotes every webhook creator,
+    /// PluralKit included, to app-only. Rides the same ConfigRuntime reload
+    /// path as `allow_from`.
+    #[serde(default = "default_trusted_webhook_creators")]
+    pub trusted_webhook_creators: Vec<String>,
+}
+
+fn default_trusted_webhook_creators() -> Vec<String> {
+    vec![PLURALKIT_APPLICATION_ID.to_string()]
 }
 
 impl Default for AccessConfig {
@@ -695,7 +710,74 @@ impl Default for AccessConfig {
             ignore_from: Vec::new(),
             admins: Vec::new(),
             admin_only_mutations: false,
+            trusted_webhook_creators: default_trusted_webhook_creators(),
         }
+    }
+}
+
+/// Parsed `access.trusted_webhook_creators`: the bot user IDs whose webhooks
+/// are eligible for provider resolution.
+///
+/// Membership is a transport-trust fact, not an authorization verdict: a
+/// trusted creator's webhook still goes through provider resolution and the
+/// channel identity gate. `Default` is the shipped list (PluralKit only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustedWebhookCreators(HashSet<u64>);
+
+impl TrustedWebhookCreators {
+    /// Parses the raw config list, rejecting (and logging) malformed or zero
+    /// entries so one bad value cannot break the rest of the list.
+    pub fn from_raw(ids: &[String]) -> Self {
+        Self(
+            ids.iter()
+                .filter_map(|s| match s.parse::<u64>() {
+                    Ok(0) => {
+                        tracing::error!(
+                            field = "trusted_webhook_creators",
+                            value = s.as_str(),
+                            "zero is not a Discord user ID — entry rejected"
+                        );
+                        None
+                    }
+                    Ok(id) => Some(id),
+                    Err(error) => {
+                        tracing::error!(
+                            field = "trusted_webhook_creators",
+                            value = s.as_str(),
+                            %error,
+                            "invalid trusted webhook creator ID in config — entry rejected"
+                        );
+                        None
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    /// Builds a list from already-parsed IDs.
+    pub fn from_ids<I: IntoIterator<Item = u64>>(ids: I) -> Self {
+        Self(ids.into_iter().filter(|id| *id != 0).collect())
+    }
+
+    /// O(1) check whether `creator_user_id` is a trusted webhook creator.
+    pub fn contains(&self, creator_user_id: u64) -> bool {
+        self.0.contains(&creator_user_id)
+    }
+
+    /// Number of trusted creators.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether no creator is trusted (every webhook resolves app-only).
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Default for TrustedWebhookCreators {
+    fn default() -> Self {
+        Self::from_ids([PLURALKIT_APPLICATION_ID])
     }
 }
 
@@ -997,6 +1079,8 @@ pub struct LoadedConfig {
     pub ignored_ids: HashSet<u64>,
     /// Parsed admin IDs for O(1) membership test and iteration.
     pub admin_ids: HashSet<u64>,
+    /// Parsed `access.trusted_webhook_creators` for O(1) membership test.
+    pub trusted_webhook_creators: TrustedWebhookCreators,
     /// Per-channel parsed policies. O(1) lookup by channel ID.
     pub channel_policies: HashMap<u64, ChannelPolicy>,
     /// Pre-compiled mention regex patterns.
@@ -1085,6 +1169,8 @@ impl LoadedConfig {
         let allowed_ids = parse_id_set(&raw.access.allow_from);
         let ignored_ids = parse_ignore_id_set(&raw.access.ignore_from);
         let admin_ids = parse_id_set(&raw.access.admins);
+        let trusted_webhook_creators =
+            TrustedWebhookCreators::from_raw(&raw.access.trusted_webhook_creators);
         let channel_policies = raw
             .channels
             .iter()
@@ -1166,6 +1252,7 @@ impl LoadedConfig {
             allowed_ids,
             ignored_ids,
             admin_ids,
+            trusted_webhook_creators,
             channel_policies,
             mention_patterns,
             tz,
@@ -1196,6 +1283,11 @@ impl LoadedConfig {
     /// ID takes effect on the very next check.
     pub fn is_ignored(&self, user_id: u64) -> bool {
         self.ignored_ids.contains(&user_id)
+    }
+
+    /// O(1) check whether a webhook creator is on `access.trusted_webhook_creators`.
+    pub fn is_trusted_webhook_creator(&self, creator_user_id: u64) -> bool {
+        self.trusted_webhook_creators.contains(creator_user_id)
     }
 
     /// O(1) check if a user is an admin.
@@ -4317,6 +4409,7 @@ enabled = true
                 ignore_from: vec![],
                 admins: vec!["111".to_string()],
                 admin_only_mutations: false,
+                trusted_webhook_creators: default_trusted_webhook_creators(),
             },
             channels: vec![ChannelConfig {
                 id: "500".to_string(),
@@ -4438,6 +4531,119 @@ enabled = true
         assert!(!cfg.is_ignored(111));
     }
 
+    // #323: the shipped trusted_webhook_creators list is exactly PluralKit.
+    #[test]
+    fn test_trusted_webhook_creators_default_is_pluralkit() {
+        let cfg = LoadedConfig::from_raw(Config::default());
+        assert!(cfg.is_trusted_webhook_creator(PLURALKIT_APPLICATION_ID));
+        assert_eq!(cfg.trusted_webhook_creators.len(), 1);
+        assert!(!cfg.is_trusted_webhook_creator(1));
+        assert_eq!(
+            TrustedWebhookCreators::default(),
+            cfg.trusted_webhook_creators,
+            "the newtype default mirrors the AccessConfig default"
+        );
+    }
+
+    // #323: a configured extra creator is trusted; unlisted creators are not.
+    #[test]
+    fn test_trusted_webhook_creators_configured_extra_is_recognized() {
+        let raw = Config {
+            access: AccessConfig {
+                trusted_webhook_creators: vec![
+                    PLURALKIT_APPLICATION_ID.to_string(),
+                    "123456789012345678".to_string(),
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let cfg = LoadedConfig::from_raw(raw);
+        assert!(cfg.is_trusted_webhook_creator(PLURALKIT_APPLICATION_ID));
+        assert!(cfg.is_trusted_webhook_creator(123_456_789_012_345_678));
+        assert!(
+            !cfg.is_trusted_webhook_creator(987_654_321),
+            "an unlisted creator is not trusted"
+        );
+    }
+
+    // #323: an explicit list replaces the default rather than extending it, so
+    // an operator can distrust PluralKit; an empty list trusts nobody.
+    #[test]
+    fn test_trusted_webhook_creators_explicit_list_replaces_default() {
+        let only_other = LoadedConfig::from_raw(Config {
+            access: AccessConfig {
+                trusted_webhook_creators: vec!["42".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert!(only_other.is_trusted_webhook_creator(42));
+        assert!(!only_other.is_trusted_webhook_creator(PLURALKIT_APPLICATION_ID));
+
+        let none = LoadedConfig::from_raw(Config {
+            access: AccessConfig {
+                trusted_webhook_creators: vec![],
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert!(none.trusted_webhook_creators.is_empty());
+        assert!(!none.is_trusted_webhook_creator(PLURALKIT_APPLICATION_ID));
+    }
+
+    // #323: malformed and zero entries are rejected without discarding the
+    // valid entries around them.
+    #[test]
+    fn test_trusted_webhook_creators_skips_malformed_entries() {
+        let cfg = LoadedConfig::from_raw(Config {
+            access: AccessConfig {
+                trusted_webhook_creators: vec![
+                    "77".to_string(),
+                    "not-a-snowflake".to_string(),
+                    "0".to_string(),
+                    "88".to_string(),
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert!(cfg.is_trusted_webhook_creator(77));
+        assert!(cfg.is_trusted_webhook_creator(88));
+        assert!(!cfg.is_trusted_webhook_creator(0));
+        assert_eq!(cfg.trusted_webhook_creators.len(), 2);
+    }
+
+    // #323: trusted_webhook_creators round-trips through TOML on the reload
+    // path, and an omitted key keeps the PluralKit default.
+    #[test]
+    fn test_trusted_webhook_creators_parses_from_toml() {
+        let _cache = config_cache_guard();
+        let (_dir, state_dir) = temp_state_dir();
+        let config_path = state_dir.join("config.toml");
+        fs::write(
+            config_path.as_std_path(),
+            b"[access]\ntrusted_webhook_creators = [\"555\", \"666\"]\n",
+        )
+        .unwrap();
+        let cfg = reload_config(&state_dir).0;
+        assert_eq!(cfg.access.trusted_webhook_creators, vec!["555", "666"]);
+        assert!(cfg.is_trusted_webhook_creator(555));
+        assert!(cfg.is_trusted_webhook_creator(666));
+        assert!(!cfg.is_trusted_webhook_creator(PLURALKIT_APPLICATION_ID));
+
+        fs::write(
+            config_path.as_std_path(),
+            b"[access]\ndm_policy = \"drop\"\n",
+        )
+        .unwrap();
+        let cfg = reload_config(&state_dir).0;
+        assert!(
+            cfg.is_trusted_webhook_creator(PLURALKIT_APPLICATION_ID),
+            "omitting the key keeps the shipped PluralKit default"
+        );
+    }
+
     // is_admin returns true for configured admin.
     #[test]
     fn test_loaded_config_is_admin_true() {
@@ -4496,6 +4702,7 @@ enabled = true
                 ignore_from: vec![],
                 admins: vec!["bad-admin-id".to_string()],
                 admin_only_mutations: false,
+                trusted_webhook_creators: default_trusted_webhook_creators(),
             },
             channels: vec![ChannelConfig {
                 id: "not-numeric".to_string(),
@@ -4886,6 +5093,7 @@ delivery_delay_ms = 750
                 ignore_from: vec![],
                 admins: vec![],
                 admin_only_mutations: false,
+                trusted_webhook_creators: default_trusted_webhook_creators(),
             },
             ..Default::default()
         };

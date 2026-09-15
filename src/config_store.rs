@@ -103,6 +103,7 @@ impl ConfigStore {
             },
             "allow_from": config.raw.access.allow_from,
             "admins": config.raw.access.admins,
+            "trusted_webhook_creators": config.raw.access.trusted_webhook_creators,
         })
     }
 

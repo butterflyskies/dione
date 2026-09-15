@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-09-14
+
+### Added
+- `access.trusted_webhook_creators`: the bot user IDs whose webhooks are
+  eligible for provider resolution, replacing the hardcoded PluralKit-only
+  creator list. Ships with PluralKit's application ID; hot-reloads with the
+  rest of `[access]`. Creators not on the list, and trusted creators with no
+  resolver, stay app-only per #363: the list can demote PluralKit to app-only
+  but never widens what a webhook may do. (#323)
+
 ## [0.43.1] - 2026-09-14
 
 ### Added

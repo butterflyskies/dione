@@ -44,8 +44,8 @@ pub struct SharedState {
     ///
     /// Uses HashMap + VecDeque for FIFO eviction (oldest insertion evicted
     /// first), avoiding the BTreeMap bias of evicting by smallest key.
-    proxy_webhooks: HashMap<u64, WebhookCreatorInfo>,
-    proxy_webhook_order: std::collections::VecDeque<u64>,
+    webhook_creators: HashMap<u64, WebhookCreatorInfo>,
+    webhook_creator_order: std::collections::VecDeque<u64>,
 }
 
 /// Observed facts about a webhook's creator.
@@ -83,8 +83,8 @@ impl SharedState {
             non_bot_message_ids: BTreeSet::new(),
             user_names: BTreeMap::new(),
             thread_parents: BTreeMap::new(),
-            proxy_webhooks: HashMap::new(),
-            proxy_webhook_order: std::collections::VecDeque::new(),
+            webhook_creators: HashMap::new(),
+            webhook_creator_order: std::collections::VecDeque::new(),
         }
     }
 
@@ -175,20 +175,20 @@ impl SharedState {
 
     /// Caches observed webhook creator facts (not a classification verdict).
     /// FIFO eviction: oldest insertion is evicted first, regardless of key value.
-    fn record_proxy_webhook(&mut self, webhook_id: u64, creator_bot_id: u64) {
-        self.proxy_webhook_order
+    fn record_webhook_creator(&mut self, webhook_id: u64, creator_bot_id: u64) {
+        self.webhook_creator_order
             .retain(|queued| *queued != webhook_id);
-        self.proxy_webhook_order.push_back(webhook_id);
-        self.proxy_webhooks.insert(
+        self.webhook_creator_order.push_back(webhook_id);
+        self.webhook_creators.insert(
             webhook_id,
             WebhookCreatorInfo {
                 creator_bot_id,
                 observed_at: Instant::now(),
             },
         );
-        while self.proxy_webhooks.len() > WEBHOOK_CACHE_CAP {
-            if let Some(oldest) = self.proxy_webhook_order.pop_front() {
-                self.proxy_webhooks.remove(&oldest);
+        while self.webhook_creators.len() > WEBHOOK_CACHE_CAP {
+            if let Some(oldest) = self.webhook_creator_order.pop_front() {
+                self.webhook_creators.remove(&oldest);
             } else {
                 break;
             }
@@ -196,14 +196,14 @@ impl SharedState {
     }
 
     /// Returns a fresh observed creator fact, physically removing stale facts.
-    fn proxy_webhook_creator(&mut self, webhook_id: u64) -> Option<u64> {
+    fn cached_webhook_creator(&mut self, webhook_id: u64) -> Option<u64> {
         let now = Instant::now();
-        self.proxy_webhooks.retain(|_, info| {
+        self.webhook_creators.retain(|_, info| {
             now.saturating_duration_since(info.observed_at) < WEBHOOK_CREATOR_TTL
         });
-        self.proxy_webhook_order
-            .retain(|queued| self.proxy_webhooks.contains_key(queued));
-        self.proxy_webhooks
+        self.webhook_creator_order
+            .retain(|queued| self.webhook_creators.contains_key(queued));
+        self.webhook_creators
             .get(&webhook_id)
             .map(|info| info.creator_bot_id)
     }
@@ -246,7 +246,7 @@ pub(crate) async fn observe_webhook_creator(
     state: &State,
     webhook_id: WebhookId,
 ) -> Option<u64> {
-    if let Some(creator_bot_id) = state.write().await.proxy_webhook_creator(webhook_id.get()) {
+    if let Some(creator_bot_id) = state.write().await.cached_webhook_creator(webhook_id.get()) {
         return Some(creator_bot_id);
     }
 
@@ -265,7 +265,7 @@ pub(crate) async fn observe_webhook_creator(
     state
         .write()
         .await
-        .record_proxy_webhook(webhook_id.get(), creator_bot_id);
+        .record_webhook_creator(webhook_id.get(), creator_bot_id);
     Some(creator_bot_id)
 }
 
@@ -485,35 +485,38 @@ mod tests {
     }
 
     #[test]
-    fn test_record_proxy_webhook() {
+    fn test_record_webhook_creator() {
         let mut state = SharedState::new();
-        state.record_proxy_webhook(100, 466378653216014359);
-        assert_eq!(state.proxy_webhook_creator(100), Some(466378653216014359));
-        assert_eq!(state.proxy_webhook_creator(300), None);
+        state.record_webhook_creator(100, 466_378_653_216_014_359);
+        assert_eq!(
+            state.cached_webhook_creator(100),
+            Some(466_378_653_216_014_359)
+        );
+        assert_eq!(state.cached_webhook_creator(300), None);
     }
 
     #[test]
-    fn test_proxy_webhook_cache_prunes() {
+    fn test_webhook_creator_cache_prunes() {
         let mut state = SharedState::new();
         for i in 0u64..210 {
-            state.record_proxy_webhook(i, i + 1);
+            state.record_webhook_creator(i, i + 1);
         }
         assert!(
-            state.proxy_webhooks.len() <= 200,
-            "proxy_webhooks exceeded cap: {}",
-            state.proxy_webhooks.len()
+            state.webhook_creators.len() <= 200,
+            "webhook_creators exceeded cap: {}",
+            state.webhook_creators.len()
         );
     }
 
     #[test]
-    fn proxy_webhook_cache_physically_removes_expired_facts() {
+    fn webhook_creator_cache_physically_removes_expired_facts() {
         let mut state = SharedState::new();
-        state.record_proxy_webhook(100, 200);
-        state.proxy_webhooks.get_mut(&100).unwrap().observed_at =
+        state.record_webhook_creator(100, 200);
+        state.webhook_creators.get_mut(&100).unwrap().observed_at =
             Instant::now() - WEBHOOK_CREATOR_TTL - Duration::from_secs(1);
 
-        assert_eq!(state.proxy_webhook_creator(100), None);
-        assert!(!state.proxy_webhooks.contains_key(&100));
-        assert!(!state.proxy_webhook_order.contains(&100));
+        assert_eq!(state.cached_webhook_creator(100), None);
+        assert!(!state.webhook_creators.contains_key(&100));
+        assert!(!state.webhook_creator_order.contains(&100));
     }
 }

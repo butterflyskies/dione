@@ -70,6 +70,12 @@ deadline_ms = 300       # total evaluation deadline in ms (max 2000)
 dm_policy = "queue"     # "queue", "drop", or "disabled"
 allow_from = []         # Discord user IDs that can DM the bot
 admins = []             # Discord user IDs that receive access requests
+# Bot user IDs whose webhooks are eligible for provider resolution (proxy bots
+# such as PluralKit); the resolved principal still passes allow_from. Webhooks
+# from any other creator are app-only and admitted only on unrestricted
+# channels. Setting this key replaces the default; an empty list demotes every
+# webhook creator, PluralKit included, to app-only.
+trusted_webhook_creators = ["466378653216014359"]   # PluralKit
 
 # [[channels]]
 # id = ""               # Discord channel ID

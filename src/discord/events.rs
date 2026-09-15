@@ -694,7 +694,12 @@ impl EventHandler for Handler {
                 let delivery_msg = msg.clone();
                 let resolution = async {
                     let action = crate::discord::verified_action::DiscordTransportVerifier::new()
-                        .verify(&ctx.http, &self.state, msg)
+                        .verify(
+                            &ctx.http,
+                            &self.state,
+                            &config.trusted_webhook_creators,
+                            msg,
+                        )
                         .await?;
                     resolve_webhook_action(self.pk_resolver.as_deref(), action).await
                 };
@@ -1106,7 +1111,12 @@ impl EventHandler for Handler {
             };
             let resolution = async {
                 let action = crate::discord::verified_action::DiscordTransportVerifier::new()
-                    .verify_update(&ctx.http, &self.state, candidate)
+                    .verify_update(
+                        &ctx.http,
+                        &self.state,
+                        &config.trusted_webhook_creators,
+                        candidate,
+                    )
                     .await?;
                 resolve_webhook_action(self.pk_resolver.as_deref(), action).await
             };
@@ -2584,6 +2594,7 @@ mod tests {
                 ignore_from: vec![],
                 admins: vec![],
                 admin_only_mutations: false,
+                trusted_webhook_creators: AccessConfig::default().trusted_webhook_creators,
             },
             ..Default::default()
         };
@@ -2606,6 +2617,7 @@ mod tests {
                 ignore_from: ignored.into_iter().map(String::from).collect(),
                 admins: vec![],
                 admin_only_mutations: false,
+                trusted_webhook_creators: AccessConfig::default().trusted_webhook_creators,
             },
             ..Default::default()
         };
@@ -2852,6 +2864,7 @@ mod tests {
                 ignore_from: vec![],
                 admins: vec![],
                 admin_only_mutations: false,
+                trusted_webhook_creators: AccessConfig::default().trusted_webhook_creators,
             },
             ..Default::default()
         };

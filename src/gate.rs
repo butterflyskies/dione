@@ -479,6 +479,7 @@ mod tests {
                 ignore_from: vec![],
                 admins: vec!["100".to_string()],
                 admin_only_mutations: false,
+                trusted_webhook_creators: AccessConfig::default().trusted_webhook_creators,
             },
             channels: vec![ChannelConfig {
                 id: "500".to_string(),

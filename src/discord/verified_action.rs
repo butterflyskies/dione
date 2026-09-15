@@ -12,7 +12,14 @@ use serenity::model::{
 use std::collections::HashSet;
 use uuid::Uuid;
 
-const PLURALKIT_APPLICATION_ID: u64 = 466_378_653_216_014_359;
+/// Discord application (bot user) ID of the official PluralKit deployment.
+///
+/// This is the creator ID Discord reports on PluralKit-owned proxy webhooks.
+/// It is the shipped default of `access.trusted_webhook_creators` and the only
+/// creator [`TransportProvider`] can currently resolve to a represented principal. Defined here (not in
+/// the `pluralkit` module) because the compile-fail UI tests include this file
+/// standalone.
+pub(crate) const PLURALKIT_APPLICATION_ID: u64 = 466_378_653_216_014_359;
 
 /// Whether the bound event occurred in a guild or a direct message.
 #[derive(Debug, PartialEq, Eq)]
@@ -87,6 +94,13 @@ pub(crate) enum TransportProvider {
 }
 
 impl TransportProvider {
+    /// Maps an observed webhook creator to the provider that can resolve it.
+    ///
+    /// Only PluralKit has a represented-principal resolver today; any other
+    /// observed creator is a [`Self::GenericWebhook`] (#363). Callers must
+    /// already have checked the creator against
+    /// `access.trusted_webhook_creators`: an untrusted creator never reaches
+    /// this mapping and is classified generic instead.
     pub(super) fn from_creator_user_id(creator_user_id: Option<u64>) -> Option<Self> {
         match creator_user_id {
             Some(PLURALKIT_APPLICATION_ID) => Some(Self::PluralKit),
