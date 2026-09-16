@@ -11,11 +11,14 @@ fmt-check:
 
 # Run clippy with all warnings as errors
 lint:
-    cargo clippy -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets --features oneshot-test-seam -- -D warnings
 
 # Run tests with nextest (parallel, fail-fast off)
 test:
-    cargo nextest run --workspace --no-fail-fast
+    cargo nextest run --workspace --no-fail-fast --features oneshot-test-seam
+    # Production feature set: proves the endpoint-override seam is absent.
+    cargo nextest run --workspace --no-fail-fast --test oneshot_send
 
 # Verify documentation builds without warnings
 doc:

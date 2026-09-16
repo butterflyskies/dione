@@ -152,9 +152,10 @@ pub fn load_sidecar_entries(path: &Path) -> Result<Vec<Entry>, String> {
         )
     })?;
     for (pattern, action) in find_retired_actions(&value) {
+        // The pattern is operator-authored and deliberately not logged.
         tracing::warn!(
             path = %path.display(),
-            pattern,
+            pattern_len = pattern.len(),
             action,
             "contradictionary entry uses retired action; treating it as 'block'. \
              Update the entry — this alias is a migration shim, not a supported value."

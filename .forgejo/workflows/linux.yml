@@ -50,6 +50,7 @@ jobs:
           toolchain: "1.98.0"
           components: clippy
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo clippy --workspace --all-targets --locked --features oneshot-test-seam -- -D warnings
 
   test:
     name: Tests
@@ -70,7 +71,9 @@ jobs:
             -o /tmp/cargo-nextest.tar.gz
           echo "a098eed56f2dd88c7fdca1e554a6b99fa1ffbd2a7a1c41b865700112981f6f52  /tmp/cargo-nextest.tar.gz" | sha256sum -c -
           tar xzf /tmp/cargo-nextest.tar.gz -C /usr/local/bin
-      - run: cargo nextest run --workspace --locked --no-fail-fast
+      - run: cargo nextest run --workspace --locked --no-fail-fast --features oneshot-test-seam
+      # Production feature set: proves the endpoint-override seam is absent.
+      - run: cargo nextest run --workspace --locked --no-fail-fast --test oneshot_send
 
   package:
     name: Public package boundary

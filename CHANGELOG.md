@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-09-15
+
+### Added
+- `dione-send`: a one-shot, outbound-only send binary for stateless callers
+  such as Trundle's `trundle-wake` egress seam. It loads the config
+  read-only (no default-template write, no last-known-good promotion, no
+  quarantine), reads the token only from the named `--token-source`
+  (`config` or `env:<VAR>`; ambient `DISCORD_BOT_TOKEN` never wins), binds
+  the send to the numeric bot user id from `GET /users/@me` via the required
+  `--expect-identity`, gates the target against `[[channels]]` alone, refuses
+  multi-chunk messages unless `--allow-multi-chunk`, and runs the pre-send
+  pipeline and contradictionary judge in-process where a `Bounce` refuses
+  outright (no ConsentGate, no no_rly journal, no held ticket). It never
+  initializes the gateway, MCP server, config watcher, mute store, or
+  ingress ledger. stdout carries exactly one JSON object with a required
+  `retryable` boolean and string snowflakes; `--dry-run` reports
+  `"status":"preflight_ok"`. Exit 0 sent or dry-run clean, 1 usage/config/IO,
+  2 preflight refusal, 3 Discord REST failure. Usage errors also emit the JSON
+  object (`reason: usage`). The client runs with Serenity's ratelimiter
+  disabled so a 429 surfaces as `retryable:true`; ambiguous POST failures
+  (5xx, timeout, lost response) are `retryable:false` with a required
+  `delivery_ambiguous:true`, with or without the optional `--nonce`
+  (defense-in-depth only: Discord's `enforce_nonce` window is undocumented).
+  Config diagnostics are redacted on both stdout and stderr. (#426)
+
 ## [0.44.0] - 2026-09-14
 
 ### Added

@@ -205,6 +205,17 @@ the structured handle and audit path.
   channel policies, compiled RegexSet for mention patterns.
 - **Config-driven** — all policy changes via TOML edit, no restart required.
 
+## One-shot send
+
+`dione-send` posts one message to one configured channel without starting the
+gateway, bound to an explicit bot identity — the egress seam for stateless
+callers such as Trundle. See [docs/oneshot-send.md](docs/oneshot-send.md).
+
+```bash
+dione-send --channel 123 --expect-identity 456 --message "drumbeat" \
+           --config /etc/dione/config.toml --token-source env:TRUNDLE_TOKEN --dry-run
+```
+
 ## Building from source
 
 ```bash

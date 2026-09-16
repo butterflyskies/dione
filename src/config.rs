@@ -728,13 +728,16 @@ impl TrustedWebhookCreators {
     /// Parses the raw config list, rejecting (and logging) malformed or zero
     /// entries so one bad value cannot break the rest of the list.
     pub fn from_raw(ids: &[String]) -> Self {
+        // Operator-authored values are never logged (only position and
+        // length): config logs may reach streams that are not secret-safe.
         Self(
             ids.iter()
-                .filter_map(|s| match s.parse::<u64>() {
+                .enumerate()
+                .filter_map(|(index, s)| match s.parse::<u64>() {
                     Ok(0) => {
                         tracing::error!(
                             field = "trusted_webhook_creators",
-                            value = s.as_str(),
+                            index,
                             "zero is not a Discord user ID — entry rejected"
                         );
                         None
@@ -743,7 +746,8 @@ impl TrustedWebhookCreators {
                     Err(error) => {
                         tracing::error!(
                             field = "trusted_webhook_creators",
-                            value = s.as_str(),
+                            index,
+                            len = s.len(),
                             %error,
                             "invalid trusted webhook creator ID in config — entry rejected"
                         );
@@ -1029,7 +1033,9 @@ impl RateLimitTomlConfig {
             Some("drop") | None => OverflowPolicy::Drop { notify: true },
             Some(other) => {
                 tracing::warn!(
-                    value = other,
+                    field = "rate_limit.overflow",
+                    accepted = "buffer | drop",
+                    len = other.len(),
                     "unrecognized rate_limit.overflow value, defaulting to \"drop\""
                 );
                 OverflowPolicy::Drop { notify: true }
@@ -1209,7 +1215,11 @@ impl LoadedConfig {
             .and_then(|s| match s.parse::<chrono_tz::Tz>() {
                 Ok(tz) => Some(tz),
                 Err(_) => {
-                    tracing::warn!(timezone = s, "invalid IANA timezone, falling back to UTC");
+                    tracing::warn!(
+                        field = "timezone",
+                        len = s.len(),
+                        "invalid IANA timezone, falling back to UTC"
+                    );
                     None
                 }
             });
@@ -1225,9 +1235,10 @@ impl LoadedConfig {
         let pre_send_author_id = raw.pre_send.author_id;
         let pre_send_construct_id = match ConstructId::parse(raw.pre_send.construct_id.clone()) {
             Ok(construct_id) => construct_id,
-            Err(error) => {
+            Err(_) => {
                 tracing::warn!(
-                    %error,
+                    field = "pre_send.construct_id",
+                    len = raw.pre_send.construct_id.len(),
                     "invalid pre_send.construct_id; disabling pre-send pipeline"
                 );
                 raw.pre_send.enabled = false;
@@ -1384,12 +1395,14 @@ fn parse_id_set(ids: &[String]) -> HashSet<u64> {
 /// so one bad value cannot break the rest of the list.
 fn parse_ignore_id_set(ids: &[String]) -> HashSet<u64> {
     ids.iter()
-        .filter_map(|s| match s.parse::<u64>() {
+        .enumerate()
+        .filter_map(|(index, s)| match s.parse::<u64>() {
             Ok(id) => Some(id),
             Err(error) => {
                 tracing::error!(
                     field = "ignore_from",
-                    value = s.as_str(),
+                    index,
+                    len = s.len(),
                     %error,
                     "invalid identity ignore ID in config — entry rejected; the ignore \
                      blocklist will NOT filter this value"
@@ -1409,19 +1422,23 @@ fn parse_ignore_id_set(ids: &[String]) -> HashSet<u64> {
 fn validate_pk_uuids(uuids: &[String], field: &str, channel_id: &str) -> HashSet<String> {
     uuids
         .iter()
-        .filter_map(|s| match crate::pluralkit::PkUuid::parse(s.as_str()) {
-            Ok(uuid) => Some(uuid.as_str().to_owned()),
-            Err(e) => {
-                tracing::error!(
-                    channel_id,
-                    field,
-                    value = s.as_str(),
-                    error = e,
-                    "invalid PK UUID in config — entry rejected, channel will fail closed"
-                );
-                None
-            }
-        })
+        .enumerate()
+        .filter_map(
+            |(index, s)| match crate::pluralkit::PkUuid::parse(s.as_str()) {
+                Ok(uuid) => Some(uuid.as_str().to_owned()),
+                Err(e) => {
+                    tracing::error!(
+                        channel_id,
+                        field,
+                        index,
+                        len = s.len(),
+                        error = e,
+                        "invalid PK UUID in config — entry rejected, channel will fail closed"
+                    );
+                    None
+                }
+            },
+        )
         .collect()
 }
 
@@ -2360,6 +2377,45 @@ impl ConfigRuntime {
 /// three routed producers (e.g. `src/bin/gaie_archive.rs`) and for tests.
 pub async fn reload_config(state_dir: &Utf8Path) -> (LoadedConfig, Option<String>) {
     ConfigRuntime::new(state_dir.to_owned()).reload().await
+}
+
+/// Why a read-only config load failed. See [`load_config_readonly`].
+#[derive(Debug, Error)]
+pub enum ReadOnlyConfigError {
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+    #[error("contradictionary sidecar error: {0}")]
+    Sidecar(String),
+    #[error(transparent)]
+    Generation(#[from] ConfigGenerationError),
+}
+
+/// Parses `config_path` (and its contradictionary sidecar) into a
+/// [`LoadedConfig`] **without touching disk or process state**: no default
+/// template is written for a missing file, no last-known-good promotion, no
+/// quarantine/restore, and the in-memory cache read by [`load_config`] is
+/// left alone. Every failure is a typed error for the caller to report.
+///
+/// This is the loader for one-shot, outbound-only invocations that may run
+/// with a read-only home (`dione-send`, #426). Long-lived seats keep using
+/// [`reload_config`] / [`ConfigRuntime`], which own the durability story.
+///
+/// Nothing on this path logs a raw parse/IO error: their `Display` can
+/// embed the offending source line (a `token = "..."` line included), and
+/// one-shot callers treat stderr as human-readable but not secret-safe.
+pub fn load_config_readonly(config_path: &Utf8Path) -> Result<LoadedConfig, ReadOnlyConfigError> {
+    let (raw, _snapshot) = try_load_config(config_path)?;
+    let sidecar_entries = if raw.contradictionary.enabled {
+        let sidecar = resolve_sidecar_path(config_path, &raw.contradictionary.sidecar_path);
+        load_sidecar_entries(sidecar.as_std_path()).map_err(ReadOnlyConfigError::Sidecar)?
+    } else {
+        Vec::new()
+    };
+    Ok(compose_candidate(
+        raw,
+        sidecar_entries,
+        &NEXT_CONFIG_GENERATION,
+    )?)
 }
 
 /// Resolves the Discord bot token.
