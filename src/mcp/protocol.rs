@@ -44,6 +44,7 @@ pub(crate) fn initialize_response(
 pub(crate) fn tools_list(mode: TransportMode, evidence_markers_enabled: bool) -> Value {
     let mut response = json!({
         "tools": [
+            tool("attention", "Recipient-local attention controls: status/configure, authorized source review/retrieval and feedback, offline replay/fitting, held-out evaluation and explicit digest promotion/rollback. Configure replaces settings from status. No command is accepted from Discord message text; this authenticated seat supplies recipient identity.", crate::attention::control::schema()),
             tool("reply", "Send a reply to a Discord channel or DM. A contradictionary block-tier match does not send: the message is held under a single-use handle and the error names the matched pattern(s) plus the handle. Act on it with no_rly (send verbatim), rephrase (replacement, re-checked), or ignore it to let it expire.", json!({
                 "type": "object",
                 "required": ["channel_id", "content"],

@@ -8,7 +8,11 @@
 
 mod app_server;
 
-pub use app_server::{CodexDeliveryConfig, CodexDeliveryError, run_delivery_worker};
+use crate::attention::types::RecordId;
+pub use app_server::{
+    AttentionDeliveryGuard, AttentionDeliveryReceipt, AttentionGuardFailure, CodexDeliveryConfig,
+    CodexDeliveryError, run_delivery_worker,
+};
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::{DateTime, TimeDelta, Utc};
 use clap::ValueEnum;
@@ -36,6 +40,9 @@ const MAX_CONSUMER_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const DEFAULT_CONSUMER_TTL: Duration = Duration::from_secs(15 * 60);
 const MAX_PROCESSED_MESSAGE_IDS: usize = 10_000;
 const LIVE_CONSUMER_LABEL: &str = "dione-live-app-server";
+const MAX_ATTENTION_RECORD_ID_BYTES: usize = 512;
+const MIN_ATTENTION_DEFER: Duration = Duration::from_millis(100);
+const MAX_ATTENTION_DEFER: Duration = Duration::from_secs(30);
 
 /// Determines how inbound Discord events are delivered to an agent harness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
@@ -139,6 +146,20 @@ impl<'de> Deserialize<'de> for CodexThreadId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct DiscordMessageId(MessageId);
 
+/// Safe-turn scheduling requested by the attention admission layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AttentionDelivery {
+    Prompt,
+    NextTurn,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct AttentionScheduling {
+    pub(crate) delivery: AttentionDelivery,
+    pub(crate) record_id: RecordId,
+}
+
 impl Serialize for DiscordMessageId {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -215,6 +236,12 @@ struct QueuedEvent {
     /// Exact live thread binding at ingress. Pull consumers leave this unset.
     #[serde(default)]
     live_thread_id: Option<CodexThreadId>,
+    /// Parsed and persisted at ingress so managed notifications can never
+    /// silently fall back to ordinary delivery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    attention: Option<AttentionScheduling>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deferred_until: Option<DateTime<Utc>>,
     #[serde(default)]
     lease: Option<Lease>,
 }
@@ -262,6 +289,21 @@ pub struct LeasedEvent {
     pub consumer_id: ConsumerId,
     /// Structured MCP notification. User-authored content remains data.
     pub event: Value,
+    #[serde(skip)]
+    pub(crate) attention: Option<AttentionScheduling>,
+}
+
+#[derive(Debug, Clone)]
+struct LeasePoll {
+    event: Option<LeasedEvent>,
+    deferred_for: Option<Duration>,
+}
+
+/// Durable result of narrowly invalidating attention-managed pending work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct AttentionInvalidationResult {
+    pub removed: usize,
+    pub invalidated_leases: usize,
 }
 
 /// Queue status for diagnostics and operational checks.
@@ -329,6 +371,12 @@ pub enum CodexQueueError {
     PrimaryConsumerExists,
     #[error("delivery token is unknown or its lease expired")]
     UnknownDeliveryToken,
+    #[error("malformed attention scheduling metadata: {reason}")]
+    MalformedAttentionMetadata { reason: &'static str },
+    #[error("attention invalidation requires a source message id or record id")]
+    AttentionSelectorRequired,
+    #[error("delivery token does not identify an attention-managed event")]
+    NotAttentionManaged,
 }
 
 impl DurableInbox {
@@ -378,6 +426,7 @@ impl DurableInbox {
             if event.discord_message_id.is_none() {
                 event.discord_message_id = discord_message_id(&event.payload);
             }
+            event.attention = parse_attention_scheduling(&event.payload)?;
             migrate_legacy_evidence_projection(&mut event.payload);
         }
         let message_ids = state
@@ -400,6 +449,7 @@ impl DurableInbox {
         let now = Utc::now();
         self.expire_consumers(now);
         let discord_message_id = discord_message_id(&payload);
+        let attention = parse_attention_scheduling(&payload)?;
         if discord_message_id.as_ref().is_some_and(|id| {
             self.message_ids.contains(id) || self.processed_message_ids.contains(id)
         }) {
@@ -418,6 +468,8 @@ impl DurableInbox {
                 discord_message_id,
                 consumer_id: inbox.state.primary_consumer.clone(),
                 live_thread_id: inbox.live_event_thread_id(),
+                attention,
+                deferred_until: None,
                 lease: None,
             });
             Ok(true)
@@ -430,7 +482,7 @@ impl DurableInbox {
         now: DateTime<Utc>,
         lease_duration: Duration,
         live_thread_id: Option<&CodexThreadId>,
-    ) -> Result<Option<LeasedEvent>, CodexQueueError> {
+    ) -> Result<LeasePoll, CodexQueueError> {
         self.transaction(|inbox| {
             inbox.touch_consumer(consumer_id, now)?;
             for event in &mut inbox.state.entries {
@@ -443,18 +495,38 @@ impl DurableInbox {
                 }
             }
 
-            let Some(index) = inbox.state.entries.iter().position(|event| {
+            let matches_consumer = |event: &QueuedEvent| {
                 event.lease.is_none()
                     && event.consumer_id.as_ref() == Some(consumer_id)
                     && live_thread_id
                         .is_none_or(|thread_id| event.live_thread_id.as_ref() == Some(thread_id))
-            }) else {
-                return Ok(None);
+            };
+            let index = inbox.state.entries.iter().position(|event| {
+                matches_consumer(event)
+                    && event
+                        .deferred_until
+                        .is_none_or(|available| available <= now)
+            });
+            let Some(index) = index else {
+                let deferred_for = inbox
+                    .state
+                    .entries
+                    .iter()
+                    .filter(|event| matches_consumer(event))
+                    .filter_map(|event| event.deferred_until)
+                    .filter(|available| *available > now)
+                    .min()
+                    .and_then(|available| available.signed_duration_since(now).to_std().ok());
+                return Ok(LeasePoll {
+                    event: None,
+                    deferred_for,
+                });
             };
 
             let generation = inbox.state.next_lease_generation;
             inbox.state.next_lease_generation = generation.saturating_add(1);
             let event = &mut inbox.state.entries[index];
+            event.deferred_until = None;
             let token = DeliveryToken::new(event.id, generation);
             let expires_at = now + duration_delta(lease_duration);
             event.lease = Some(Lease {
@@ -462,13 +534,17 @@ impl DurableInbox {
                 consumer_id: Some(consumer_id.clone()),
                 expires_at,
             });
-            Ok(Some(LeasedEvent {
-                event_id: event.id,
-                delivery_token: token,
-                lease_expires_at: expires_at,
-                consumer_id: consumer_id.clone(),
-                event: event.payload.clone(),
-            }))
+            Ok(LeasePoll {
+                event: Some(LeasedEvent {
+                    event_id: event.id,
+                    delivery_token: token,
+                    lease_expires_at: expires_at,
+                    consumer_id: consumer_id.clone(),
+                    event: event.payload.clone(),
+                    attention: event.attention.clone(),
+                }),
+                deferred_for: None,
+            })
         })
     }
 
@@ -514,6 +590,74 @@ impl DurableInbox {
                 inbox.remember_processed_message(message_id);
             }
             Ok(())
+        })
+    }
+
+    fn defer_attention(
+        &mut self,
+        consumer_id: &ConsumerId,
+        token: &DeliveryToken,
+        now: DateTime<Utc>,
+        delay: Duration,
+    ) -> Result<(), CodexQueueError> {
+        self.transaction(|inbox| {
+            inbox.touch_consumer(consumer_id, now)?;
+            let event = inbox
+                .state
+                .entries
+                .iter_mut()
+                .find(|event| {
+                    event.lease.as_ref().is_some_and(|lease| {
+                        lease.token == *token && lease.consumer_id.as_ref() == Some(consumer_id)
+                    })
+                })
+                .ok_or(CodexQueueError::UnknownDeliveryToken)?;
+            if event.attention.is_none() {
+                return Err(CodexQueueError::NotAttentionManaged);
+            }
+            event.lease = None;
+            event.deferred_until = Some(now + duration_delta(delay));
+            Ok(())
+        })
+    }
+
+    fn invalidate_attention(
+        &mut self,
+        source_message_id: Option<DiscordMessageId>,
+        record_id: Option<&RecordId>,
+    ) -> Result<AttentionInvalidationResult, CodexQueueError> {
+        if source_message_id.is_none() && record_id.is_none() {
+            return Err(CodexQueueError::AttentionSelectorRequired);
+        }
+        self.transaction(|inbox| {
+            let matches = |event: &QueuedEvent| {
+                event.attention.as_ref().is_some_and(|attention| {
+                    source_message_id.is_some_and(|id| event.discord_message_id == Some(id))
+                        || record_id.is_some_and(|id| &attention.record_id == id)
+                })
+            };
+            let mut invalidated_leases = 0;
+            for event in &mut inbox.state.entries {
+                if matches(event) && event.lease.take().is_some() {
+                    invalidated_leases += 1;
+                }
+            }
+            let removed_message_ids: Vec<_> = inbox
+                .state
+                .entries
+                .iter()
+                .filter(|event| matches(event))
+                .filter_map(|event| event.discord_message_id)
+                .collect();
+            let before = inbox.state.entries.len();
+            inbox.state.entries.retain(|event| !matches(event));
+            for message_id in removed_message_ids {
+                inbox.message_ids.remove(&message_id);
+            }
+            Ok(AttentionInvalidationResult {
+                removed: before - inbox.state.entries.len(),
+                invalidated_leases,
+            })
         })
     }
 
@@ -853,29 +997,8 @@ impl CodexEventQueue {
         wait: Duration,
         lease: Duration,
     ) -> Result<Option<LeasedEvent>, CodexQueueError> {
-        let wait = wait.min(MAX_WAIT);
-        let lease = lease.min(MAX_LEASE);
-        let deadline = tokio::time::Instant::now() + wait;
-        loop {
-            // Register the waiter before checking the queue. `notify_waiters`
-            // does not retain a permit when no waiter is registered, so doing
-            // this after `lease_next` leaves a lost-wake window.
-            let notified = self.changed.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            if let Some(event) =
-                self.inbox
-                    .lock()
-                    .await
-                    .lease_next(consumer_id, Utc::now(), lease, None)?
-            {
-                return Ok(Some(event));
-            }
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() || tokio::time::timeout(remaining, notified).await.is_err() {
-                return Ok(None);
-            }
-        }
+        self.next_matching_event(consumer_id, None, wait, lease)
+            .await
     }
 
     pub(crate) async fn next_live_event(
@@ -885,23 +1008,45 @@ impl CodexEventQueue {
         wait: Duration,
         lease: Duration,
     ) -> Result<Option<LeasedEvent>, CodexQueueError> {
+        self.next_matching_event(consumer_id, Some(thread_id), wait, lease)
+            .await
+    }
+
+    async fn next_matching_event(
+        &self,
+        consumer_id: &ConsumerId,
+        thread_id: Option<&CodexThreadId>,
+        wait: Duration,
+        lease: Duration,
+    ) -> Result<Option<LeasedEvent>, CodexQueueError> {
         let wait = wait.min(MAX_WAIT);
         let lease = lease.min(MAX_LEASE);
         let deadline = tokio::time::Instant::now() + wait;
         loop {
+            // Register before checking. Notify does not retain a permit when
+            // no waiter exists, so registering later creates a lost-wake gap.
             let notified = self.changed.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if let Some(event) = self.inbox.lock().await.lease_next(
-                consumer_id,
-                Utc::now(),
-                lease,
-                Some(thread_id),
-            )? {
-                return Ok(Some(event));
+            let LeasePoll {
+                event,
+                deferred_for,
+            } = self
+                .inbox
+                .lock()
+                .await
+                .lease_next(consumer_id, Utc::now(), lease, thread_id)?;
+            if event.is_some() {
+                return Ok(event);
             }
+
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() || tokio::time::timeout(remaining, notified).await.is_err() {
+            if remaining.is_zero() {
+                return Ok(None);
+            }
+            let wake_after = deferred_for.unwrap_or(remaining).min(remaining);
+            if tokio::time::timeout(wake_after, notified).await.is_err() && wake_after == remaining
+            {
                 return Ok(None);
             }
         }
@@ -927,6 +1072,46 @@ impl CodexEventQueue {
             .acknowledge(consumer_id, token, Utc::now())?;
         self.changed.notify_waiters();
         Ok(())
+    }
+
+    pub(crate) async fn defer_attention(
+        &self,
+        consumer_id: &ConsumerId,
+        token: &DeliveryToken,
+        delay: Duration,
+    ) -> Result<(), CodexQueueError> {
+        self.inbox.lock().await.defer_attention(
+            consumer_id,
+            token,
+            Utc::now(),
+            delay.clamp(MIN_ATTENTION_DEFER, MAX_ATTENTION_DEFER),
+        )?;
+        self.changed.notify_waiters();
+        Ok(())
+    }
+
+    /// Remove only attention-managed pending work matching either selector.
+    /// Active leases are invalidated transactionally before entries disappear.
+    pub async fn invalidate_attention(
+        &self,
+        source_message_id: Option<MessageId>,
+        record_id: Option<&RecordId>,
+    ) -> Result<AttentionInvalidationResult, CodexQueueError> {
+        if let Some(record_id) = record_id
+            && (record_id.as_str().trim().is_empty()
+                || record_id.as_str().len() > MAX_ATTENTION_RECORD_ID_BYTES)
+        {
+            return Err(CodexQueueError::MalformedAttentionMetadata {
+                reason: "attention_record must be a non-empty bounded string",
+            });
+        }
+        let result = self
+            .inbox
+            .lock()
+            .await
+            .invalidate_attention(source_message_id.map(DiscordMessageId), record_id)?;
+        self.changed.notify_waiters();
+        Ok(result)
     }
 
     pub async fn status(&self) -> QueueStatus {
@@ -1017,6 +1202,14 @@ fn duration_delta(duration: Duration) -> TimeDelta {
 }
 
 fn discord_message_id(payload: &Value) -> Option<DiscordMessageId> {
+    // A lifecycle event or reaction references a source; it is not another create.
+    if payload
+        .pointer("/params/meta/type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind != "message")
+    {
+        return None;
+    }
     payload
         .pointer("/params/meta/message_id")
         .and_then(Value::as_str)
@@ -1024,6 +1217,54 @@ fn discord_message_id(payload: &Value) -> Option<DiscordMessageId> {
         .and_then(crate::mcp::ids::Snowflake::new)
         .map(crate::mcp::ids::Snowflake::message)
         .map(DiscordMessageId)
+}
+
+fn parse_attention_scheduling(
+    notification: &Value,
+) -> Result<Option<AttentionScheduling>, CodexQueueError> {
+    let Some(meta) = notification
+        .pointer("/params/meta")
+        .and_then(Value::as_object)
+    else {
+        return Ok(None);
+    };
+    let delivery = meta.get("attention_delivery");
+    let record_id = meta.get("attention_record");
+    if delivery.is_none() && record_id.is_none() {
+        return Ok(None);
+    }
+
+    let delivery =
+        delivery
+            .and_then(Value::as_str)
+            .ok_or(CodexQueueError::MalformedAttentionMetadata {
+                reason: "attention_delivery must be prompt or next_turn",
+            })?;
+    let delivery = match delivery {
+        "prompt" => AttentionDelivery::Prompt,
+        "next_turn" => AttentionDelivery::NextTurn,
+        _ => {
+            return Err(CodexQueueError::MalformedAttentionMetadata {
+                reason: "attention_delivery must be prompt or next_turn",
+            });
+        }
+    };
+    let record_id =
+        record_id
+            .and_then(Value::as_str)
+            .ok_or(CodexQueueError::MalformedAttentionMetadata {
+                reason: "attention_record must be a non-empty bounded string",
+            })?;
+    if record_id.trim().is_empty() || record_id.len() > MAX_ATTENTION_RECORD_ID_BYTES {
+        return Err(CodexQueueError::MalformedAttentionMetadata {
+            reason: "attention_record must be a non-empty bounded string",
+        });
+    }
+
+    Ok(Some(AttentionScheduling {
+        delivery,
+        record_id: record_id.into(),
+    }))
 }
 
 /// Renames the pre-v2 structured projection on queued notifications.
@@ -1083,6 +1324,13 @@ mod tests {
                 "meta": { "message_id": id, "chat_id": "123" }
             }
         })
+    }
+
+    fn managed_message(id: &str, record_id: &str, delivery: &str, content: &str) -> Value {
+        let mut notification = message(id, content);
+        notification["params"]["meta"]["attention_delivery"] = json!(delivery);
+        notification["params"]["meta"]["attention_record"] = json!(record_id);
+        notification
     }
 
     async fn primary_consumer(queue: &CodexEventQueue) -> ConsumerId {
@@ -1208,6 +1456,7 @@ mod tests {
             .await
             .lease_next(&consumer, leased_at, DEFAULT_LEASE, None)
             .unwrap()
+            .event
             .unwrap();
         let lease_refresh = queue
             .inbox
@@ -1270,6 +1519,58 @@ mod tests {
         assert!(queue.enqueue(message("1", "first")).await.unwrap());
         assert!(!queue.enqueue(message("1", "duplicate")).await.unwrap());
         assert_eq!(queue.status().await.queued, 1);
+    }
+
+    #[tokio::test]
+    async fn durable_lifecycle_events_are_not_deduplicated_as_duplicate_creates() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let consumer = primary_consumer(&queue).await;
+        let mut edit = message("1", "edited");
+        edit["params"]["meta"]["type"] = json!("message_edit");
+        let mut delete = message("1", "deleted");
+        delete["params"]["meta"]["type"] = json!("message_delete");
+
+        assert!(queue.enqueue(message("1", "original")).await.unwrap());
+        assert!(queue.enqueue(edit).await.unwrap());
+        assert!(queue.enqueue(delete).await.unwrap());
+        assert!(
+            !queue
+                .enqueue(message("1", "duplicate create"))
+                .await
+                .unwrap()
+        );
+        drop(queue);
+
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let mut delivered_kinds = Vec::new();
+        while let Some(event) = queue
+            .next_event(&consumer, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+        {
+            delivered_kinds.push(
+                event
+                    .event
+                    .pointer("/params/meta/type")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            );
+            queue
+                .acknowledge(&consumer, &event.delivery_token)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            delivered_kinds,
+            [
+                None,
+                Some("message_edit".to_owned()),
+                Some("message_delete".to_owned()),
+            ]
+        );
     }
 
     #[test]
@@ -1655,6 +1956,88 @@ mod tests {
         queue.inbox.lock().await.temporary_path = valid_temporary_path;
         queue
             .acknowledge(&consumer, &event.delivery_token)
+            .await
+            .unwrap();
+        assert_eq!(queue.status().await.queued, 0);
+    }
+
+    #[tokio::test]
+    async fn malformed_attention_markers_are_rejected_at_enqueue() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        for malformed in [
+            json!({ "params": { "meta": { "attention_delivery": "prompt" } } }),
+            json!({ "params": { "meta": { "attention_record": "record-a" } } }),
+            json!({ "params": { "meta": {
+                "attention_delivery": "immediate",
+                "attention_record": "record-a"
+            } } }),
+        ] {
+            assert!(matches!(
+                queue.enqueue(malformed).await,
+                Err(CodexQueueError::MalformedAttentionMetadata { .. })
+            ));
+        }
+        assert!(queue.enqueue(message("10", "ordinary")).await.unwrap());
+        assert_eq!(queue.status().await.queued, 1);
+    }
+
+    #[tokio::test]
+    async fn attention_invalidation_revokes_leases_and_preserves_unrelated_queue() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        let consumer = primary_consumer(&queue).await;
+        queue
+            .enqueue(managed_message("101", "record-a", "prompt", "managed a"))
+            .await
+            .unwrap();
+        queue.enqueue(message("102", "ordinary")).await.unwrap();
+        queue
+            .enqueue(managed_message("103", "record-b", "next_turn", "managed b"))
+            .await
+            .unwrap();
+
+        let leased_managed = queue
+            .next_event(&consumer, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(leased_managed.event["params"]["content"], "managed a");
+        let invalidated = queue
+            .invalidate_attention(None, Some(&"record-a".into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            invalidated,
+            AttentionInvalidationResult {
+                removed: 1,
+                invalidated_leases: 1,
+            }
+        );
+        assert!(matches!(
+            queue
+                .defer_attention(
+                    &consumer,
+                    &leased_managed.delivery_token,
+                    Duration::from_secs(1),
+                )
+                .await,
+            Err(CodexQueueError::UnknownDeliveryToken)
+        ));
+        let ordinary = queue
+            .next_event(&consumer, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ordinary.event["params"]["content"], "ordinary");
+        let invalidated = queue
+            .invalidate_attention(Some(MessageId::new(103)), None)
+            .await
+            .unwrap();
+        assert_eq!(invalidated.removed, 1);
+        assert_eq!(invalidated.invalidated_leases, 0);
+        queue
+            .acknowledge(&consumer, &ordinary.delivery_token)
             .await
             .unwrap();
         assert_eq!(queue.status().await.queued, 0);

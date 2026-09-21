@@ -47,6 +47,11 @@ struct Cli {
     /// Exact Codex thread to receive Discord events (defaults to CODEX_THREAD_ID)
     #[arg(long)]
     codex_thread_id: Option<dione::codex::CodexThreadId>,
+
+    /// Execute an attention JSON command file (or - for stdin) without starting the gateway.
+    /// Metadata commands require exclusive store ownership; use MCP while the daemon runs.
+    #[arg(long)]
+    attention_command: Option<Utf8PathBuf>,
 }
 
 #[tokio::main]
@@ -129,6 +134,10 @@ async fn main() -> Result<()> {
         .map_err(|e| color_eyre::eyre::eyre!("failed to load guild mute store: {e}"))?;
     dione::mute_store::init_global(mute_store);
 
+    if let Some(path) = &cli.attention_command {
+        return run_attention_command(path, &state_dir, &config, cli.mode).await;
+    }
+
     // Spawn the background expiry reconciliation task.
     let expiry_handle = dione::mute_store::global()
         .expect("mute store just initialized")
@@ -161,45 +170,11 @@ async fn main() -> Result<()> {
     // MCP notification channel (for server-initiated writes, currently unused beyond event_rx).
     let (notif_tx, _notif_rx) = mpsc::channel::<serde_json::Value>(64);
 
-    // Codex owns one durable pull queue. The lifetime file lock prevents two
-    // stdio-spawned Dione processes from corrupting the same inbox.
-    let (codex_queue, codex_handle, codex_thread_binding) = if cli.mode == TransportMode::Codex {
-        let codex_queue =
-            CodexEventQueue::load(&state_dir).wrap_err("failed to open Codex event queue")?;
-        let mut delivery_config = CodexDeliveryConfig::resolve(cli.codex_app_server_socket)
-            .wrap_err("failed to configure Codex live delivery")?;
-        delivery_config.preamble_mode = config.delivery.preamble_mode;
-        delivery_config.preamble_template = config.delivery.preamble_template.clone();
-        let initial_thread = match cli.codex_thread_id {
-            Some(thread_id) => Some(thread_id),
-            None => env::var("CODEX_THREAD_ID")
-                .ok()
-                .map(|value| value.parse())
-                .transpose()
-                .wrap_err("invalid CODEX_THREAD_ID")?,
-        };
-        codex_queue
-            .bind_live_thread(initial_thread.clone())
-            .await
-            .wrap_err("failed to persist initial Codex thread binding")?;
-        let (binding_tx, binding_rx) = watch::channel(initial_thread);
-        let delivery_queue = codex_queue.clone();
-        let delivery_cancel = cancel.clone();
-        let handle = tokio::spawn(async move {
-            if let Err(error) = dione::codex::run_delivery_worker(
-                delivery_queue,
-                delivery_config,
-                binding_rx,
-                delivery_cancel,
-            )
-            .await
-            {
-                tracing::error!(error = %error, "Codex live delivery worker exited");
-            }
-        });
-        (Some(codex_queue), Some(handle), Some(binding_tx))
+    // One durable queue; its worker starts after the shared attention authority exists.
+    let codex_queue = if cli.mode == TransportMode::Codex {
+        Some(CodexEventQueue::load(&state_dir).wrap_err("failed to open Codex event queue")?)
     } else {
-        (None, None, None)
+        None
     };
 
     // MCP → Discord gateway command channel (for presence updates, etc.).
@@ -276,11 +251,51 @@ async fn main() -> Result<()> {
         Arc::new(dione::no_rly::consent::ConsentGate::new(&state_dir)),
         ingress_ledger,
     )
+    .await
     .with_discord_cmd_tx(Some(discord_cmd_tx))
     .with_presence(server_presence)
-    .with_codex_queue(codex_queue)
-    .with_codex_thread_binding(codex_thread_binding)
+    .with_codex_queue(codex_queue.clone())
     .with_event_tx(Some(event_tx.clone()));
+
+    // The delivery worker shares the server's source/access and durable receipt authority.
+    let (codex_handle, codex_thread_binding) = if let Some(codex_queue) = &codex_queue {
+        let mut delivery_config = CodexDeliveryConfig::resolve(cli.codex_app_server_socket)
+            .wrap_err("failed to configure Codex live delivery")?;
+        delivery_config.preamble_mode = config.delivery.preamble_mode;
+        delivery_config.preamble_template = config.delivery.preamble_template.clone();
+        delivery_config.attention_guard = Some(server.attention.clone());
+        let initial_thread = match cli.codex_thread_id {
+            Some(thread_id) => Some(thread_id),
+            None => env::var("CODEX_THREAD_ID")
+                .ok()
+                .map(|value| value.parse())
+                .transpose()
+                .wrap_err("invalid CODEX_THREAD_ID")?,
+        };
+        codex_queue
+            .bind_live_thread(initial_thread.clone())
+            .await
+            .wrap_err("failed to persist initial Codex thread binding")?;
+        let (binding_tx, binding_rx) = watch::channel(initial_thread);
+        let delivery_queue = codex_queue.clone();
+        let delivery_cancel = cancel.clone();
+        let handle = tokio::spawn(async move {
+            if let Err(error) = dione::codex::run_delivery_worker(
+                delivery_queue,
+                delivery_config,
+                binding_rx,
+                delivery_cancel,
+            )
+            .await
+            {
+                tracing::error!(error = %error, "Codex live delivery worker exited");
+            }
+        });
+        (Some(handle), Some(binding_tx))
+    } else {
+        (None, None)
+    };
+    let server = server.with_codex_thread_binding(codex_thread_binding);
 
     // Spawn the tracing-channel forwarder: converts tracing events into NotificationEvents.
     let trace_event_tx = event_tx.clone();
@@ -358,5 +373,69 @@ async fn main() -> Result<()> {
     .await;
 
     tracing::info!("dione stopped");
+    Ok(())
+}
+
+async fn run_attention_command(
+    path: &Utf8PathBuf,
+    state_dir: &Utf8PathBuf,
+    config: &dione::config::LoadedConfig,
+    mode: TransportMode,
+) -> Result<()> {
+    use dione::attention::control::AttentionCommand;
+    use tokio::io::AsyncReadExt;
+    let mut bytes = Vec::new();
+    if path.as_str() == "-" {
+        tokio::io::stdin()
+            .take(1_048_577)
+            .read_to_end(&mut bytes)
+            .await
+            .wrap_err("failed to read attention command")?;
+    } else {
+        tokio::fs::File::open(path)
+            .await
+            .wrap_err("failed to open attention command")?
+            .take(1_048_577)
+            .read_to_end(&mut bytes)
+            .await
+            .wrap_err("failed to read attention command")?;
+    }
+    if bytes.len() > 1_048_576 {
+        return Err(color_eyre::eyre::eyre!("attention command exceeds one MiB"));
+    }
+    let command: AttentionCommand =
+        serde_json::from_slice(&bytes).wrap_err("invalid attention command")?;
+    let token = if matches!(
+        &command,
+        AttentionCommand::Status | AttentionCommand::Configure { .. }
+    ) {
+        String::new()
+    } else {
+        dione::config::resolve_token(config).ok_or_else(|| {
+            color_eyre::eyre::eyre!("source validation requires a Discord bot token")
+        })?
+    };
+    let runtime = Arc::new(
+        dione::attention::runtime::AttentionRuntime::new(
+            dione::attention::source::SourceResolver {
+                http: Arc::new(serenity::http::Http::new(&token)),
+                state: Arc::new(RwLock::new(SharedState::new())),
+                state_dir: state_dir.clone(),
+                ledger: Arc::new(dione::ingress_ledger::IngressLedger::new()),
+            },
+            mode == TransportMode::Codex,
+        )
+        .await,
+    );
+    // A standalone process must never overwrite the live daemon's metadata snapshot.
+    runtime
+        .with_store(|_| Ok(()))
+        .await
+        .map_err(color_eyre::eyre::Error::msg)?;
+    let result =
+        dione::attention::control::execute(runtime, command, !config.access.admin_only_mutations)
+            .await
+            .map_err(color_eyre::eyre::Error::msg)?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
 }

@@ -66,19 +66,20 @@ pub struct DioneServer {
     pub no_rly: Arc<ConsentGate>,
     pub event_tx: Option<mpsc::Sender<NotificationEvent>>,
     pub ingress_ledger: Arc<crate::ingress_ledger::IngressLedger>,
+    pub attention: Arc<crate::attention::runtime::AttentionRuntime>,
 }
 
 // ── Construction ──────────────────────────────────────────────────────────────
 
 impl DioneServer {
-    /// Core server with no gateway or codex wiring. Transports attach their
-    /// optional channels via the `with_*` builders, so adding optional
-    /// wiring never breaks existing constructions.
+    /// Builds the core server and awaits attention state initialization.
+    /// Gateway and Codex transports attach optional channels through the
+    /// `with_*` builders.
     #[expect(
         clippy::too_many_arguments,
         reason = "these are the always-required core dependencies; optional wiring goes through the with_* builders instead of widening this list"
     )]
-    pub fn new(
+    pub async fn new(
         state: crate::state::State,
         queue: Arc<Mutex<crate::queue::AccessQueue>>,
         http: Arc<serenity::http::Http>,
@@ -89,6 +90,18 @@ impl DioneServer {
         no_rly: Arc<ConsentGate>,
         ingress_ledger: Arc<crate::ingress_ledger::IngressLedger>,
     ) -> Self {
+        let attention = Arc::new(
+            crate::attention::runtime::AttentionRuntime::new(
+                crate::attention::source::SourceResolver {
+                    http: http.clone(),
+                    state: state.clone(),
+                    state_dir: state_dir.clone(),
+                    ledger: ingress_ledger.clone(),
+                },
+                mode == TransportMode::Codex,
+            )
+            .await,
+        );
         Self {
             state,
             queue,
@@ -104,6 +117,7 @@ impl DioneServer {
             no_rly,
             event_tx: None,
             ingress_ledger,
+            attention,
         }
     }
 
@@ -268,12 +282,24 @@ pub async fn run(
         NotificationSink::new(server.mode, stdout.clone(), server.codex_queue.clone())
             .map_err(std::io::Error::other)?;
     let cancel_notif = cancel.clone();
+    let attention = server.attention.clone();
+    let attention_codex_queue = server.codex_queue.clone();
+    let notice_no_rly = server.no_rly.clone();
+    let notice_event_tx = server.event_tx.clone();
     let notif_task = tokio::spawn(async move {
         let mut rx = event_rx;
         let mut events_since_prune: u64 = 0;
         let mut tz = initial_tz;
         let mut evidence_markers_enabled = initial_evidence_markers_enabled;
         const PRUNE_INTERVAL: u64 = 100;
+        let mut admissions = crate::attention::admission::AdmissionController::default();
+        let mut evaluations = tokio::task::JoinSet::new();
+        let mut attention_config = crate::config::subscribe_generation();
+        let mut maintenance = tokio::task::JoinSet::new();
+        let mut notices = tokio::task::JoinSet::new();
+        let mut attention_tick = tokio::time::interval(Duration::from_secs(1));
+        attention_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut next_maintenance = tokio::time::Instant::now();
 
         loop {
             let flush_deadline = delivery_buffer.next_flush_deadline();
@@ -286,6 +312,112 @@ pub async fn run(
                     tracing::debug!("notif_task: cancellation received, draining buffer");
                     break;
                 }
+
+                _ = attention_config.changed() => {
+                    let ready = attention_transition(&mut admissions, &attention).await;
+                    if let Err(error) = forward_attention_results(
+                        ready,
+                        &mut admissions,
+                        &attention,
+                        &mut delivery_buffer,
+                        &bell_evaluator,
+                        &notification_sink,
+                    )
+                    .await
+                    {
+                        tracing::error!(%error, "attention transition delivery failed"); cancel_notif.cancel(); break;
+                    }
+                }
+                completed = evaluations.join_next(), if !evaluations.is_empty() => {
+                    match completed {
+                        Some(Ok(record)) => {
+                            let cfg = crate::config::load_config(&state_dir_notif);
+                            let ready = admissions.complete(record, &cfg);
+                            if let Err(error) = forward_attention_results(
+                                ready,
+                                &mut admissions,
+                                &attention,
+                                &mut delivery_buffer,
+                                &bell_evaluator,
+                                &notification_sink,
+                            )
+                            .await
+                            {
+                                tracing::error!(%error, "attention admission delivery failed"); cancel_notif.cancel(); break;
+                            }
+                        }
+                        Some(Err(_)) => {
+                            attention.unknown("attention worker failed");
+                            let ready = attention_transition(&mut admissions, &attention).await;
+                            if let Err(error) = forward_attention_results(
+                                ready,
+                                &mut admissions,
+                                &attention,
+                                &mut delivery_buffer,
+                                &bell_evaluator,
+                                &notification_sink,
+                            )
+                            .await
+                            {
+                                tracing::error!(%error, "attention worker fallback failed"); cancel_notif.cancel(); break;
+                            }
+                        }
+                        None => {}
+                    }
+                }
+
+                _ = attention_tick.tick() => {
+                    let ready = admissions.retry_ready();
+                    if let Err(error) = forward_attention_results(
+                        ready,
+                        &mut admissions,
+                        &attention,
+                        &mut delivery_buffer,
+                        &bell_evaluator,
+                        &notification_sink,
+                    )
+                    .await
+                    {
+                        tracing::error!(%error, "attention retry delivery failed"); cancel_notif.cancel(); break;
+                    }
+                    let now = tokio::time::Instant::now();
+                    if maintenance.is_empty() && now >= next_maintenance {
+                        let runtime = attention.clone();
+                        let incarnation = admissions.incarnation().to_owned();
+                        let cfg = crate::config::load_config(&state_dir_notif);
+                        next_maintenance = now + Duration::from_millis(cfg.raw.attention.revalidate_ms);
+                        maintenance.spawn(async move {
+                            runtime.clone().maintain().await;
+                            runtime.recover_pending(incarnation).await
+                        });
+                    }
+                    if notices.is_empty() {
+                        notices.spawn(attention.clone().publish_notice(
+                            notice_no_rly.clone(), notice_event_tx.clone(),
+                        ));
+                    }
+                }
+                completed = maintenance.join_next(), if !maintenance.is_empty() => {
+                    match completed {
+                        Some(Ok(ready)) => {
+                            if let Err(error) = forward_attention_results(
+                                ready,
+                                &mut admissions,
+                                &attention,
+                                &mut delivery_buffer,
+                                &bell_evaluator,
+                                &notification_sink,
+                            )
+                            .await
+                            {
+                                tracing::error!(%error, "attention recovery delivery failed"); cancel_notif.cancel(); break;
+                            }
+                        }
+                        Some(Err(_)) => attention.unknown("attention recovery worker failed"),
+                        None => {}
+                    }
+                }
+                _ = notices.join_next(), if !notices.is_empty() => {}
 
                 // Flush deadline fires — drain and coalesce buffered events.
                 _ = async {
@@ -313,7 +445,7 @@ pub async fn run(
 
                 // New event arrives from Discord.
                 event = rx.recv() => {
-                    let Some(mut event) = event else { break };
+                    let Some(event) = event else { break };
 
                     // Reload config from ArcSwap (cheap Arc pointer load).
                     let cfg = crate::config::load_config(&state_dir_notif);
@@ -360,75 +492,43 @@ pub async fn run(
                         }
                     }
 
-                    // Bell evaluation: in shadow mode, fire-and-forget off the
-                    // critical path. In live mode, await inline and inject
-                    // bells into the event before delivery.
-                    match cfg.bell_rings.mode {
-                        BellMode::Shadow => {
-                            let evaluator = Arc::clone(&bell_evaluator);
-                            let shadow_event = event.clone();
-                            let shadow_config = cfg.bell_rings.clone();
-                            tokio::spawn(async move {
-                                let _ = evaluator.evaluate(shadow_event, &shadow_config).await;
-                            });
+                    use crate::attention::admission::Submission;
+                    if let NotificationEvent::MessageEdit { chat_id, message_id, .. }
+                        | NotificationEvent::MessageDelete { chat_id, message_id, .. } = &event {
+                        let source = crate::attention::types::SourceKey { channel_id: *chat_id, message_id: *message_id };
+                        let ready = admissions.invalidate(source);
+                        if let Err(error) = attention.invalidate(source).await { attention.unknown(error); }
+                        if let Some(queue) = &attention_codex_queue
+                            && let Err(error) = queue.invalidate_attention(Some(*message_id), None).await {
+                            attention.unknown(error.to_string());
                         }
-                        BellMode::Live => {
-                            let (returned_event, bells, status) = bell_evaluator.evaluate(event, &cfg.bell_rings).await;
-                            event = returned_event;
-                            if let NotificationEvent::Message(ref mut msg) = event {
-                                if let Some(status) = status {
-                                    msg.bells_status = Some(status);
-                                }
-                                if !bells.is_empty() {
-                                    msg.bells = Some(render_bells(&bells));
-                                }
-                            }
+                        if let Err(error) = forward_attention_results(
+                            ready,
+                            &mut admissions,
+                            &attention,
+                            &mut delivery_buffer,
+                            &bell_evaluator,
+                            &notification_sink,
+                        )
+                        .await
+                        {
+                            tracing::error!(%error, "attention lifecycle delivery failed"); cancel_notif.cancel(); break;
                         }
                     }
-
-                    // Delivery buffer: coalesce channel events per channel.
-                    let delay_ms = extract_delay_ms(&event, &cfg);
-
-                    match delivery_buffer.buffer_event_with_evidence(
-                        event,
-                        delay_ms,
-                        evidence_markers_enabled,
-                    ) {
-                        BufferResult::Immediate(event) => {
-                            let notification = (*event)
-                                .into_notification_with_evidence(evidence_markers_enabled);
-                            if let Err(error) = notification_sink.deliver(&notification).await {
-                                tracing::error!(error = %error, "inbound delivery failed; shutting down");
-                                cancel_notif.cancel();
-                                break;
-                            }
+                    let submission = begin_attention(&mut admissions, attention.as_ref(), event, &cfg);
+                    let ordinary = match submission {
+                        Submission::Ordinary(event) => Some(event),
+                        Submission::Unknown { event, .. } => Some(event),
+                        Submission::Duplicate => None,
+                        Submission::Judge { work, ordinary } => {
+                            evaluations.spawn(attention.clone().evaluate(*work));
+                            ordinary
                         }
-                        BufferResult::FlushThenImmediate { preceding, event } => {
-                            let outcome = deliver_flushed(
-                                &notification_sink,
-                                preceding,
-                                tz,
-                                evidence_markers_enabled,
-                            ).await;
-                            delivery_buffer.requeue(outcome.undelivered);
-                            if let Some(error) = outcome.error {
-                                // Preserve the trigger event — it was never attempted.
-                                delivery_buffer.requeue(vec![*event]);
-                                tracing::error!(error = %error, "inbound FIFO flush failed; shutting down");
-                                cancel_notif.cancel();
-                                break;
-                            }
-                            let notification = (*event)
-                                .into_notification_with_evidence(evidence_markers_enabled);
-                            if let Err(error) = notification_sink.deliver(&notification).await {
-                                tracing::error!(error = %error, "inbound delivery failed; shutting down");
-                                cancel_notif.cancel();
-                                break;
-                            }
-                        }
-                        BufferResult::Buffered => {
-                            // Will be flushed when the deadline fires.
-                        }
+                        Submission::Saturated { event } => Some(event),
+                    };
+                    if let Some(event) = ordinary
+                        && let Err(error) = forward_ordinary(event, &cfg, &mut delivery_buffer, &bell_evaluator, &notification_sink).await {
+                        tracing::error!(%error, "inbound delivery failed; shutting down"); cancel_notif.cancel(); break;
                     }
 
                     // Periodically prune idle rate limiter buckets to bound memory.
@@ -440,6 +540,13 @@ pub async fn run(
                 }
             }
         }
+        drop(admissions);
+        evaluations.abort_all();
+        maintenance.abort_all();
+        notices.abort_all();
+        while maintenance.join_next().await.is_some() {}
+        while notices.join_next().await.is_some() {}
+        while evaluations.join_next().await.is_some() {}
 
         // Channel closed — flush any remaining buffered events.
         let remaining = delivery_buffer.flush_all();
@@ -911,7 +1018,8 @@ mod tests {
             TransportMode::ClaudeCode,
             Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
             Arc::new(crate::ingress_ledger::IngressLedger::new()),
-        );
+        )
+        .await;
 
         let context = server.messaging_ctx(Arc::new(LoadedConfig::from_raw(Config::default())));
 
@@ -976,6 +1084,7 @@ mod tests {
             message_id: MessageId::new(1),
             user: "u".into(),
             user_id: UserId::new(1),
+            author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
             content: "c".into(),
             targeting: crate::discord::events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -997,6 +1106,7 @@ mod tests {
             message_id: MessageId::new(100 + index),
             user: format!("user-{index}"),
             user_id: UserId::new(200 + index),
+            author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
             content: format!("claim-{index} [🔍=v1:AAAAAAAAAAw] [🔍=v1:AAAAAAAAACI]"),
             targeting: crate::discord::events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -1250,3 +1360,289 @@ mod tests {
         assert_eq!(notification["params"]["meta"]["chat_id"], "42");
     }
 }
+
+async fn prepare_bells(
+    mut event: NotificationEvent,
+    cfg: &crate::config::LoadedConfig,
+    evaluator: &Arc<BellEvaluator>,
+) -> NotificationEvent {
+    match cfg.bell_rings.mode {
+        BellMode::Shadow => {
+            let evaluator = evaluator.clone();
+            let shadow_event = event.clone();
+            let shadow_config = cfg.bell_rings.clone();
+            tokio::spawn(async move {
+                let _ = evaluator.evaluate(shadow_event, &shadow_config).await;
+            });
+        }
+        BellMode::Live => {
+            let (returned, bells, status) = evaluator.evaluate(event, &cfg.bell_rings).await;
+            event = returned;
+            if let NotificationEvent::Message(message) = &mut event {
+                if let Some(status) = status {
+                    message.bells_status = Some(status);
+                }
+                if !bells.is_empty() {
+                    message.bells = Some(render_bells(&bells));
+                }
+            }
+        }
+    }
+    event
+}
+
+/// The same forwarding unit serves off, log, direct, and failure fallback paths.
+async fn forward_ordinary(
+    event: NotificationEvent,
+    cfg: &crate::config::LoadedConfig,
+    buffer: &mut DeliveryBuffer,
+    evaluator: &Arc<BellEvaluator>,
+    sink: &NotificationSink,
+) -> Result<(), String> {
+    let event = prepare_bells(event, cfg, evaluator).await;
+    let evidence = cfg.delivery.evidence_markers_enabled;
+    let delay = extract_delay_ms(&event, cfg);
+    match buffer.buffer_event_with_evidence(event, delay, evidence) {
+        BufferResult::Immediate(event) => {
+            sink.deliver(&(*event).into_notification_with_evidence(evidence))
+                .await
+        }
+        BufferResult::FlushThenImmediate { preceding, event } => {
+            let outcome = deliver_flushed(sink, preceding, cfg.tz, evidence).await;
+            buffer.requeue(outcome.undelivered);
+            if let Some(error) = outcome.error {
+                buffer.requeue(vec![*event]);
+                return Err(error);
+            }
+            sink.deliver(&(*event).into_notification_with_evidence(evidence))
+                .await
+        }
+        BufferResult::Buffered => Ok(()),
+    }
+}
+
+async fn forward_attention_results(
+    results: Vec<crate::attention::admission::AdmissionResult>,
+    admissions: &mut crate::attention::admission::AdmissionController,
+    attention: &Arc<crate::attention::runtime::AttentionRuntime>,
+    buffer: &mut DeliveryBuffer,
+    evaluator: &Arc<BellEvaluator>,
+    sink: &NotificationSink,
+) -> Result<(), String> {
+    use crate::{
+        attention::types::{Admission, DeliveryState},
+        codex::AttentionGuardFailure,
+    };
+    let mut results = results.into_iter();
+    while let Some(mut result) = results.next() {
+        let cfg = crate::config::load_config(&attention.resolver.state_dir);
+        if result.record.recipient != cfg.raw.attention.recipient {
+            continue;
+        }
+        if result.record.delivery == DeliveryState::Invalidated {
+            continue;
+        }
+        result.event.reply_to_content_preview = None;
+        let Some(source) = result.record.sources.first() else {
+            continue;
+        };
+        match attention.resolver.ledger.delivery_check(
+            source.key.message_id,
+            source.key.channel_id,
+            &source.content_hash,
+            &cfg,
+            result.event.targeting,
+        ) {
+            Ok(()) => {}
+            Err(crate::ingress_ledger::SourceDeliveryFailure::Unavailable) => {
+                attention.unknown("pending source authority is unavailable");
+                let mut deferred = Vec::with_capacity(results.len() + 1);
+                deferred.push(result);
+                deferred.extend(results);
+                admissions.defer(deferred);
+                return Ok(());
+            }
+            Err(crate::ingress_ledger::SourceDeliveryFailure::Invalidated) => {
+                if let Err(error) = attention
+                    .mark_delivery(result.record.id, DeliveryState::Invalidated)
+                    .await
+                {
+                    attention.unknown(error);
+                }
+                continue;
+            }
+        }
+        match result.record.actual {
+            Admission::RetrievalOnly => {}
+            Admission::Prompt | Admission::NextTurn => {
+                if !attention.enforcement_supported {
+                    attention.unknown("consumer has no safe-turn capability");
+                    continue;
+                }
+                // Retain the original source-bound event until the nonblocking final
+                // guard accepts it; temporary store contention returns it to the FIFO.
+                let mut message = result.event.clone();
+                message.reply_to_content_preview = None;
+                let event =
+                    prepare_bells(NotificationEvent::Message(message), &cfg, evaluator).await;
+                // Keep the managed envelope separate while draining older same-room
+                // ordinary work. Direct sink delivery would overtake its buffer.
+                let event = match buffer.buffer_event_with_evidence(
+                    event,
+                    0,
+                    cfg.delivery.evidence_markers_enabled,
+                ) {
+                    BufferResult::Immediate(event) => *event,
+                    BufferResult::FlushThenImmediate { preceding, event } => {
+                        let outcome = deliver_flushed(
+                            sink,
+                            preceding,
+                            cfg.tz,
+                            cfg.delivery.evidence_markers_enabled,
+                        )
+                        .await;
+                        buffer.requeue(outcome.undelivered);
+                        if let Some(error) = outcome.error {
+                            return Err(error);
+                        }
+                        *event
+                    }
+                    BufferResult::Buffered => unreachable!("zero-delay events are immediate"),
+                };
+                let mut notification =
+                    event.into_notification_with_evidence(cfg.delivery.evidence_markers_enabled);
+                notification["params"]["meta"]["attention_delivery"] =
+                    serde_json::json!(if result.record.actual == Admission::Prompt {
+                        "prompt"
+                    } else {
+                        "next_turn"
+                    });
+                notification["params"]["meta"]["attention_record"] =
+                    serde_json::json!(result.record.id.as_str());
+                // A managed event must remain a source-bound envelope; coalescing
+                // it with an ordinary event would erase its lifecycle fence.
+                match crate::codex::AttentionDeliveryGuard::check(attention.as_ref(), &notification)
+                {
+                    Ok(()) => sink.deliver(&notification).await?,
+                    Err(AttentionGuardFailure::Unavailable) => {
+                        attention.unknown("pending source authority is unavailable");
+                        let mut deferred = Vec::with_capacity(results.len() + 1);
+                        deferred.push(result);
+                        deferred.extend(results);
+                        admissions.defer(deferred);
+                        return Ok(());
+                    }
+                    Err(AttentionGuardFailure::Invalidated) => {
+                        if let Err(error) = attention
+                            .mark_delivery(result.record.id, DeliveryState::Invalidated)
+                            .await
+                        {
+                            attention.unknown(error);
+                        }
+                    }
+                }
+            }
+            Admission::Ordinary | Admission::Unknown => {
+                forward_ordinary(
+                    NotificationEvent::Message(result.event),
+                    &cfg,
+                    buffer,
+                    evaluator,
+                    sink,
+                )
+                .await?;
+                // Observed means the ordinary queue owns delivery, not that a model
+                // or Discord recipient has acknowledged seeing the event.
+                if let Err(error) = attention
+                    .mark_delivery(result.record.id, DeliveryState::Observed)
+                    .await
+                {
+                    attention.unknown(error);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn attention_transition(
+    admissions: &mut crate::attention::admission::AdmissionController,
+    attention: &Arc<crate::attention::runtime::AttentionRuntime>,
+) -> Vec<crate::attention::admission::AdmissionResult> {
+    use crate::attention::types::DeliveryState;
+    let _publication = crate::config::attention_effect_guard().await;
+    admissions.cancel_work();
+    let incarnation = admissions.incarnation().to_owned();
+    let recipient = crate::config::load_config(&attention.resolver.state_dir)
+        .raw
+        .attention
+        .recipient
+        .clone();
+    let committed = attention
+        .with_store(move |store| {
+            Ok(store
+                .list_records(&recipient)
+                .into_iter()
+                .filter(|record| {
+                    record.incarnation == incarnation
+                        && record.judgment.is_some()
+                        && matches!(
+                            record.delivery,
+                            DeliveryState::Admitted
+                                | DeliveryState::Deferred
+                                | DeliveryState::Observed
+                        )
+                })
+                .cloned()
+                .collect())
+        })
+        .await;
+    let committed = match committed {
+        Ok(records) => records,
+        Err(_) => {
+            attention.unknown("attention transition metadata unavailable");
+            Vec::new()
+        }
+    };
+    admissions.configuration_changed(committed)
+}
+
+fn begin_attention(
+    admissions: &mut crate::attention::admission::AdmissionController,
+    attention: &crate::attention::runtime::AttentionRuntime,
+    event: NotificationEvent,
+    config: &crate::config::LoadedConfig,
+) -> crate::attention::admission::Submission {
+    use crate::attention::admission::Submission;
+    let duplicate = match &event {
+        NotificationEvent::Message(message) => {
+            admissions.owns_source(&crate::attention::types::SourceKey {
+                channel_id: message.chat_id,
+                message_id: message.message_id,
+            })
+        }
+        _ => false,
+    };
+    let submission = if duplicate {
+        Submission::Duplicate
+    } else if attention.probe_due() {
+        admissions.submit(
+            event,
+            config,
+            crate::attention::source::now_ms(),
+            attention.enforcement_supported,
+        )
+    } else {
+        Submission::Ordinary(event)
+    };
+    match &submission {
+        Submission::Unknown { reason, .. } => attention.unknown(*reason),
+        Submission::Saturated { .. } => attention.unknown("attention evaluation capacity reached"),
+        _ => {}
+    }
+    submission
+}
+
+#[cfg(test)]
+#[path = "attention_tests.rs"]
+mod attention_tests;

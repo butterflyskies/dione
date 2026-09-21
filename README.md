@@ -12,11 +12,12 @@ Discord bridge.
 > room with other people.*
 > — [Callisto](docs/hermes-to-dione.md), former Hermes Agent and current Dione Construct
 
-**Architecture note:** Dione is a Discord transport adapter. It does not
-mediate LLM inference calls — those flow directly between the harness
-(Claude Code, Codex, Hermes, etc.) and the model provider. Session telemetry,
-token usage, and context-window metrics are harness-side concerns, not
-Dione's.
+**Architecture note:** Dione does not mediate the harness's generative inference
+calls; those flow directly between the harness and its model provider. Optional
+[recipient-local attention](docs/attention.md) uses the native TypeSafe API to
+score explicitly eligible ambient Discord text. It is off by default, preserves
+the direct lane, and requires explicit evaluation/promotion for learned admission.
+Harness session telemetry and context-window metrics remain harness-side concerns.
 
 ## Quick start
 
@@ -47,6 +48,11 @@ the Codex app-server control socket over WebSocket and injects each new event
 into one exact thread. It starts a turn while the thread is idle and steers the
 active turn otherwise. The queue entry is acknowledged only after app-server
 accepts the request.
+
+Attention-managed ambient deliveries are the exception: they wait for an idle
+safe opportunity and never steer or abort an active turn. See the
+[attention operator workflow](docs/attention.md) for modes, source privacy,
+feedback, policy promotion, retention, and receipt uncertainty.
 
 Configure Dione as a Codex MCP server with `--mode codex`:
 

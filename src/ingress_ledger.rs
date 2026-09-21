@@ -12,8 +12,9 @@
 //! remain independent lineages: the ledger does not suppress either event based
 //! on timing or content similarity.
 
-use crate::discord::verified_action::{
-    LifecycleAdmissionFacts, LifecycleContext, LifecycleProvenance,
+use crate::{
+    attention::types::{DirectAuthorKind, SourceAuthorKind},
+    discord::verified_action::{LifecycleAdmissionFacts, LifecycleContext, LifecycleProvenance},
 };
 use serenity::model::{
     Timestamp,
@@ -72,16 +73,16 @@ impl Clock for SystemClock {
 
 #[derive(Debug)]
 enum StoredLineage {
-    Direct,
+    Direct(DirectAuthorKind),
     Verified(LifecycleAdmissionFacts),
 }
 
 impl StoredLineage {
     fn same_actor_lineage(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Direct, Self::Direct) => true,
+            (Self::Direct(left), Self::Direct(right)) => left == right,
             (Self::Verified(left), Self::Verified(right)) => left.same_actor_lineage(right),
-            (Self::Direct, Self::Verified(_)) | (Self::Verified(_), Self::Direct) => false,
+            (Self::Direct(_), Self::Verified(_)) | (Self::Verified(_), Self::Direct(_)) => false,
         }
     }
 }
@@ -152,6 +153,7 @@ pub(crate) struct LifecycleSnapshot {
     message_id: MessageId,
     context: LifecycleContext,
     actor_id: UserId,
+    author_kind: SourceAuthorKind,
     thread_parent_id: Option<ChannelId>,
     provenance: Option<LifecycleProvenance>,
 }
@@ -184,6 +186,11 @@ impl LifecycleSnapshot {
         }
     }
 
+    /// Returns the verified transport-aware author class captured at admission.
+    pub(crate) fn author_kind(&self) -> SourceAuthorKind {
+        self.author_kind
+    }
+
     pub(crate) fn provenance(&self) -> Option<&LifecycleProvenance> {
         self.provenance.as_ref()
     }
@@ -200,7 +207,7 @@ impl LifecycleView<'_> {
     }
     pub(crate) fn provenance(&self) -> Option<&LifecycleProvenance> {
         match &self.record.lineage {
-            StoredLineage::Direct => None,
+            StoredLineage::Direct(_) => None,
             StoredLineage::Verified(facts) => Some(facts.provenance()),
         }
     }
@@ -212,6 +219,12 @@ pub(crate) enum TransitionResult {
     Duplicate,
     Rejected,
     Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceDeliveryFailure {
+    Unavailable,
+    Invalidated,
 }
 
 pub struct IngressLedger {
@@ -271,6 +284,7 @@ impl IngressLedger {
             channel_id,
             LifecycleContext::DirectMessage,
             user_id,
+            DirectAuthorKind::Human,
             None,
             content,
             Timestamp::now(),
@@ -287,6 +301,7 @@ impl IngressLedger {
         channel_id: ChannelId,
         context: LifecycleContext,
         actor_id: UserId,
+        author_kind: DirectAuthorKind,
         thread_parent_id: Option<ChannelId>,
         content: &str,
         version: Timestamp,
@@ -299,7 +314,7 @@ impl IngressLedger {
             thread_parent_id,
             content,
             version,
-            StoredLineage::Direct,
+            StoredLineage::Direct(author_kind),
         )
     }
 
@@ -630,6 +645,79 @@ impl IngressLedger {
             .then(|| Self::snapshot(message_id, record))
     }
 
+    /// Recheck a source version and its existing admitted lineage at a delayed effect.
+    /// Unknown/expired lineage is not permission; callers must re-resolve it.
+    pub(crate) fn delivery_check(
+        &self,
+        message_id: MessageId,
+        channel_id: ChannelId,
+        expected_hash: &str,
+        config: &crate::config::LoadedConfig,
+        targeting: crate::discord::events::MessageTargeting,
+    ) -> Result<(), SourceDeliveryFailure> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| SourceDeliveryFailure::Unavailable)?;
+        self.cleanup(&mut state, self.clock.now());
+        if state.tombstones.contains_key(&message_id) {
+            return Err(SourceDeliveryFailure::Invalidated);
+        }
+        let record = state
+            .active
+            .get(&message_id)
+            .ok_or(SourceDeliveryFailure::Unavailable)?;
+        if record.channel_id != channel_id || expected_hash.len() != 64 {
+            return Err(SourceDeliveryFailure::Invalidated);
+        }
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        if !record
+            .content_hash
+            .0
+            .iter()
+            .zip(expected_hash.as_bytes().as_chunks::<2>().0)
+            .all(|(byte, pair)| {
+                pair[0] == HEX[(byte >> 4) as usize] && pair[1] == HEX[(byte & 15) as usize]
+            })
+        {
+            return Err(SourceDeliveryFailure::Invalidated);
+        }
+        if matches!(
+            &record.lineage,
+            StoredLineage::Direct(DirectAuthorKind::Bot)
+        ) && !config.is_allowed(record.actor_id.get())
+        {
+            return Err(SourceDeliveryFailure::Invalidated);
+        }
+        let lineage = LifecycleView { record };
+        match record.context {
+            LifecycleContext::DirectMessage => matches!(
+                crate::gate::InboundGate::check_dm(config, record.actor_id.get()),
+                crate::gate::GateDecision::Deliver
+            ),
+            LifecycleContext::Guild(guild) => {
+                let scope = if config.channel_policy(channel_id.get()).is_some() {
+                    channel_id
+                } else {
+                    record.thread_parent_id.unwrap_or(channel_id)
+                };
+                let mention = match targeting {
+                    crate::discord::events::MessageTargeting::GuildDirected(kind) => Some(kind),
+                    _ => None,
+                };
+                crate::discord::events::passive_edit_policy_allows(
+                    config,
+                    scope.get(),
+                    Some(guild.get()),
+                    mention,
+                    &lineage,
+                )
+            }
+        }
+        .then_some(())
+        .ok_or(SourceDeliveryFailure::Invalidated)
+    }
+
     pub fn gc_expired(&self) {
         let now = self.clock.now();
         if let Ok(mut state) = self.state.lock() {
@@ -707,15 +795,19 @@ impl IngressLedger {
     }
 
     fn snapshot(message_id: MessageId, record: &ActiveRecord) -> LifecycleSnapshot {
-        let provenance = match &record.lineage {
-            StoredLineage::Direct => None,
-            StoredLineage::Verified(facts) => Some(facts.provenance().clone()),
+        let (author_kind, provenance) = match &record.lineage {
+            StoredLineage::Direct(kind) => ((*kind).into(), None),
+            StoredLineage::Verified(facts) => (
+                SourceAuthorKind::VerifiedWebhook,
+                Some(facts.provenance().clone()),
+            ),
         };
         LifecycleSnapshot {
             channel_id: record.channel_id,
             message_id,
             context: record.context,
             actor_id: record.actor_id,
+            author_kind,
             thread_parent_id: record.thread_parent_id,
             provenance,
         }
@@ -788,6 +880,7 @@ mod tests {
             ChannelId::new(100),
             LifecycleContext::Guild(GuildId::new(200)),
             UserId::new(300),
+            DirectAuthorKind::Human,
             None,
             content,
             Timestamp::from_unix_timestamp(id as i64).unwrap(),
@@ -1055,6 +1148,7 @@ mod tests {
                 ChannelId::new(999),
                 guild,
                 UserId::new(300),
+                DirectAuthorKind::Human,
                 None,
                 "conflicting create",
                 Timestamp::from_unix_timestamp(20).unwrap(),
@@ -1395,7 +1489,8 @@ mod tests {
                 match kind {
                     0 => {
                         let _ = ledger.admit_direct_create(
-                            MessageId::new(id), channel, context, UserId::new(300), None, content,
+                            MessageId::new(id), channel, context, UserId::new(300),
+                            DirectAuthorKind::Human, None, content,
                             Timestamp::from_unix_timestamp(version).unwrap(),
                         );
                     }

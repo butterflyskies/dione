@@ -796,6 +796,7 @@ mod tests {
             message_id: MessageId::new(2),
             user: "user".to_owned(),
             user_id: UserId::new(3),
+            author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
             content: "query text".to_owned(),
             targeting,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),

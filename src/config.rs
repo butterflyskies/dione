@@ -117,6 +117,11 @@ pub struct Config {
     pub vaelii: crate::vaelii::VaeliiConfig,
     /// Inbound memory-bell shadow evaluation.
     pub bell_rings: BellRingsConfig,
+    /// Recipient-controlled TypeSafe attention; separate from provider permissions.
+    #[serde(deserialize_with = "crate::attention::config::deserialize_config")]
+    pub attention: crate::attention::config::AttentionConfig,
+    /// Operator-owned attention notice audience; recipient tools cannot change this binding.
+    pub attention_notice_route: Option<crate::attention::config::RecipientNoticeRoute>,
     /// Restart-only, one-shot GAIE archive configuration.
     pub archive: ArchiveConfig,
     /// Pronoun enforcement via PronounDB.
@@ -1512,6 +1517,14 @@ static LAST_VALID_CONFIG: std::sync::LazyLock<ArcSwap<LoadedConfig>> =
         ArcSwap::from_pointee(LoadedConfig::from_raw_with_generation(Config::default(), 0))
     });
 
+static CONFIG_GENERATION: std::sync::LazyLock<tokio::sync::watch::Sender<u64>> =
+    std::sync::LazyLock::new(|| tokio::sync::watch::channel(0).0);
+
+/// Observe actual published configuration changes without polling or a second reader.
+pub(crate) fn subscribe_generation() -> tokio::sync::watch::Receiver<u64> {
+    CONFIG_GENERATION.subscribe()
+}
+
 #[cfg(test)]
 fn build_and_store_raw_config(
     raw: Config,
@@ -1960,6 +1973,12 @@ pub struct ConfigMutationOutcome {
 /// per-instance lock would serialize nothing.
 static CONFIG_WRITER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// Serialize durable attention admission with the canonical config publication.
+/// Callers must perform network work before acquiring this guard.
+pub(crate) async fn attention_effect_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    CONFIG_WRITER.lock().await
+}
+
 /// Loads contradictionary sidecar entries for an already-parsed raw config.
 ///
 /// Returns an empty list when the contradictionary is disabled or the sidecar
@@ -2223,6 +2242,7 @@ impl ConfigRuntime {
             }
         };
         LAST_VALID_CONFIG.store(Arc::new(loaded.clone()));
+        CONFIG_GENERATION.send_replace(loaded.generation());
         if let Some(snapshot) = promote {
             promote_lkg_or_warn(
                 config_path,
@@ -2335,6 +2355,7 @@ impl ConfigRuntime {
                 // when parent fsync failed so disk and live policy agree.
                 let generation = loaded.generation();
                 LAST_VALID_CONFIG.store(Arc::new(loaded));
+                CONFIG_GENERATION.send_replace(generation);
                 let durability = match persisted.durability_error {
                     None => ConfigDurability::Durable,
                     Some(error) => {
@@ -2595,6 +2616,17 @@ fn try_load_config(config_path: &Utf8Path) -> Result<(Config, CanonicalSnapshot)
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+static CONFIG_CACHE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Serializes tests that publish the process-wide configuration snapshot.
+#[cfg(test)]
+pub(crate) fn config_cache_guard() -> std::sync::MutexGuard<'static, ()> {
+    CONFIG_CACHE_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
@@ -2629,19 +2661,6 @@ mod tests {
         let after = cache.load_full();
         assert!(Arc::ptr_eq(&before, &after));
         assert_eq!(after.generation(), 77);
-    }
-
-    /// Serialises tests that call [`reload_config`].
-    ///
-    /// `LAST_VALID_CONFIG` is a process-global `ArcSwap`. Under a thread-parallel
-    /// runner (`cargo test`) any test calling `reload_config` clobbers it for
-    /// every other test, so assertions that span two reloads — priming the cache
-    /// then observing the fallback — are otherwise racy.
-    static CONFIG_CACHE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    /// Takes the config-cache lock, ignoring poisoning from an unrelated panic.
-    fn config_cache_guard() -> std::sync::MutexGuard<'static, ()> {
-        CONFIG_CACHE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Test-side sync facade over the async [`super::reload_config`]. Shadows

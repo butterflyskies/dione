@@ -482,6 +482,17 @@ pub(crate) async fn call_tool(
             result
         }
         "get_access_config" => ConfigStore::get_access(&server.state_dir),
+        "attention" => {
+            let command: crate::attention::control::AttentionCommand =
+                serde_json::from_value(args.clone())
+                    .map_err(|error| format!("invalid attention command: {error}"))?;
+            crate::attention::control::execute(
+                server.attention.clone(),
+                command,
+                !config.access.admin_only_mutations,
+            )
+            .await?
+        }
 
         // Config management — mutations (serialized through ConfigRuntime, admin-gated)
         "add_channel" => {
@@ -956,6 +967,7 @@ mod tests {
             std::sync::Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
             std::sync::Arc::new(crate::ingress_ledger::IngressLedger::new()),
         )
+        .await
         .with_presence(server_presence);
 
         fn unwrap_tool_result(response: &Value) -> Value {

@@ -72,6 +72,17 @@ impl ConfigStore {
         self.doc.to_string()
     }
 
+    /// Edit attention through the same serialized config publication path.
+    pub fn set_attention(
+        &mut self,
+        attention: &crate::attention::config::AttentionConfig,
+    ) -> Result<(), BoxError> {
+        attention.validate().map_err(std::io::Error::other)?;
+        let table: DocumentMut = toml::to_string(attention)?.parse()?;
+        self.doc["attention"] = Item::Table(table.as_table().clone());
+        Ok(())
+    }
+
     // ── Read-only config queries ─────────────────────────────────────────────
 
     /// Return a JSON list of all configured channels (reads from ArcSwap cache).

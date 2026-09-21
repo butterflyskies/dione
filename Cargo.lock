@@ -828,7 +828,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.45.0"
+version = "0.46.0"
 dependencies = [
  "aho-corasick",
  "arc-swap",
@@ -844,6 +844,7 @@ dependencies = [
  "libc",
  "mitex",
  "notify",
+ "parking_lot",
  "pretty_assertions",
  "proptest",
  "regex",

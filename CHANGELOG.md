@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.46.0]
+
+### Added
+- Optional, default-off recipient-local attention with explicit per-room provider
+  eligibility, off/log/on controls, native pinned-model TypeSafe judgments,
+  source-bound review and retrieval, attributed feedback, local fitting and
+  held-out evaluation, and explicit digest promotion/rollback. The `attention`
+  MCP tool and `--attention-command` offline CLI share the same controls.
+- Safe-turn Codex attention delivery, durable receipt uncertainty and bounded
+  recovery, source/access invalidation, and independent degraded/recovery
+  diagnostics and notice controls. See [the operator guide](docs/attention.md).
+
+### Changed
+- Rust API: `DioneServer::new` is now asynchronous so durable attention recovery
+  does not block an async worker. Callers constructing `MessageEvent` must
+  supply its verified `author_kind` for delayed source-authority checks.
+- Attention notices require an independent operator-owned recipient/channel
+  binding; outbound reachability and inbound room grants are not audience authority.
+- Policy promotion requires a complete source-bound representative review batch;
+  exploratory cohorts and absent propensities cannot authorize enforcement.
+
+### Fixed
+- Preserve edit/delete lifecycle events in the durable Codex queue when they
+  share a message ID with a previously delivered create.
+- Keep attention metadata private, refuse symlinked store artifacts, and preserve
+  committed in-memory state when a post-rename directory sync reports failure.
+- Retain admitted attention delivery across transient final-guard unavailability
+  without losing FIFO order, source invalidation, or duplicate suppression.
+
 ## [0.45.0] - 2026-09-15
 
 ### Added

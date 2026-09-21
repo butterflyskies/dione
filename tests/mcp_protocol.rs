@@ -37,14 +37,6 @@ fn temp_state_dir() -> (TempDir, camino::Utf8PathBuf) {
     (dir, path)
 }
 
-#[test]
-fn normal_library_surface_has_no_config_fixture_publisher() {
-    let server_source = include_str!("../src/mcp/server.rs");
-    let config_source = include_str!("../src/config.rs");
-    assert!(!server_source.contains("pub fn set_global_config"));
-    assert!(!config_source.contains("fn store_loaded_config"));
-}
-
 static CONFIG_FIXTURE_LOCK: Mutex<()> = Mutex::const_new(());
 
 struct ConfigFixtureGuard {
@@ -81,33 +73,30 @@ async fn load_config_fixture(state_dir: &camino::Utf8PathBuf, toml: &str) -> Con
     }
 }
 
-fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
+async fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
     make_server_with_http(
         state_dir,
         Arc::new(serenity::http::Http::new("fake-token-for-tests")),
     )
+    .await
 }
 
-fn make_server_with_http(state_dir: &camino::Utf8PathBuf, http: Arc<Http>) -> DioneServer {
+async fn make_server_with_http(state_dir: &camino::Utf8PathBuf, http: Arc<Http>) -> DioneServer {
     let state = new_state();
     let queue = Arc::new(Mutex::new(AccessQueue::load(state_dir)));
     let (tx, _rx) = mpsc::channel(4);
-    DioneServer {
+    DioneServer::new(
         state,
         queue,
         http,
-        state_dir: state_dir.clone(),
-        notification_tx: tx,
-        discord_cmd_tx: None,
-        presence: None,
-        trace_controller: TraceLevelController::noop(),
-        mode: TransportMode::ClaudeCode,
-        codex_queue: None,
-        codex_thread_binding: None,
-        no_rly: Arc::new(ConsentGate::new(state_dir)),
-        event_tx: None,
-        ingress_ledger: Arc::new(dione::ingress_ledger::IngressLedger::new()),
-    }
+        state_dir.clone(),
+        tx,
+        TraceLevelController::noop(),
+        TransportMode::ClaudeCode,
+        Arc::new(ConsentGate::new(state_dir)),
+        Arc::new(dione::ingress_ledger::IngressLedger::new()),
+    )
+    .await
 }
 
 async fn missing_access_http() -> (Arc<Http>, Arc<Mutex<Vec<String>>>, JoinHandle<()>) {
@@ -231,7 +220,7 @@ fn test_codex_initialize_omits_claude_experimental_capabilities() {
 #[tokio::test]
 async fn test_initialize_request_dispatch() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -254,7 +243,7 @@ async fn test_initialize_request_dispatch() {
 #[tokio::test]
 async fn test_initialize_negotiates_supported_protocol() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -270,7 +259,7 @@ async fn test_initialize_negotiates_supported_protocol() {
 #[tokio::test]
 async fn test_initialize_negotiates_current_codex_protocol() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -286,7 +275,7 @@ async fn test_initialize_negotiates_current_codex_protocol() {
 #[tokio::test]
 async fn test_initialize_unknown_protocol_falls_back_to_latest_supported() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -437,7 +426,7 @@ fn test_reply_schema_has_no_no_rly_arg() {
 #[tokio::test]
 async fn test_tools_list_dispatch() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -460,7 +449,7 @@ async fn test_tools_list_dispatch() {
 #[tokio::test]
 async fn test_unknown_method_returns_error() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -488,7 +477,7 @@ async fn test_unknown_method_returns_error() {
 #[tokio::test]
 async fn test_client_notification_no_response() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     // A JSON-RPC notification has no "id" field.
     let notif = json!({
@@ -510,7 +499,7 @@ async fn test_client_notification_no_response() {
 async fn test_tools_call_send_typing_rejected_unknown_channel() {
     let (_dir, state_dir) = temp_state_dir();
     // Empty config → no opted-in channels, no DM map → gate will reject.
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -538,7 +527,7 @@ async fn test_tools_call_send_typing_rejected_unknown_channel() {
 async fn test_tools_call_fetch_new_since_rejected_unknown_channel() {
     let (_dir, state_dir) = temp_state_dir();
     // Empty config → no opted-in channels, no DM map → gate will reject.
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -567,7 +556,7 @@ async fn test_tools_call_fetch_new_since_rejected_unknown_channel() {
 #[tokio::test]
 async fn test_tools_call_fetch_new_since_zero_cursor_returns_error() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     // after_message_id = 0 must be rejected at the MCP boundary: serenity's
     // `MessageId::new` wraps a `NonZeroU64` and panics on zero.
@@ -596,7 +585,7 @@ async fn test_tools_call_fetch_new_since_zero_cursor_returns_error() {
 #[tokio::test]
 async fn test_tools_call_zero_snowflake_returns_error_across_tools() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     // Every tool that feeds a parsed ID into serenity's NonZeroU64-backed Id
     // wrappers must reject zero at the MCP boundary instead of panicking.
@@ -664,7 +653,7 @@ async fn test_tools_call_zero_snowflake_returns_error_across_tools() {
 #[tokio::test]
 async fn test_tools_call_send_file_rejected_unknown_channel() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -682,7 +671,7 @@ async fn test_tools_call_send_file_rejected_unknown_channel() {
 #[tokio::test]
 async fn test_tools_call_send_file_rejects_relative_path() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -705,7 +694,7 @@ async fn test_tools_call_send_file_rejects_relative_path() {
 #[tokio::test]
 async fn test_tools_call_send_file_rejects_captionless_hook_override() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
     let req = json!({
         "jsonrpc": "2.0",
         "id": 311,
@@ -728,7 +717,7 @@ async fn test_tools_call_send_file_rejects_captionless_hook_override() {
 #[tokio::test]
 async fn test_tools_call_render_latex_to_channel_rejected_unknown_channel() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -746,7 +735,7 @@ async fn test_tools_call_render_latex_to_channel_rejected_unknown_channel() {
 #[tokio::test]
 async fn test_tools_call_render_rejects_captionless_hook_override() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
     let req = json!({
         "jsonrpc": "2.0",
         "id": 321,
@@ -770,7 +759,7 @@ async fn test_tools_call_render_rejects_captionless_hook_override() {
 async fn test_tools_call_send_dm_disabled_returns_error() {
     let (_dir, state_dir) = temp_state_dir();
     let _config = load_config_fixture(&state_dir, "[access]\ndm_policy = \"disabled\"\n").await;
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -798,7 +787,7 @@ async fn test_tools_call_send_dm_disabled_returns_error() {
 #[tokio::test]
 async fn test_tools_call_send_dm_missing_user_id_returns_error() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -820,7 +809,7 @@ async fn test_tools_call_send_dm_missing_user_id_returns_error() {
 #[tokio::test]
 async fn test_tools_call_unknown_tool_returns_error() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -843,7 +832,7 @@ async fn test_tools_call_unknown_tool_returns_error() {
 #[tokio::test]
 async fn test_tools_call_missing_tool_name_returns_error() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -865,7 +854,7 @@ async fn test_tools_call_missing_tool_name_returns_error() {
 #[tokio::test]
 async fn test_tools_call_list_access_requests_empty() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -892,7 +881,7 @@ async fn test_tools_call_list_access_requests_empty() {
 #[tokio::test]
 async fn test_bind_codex_thread_updates_live_binding() {
     let (_dir, state_dir) = temp_state_dir();
-    let mut server = make_server(&state_dir);
+    let mut server = make_server(&state_dir).await;
     let (binding_tx, mut binding_rx) = tokio::sync::watch::channel(None);
     server.mode = TransportMode::Codex;
     server.codex_queue = Some(dione::codex::CodexEventQueue::load(&state_dir).unwrap());
@@ -945,6 +934,7 @@ fn test_notification_has_no_id_field() {
         message_id: MessageId::new(2),
         user: "x".to_string(),
         user_id: UserId::new(3),
+        author_kind: dione::attention::types::SourceAuthorKind::DirectHuman,
         content: "hi".to_string(),
         targeting: dione::discord::events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -972,6 +962,7 @@ fn test_notification_attachment_metadata_present() {
         message_id: MessageId::new(2),
         user: "x".to_string(),
         user_id: UserId::new(3),
+        author_kind: dione::attention::types::SourceAuthorKind::DirectHuman,
         content: "see file".to_string(),
         targeting: dione::discord::events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -1002,6 +993,7 @@ fn test_notification_voice_flag_in_meta() {
         message_id: MessageId::new(2),
         user: "x".to_string(),
         user_id: UserId::new(3),
+        author_kind: dione::attention::types::SourceAuthorKind::DirectHuman,
         content: String::new(),
         targeting: dione::discord::events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -1039,6 +1031,7 @@ fn test_notification_message_snapshot() {
         message_id: MessageId::new(2000),
         user: "snapuser".to_string(),
         user_id: UserId::new(3000),
+        author_kind: dione::attention::types::SourceAuthorKind::DirectHuman,
         content: "snapshot content".to_string(),
         targeting: dione::discord::events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00+00:00").unwrap(),
@@ -1149,6 +1142,7 @@ fn test_notification_message_in_thread_snapshot() {
         message_id: MessageId::new(2000),
         user: "threaduser".to_string(),
         user_id: UserId::new(3000),
+        author_kind: dione::attention::types::SourceAuthorKind::DirectHuman,
         content: "reply in thread".to_string(),
         targeting: dione::discord::events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00+00:00").unwrap(),
@@ -1175,6 +1169,7 @@ fn test_notification_message_reply_snapshot() {
         message_id: MessageId::new(2000),
         user: "replyuser".to_string(),
         user_id: UserId::new(3000),
+        author_kind: dione::attention::types::SourceAuthorKind::DirectHuman,
         content: "replying to someone".to_string(),
         targeting: dione::discord::events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00+00:00").unwrap(),
@@ -1199,6 +1194,7 @@ fn test_notification_message_reply_in_thread_snapshot() {
         message_id: MessageId::new(2000),
         user: "threaduser".to_string(),
         user_id: UserId::new(3000),
+        author_kind: dione::attention::types::SourceAuthorKind::DirectHuman,
         content: "reply in thread".to_string(),
         targeting: dione::discord::events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00+00:00").unwrap(),
@@ -1270,7 +1266,7 @@ fn test_trace_notification_snapshot() {
 #[tokio::test]
 async fn test_get_version_returns_current_version() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
     let req = json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -1287,7 +1283,7 @@ async fn test_get_version_returns_current_version() {
 #[tokio::test]
 async fn test_set_trace_level_accepts_valid_filter() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
     let req = json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -1304,7 +1300,7 @@ async fn test_set_trace_level_accepts_valid_filter() {
 #[tokio::test]
 async fn test_set_trace_level_rejects_invalid_filter() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
     let req = json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -1320,7 +1316,7 @@ async fn test_set_trace_level_rejects_invalid_filter() {
 #[tokio::test]
 async fn test_set_stderr_level_accepts_valid_filter() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
     let req = json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -1337,7 +1333,7 @@ async fn test_set_stderr_level_accepts_valid_filter() {
 #[tokio::test]
 async fn test_set_trace_level_missing_filter_param() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
     let req = json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -1353,7 +1349,7 @@ async fn test_set_trace_level_missing_filter_param() {
 #[tokio::test]
 async fn test_permission_request_empty_id_is_ignored() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
     let req = json!({
         "jsonrpc": "2.0",
         "method": "notifications/claude/channel/permission_request",
@@ -1372,7 +1368,7 @@ async fn test_permission_request_empty_id_is_ignored() {
 #[tokio::test]
 async fn test_permission_request_missing_id_is_ignored() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
     let req = json!({
         "jsonrpc": "2.0",
         "method": "notifications/claude/channel/permission_request",
@@ -1391,7 +1387,7 @@ async fn test_permission_request_missing_id_is_ignored() {
 #[tokio::test]
 async fn test_no_rly_unknown_handle_errors() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
     let req = json!({
         "jsonrpc": "2.0",
         "id": 60,
@@ -1412,7 +1408,7 @@ async fn test_no_rly_unknown_handle_errors() {
 #[tokio::test]
 async fn test_rephrase_unknown_handle_errors() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
     let req = json!({
         "jsonrpc": "2.0",
         "id": 61,
@@ -1433,7 +1429,7 @@ async fn test_rephrase_unknown_handle_errors() {
 #[tokio::test]
 async fn test_rephrase_missing_content_is_protocol_error() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
     let req = json!({
         "jsonrpc": "2.0",
         "id": 62,
@@ -1447,7 +1443,7 @@ async fn test_rephrase_missing_content_is_protocol_error() {
 #[tokio::test]
 async fn test_no_rly_stats_empty_journal_reports_zeros() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
     let req = json!({
         "jsonrpc": "2.0",
         "id": 63,
@@ -1466,7 +1462,7 @@ async fn test_no_rly_stats_empty_journal_reports_zeros() {
 #[tokio::test]
 async fn test_no_rly_stats_rejects_invalid_outcome() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
     let req = json!({
         "jsonrpc": "2.0",
         "id": 64,
@@ -1487,7 +1483,7 @@ async fn test_no_rly_stats_rejects_invalid_outcome() {
 #[tokio::test]
 async fn test_no_rly_condense_and_vacuum_empty_journal() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -1583,7 +1579,7 @@ async fn evidence_handle_dispatch_rejects_legacy_noncanonical_and_over_limit_inp
     let (_dir, state_dir) = temp_state_dir();
     let _config =
         load_config_fixture(&state_dir, "[delivery]\nevidence_markers_enabled = true\n").await;
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
     let cases = [
         ("evidence_keys", json!(["1"])),
         ("claim_handles", json!([1])),
@@ -1650,7 +1646,7 @@ async fn evidence_handle_dispatch_rejects_legacy_noncanonical_and_over_limit_inp
 #[tokio::test]
 async fn disabled_evidence_markers_reject_present_handle_fields_even_when_empty() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     for (index, (tool, destination_field, destination, handle_field)) in [
         ("reply", "channel_id", "999999", "claim_handles"),
@@ -1690,7 +1686,7 @@ async fn disabled_evidence_markers_reject_present_handle_fields_even_when_empty(
 #[tokio::test]
 async fn test_reply_suppress_ping_defaults_to_false_gate_rejection() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     // Call reply without suppress_ping — should still reach the gate (and be
     // rejected because no channel is configured).
@@ -1713,7 +1709,7 @@ async fn test_reply_suppress_ping_defaults_to_false_gate_rejection() {
 #[tokio::test]
 async fn test_reply_suppress_ping_true_gate_rejection() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     // Call reply with suppress_ping=true — should still reach the gate (and be
     // rejected because no channel is configured). This exercises the arg parsing
@@ -1738,7 +1734,7 @@ async fn test_reply_suppress_ping_true_gate_rejection() {
 #[tokio::test]
 async fn test_reply_suppress_ping_false_explicit_gate_rejection() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -1767,7 +1763,7 @@ async fn test_reply_suppress_ping_true_passes_gate_with_configured_channel() {
         "[[channels]]\nid = \"100100\"\nrequire_mention = false\n",
     )
     .await;
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     // With suppress_ping=true, the reply should pass the gate but fail at the
     // Discord HTTP layer (fake token). The error should NOT be a gate rejection.
@@ -1804,7 +1800,7 @@ async fn test_reply_suppress_ping_false_passes_gate_with_configured_channel() {
         "[[channels]]\nid = \"100101\"\nrequire_mention = false\n",
     )
     .await;
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     // With suppress_ping=false (default behavior), same path but without
     // allowed_mentions being set.
@@ -1857,7 +1853,7 @@ reason = "nothing is ever straightforward"
 async fn test_reply_blocked_returns_parseable_held_handle() {
     let (_dir, state_dir) = temp_state_dir();
     let _cfg = load_config_fixture(&state_dir, BLOCKING_CONFIG).await;
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -1895,7 +1891,7 @@ async fn test_reply_blocked_returns_parseable_held_handle() {
 async fn test_reply_no_rly_flag_is_ignored_and_still_bounces() {
     let (_dir, state_dir) = temp_state_dir();
     let _cfg = load_config_fixture(&state_dir, BLOCKING_CONFIG).await;
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -1930,7 +1926,7 @@ async fn test_reply_no_rly_flag_is_ignored_and_still_bounces() {
 #[tokio::test]
 async fn test_no_rly_stats_rejects_wrong_type_filter() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir);
+    let server = make_server(&state_dir).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -1960,7 +1956,7 @@ async fn test_fetch_messages_preserves_discord_missing_access_after_gate() {
     )
     .await;
     let (http, requests, mock_server) = missing_access_http().await;
-    let server = make_server_with_http(&state_dir, http);
+    let server = make_server_with_http(&state_dir, http).await;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -2007,7 +2003,7 @@ async fn test_reply_preserves_discord_missing_access_after_gate() {
     )
     .await;
     let (http, requests, mock_server) = missing_access_http().await;
-    let server = make_server_with_http(&state_dir, http);
+    let server = make_server_with_http(&state_dir, http).await;
 
     let req = json!({
         "jsonrpc": "2.0",

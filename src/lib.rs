@@ -1,3 +1,4 @@
+pub mod attention;
 pub mod batch;
 pub mod bell_rings;
 pub mod coalesce;

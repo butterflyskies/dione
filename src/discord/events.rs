@@ -1,4 +1,5 @@
 use crate::{
+    attention::types::{DirectAuthorKind, SourceAuthorKind},
     bell_rings::BellStatus,
     discord::{
         verified_action::{
@@ -221,6 +222,8 @@ pub struct MessageEvent {
     pub message_id: MessageId,
     pub user: String,
     pub user_id: UserId,
+    /// Verified author/transport class captured before delayed attention work.
+    pub author_kind: SourceAuthorKind,
     pub content: String,
     /// Typed targeting evidence captured at the Discord ingress boundary.
     pub targeting: MessageTargeting,
@@ -458,6 +461,7 @@ async fn send_gateway_admitted_message(
             msg.channel_id,
             context,
             msg.author.id,
+            DirectAuthorKind::from_bot_flag(msg.author.bot),
             thread_parent_id,
             &msg.content,
             msg.timestamp,
@@ -1958,7 +1962,7 @@ fn fresh_guild_envelope_allows_with_mute(
     !policy.require_mention || mention_kind.is_some()
 }
 
-fn passive_edit_policy_allows(
+pub(crate) fn passive_edit_policy_allows(
     config: &crate::config::LoadedConfig,
     gate_channel_id: u64,
     guild_id: Option<u64>,
@@ -2207,6 +2211,7 @@ fn build_message_event(
         msg.channel_id,
         msg.id,
         msg.author.id,
+        DirectAuthorKind::from_bot_flag(msg.author.bot).into(),
         msg,
         config,
         ingress_ledger,
@@ -2235,6 +2240,7 @@ fn build_verified_message_event(
         admission.channel_id(),
         admission.message_id(),
         admission.effective_user_id(),
+        admission.author_kind(),
         msg,
         config,
         ingress_ledger,
@@ -2253,6 +2259,7 @@ fn build_message_event_with_coordinates(
     chat_id: ChannelId,
     message_id: MessageId,
     effective_user_id: UserId,
+    author_kind: SourceAuthorKind,
     msg: &Message,
     config: &crate::config::LoadedConfig,
     ingress_ledger: &crate::ingress_ledger::IngressLedger,
@@ -2297,6 +2304,7 @@ fn build_message_event_with_coordinates(
         message_id,
         user: resolved_name,
         user_id: effective_user_id,
+        author_kind,
         content: msg.content.clone(),
         targeting,
         timestamp: config
@@ -3344,6 +3352,7 @@ mod tests {
                     ChannelId::new(20),
                     LifecycleContext::DirectMessage,
                     UserId::new(500),
+                    DirectAuthorKind::Human,
                     None,
                     "dm",
                     serenity::model::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -4404,7 +4413,7 @@ mod tests {
         let config = LoadedConfig::from_raw(Config::default());
         let direct_ledger = crate::ingress_ledger::IngressLedger::new();
         let direct = message_from_wire(wire_message_body(200, wire_author(600, "alice"), "hello"));
-        let direct = build_message_event(
+        let NotificationEvent::Message(direct_event) = build_message_event(
             &direct,
             &config,
             &direct_ledger,
@@ -4412,8 +4421,11 @@ mod tests {
             MessageTargeting::Ambient,
             None,
             false,
-        )
-        .into_notification();
+        ) else {
+            panic!("direct builder must return a message");
+        };
+        assert_eq!(direct_event.author_kind, SourceAuthorKind::DirectHuman);
+        let direct = NotificationEvent::Message(direct_event).into_notification();
 
         let represented_ledger = crate::ingress_ledger::IngressLedger::new();
         let mut represented_message = wire_message_body(201, wire_author(500, "alice"), "hello");
@@ -4446,7 +4458,7 @@ mod tests {
         else {
             panic!("represented message must admit");
         };
-        let represented = build_verified_message_event(
+        let NotificationEvent::Message(represented_event) = build_verified_message_event(
             &admission,
             &represented_message,
             &config,
@@ -4455,8 +4467,15 @@ mod tests {
             MessageTargeting::Ambient,
             None,
             false,
-        )
-        .into_notification();
+        ) else {
+            panic!("verified builder must return a message");
+        };
+        assert_eq!(
+            represented_event.author_kind,
+            SourceAuthorKind::VerifiedWebhook
+        );
+        assert_eq!(represented_event.user_id, UserId::new(600));
+        let represented = NotificationEvent::Message(represented_event).into_notification();
 
         let direct_meta = direct["params"]["meta"].as_object().expect("direct meta");
         let represented_meta = represented["params"]["meta"]

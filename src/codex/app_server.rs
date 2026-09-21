@@ -1,8 +1,8 @@
 use super::{CodexEventQueue, CodexQueueError, CodexThreadId, LeasedEvent};
 use camino::Utf8PathBuf;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt, future::BoxFuture};
 use serde_json::{Value, json};
-use std::{env, io, time::Duration};
+use std::{env, fmt::Debug, io, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::net::UnixStream;
 use tokio_tungstenite::{
@@ -21,12 +21,45 @@ const EVENT_WAIT: Duration = Duration::from_secs(45);
 const EVENT_LEASE: Duration = Duration::from_secs(5 * 60);
 const MAX_WEBSOCKET_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
 
+/// Result known at the app-server request/response boundary. Accepted means
+/// Codex acknowledged the turn/start request, not that the recipient saw it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttentionDeliveryReceipt {
+    Accepted,
+    Uncertain,
+}
+
+/// Final dispatch denial: temporary evidence loss defers work; invalid evidence rejects it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AttentionGuardFailure {
+    #[error("attention evidence is temporarily unavailable")]
+    Unavailable,
+    #[error("attention evidence was invalidated")]
+    Invalidated,
+}
+
+/// Final lifecycle fence and durable outcome observer for managed work.
+pub trait AttentionDeliveryGuard: Send + Sync + Debug {
+    /// Checks current authority immediately before dispatch; must not wait for blocking I/O.
+    fn check(&self, notification: &Value) -> Result<(), AttentionGuardFailure>;
+    /// Durably records a transport-boundary outcome before queue acknowledgement continues.
+    ///
+    /// The owned guard lets implementations move blocking persistence into an
+    /// awaited worker without borrowing the delivery task.
+    fn receipt<'a>(
+        self: Arc<Self>,
+        notification: &'a Value,
+        outcome: AttentionDeliveryReceipt,
+    ) -> BoxFuture<'a, Result<(), String>>;
+}
+
 #[derive(Debug, Clone)]
 pub struct CodexDeliveryConfig {
     pub socket_path: Utf8PathBuf,
     pub request_timeout: Duration,
     pub preamble_mode: crate::config::PreambleMode,
     pub preamble_template: crate::config::PreambleTemplate,
+    pub attention_guard: Option<Arc<dyn AttentionDeliveryGuard>>,
 }
 
 impl CodexDeliveryConfig {
@@ -45,6 +78,7 @@ impl CodexDeliveryConfig {
             request_timeout: REQUEST_TIMEOUT,
             preamble_mode: defaults.preamble_mode,
             preamble_template: defaults.preamble_template,
+            attention_guard: None,
         })
     }
 }
@@ -144,6 +178,18 @@ impl From<AppServerRequestError> for CodexDeliveryError {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DeliveryOutcome {
+    Dispatched,
+    DeferredAttention,
+    RejectedAttention { reason: String },
+}
+
+struct PendingAttentionReceipt {
+    guard: Arc<dyn AttentionDeliveryGuard>,
+    outcome: AttentionDeliveryReceipt,
+}
+
 struct AppServerClient {
     stream: WebSocketStream<UnixStream>,
     next_request_id: u64,
@@ -218,11 +264,24 @@ impl AppServerClient {
         }
     }
 
+    #[cfg(test)]
     async fn deliver(
         &mut self,
         event: &LeasedEvent,
         preamble: Option<&str>,
-    ) -> Result<(), CodexDeliveryError> {
+    ) -> Result<DeliveryOutcome, CodexDeliveryError> {
+        let mut receipt = None;
+        let outcome = self.deliver_transport(event, preamble, &mut receipt).await;
+        persist_attention_receipt(receipt, event).await;
+        outcome
+    }
+
+    async fn deliver_transport(
+        &mut self,
+        event: &LeasedEvent,
+        preamble: Option<&str>,
+        pending_receipt: &mut Option<PendingAttentionReceipt>,
+    ) -> Result<DeliveryOutcome, CodexDeliveryError> {
         let result = self
             .request(
                 "thread/read",
@@ -233,19 +292,67 @@ impl AppServerClient {
             )
             .await?;
         let thread = result.get("thread").cloned().unwrap_or(Value::Null);
+        let status = thread.pointer("/status/type").and_then(Value::as_str);
+        if status == Some("active") && event.attention.is_some() {
+            // Attention-managed ambient work never steers an active turn. The
+            // worker releases its lease so ordinary/direct work can pass it.
+            return Ok(DeliveryOutcome::DeferredAttention);
+        }
+
         let input = event_input(event, preamble);
-        let client_message_id = format!("dione-{}", event.event_id);
-        match thread.pointer("/status/type").and_then(Value::as_str) {
+        let client_message_id = event.attention.as_ref().map_or_else(
+            || format!("dione-{}", event.event_id),
+            |attention| format!("dione-attention-{}", attention.record_id),
+        );
+        match status {
             Some("idle") => {
-                self.request(
-                    "turn/start",
-                    json!({
-                        "threadId": self.thread_id,
-                        "clientUserMessageId": client_message_id,
-                        "input": input
-                    }),
-                )
-                .await?;
+                let guard = if event.attention.is_some() {
+                    let Some(guard) = self.config.attention_guard.as_ref() else {
+                        return Ok(DeliveryOutcome::DeferredAttention);
+                    };
+                    // This is deliberately after thread/read and immediately
+                    // before the dispatch request: asynchronous work cannot
+                    // turn a stale admission into an effect.
+                    match guard.check(&event.event) {
+                        Ok(()) => {}
+                        Err(AttentionGuardFailure::Unavailable) => {
+                            return Ok(DeliveryOutcome::DeferredAttention);
+                        }
+                        Err(error @ AttentionGuardFailure::Invalidated) => {
+                            return Ok(DeliveryOutcome::RejectedAttention {
+                                reason: error.to_string(),
+                            });
+                        }
+                    }
+                    Some(Arc::clone(guard))
+                } else {
+                    None
+                };
+                let dispatch = self
+                    .request(
+                        "turn/start",
+                        json!({
+                            "threadId": self.thread_id,
+                            "clientUserMessageId": client_message_id,
+                            "input": input
+                        }),
+                    )
+                    .await;
+                if let Some(guard) = guard {
+                    let outcome = match &dispatch {
+                        Ok(_) => Some(AttentionDeliveryReceipt::Accepted),
+                        Err(AppServerRequestError::Delivery(_)) => {
+                            Some(AttentionDeliveryReceipt::Uncertain)
+                        }
+                        // A JSON-RPC error response is a definitive negative
+                        // acknowledgement, not an ambiguous transport loss.
+                        Err(AppServerRequestError::Rejected { .. }) => None,
+                    };
+                    if let Some(outcome) = outcome {
+                        *pending_receipt = Some(PendingAttentionReceipt { guard, outcome });
+                    }
+                }
+                dispatch?;
             }
             Some("active") => {
                 let turns = self
@@ -280,7 +387,7 @@ impl AppServerClient {
                 });
             }
         }
-        Ok(())
+        Ok(DeliveryOutcome::Dispatched)
     }
 
     async fn request(
@@ -385,6 +492,23 @@ impl AppServerClient {
     }
 }
 
+async fn persist_attention_receipt(receipt: Option<PendingAttentionReceipt>, event: &LeasedEvent) {
+    let Some(PendingAttentionReceipt { guard, outcome }) = receipt else {
+        return;
+    };
+    if let Err(error) = guard.receipt(&event.event, outcome).await {
+        // The receipt sink is metadata, not the transport. In particular, a
+        // confirmed accepted turn must not be retried solely because this
+        // durable update failed.
+        tracing::error!(
+            event_id = %event.event_id,
+            ?outcome,
+            error,
+            "failed to persist attention delivery receipt"
+        );
+    }
+}
+
 fn websocket_config() -> WebSocketConfig {
     WebSocketConfig {
         // Leave room for large bounded protocol responses above Tungstenite's
@@ -457,6 +581,7 @@ async fn run_delivery_worker_with_lease(
     let consumer_id = queue.register_live_consumer().await?;
     let mut client = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
+    let mut attention_retry_delay = INITIAL_RETRY_DELAY;
     // Track first-mode preamble state outside the disposable WebSocket
     // client so it survives reconnects within the same thread binding.
     // Reset when the thread binding changes.
@@ -484,6 +609,7 @@ async fn run_delivery_worker_with_lease(
                 }
                 client = None;
                 preamble_sent = false;
+                attention_retry_delay = INITIAL_RETRY_DELAY;
                 continue;
             },
             event = queue.next_live_event(&consumer_id, &thread_id, EVENT_WAIT, event_lease) => event?,
@@ -517,6 +643,7 @@ async fn run_delivery_worker_with_lease(
                             return Ok(());
                         }
                         preamble_sent = false;
+                        attention_retry_delay = INITIAL_RETRY_DELAY;
                         break;
                     },
                     connection = AppServerClient::connect(config.clone(), thread_id.clone()) => connection,
@@ -540,6 +667,7 @@ async fn run_delivery_worker_with_lease(
                                 client = None;
                                 preamble_sent = false;
                                 retry_delay = INITIAL_RETRY_DELAY;
+                                attention_retry_delay = INITIAL_RETRY_DELAY;
                                 break;
                             }
                             RetryWait::Stopped => return Ok(()),
@@ -553,6 +681,7 @@ async fn run_delivery_worker_with_lease(
                 continue;
             };
             let preamble = active_client.resolve_preamble(preamble_sent);
+            let mut receipt = None;
             let delivery = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Ok(()),
@@ -562,19 +691,79 @@ async fn run_delivery_worker_with_lease(
                     }
                     client = None;
                     preamble_sent = false;
+                    attention_retry_delay = INITIAL_RETRY_DELAY;
                     break;
                 },
-                delivery = active_client.deliver(&event, preamble.as_deref()) => delivery,
+                delivery = active_client.deliver_transport(
+                    &event,
+                    preamble.as_deref(),
+                    &mut receipt,
+                ) => delivery,
             };
+            // Once transport has produced a receipt, complete its durable write
+            // before observing cancellation, rebinding, retrying, or acknowledging.
+            persist_attention_receipt(receipt, &event).await;
             match delivery {
-                Ok(()) => {
-                    // Mark the preamble as consumed only after a confirmed
-                    // delivery so a failed first attempt retries with it.
+                Ok(DeliveryOutcome::Dispatched) => {
+                    // A successful request is only an app-server acceptance,
+                    // not proof that the recipient observed the notification.
                     if preamble.is_some() {
                         preamble_sent = true;
                     }
                     acknowledge_with_retry(&queue, &consumer_id, &event, &cancel).await?;
                     retry_delay = INITIAL_RETRY_DELAY;
+                    if event.attention.is_some() {
+                        attention_retry_delay = INITIAL_RETRY_DELAY;
+                    }
+                    break;
+                }
+                Ok(DeliveryOutcome::DeferredAttention) => {
+                    let Some(attention) = event.attention.as_ref() else {
+                        return Err(CodexQueueError::NotAttentionManaged.into());
+                    };
+                    match queue
+                        .defer_attention(&consumer_id, &event.delivery_token, attention_retry_delay)
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(CodexQueueError::UnknownDeliveryToken) => {
+                            tracing::debug!(
+                                event_id = %event.event_id,
+                                "attention-managed Codex event was invalidated while being deferred"
+                            );
+                            retry_delay = INITIAL_RETRY_DELAY;
+                            attention_retry_delay = INITIAL_RETRY_DELAY;
+                            break;
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                    tracing::debug!(
+                        event_id = %event.event_id,
+                        scheduling = ?attention.delivery,
+                        retry_after_ms = attention_retry_delay.as_millis(),
+                        "deferred attention-managed Codex event while its thread is active"
+                    );
+                    attention_retry_delay = (attention_retry_delay * 2).min(MAX_RETRY_DELAY);
+                    retry_delay = INITIAL_RETRY_DELAY;
+                    break;
+                }
+                Ok(DeliveryOutcome::RejectedAttention { reason }) => {
+                    let Some(attention) = event.attention.as_ref() else {
+                        return Err(CodexQueueError::NotAttentionManaged.into());
+                    };
+                    let invalidated = queue
+                        .invalidate_attention(None, Some(&attention.record_id))
+                        .await?;
+                    tracing::warn!(
+                        event_id = %event.event_id,
+                        record_id = %attention.record_id,
+                        removed = invalidated.removed,
+                        invalidated_leases = invalidated.invalidated_leases,
+                        reason,
+                        "rejected stale attention-managed Codex event before dispatch"
+                    );
+                    retry_delay = INITIAL_RETRY_DELAY;
+                    attention_retry_delay = INITIAL_RETRY_DELAY;
                     break;
                 }
                 Err(error) => {
@@ -587,6 +776,7 @@ async fn run_delivery_worker_with_lease(
                         RetryWait::BindingChanged => {
                             preamble_sent = false;
                             retry_delay = INITIAL_RETRY_DELAY;
+                            attention_retry_delay = INITIAL_RETRY_DELAY;
                             break;
                         }
                         RetryWait::Stopped => return Ok(()),
@@ -669,10 +859,10 @@ async fn wait_to_retry_or_rebind(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codex::{ConsumerId, DeliveryToken};
+    use crate::codex::{AttentionDelivery, AttentionScheduling, ConsumerId, DeliveryToken};
     use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     use tempfile::TempDir;
     use tokio::{net::UnixListener, sync::mpsc};
@@ -685,7 +875,71 @@ mod tests {
             request_timeout: timeout,
             preamble_mode: defaults.preamble_mode,
             preamble_template: defaults.preamble_template,
+            attention_guard: None,
         }
+    }
+
+    #[derive(Debug)]
+    struct TestGuard {
+        calls: Arc<AtomicUsize>,
+        rejection: Option<AttentionGuardFailure>,
+        receipts: Arc<StdMutex<Vec<AttentionDeliveryReceipt>>>,
+        receipt_rejection: Option<&'static str>,
+    }
+
+    impl AttentionDeliveryGuard for TestGuard {
+        fn check(&self, _notification: &Value) -> Result<(), AttentionGuardFailure> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            match self.rejection {
+                Some(reason) => Err(reason),
+                None => Ok(()),
+            }
+        }
+
+        fn receipt<'a>(
+            self: Arc<Self>,
+            _notification: &'a Value,
+            outcome: AttentionDeliveryReceipt,
+        ) -> BoxFuture<'a, Result<(), String>> {
+            Box::pin(async move {
+                self.receipts.lock().unwrap().push(outcome);
+                match self.receipt_rejection {
+                    Some(reason) => Err(reason.to_owned()),
+                    None => Ok(()),
+                }
+            })
+        }
+    }
+
+    fn managed_test_event(delivery: AttentionDelivery, record_id: &str) -> LeasedEvent {
+        let mut event = test_event();
+        let delivery_marker = match delivery {
+            AttentionDelivery::Prompt => "prompt",
+            AttentionDelivery::NextTurn => "next_turn",
+        };
+        event.event["params"]["meta"] = json!({
+            "attention_delivery": delivery_marker,
+            "attention_record": record_id,
+        });
+        event.attention = Some(AttentionScheduling {
+            delivery,
+            record_id: record_id.into(),
+        });
+        event
+    }
+
+    fn managed_notification(message_id: &str, record_id: &str) -> Value {
+        json!({
+            "method": "notifications/claude/channel",
+            "params": {
+                "content": format!("managed {record_id}"),
+                "meta": {
+                    "message_id": message_id,
+                    "attention_delivery": "next_turn",
+                    "attention_record": record_id,
+                }
+            }
+        })
     }
 
     fn rejected_error(
@@ -957,6 +1211,7 @@ mod tests {
             lease_expires_at: chrono::Utc::now(),
             consumer_id: ConsumerId::parse("consumer-7").unwrap(),
             event: json!({ "params": { "content": "ping" } }),
+            attention: None,
         };
 
         let mut client =
@@ -1057,6 +1312,411 @@ mod tests {
             })
         );
         assert_eq!(received[4]["params"]["expectedTurnId"], "turn-live");
+    }
+
+    #[tokio::test]
+    async fn active_attention_delivery_defers_without_turn_mutation() {
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            let mut methods = Vec::new();
+            while let Some(message) = websocket.next().await {
+                let text = match message.unwrap() {
+                    Message::Text(text) => text,
+                    Message::Close(_) => break,
+                    _ => continue,
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                methods.push(request["method"].as_str().unwrap().to_owned());
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                let result = if request["method"] == "thread/read" {
+                    json!({ "thread": { "status": { "type": "active" } } })
+                } else {
+                    json!({})
+                };
+                websocket
+                    .send(Message::Text(
+                        json!({ "id": id, "result": result }).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+            methods
+        });
+        let config = test_delivery_config(socket_path, Duration::from_secs(1));
+        let mut client = AppServerClient::connect(
+            config,
+            CodexThreadId::parse("thread-managed-active").unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let outcome = client
+            .deliver(
+                &managed_test_event(AttentionDelivery::Prompt, "record-active"),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome, DeliveryOutcome::DeferredAttention);
+        client.stream.close(None).await.unwrap();
+        drop(client);
+        assert_eq!(
+            server.await.unwrap(),
+            ["initialize", "initialized", "thread/read"]
+        );
+    }
+
+    #[tokio::test]
+    async fn idle_attention_delivery_checks_guard_then_starts_turn() {
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            let mut received = Vec::new();
+            while let Some(message) = websocket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                received.push(request.clone());
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                let result = if request["method"] == "thread/read" {
+                    json!({ "thread": { "status": { "type": "idle" } } })
+                } else {
+                    json!({})
+                };
+                websocket
+                    .send(Message::Text(
+                        json!({ "id": id, "result": result }).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                if request["method"] == "turn/start" {
+                    return received;
+                }
+            }
+            received
+        });
+        let calls = Arc::new(AtomicUsize::new(0));
+        let receipts = Arc::new(StdMutex::new(Vec::new()));
+        let mut config = test_delivery_config(socket_path, Duration::from_secs(1));
+        config.attention_guard = Some(Arc::new(TestGuard {
+            calls: calls.clone(),
+            rejection: None,
+            receipts: receipts.clone(),
+            receipt_rejection: Some("metadata store unavailable"),
+        }));
+        let mut client =
+            AppServerClient::connect(config, CodexThreadId::parse("thread-managed-idle").unwrap())
+                .await
+                .unwrap();
+
+        let outcome = client
+            .deliver(
+                &managed_test_event(AttentionDelivery::NextTurn, "record-idle"),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome, DeliveryOutcome::Dispatched);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *receipts.lock().unwrap(),
+            [AttentionDeliveryReceipt::Accepted]
+        );
+        let received = server.await.unwrap();
+        assert_eq!(received[3]["method"], "turn/start");
+    }
+
+    #[tokio::test]
+    async fn managed_turn_identity_survives_reconstructed_queue_event_ids() {
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            let mut client_message_ids = Vec::new();
+            while let Some(message) = websocket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                let method = request["method"].as_str().unwrap();
+                let result = if method == "thread/read" {
+                    json!({ "thread": { "status": { "type": "idle" } } })
+                } else {
+                    json!({})
+                };
+                if method == "turn/start" {
+                    client_message_ids.push(
+                        request["params"]["clientUserMessageId"]
+                            .as_str()
+                            .unwrap()
+                            .to_owned(),
+                    );
+                }
+                websocket
+                    .send(Message::Text(
+                        json!({ "id": id, "result": result }).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                if client_message_ids.len() == 3 {
+                    return client_message_ids;
+                }
+            }
+            client_message_ids
+        });
+        let mut config = test_delivery_config(socket_path, Duration::from_secs(1));
+        config.attention_guard = Some(Arc::new(TestGuard {
+            calls: Arc::new(AtomicUsize::new(0)),
+            rejection: None,
+            receipts: Arc::new(StdMutex::new(Vec::new())),
+            receipt_rejection: None,
+        }));
+        let mut client = AppServerClient::connect(
+            config,
+            CodexThreadId::parse("thread-managed-identity").unwrap(),
+        )
+        .await
+        .unwrap();
+        let mut first = managed_test_event(AttentionDelivery::NextTurn, "stable-record");
+        first.event_id = crate::codex::EventId::new(4);
+        let mut reconstructed = managed_test_event(AttentionDelivery::NextTurn, "stable-record");
+        reconstructed.event_id = crate::codex::EventId::new(40);
+        let mut distinct = managed_test_event(AttentionDelivery::NextTurn, "distinct-record");
+        distinct.event_id = crate::codex::EventId::new(41);
+
+        for event in [&first, &reconstructed, &distinct] {
+            assert_eq!(
+                client.deliver(event, None).await.unwrap(),
+                DeliveryOutcome::Dispatched
+            );
+        }
+
+        let client_message_ids = server.await.unwrap();
+        assert_eq!(client_message_ids.len(), 3);
+        assert_eq!(client_message_ids[0], client_message_ids[1]);
+        assert_ne!(client_message_ids[1], client_message_ids[2]);
+    }
+
+    #[tokio::test]
+    async fn lost_turn_start_response_reports_uncertain_receipt() {
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            while let Some(message) = websocket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                if request["method"] == "turn/start" {
+                    // The request reached Codex, but its response is lost.
+                    return;
+                }
+                let result = if request["method"] == "thread/read" {
+                    json!({ "thread": { "status": { "type": "idle" } } })
+                } else {
+                    json!({})
+                };
+                websocket
+                    .send(Message::Text(
+                        json!({ "id": id, "result": result }).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        });
+        let calls = Arc::new(AtomicUsize::new(0));
+        let receipts = Arc::new(StdMutex::new(Vec::new()));
+        let mut config = test_delivery_config(socket_path, Duration::from_secs(1));
+        config.attention_guard = Some(Arc::new(TestGuard {
+            calls: calls.clone(),
+            rejection: None,
+            receipts: receipts.clone(),
+            receipt_rejection: None,
+        }));
+        let mut client = AppServerClient::connect(
+            config,
+            CodexThreadId::parse("thread-managed-uncertain").unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            client
+                .deliver(
+                    &managed_test_event(AttentionDelivery::Prompt, "record-uncertain"),
+                    None,
+                )
+                .await
+                .is_err()
+        );
+        server.await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *receipts.lock().unwrap(),
+            [AttentionDeliveryReceipt::Uncertain]
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_turn_start_rejection_is_not_an_uncertain_receipt() {
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            while let Some(message) = websocket.next().await {
+                let Message::Text(text) = message.unwrap() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                if request["method"] == "turn/start" {
+                    websocket
+                        .send(Message::Text(
+                            json!({
+                                "id": id,
+                                "error": { "code": -32000, "message": "turn refused" }
+                            })
+                            .to_string(),
+                        ))
+                        .await
+                        .unwrap();
+                    return;
+                }
+                let result = if request["method"] == "thread/read" {
+                    json!({ "thread": { "status": { "type": "idle" } } })
+                } else {
+                    json!({})
+                };
+                websocket
+                    .send(Message::Text(
+                        json!({ "id": id, "result": result }).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        });
+        let calls = Arc::new(AtomicUsize::new(0));
+        let receipts = Arc::new(StdMutex::new(Vec::new()));
+        let mut config = test_delivery_config(socket_path, Duration::from_secs(1));
+        config.attention_guard = Some(Arc::new(TestGuard {
+            calls: calls.clone(),
+            rejection: None,
+            receipts: receipts.clone(),
+            receipt_rejection: None,
+        }));
+        let mut client = AppServerClient::connect(
+            config,
+            CodexThreadId::parse("thread-managed-rejected").unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let error = client
+            .deliver(
+                &managed_test_event(AttentionDelivery::Prompt, "record-rejected"),
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, CodexDeliveryError::Rejected { .. }));
+        server.await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(receipts.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn stale_attention_guard_rejects_before_idle_dispatch() {
+        let dir = TempDir::new().unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            let mut methods = Vec::new();
+            while let Some(message) = websocket.next().await {
+                let text = match message.unwrap() {
+                    Message::Text(text) => text,
+                    Message::Close(_) => break,
+                    _ => continue,
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                methods.push(request["method"].as_str().unwrap().to_owned());
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                let result = if request["method"] == "thread/read" {
+                    json!({ "thread": { "status": { "type": "idle" } } })
+                } else {
+                    json!({})
+                };
+                websocket
+                    .send(Message::Text(
+                        json!({ "id": id, "result": result }).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+            methods
+        });
+        let calls = Arc::new(AtomicUsize::new(0));
+        let receipts = Arc::new(StdMutex::new(Vec::new()));
+        let mut config = test_delivery_config(socket_path, Duration::from_secs(1));
+        config.attention_guard = Some(Arc::new(TestGuard {
+            calls: calls.clone(),
+            rejection: Some(AttentionGuardFailure::Invalidated),
+            receipts: receipts.clone(),
+            receipt_rejection: None,
+        }));
+        let mut client = AppServerClient::connect(
+            config,
+            CodexThreadId::parse("thread-managed-stale").unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let outcome = client
+            .deliver(
+                &managed_test_event(AttentionDelivery::Prompt, "record-stale"),
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, DeliveryOutcome::RejectedAttention { .. }));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(receipts.lock().unwrap().is_empty());
+        client.stream.close(None).await.unwrap();
+        drop(client);
+        assert_eq!(
+            server.await.unwrap(),
+            ["initialize", "initialized", "thread/read"]
+        );
     }
 
     #[tokio::test]
@@ -1409,6 +2069,125 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deferred_attention_allows_direct_event_to_bypass_active_turn() {
+        let dir = TempDir::new().unwrap();
+        let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let (steered_tx, mut steered_rx) = mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            while let Some(message) = websocket.next().await {
+                let Ok(Message::Text(text)) = message else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                let method = request["method"].as_str().unwrap();
+                let result = match method {
+                    "thread/read" => {
+                        json!({ "thread": { "status": { "type": "active" } } })
+                    }
+                    "thread/turns/list" => json!({
+                        "data": [{ "id": "turn-live", "status": "inProgress" }]
+                    }),
+                    "turn/steer" => {
+                        steered_tx
+                            .send(
+                                request["params"]["clientUserMessageId"]
+                                    .as_str()
+                                    .unwrap()
+                                    .to_owned(),
+                            )
+                            .unwrap();
+                        json!({})
+                    }
+                    _ => json!({}),
+                };
+                websocket
+                    .send(Message::Text(
+                        json!({ "id": id, "result": result }).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        });
+
+        let queue = CodexEventQueue::load(&state_path).unwrap();
+        let thread_id = CodexThreadId::parse("thread-direct-bypass").unwrap();
+        queue
+            .bind_live_thread(Some(thread_id.clone()))
+            .await
+            .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let receipts = Arc::new(StdMutex::new(Vec::new()));
+        let mut config = test_delivery_config(socket_path, Duration::from_secs(1));
+        config.attention_guard = Some(Arc::new(TestGuard {
+            calls: calls.clone(),
+            rejection: None,
+            receipts: receipts.clone(),
+            receipt_rejection: None,
+        }));
+        let cancel = CancellationToken::new();
+        let (_binding_tx, binding_rx) = tokio::sync::watch::channel(Some(thread_id));
+        let worker = tokio::spawn(run_delivery_worker_with_lease(
+            queue.clone(),
+            config,
+            binding_rx,
+            cancel.clone(),
+            Duration::from_secs(30),
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while queue.status().await.primary_consumer.is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        queue
+            .enqueue(managed_notification("201", "record-held"))
+            .await
+            .unwrap();
+        queue
+            .enqueue(json!({
+                "method": "notifications/claude/channel",
+                "params": {
+                    "content": "direct event",
+                    "meta": { "message_id": "202" }
+                }
+            }))
+            .await
+            .unwrap();
+
+        let steered = tokio::time::timeout(Duration::from_secs(2), steered_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(steered, "dione-1");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let status = queue.status().await;
+                if status.queued == 1 && status.leased == 0 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(receipts.lock().unwrap().is_empty());
+
+        cancel.cancel();
+        worker.await.unwrap().unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn reset_peer_reacquires_expired_lease_and_retries_before_later_events() {
         let dir = TempDir::new().unwrap();
         let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
@@ -1702,6 +2481,7 @@ mod tests {
             lease_expires_at: chrono::Utc::now(),
             consumer_id: ConsumerId::parse("consumer-test").unwrap(),
             event: json!({ "params": { "content": "test event" } }),
+            attention: None,
         }
     }
 

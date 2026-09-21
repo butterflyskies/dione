@@ -38,7 +38,7 @@ fn load_config_from_disk(state_dir: &Utf8PathBuf) -> LoadedConfig {
     LoadedConfig::try_from_raw(raw).expect("test configuration generation")
 }
 
-fn make_server(state_dir: &Utf8PathBuf) -> DioneServer {
+async fn make_server(state_dir: &Utf8PathBuf) -> DioneServer {
     let (notification_tx, _notification_rx) = mpsc::channel(1);
     DioneServer::new(
         new_state(),
@@ -51,6 +51,7 @@ fn make_server(state_dir: &Utf8PathBuf) -> DioneServer {
         Arc::new(ConsentGate::new(state_dir)),
         Arc::new(dione::ingress_ledger::IngressLedger::new()),
     )
+    .await
 }
 
 fn config_projection(config: &LoadedConfig) -> Value {
@@ -75,7 +76,12 @@ async fn call_config_tool(state_dir: &Utf8PathBuf, name: &str, arguments: Value)
     // ArcSwap is process-global. Keep the production dispatch and its
     // immediate disk/live oracle indivisible across parallel test cases.
     let _config_dispatch = CONFIG_DISPATCH_LOCK.lock().await;
-    let server = make_server(state_dir);
+    // Some cases deliberately install invalid sidecars; their production
+    // dispatch error is asserted below, not rejected by fixture setup.
+    let _ = dione::config::ConfigRuntime::new(state_dir.clone())
+        .reload()
+        .await;
+    let server = make_server(state_dir).await;
     let response = test_helpers::dispatch_request(
         &server,
         json!({
