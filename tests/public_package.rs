@@ -819,9 +819,9 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
     assert!(release_tag.contains("needs: [format, lint, test, package, msrv, audit]"));
     assert!(release_tag.contains("fetch-depth: 0"));
     assert!(release_tag.contains("ref: ${{ forgejo.sha }}"));
-    assert_eq!(release_tag.matches("persist-credentials: true").count(), 1);
-    assert_eq!(workflow.matches("persist-credentials: true").count(), 1);
-    assert_eq!(workflow.matches("persist-credentials: false").count(), 6);
+    assert_eq!(workflow.matches("persist-credentials: true").count(), 0);
+    assert_eq!(workflow.matches("persist-credentials: false").count(), 7);
+    assert!(release_tag.contains("persist-credentials: false"));
     assert!(!release_tag.contains("token:"));
     assert!(!release_tag.contains("contents: write"));
     assert!(!workflow.contains("cargo publish"));
@@ -853,9 +853,12 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
     let pushes = tagger
         .lines()
         .map(str::trim)
-        .filter(|line| line.starts_with("git push"))
+        .filter(|line| line.starts_with("release_git push"))
         .collect::<Vec<_>>();
-    assert_eq!(pushes, ["git push origin \"refs/tags/${tag}\""]);
+    assert_eq!(
+        pushes,
+        ["release_git push \"$release_remote\" \"refs/tags/${tag}\""]
+    );
     assert!(!tagger.contains("--force"));
     assert!(!tagger.contains("--tags"));
     assert!(!tagger.contains("+refs/"));

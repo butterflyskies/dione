@@ -123,6 +123,9 @@ jobs:
   release-tag:
     name: Annotated release tag
     if: ${{ forgejo.event_name == 'push' && forgejo.ref == 'refs/heads/main' }}
+    # The release account's integration is restricted to this workflow,
+    # main, and push events. Other jobs cannot request its JWT.
+    enable-openid-connect: true
     needs: [format, lint, test, package, msrv, audit]
     runs-on: docker
     timeout-minutes: 15
@@ -134,11 +137,12 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ forgejo.sha }}
-          # This trusted-main job retains Forgejo's task credential for its
-          # sole write: a non-force annotated tag push.
-          persist-credentials: true
+          persist-credentials: false
       - name: Tag a qualified version and changelog bump
         env:
           EXPECTED_COMMIT: ${{ forgejo.sha }}
           PUSH_BEFORE: ${{ forgejo.event.before }}
+          RELEASE_AUTH_MODE: oidc
+          RELEASE_AUDIENCE: ${{ vars.DIONE_RELEASE_AUDIENCE }}
+          RELEASE_REMOTE_URL: ${{ forgejo.server_url }}/${{ forgejo.repository }}.git
         run: sh scripts/tag-qualified-release.sh

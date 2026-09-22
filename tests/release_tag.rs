@@ -175,8 +175,15 @@ mod unix {
             "\n    name: Annotated release tag\n    if: ${{ forgejo.event_name == 'push' && forgejo.ref == 'refs/heads/main' }}"
         ));
         assert!(release_tag.contains("needs: [format, lint, test, package, msrv, audit]"));
+        assert!(release_tag.contains("enable-openid-connect: true"));
+        assert_eq!(workflow.matches("enable-openid-connect: true").count(), 1);
         assert!(release_tag.contains("ref: ${{ forgejo.sha }}"));
-        assert!(release_tag.contains("persist-credentials: true"));
+        assert!(release_tag.contains("persist-credentials: false"));
+        assert!(release_tag.contains("RELEASE_AUTH_MODE: oidc"));
+        assert!(release_tag.contains("RELEASE_AUDIENCE: ${{ vars.DIONE_RELEASE_AUDIENCE }}"));
+        assert!(release_tag.contains(
+            "RELEASE_REMOTE_URL: ${{ forgejo.server_url }}/${{ forgejo.repository }}.git"
+        ));
         assert!(release_tag.contains("EXPECTED_COMMIT: ${{ forgejo.sha }}"));
         assert!(release_tag.contains("PUSH_BEFORE: ${{ forgejo.event.before }}"));
         assert!(release_tag.contains("run: sh scripts/tag-qualified-release.sh"));
@@ -195,8 +202,8 @@ mod unix {
             .expect("release tag job must invoke the tagger");
         assert!(toolchain_step < checkout_step);
         assert!(checkout_step < tagger_step);
-        assert_eq!(workflow.matches("persist-credentials: true").count(), 1);
-        assert_eq!(workflow.matches("persist-credentials: false").count(), 6);
+        assert_eq!(workflow.matches("persist-credentials: true").count(), 0);
+        assert_eq!(workflow.matches("persist-credentials: false").count(), 7);
         assert!(!workflow.contains("\n  release-artifact:"));
         assert!(!workflow.contains("upload-artifact"));
         assert!(!Path::new(".github/workflows/tag-release.yml").exists());
@@ -204,6 +211,156 @@ mod unix {
             include_str!("../.github/workflows/release.yml")
                 .contains("gh release create \"$TAG_NAME\" --verify-tag")
         );
+    }
+
+    #[test]
+    fn oidc_mode_fails_closed_without_an_audience_before_tagging() {
+        let fixture = fixture();
+        write_release(&fixture.repo, "0.2.0", "## [0.2.0]");
+        let head = commit(&fixture.repo, "release 0.2.0");
+        let output = Command::new("sh")
+            .arg("scripts/tag-qualified-release.sh")
+            .current_dir(&fixture.repo)
+            .env("EXPECTED_COMMIT", &head)
+            .env("PUSH_BEFORE", &fixture.initial)
+            .env("RELEASE_AUTH_MODE", "oidc")
+            .env_remove("RELEASE_AUDIENCE")
+            .output()
+            .expect("release tagger must execute");
+
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("release audience"));
+        assert!(!remote_ref(&fixture, "refs/tags/v0.2.0").status.success());
+    }
+
+    #[test]
+    fn oidc_mode_uses_url_scoped_bearer_for_tag_transport() {
+        let fixture = fixture();
+        write_release(&fixture.repo, "0.2.0", "## [0.2.0]");
+        let head = commit(&fixture.repo, "release 0.2.0");
+        let original_path = std::env::var_os("PATH").expect("PATH must be set");
+        let real_git = std::env::split_paths(&original_path)
+            .map(|directory| directory.join("git"))
+            .find(|candidate| candidate.is_file())
+            .expect("Git must be available on PATH");
+        let bin = fixture._temp.path().join("bin");
+        fs::create_dir(&bin).expect("test command directory must be created");
+        let git_wrapper = bin.join("git");
+        fs::write(
+            &git_wrapper,
+            "#!/bin/sh\nif [ \"$1\" = fetch ] || [ \"$1\" = push ]; then\n  printf '%s\\n' \"$GIT_CONFIG_KEY_0\" \"$GIT_CONFIG_VALUE_0\" \"$GIT_CONFIG_VALUE_1\" >> \"$OIDC_TEST_LOG\"\n  exec \"$OIDC_REAL_GIT\" \"$1\" \"$OIDC_TEST_ORIGIN\" \"$3\"\nfi\nexec \"$OIDC_REAL_GIT\" \"$@\"\n",
+        )
+        .expect("test git wrapper must be written");
+        fs::set_permissions(&git_wrapper, fs::Permissions::from_mode(0o755))
+            .expect("test git wrapper must be executable");
+        let curl_wrapper = bin.join("curl");
+        fs::write(
+            &curl_wrapper,
+            "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{\"value\":\"test-jwt\"}'\n",
+        )
+        .expect("test curl wrapper must be written");
+        fs::set_permissions(&curl_wrapper, fs::Permissions::from_mode(0o755))
+            .expect("test curl wrapper must be executable");
+        let log = fixture._temp.path().join("git-auth.log");
+        let output = Command::new("sh")
+            .arg("scripts/tag-qualified-release.sh")
+            .current_dir(&fixture.repo)
+            .env(
+                "PATH",
+                format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+            )
+            .env("EXPECTED_COMMIT", &head)
+            .env("PUSH_BEFORE", &fixture.initial)
+            .env("RELEASE_AUTH_MODE", "oidc")
+            .env("RELEASE_AUDIENCE", "u:1:test")
+            .env(
+                "RELEASE_REMOTE_URL",
+                "https://forgejo.invalid/lacuna/dione.git",
+            )
+            .env(
+                "ACTIONS_ID_TOKEN_REQUEST_URL",
+                "https://forgejo.invalid/oidc?job=1",
+            )
+            .env("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "test-request-token")
+            .env("OIDC_TEST_LOG", &log)
+            .env("OIDC_TEST_ORIGIN", &fixture.origin)
+            .env("OIDC_REAL_GIT", real_git)
+            .output()
+            .expect("OIDC release tagger must execute");
+        assert_success(output, "OIDC release tagger");
+        assert!(remote_ref(&fixture, "refs/tags/v0.2.0").status.success());
+        let auth = fs::read_to_string(&log).expect("Git authentication log must exist");
+        assert_eq!(
+            auth,
+            "http.https://forgejo.invalid/lacuna/dione.git.extraheader\nAuthorization: Bearer test-jwt\nfalse\nhttp.https://forgejo.invalid/lacuna/dione.git.extraheader\nAuthorization: Bearer test-jwt\nfalse\n"
+        );
+    }
+
+    #[test]
+    fn oidc_mode_rejects_invalid_jwt_responses_before_remote_access() {
+        let fixture = fixture();
+        write_release(&fixture.repo, "0.2.0", "## [0.2.0]");
+        let head = commit(&fixture.repo, "release 0.2.0");
+        let original_path = std::env::var_os("PATH").expect("PATH must be set");
+        let real_git = std::env::split_paths(&original_path)
+            .map(|directory| directory.join("git"))
+            .find(|candidate| candidate.is_file())
+            .expect("Git must be available on PATH");
+        let bin = fixture._temp.path().join("bin");
+        fs::create_dir(&bin).expect("test command directory must be created");
+        let git_wrapper = bin.join("git");
+        fs::write(
+            &git_wrapper,
+            "#!/bin/sh\nif [ \"$1\" = fetch ] || [ \"$1\" = push ]; then\n  printf '%s\\n' \"$1\" >> \"$OIDC_TEST_LOG\"\nfi\nexec \"$OIDC_REAL_GIT\" \"$@\"\n",
+        )
+        .expect("test git wrapper must be written");
+        fs::set_permissions(&git_wrapper, fs::Permissions::from_mode(0o755))
+            .expect("test git wrapper must be executable");
+        let curl_wrapper = bin.join("curl");
+        fs::write(
+            &curl_wrapper,
+            "#!/bin/sh\ncat >/dev/null\ncat \"$OIDC_TEST_RESPONSE\"\n",
+        )
+        .expect("test curl wrapper must be written");
+        fs::set_permissions(&curl_wrapper, fs::Permissions::from_mode(0o755))
+            .expect("test curl wrapper must be executable");
+        let response_path = fixture._temp.path().join("response.json");
+        let log = fixture._temp.path().join("git-remote.log");
+
+        for response in ["not-json", "{}", "{\"value\":null}", "{\"value\":\"\"}"] {
+            fs::write(&response_path, response).expect("mock response must be written");
+            let output = Command::new("sh")
+                .arg("scripts/tag-qualified-release.sh")
+                .current_dir(&fixture.repo)
+                .env(
+                    "PATH",
+                    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+                )
+                .env("EXPECTED_COMMIT", &head)
+                .env("PUSH_BEFORE", &fixture.initial)
+                .env("RELEASE_AUTH_MODE", "oidc")
+                .env("RELEASE_AUDIENCE", "u:1:test")
+                .env(
+                    "RELEASE_REMOTE_URL",
+                    "https://forgejo.invalid/lacuna/dione.git",
+                )
+                .env(
+                    "ACTIONS_ID_TOKEN_REQUEST_URL",
+                    "https://forgejo.invalid/oidc?job=1",
+                )
+                .env("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "test-request-token")
+                .env("OIDC_TEST_LOG", &log)
+                .env("OIDC_TEST_RESPONSE", &response_path)
+                .env("OIDC_REAL_GIT", &real_git)
+                .output()
+                .expect("OIDC release tagger must execute");
+            assert!(!output.status.success(), "response {response:?} must fail");
+            assert!(
+                !log.exists(),
+                "response {response:?} must not reach Git remote"
+            );
+            assert!(!remote_ref(&fixture, "refs/tags/v0.2.0").status.success());
+        }
     }
 
     #[test]
@@ -231,6 +388,25 @@ mod unix {
                 .unwrap()
                 .trim(),
             head
+        );
+        let tag_contents = git(
+            &fixture.repo,
+            &[
+                "--git-dir",
+                fixture.origin.to_str().unwrap(),
+                "cat-file",
+                "-p",
+                "refs/tags/v0.2.0",
+            ],
+        );
+        assert_success(tag_contents.clone(), "read pushed annotated tag");
+        assert!(
+            String::from_utf8(tag_contents.stdout)
+                .unwrap()
+                .lines()
+                .any(|line| {
+                    line.starts_with("tagger lacuna release bot <pale.clock3926@butterflysky.dev> ")
+                })
         );
         let tag_object =
             String::from_utf8(remote_ref(&fixture, "refs/tags/v0.2.0").stdout).unwrap();
