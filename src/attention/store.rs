@@ -2061,7 +2061,7 @@ mod tests {
             .unwrap();
         let mut initial = record(1, 0.9);
         initial.created_at_ms = now_ms;
-        initial.expires_at_ms = now_ms + 10_000;
+        initial.expires_at_ms = now_ms + 3_600_000;
         initial.judgment = None;
         initial.policy_digest = None;
         initial.delivery = DeliveryState::Held;
@@ -2096,7 +2096,7 @@ mod tests {
         let mut store = AttentionStore::open(path.clone()).unwrap();
         let mut initial = record(1, 0.9);
         initial.created_at_ms = now_ms;
-        initial.expires_at_ms = now_ms + 10_000;
+        initial.expires_at_ms = now_ms + 3_600_000;
         initial.judgment = None;
         initial.policy_digest = None;
         initial.hypothetical = Admission::Unknown;
@@ -2129,7 +2129,7 @@ mod tests {
             .unwrap();
         let mut initial = record(1, 0.9);
         initial.created_at_ms = now_ms;
-        initial.expires_at_ms = now_ms + 10_000;
+        initial.expires_at_ms = now_ms + 3_600_000;
         initial.judgment = None;
         initial.policy_digest = None;
         initial.delivery = DeliveryState::Held;

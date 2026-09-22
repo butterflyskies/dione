@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.46.2]
+
+### Changed
+- Give store finalization test records a longer fixture lifetime so slow CI
+  runners do not expire them before their one-time finalization checks.
+
 ## [0.46.1]
 
 ### Changed
