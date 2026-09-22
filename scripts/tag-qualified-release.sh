@@ -133,11 +133,37 @@ sys.stdout.write(value)
             return 1
         fi
     }
-    release_jwt="$(printf 'header = "Authorization: bearer %s"\n' \
+    oidc_response="$(umask 077; mktemp "${TMPDIR:-/tmp}/dione-oidc.XXXXXX")"
+    trap 'rm -f "$oidc_response"' EXIT
+    trap 'exit 1' HUP INT TERM
+    if ! oidc_status="$(printf 'header = "Authorization: bearer %s"\n' \
         "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" |
-        curl --fail --silent --show-error --config - \
-        "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${RELEASE_AUDIENCE}" \
-        | parse_release_jwt)"
+        curl --silent --config - --output "$oidc_response" --write-out '%{http_code}' \
+        "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${RELEASE_AUDIENCE}" 2>/dev/null)"; then
+        echo "Forgejo OIDC request failed during transport" >&2
+        exit 1
+    fi
+    if [ "$oidc_status" != 200 ]; then
+        case "$oidc_status" in
+            [0-9][0-9][0-9])
+                # Forgejo's context.Base.Error emits plain text. Classify only
+                # this exact, non-secret response; never print arbitrary bodies.
+                if [ "$oidc_status" = 403 ] &&
+                    [ "$(wc -c < "$oidc_response")" -eq 30 ] &&
+                    grep -qx 'missing scp generate_id_token' "$oidc_response"; then
+                    echo "Forgejo OIDC request returned HTTP 403: missing scp generate_id_token" >&2
+                else
+                    echo "Forgejo OIDC request returned HTTP $oidc_status" >&2
+                fi
+                ;;
+            *) echo "Forgejo OIDC request returned an invalid HTTP status" >&2 ;;
+        esac
+        exit 1
+    fi
+    if ! release_jwt="$(parse_release_jwt < "$oidc_response")"; then
+        echo "Forgejo OIDC request returned an invalid JWT response" >&2
+        exit 1
+    fi
     if [ -z "$release_jwt" ]; then
         echo "Forgejo OIDC request returned no JWT" >&2
         exit 1

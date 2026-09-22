@@ -257,15 +257,18 @@ mod unix {
         let curl_wrapper = bin.join("curl");
         fs::write(
             &curl_wrapper,
-            "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{\"value\":\"test-jwt\"}'\n",
+            "#!/bin/sh\ncat >/dev/null\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --output ]; then\n    shift\n    output=$1\n  fi\n  shift\ndone\nprintf '%s\\n' '{\"value\":\"test-jwt\"}' > \"$output\"\nprintf 200\n",
         )
         .expect("test curl wrapper must be written");
         fs::set_permissions(&curl_wrapper, fs::Permissions::from_mode(0o755))
             .expect("test curl wrapper must be executable");
         let log = fixture._temp.path().join("git-auth.log");
+        let temporary_files = fixture._temp.path().join("response-temp");
+        fs::create_dir(&temporary_files).expect("private response directory must be created");
         let output = Command::new("sh")
             .arg("scripts/tag-qualified-release.sh")
             .current_dir(&fixture.repo)
+            .env("TMPDIR", &temporary_files)
             .env(
                 "PATH",
                 format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
@@ -295,6 +298,11 @@ mod unix {
             auth,
             "http.https://forgejo.invalid/lacuna/dione.git.extraheader\nAuthorization: Bearer test-jwt\nfalse\nhttp.https://forgejo.invalid/lacuna/dione.git.extraheader\nAuthorization: Bearer test-jwt\nfalse\n"
         );
+        assert_eq!(
+            fs::read_dir(&temporary_files).unwrap().count(),
+            0,
+            "private OIDC response must be removed on success"
+        );
     }
 
     #[test]
@@ -320,7 +328,7 @@ mod unix {
         let curl_wrapper = bin.join("curl");
         fs::write(
             &curl_wrapper,
-            "#!/bin/sh\ncat >/dev/null\ncat \"$OIDC_TEST_RESPONSE\"\n",
+            "#!/bin/sh\ncat >/dev/null\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --output ]; then\n    shift\n    output=$1\n  fi\n  shift\ndone\ncat \"$OIDC_TEST_RESPONSE\" > \"$output\"\nprintf 200\n",
         )
         .expect("test curl wrapper must be written");
         fs::set_permissions(&curl_wrapper, fs::Permissions::from_mode(0o755))
@@ -361,6 +369,117 @@ mod unix {
                 "response {response:?} must not reach Git remote"
             );
             assert!(!remote_ref(&fixture, "refs/tags/v0.2.0").status.success());
+        }
+    }
+
+    #[test]
+    fn oidc_http_and_transport_failures_report_safely_before_remote_access() {
+        let fixture = fixture();
+        write_release(&fixture.repo, "0.2.0", "## [0.2.0]");
+        let head = commit(&fixture.repo, "release 0.2.0");
+        let bin = fixture._temp.path().join("bin");
+        fs::create_dir(&bin).expect("test command directory must be created");
+        let real_git = String::from_utf8(run(&fixture.repo, "which", &["git"]).stdout)
+            .unwrap()
+            .trim()
+            .to_owned();
+        let git_wrapper = bin.join("git");
+        fs::write(
+            &git_wrapper,
+            "#!/bin/sh\nif [ \"$1\" = fetch ] || [ \"$1\" = push ]; then\n  printf '%s\\n' \"$1\" >> \"$OIDC_TEST_LOG\"\nfi\nexec \"$OIDC_REAL_GIT\" \"$@\"\n",
+        )
+        .expect("test git wrapper must be written");
+        fs::set_permissions(&git_wrapper, fs::Permissions::from_mode(0o755))
+            .expect("test git wrapper must be executable");
+        let curl_wrapper = bin.join("curl");
+        fs::write(
+            &curl_wrapper,
+            "#!/bin/sh\ncat >/dev/null\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --output ]; then\n    shift\n    output=$1\n  fi\n  shift\ndone\n[ \"$(find \"$output\" -perm 0600 -print)\" = \"$output\" ] || exit 9\ncat \"$OIDC_TEST_RESPONSE\" > \"$output\"\nprintf '%s' \"$OIDC_TEST_STATUS\"\nif [ \"$OIDC_TEST_TRANSPORT_ERROR\" = yes ]; then\n  printf '%s\\n' 'secret transport detail' >&2\n  exit 7\nfi\n",
+        )
+        .expect("test curl wrapper must be written");
+        fs::set_permissions(&curl_wrapper, fs::Permissions::from_mode(0o755))
+            .expect("test curl wrapper must be executable");
+        let response_path = fixture._temp.path().join("response.json");
+        let log = fixture._temp.path().join("git-remote.log");
+        let temporary_files = fixture._temp.path().join("response-temp");
+        fs::create_dir(&temporary_files).expect("private response directory must be created");
+
+        for (status, body, transport_error, expected) in [
+            (
+                "403",
+                "missing scp generate_id_token\n",
+                false,
+                "Forgejo OIDC request returned HTTP 403: missing scp generate_id_token",
+            ),
+            (
+                "403",
+                r#"{"message":"test-request-token","value":"secret-jwt"}"#,
+                false,
+                "Forgejo OIDC request returned HTTP 403",
+            ),
+            (
+                "403",
+                r#"{"message":"https://forgejo.invalid/private"}"#,
+                false,
+                "Forgejo OIDC request returned HTTP 403",
+            ),
+            (
+                "403",
+                "not-json secret-jwt",
+                false,
+                "Forgejo OIDC request returned HTTP 403",
+            ),
+            (
+                "000",
+                "secret transport body",
+                true,
+                "Forgejo OIDC request failed during transport",
+            ),
+        ] {
+            fs::write(&response_path, body).expect("mock response must be written");
+            let output = Command::new("sh")
+                .arg("scripts/tag-qualified-release.sh")
+                .current_dir(&fixture.repo)
+                .env(
+                    "PATH",
+                    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+                )
+                .env("TMPDIR", &temporary_files)
+                .env("EXPECTED_COMMIT", &head)
+                .env("PUSH_BEFORE", &fixture.initial)
+                .env("RELEASE_AUTH_MODE", "oidc")
+                .env("RELEASE_AUDIENCE", "u:1:test")
+                .env(
+                    "RELEASE_REMOTE_URL",
+                    "https://forgejo.invalid/lacuna/dione.git",
+                )
+                .env(
+                    "ACTIONS_ID_TOKEN_REQUEST_URL",
+                    "https://forgejo.invalid/oidc?job=1",
+                )
+                .env("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "test-request-token")
+                .env("OIDC_TEST_LOG", &log)
+                .env("OIDC_TEST_RESPONSE", &response_path)
+                .env("OIDC_TEST_STATUS", status)
+                .env(
+                    "OIDC_TEST_TRANSPORT_ERROR",
+                    if transport_error { "yes" } else { "no" },
+                )
+                .env("OIDC_REAL_GIT", &real_git)
+                .output()
+                .expect("OIDC release tagger must execute");
+            assert!(!output.status.success());
+            assert_eq!(String::from_utf8_lossy(&output.stderr).trim(), expected);
+            assert!(
+                !log.exists(),
+                "failed OIDC request must not reach Git remote"
+            );
+            assert!(!remote_ref(&fixture, "refs/tags/v0.2.0").status.success());
+            assert_eq!(
+                fs::read_dir(&temporary_files).unwrap().count(),
+                0,
+                "private OIDC response must be removed on failure"
+            );
         }
     }
 
