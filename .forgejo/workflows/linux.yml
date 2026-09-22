@@ -140,6 +140,9 @@ jobs:
           persist-credentials: false
       - name: Tag a qualified version and changelog bump
         env:
+          # Use the installed base toolchain for cargo pkgid without downloading
+          # the rustfmt and clippy components from rust-toolchain.toml again.
+          RUSTUP_TOOLCHAIN: "1.98.0"
           EXPECTED_COMMIT: ${{ forgejo.sha }}
           PUSH_BEFORE: ${{ forgejo.event.before }}
           RELEASE_AUTH_MODE: oidc

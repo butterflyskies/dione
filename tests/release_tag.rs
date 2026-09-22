@@ -186,6 +186,7 @@ mod unix {
         ));
         assert!(release_tag.contains("EXPECTED_COMMIT: ${{ forgejo.sha }}"));
         assert!(release_tag.contains("PUSH_BEFORE: ${{ forgejo.event.before }}"));
+        assert!(release_tag.contains("RUSTUP_TOOLCHAIN: \"1.98.0\""));
         assert!(release_tag.contains("run: sh scripts/tag-qualified-release.sh"));
         assert!(release_tag.contains(
             "uses: https://github.com/dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9"
