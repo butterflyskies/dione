@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.46.1]
+
+### Changed
+- Give app-server reset/lease-retry and attention identity-race tests longer
+  wall-clock waits on small CI runners, with clearer timeout diagnostics.
+
 ## [0.46.0]
 
 ### Added

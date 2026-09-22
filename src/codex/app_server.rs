@@ -2255,7 +2255,7 @@ mod tests {
             cancel.clone(),
             Duration::from_millis(50),
         ));
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(Duration::from_secs(10), async {
             while queue.status().await.primary_consumer.is_none() {
                 tokio::task::yield_now().await;
             }
@@ -2271,17 +2271,14 @@ mod tests {
             .await
             .unwrap();
 
-        let mut starts = Vec::new();
-        for _ in 0..3 {
-            starts.push(
-                tokio::time::timeout(Duration::from_secs(5), started_rx.recv())
-                    .await
-                    .unwrap()
-                    .unwrap(),
-            );
+        for expected in ["dione-0", "dione-0", "dione-1"] {
+            let actual = tokio::time::timeout(Duration::from_secs(30), started_rx.recv())
+                .await
+                .unwrap_or_else(|_| panic!("timed out waiting for {expected} turn/start"))
+                .unwrap_or_else(|| panic!("server closed before {expected} turn/start"));
+            assert_eq!(actual, expected);
         }
-        assert_eq!(starts, ["dione-0", "dione-0", "dione-1"]);
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(Duration::from_secs(10), async {
             while queue.status().await.queued != 0 {
                 tokio::task::yield_now().await;
             }
