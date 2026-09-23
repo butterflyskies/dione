@@ -15,6 +15,7 @@ pub(crate) mod evidence;
 pub mod gaie;
 pub mod gate;
 pub mod ingress_ledger;
+pub(crate) mod markdown;
 pub mod mcp;
 pub mod mute_store;
 pub mod nameplates;
@@ -33,6 +34,7 @@ pub mod rate_limiter;
 )]
 pub(crate) mod receipt_gate;
 pub mod state;
+pub(crate) mod status_lint;
 pub mod timestamp;
 pub mod tracing_channel;
 pub mod util;

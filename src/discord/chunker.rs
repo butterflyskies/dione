@@ -1,4 +1,7 @@
-use crate::config::ChunkMode;
+use crate::{
+    config::ChunkMode,
+    markdown::{FenceTransition, fence_transition, is_fence_delimiter},
+};
 use std::ops::Range;
 use thiserror::Error;
 
@@ -87,32 +90,19 @@ pub(crate) struct FenceContext {
     lang: String,
 }
 
-/// Parse a structural CommonMark fence delimiter. At most three leading
-/// spaces are allowed; tabs and four-space indentation are content.
-fn parse_fence_delimiter(line: &str) -> Option<(usize, &str)> {
-    let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
-    if indentation > 3 {
-        return None;
-    }
-    let structural = &line[indentation..];
-    let backticks = structural.bytes().take_while(|byte| *byte == b'`').count();
-    if backticks < 3 {
-        return None;
-    }
-    Some((backticks, structural[backticks..].trim()))
-}
-
+/// The owning form of the fence transition, for the one caller that must
+/// reproduce the delimiter later when reopening a split fence.
+///
+/// The grammar itself lives in [`crate::markdown::fence_transition`]; this
+/// only adds ownership of the tag.
 pub(crate) fn advance_fence(state: &Option<FenceContext>, line: &str) -> Option<FenceContext> {
-    let Some((backticks, tag)) = parse_fence_delimiter(line) else {
-        return state.clone();
-    };
-    match state {
-        None => Some(FenceContext {
+    match fence_transition(state.as_ref().map(|open| open.backticks), line) {
+        FenceTransition::Unchanged => state.clone(),
+        FenceTransition::Opens { backticks, tag } => Some(FenceContext {
             backticks,
             lang: tag.to_string(),
         }),
-        Some(open) if backticks >= open.backticks && tag.is_empty() => None,
-        Some(_) => state.clone(),
+        FenceTransition::Closes => None,
     }
 }
 
@@ -204,9 +194,7 @@ pub(crate) fn chunk_preserving_fences_with_context(
     if limit == 0 {
         return Ok(Vec::new());
     }
-    let has_structural_fence = text
-        .split_inclusive('\n')
-        .any(|line| parse_fence_delimiter(line).is_some());
+    let has_structural_fence = text.split_inclusive('\n').any(is_fence_delimiter);
     if initial_context.is_none() && !has_structural_fence {
         let base = text.as_ptr() as usize;
         return Ok(chunk(text, limit, mode)
@@ -231,7 +219,7 @@ pub(crate) fn chunk_preserving_fences_with_context(
     while position < text.len() {
         let line_end = source_line_end(text, position);
         let line = &text[position..line_end];
-        let delimiter = parse_fence_delimiter(line).is_some();
+        let delimiter = is_fence_delimiter(line);
         let candidate_state = advance_fence(&outgoing, line);
         let candidate = render_chunk(text, source_start..line_end, &incoming, &candidate_state);
         if candidate.len() <= limit {

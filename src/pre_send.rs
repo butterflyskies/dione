@@ -541,6 +541,25 @@ impl AuditSink for TracingAuditSink {
 
 static INSTALLED_PIPELINE: OnceLock<RwLock<Option<Arc<PreSendPipeline>>>> = OnceLock::new();
 
+/// The hooks production runs, in order.
+///
+/// This is the single registration seam: `main` installs exactly this set, and
+/// the integration tests assert against it. Constructing the set separately in
+/// a test would certify a parallel wiring rather than the shipped one.
+pub(crate) fn production_hooks() -> Vec<Box<dyn PreSendHook>> {
+    vec![Box::new(crate::status_lint::StatusPacketLint::new())]
+}
+
+/// Builds the pipeline `main` installs, hooks included.
+///
+/// `main` calls exactly this and passes no arguments of its own, so the
+/// integration tests exercise the shipped expression rather than a
+/// reconstruction of it. The residual is one line: nothing observes whether
+/// `main` calls this at all.
+pub fn production_pipeline() -> Result<Arc<PreSendPipeline>, PipelineError> {
+    observe_pipeline(production_hooks())
+}
+
 /// Builds the production Observe pipeline and supplies the hook registration seam.
 pub fn observe_pipeline(
     hooks: Vec<Box<dyn PreSendHook>>,
@@ -881,6 +900,27 @@ mod tests {
         to_audit: AuditTrail,
     ) -> HookOutput {
         HookOutput::new(decision, to_construct, to_audit)
+    }
+
+    /// The production roster is asserted here rather than from an integration
+    /// test, so `production_hooks` and the hook type stay crate-private.
+    #[test]
+    fn production_roster_contains_the_status_lint() {
+        let names: Vec<String> = production_hooks()
+            .iter()
+            .map(|hook| hook.name().as_str().to_owned())
+            .collect();
+        assert!(
+            names.iter().any(|name| name == "status-packet-lint"),
+            "production roster is {names:?}"
+        );
+    }
+
+    #[test]
+    fn production_roster_is_not_empty() {
+        // Guards the regression this work exists to fix: the pipeline shipped
+        // for months installed with `Vec::new()`, running nothing.
+        assert!(!production_hooks().is_empty());
     }
 
     fn pipeline(hooks: Vec<Box<dyn PreSendHook>>, mode: PipelineMode) -> PreSendPipeline {
@@ -1229,6 +1269,186 @@ mod tests {
             configured_pipeline(false, Vec::new())
                 .expect("disabled configuration")
                 .is_none()
+        );
+    }
+}
+
+/// Tests for the one production effect Observe mode actually has.
+///
+/// `PipelineOutcome::to_audit()` is a return value, not an effect. In Observe
+/// the pipeline's only visible output is `TracingAuditSink::record`, so a test
+/// that inspects the outcome passes unchanged if that sink's body is replaced
+/// with `Ok(())` — the assessments would be computed and emitted nowhere.
+///
+/// These drive `production_pipeline()` and read the emitted tracing event.
+#[cfg(test)]
+mod audit_sink_tests {
+    use super::*;
+    use crate::pre_send::{ChannelType, ConstructId, OutboundDestination};
+    use serenity::model::id::ChannelId;
+    use std::{
+        collections::BTreeMap,
+        sync::{Arc, Mutex},
+    };
+    use tracing_subscriber::layer::SubscriberExt;
+
+    #[derive(Default)]
+    struct Fields(BTreeMap<String, String>);
+
+    impl tracing::field::Visit for Fields {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0.insert(field.name().to_owned(), format!("{value:?}"));
+        }
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.0.insert(field.name().to_owned(), value.to_owned());
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<BTreeMap<String, String>>>>);
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Captured {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut fields = Fields::default();
+            event.record(&mut fields);
+            self.0.lock().expect("capture mutex").push(fields.0);
+        }
+    }
+
+    /// Runs `text` through the shipped pipeline with a thread-scoped capturing
+    /// subscriber and returns the events it emitted.
+    fn emitted(text: &str) -> Vec<BTreeMap<String, String>> {
+        let captured = Captured::default();
+        let subscriber = tracing_subscriber::registry().with(captured.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            let pipeline = production_pipeline().expect("pipeline builds");
+            let context = HookContext::new(
+                text,
+                OutboundDestination::Channel(ChannelId::new(1)),
+                ChannelType::Public,
+                ConstructId::default(),
+            );
+            pipeline
+                .run(&context, &NoRly::default())
+                .expect("pipeline runs");
+        });
+        captured.0.lock().expect("capture mutex").clone()
+    }
+
+    /// The audit events only, in emission order.
+    fn audit_events(text: &str) -> Vec<BTreeMap<String, String>> {
+        emitted(text)
+            .into_iter()
+            .filter(|fields| {
+                fields.get("message").map(String::as_str) == Some("pre-send audit assessment")
+            })
+            .collect()
+    }
+
+    fn confidence(fields: &BTreeMap<String, String>) -> f64 {
+        fields
+            .get("confidence")
+            .unwrap_or_else(|| panic!("event carried no confidence: {fields:?}"))
+            .parse()
+            .expect("confidence parses")
+    }
+
+    /// Pins the whole structured event, not merely that events happened.
+    ///
+    /// The previous version asserted an event existed carrying *some* hook and
+    /// *some* category. Deleting `detail`, `confidence`, or the destination
+    /// from the sink left it green — the payload could be lost entirely while
+    /// the test went on proving the plumbing was connected.
+    ///
+    /// The fixture produces exactly one finding, so the expected set is small
+    /// enough to write out literally.
+    #[test]
+    fn the_audit_sink_emits_the_exact_structured_event_set() {
+        let events = audit_events("\u{26A0}\u{FE0F} **dione** blocked on issue 12345");
+        assert_eq!(
+            events.len(),
+            2,
+            "expected the summary and one finding: {events:#?}"
+        );
+
+        for fields in &events {
+            assert_eq!(
+                fields.get("hook").map(String::as_str),
+                Some("status-packet-lint"),
+                "unattributed event: {fields:?}"
+            );
+            assert_eq!(
+                fields.get("construct").map(String::as_str),
+                Some("dione"),
+                "construct missing from the audit record: {fields:?}"
+            );
+            assert_eq!(
+                fields.get("channel").map(String::as_str),
+                Some("1"),
+                "destination missing from the audit record: {fields:?}"
+            );
+        }
+
+        let summary = &events[0];
+        assert_eq!(
+            summary.get("category").map(String::as_str),
+            Some("status-lint/summary")
+        );
+        assert_eq!(
+            summary.get("detail").map(String::as_str),
+            Some("1 status-lint finding(s)")
+        );
+        assert!((confidence(summary) - 1.0).abs() < 1e-6);
+
+        let finding = &events[1];
+        assert_eq!(
+            finding.get("category").map(String::as_str),
+            Some("status-lint/missing-link")
+        );
+        assert_eq!(
+            finding.get("detail").map(String::as_str),
+            Some("line 1: names an artifact but carries no link \u{2014} include the URL")
+        );
+        assert!((confidence(finding) - 0.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_emitted_detail_carries_no_matched_content() {
+        // The detail locates a finding by line number and never replicates the
+        // matched value into a durable log.
+        let audit = audit_events("\u{26A0}\u{FE0F} blocked on #375 and 1542814375424032792");
+        // A sink emitting nothing, or emitting events with `detail` dropped,
+        // passes a "nothing leaked" check perfectly. Both fail here, before
+        // secrecy is examined at all.
+        assert!(
+            audit.len() >= 2,
+            "expected the findings to be emitted; got {audit:?}"
+        );
+        for fields in &audit {
+            let detail = fields
+                .get("detail")
+                .unwrap_or_else(|| panic!("event carried no detail: {fields:?}"));
+            assert!(!detail.contains("#375"), "detail leaked a match: {detail}");
+            assert!(
+                !detail.contains("1542814375424032792"),
+                "detail leaked a snowflake: {detail}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_clean_packet_emits_no_audit_event_at_all() {
+        let events = emitted("\u{25B6}\u{FE0F} **status-packet lint**");
+        assert!(
+            !events
+                .iter()
+                .any(|fields| fields.get("message").map(String::as_str)
+                    == Some("pre-send audit assessment")),
+            "a clean packet emitted audit events: {events:?}"
         );
     }
 }

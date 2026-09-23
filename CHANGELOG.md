@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.46.4]
+
+### Added
+- **Status-packet lint.** Detect bare Discord snowflake IDs, missing links,
+  and other structural issues in outbound message content. Includes URL parsing
+  with host policy, deterministic attempt-count oracle, and a pinned known-gap
+  for repo-qualified snowflake-length references (#379). (#377)
+
 ## [0.46.3]
 
 ### Added

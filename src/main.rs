@@ -124,7 +124,7 @@ async fn main() -> Result<()> {
     // Keep the Observe pipeline installed for the process lifetime. Each
     // message's freshly loaded config decides whether it participates, so
     // `pre_send.enabled` hot reloads in both directions without a restart.
-    let pre_send_pipeline = dione::pre_send::observe_pipeline(Vec::new())
+    let pre_send_pipeline = dione::pre_send::production_pipeline()
         .wrap_err("failed to configure Observe pre-send pipeline")?;
     dione::pre_send::install_pipeline(Some(pre_send_pipeline));
 

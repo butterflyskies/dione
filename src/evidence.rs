@@ -1,5 +1,6 @@
 //! Visible, role-preserving Vaelii sentex locators carried in Discord messages.
 
+use crate::markdown::BlockScanner;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
 use serenity::model::id::UserId;
@@ -375,162 +376,18 @@ pub(crate) fn project_sentexes(target: &mut Value, content: &str, author_id: Use
     }
 }
 
+/// True when the evidence marker at `suffix_start` sits inside a blockquote,
+/// a fenced block, an inline code span, or an indented code block — in which
+/// case it is an example rather than an offered locator.
+///
+/// The block-structure walk is [`crate::markdown::BlockScanner`], shared with
+/// the status lint so the two cannot disagree about what counts as code.
 fn marker_is_in_quote_or_code(content: &str, suffix_start: usize) -> bool {
-    let preceding = &content[..suffix_start];
-    let mut fenced_delimiter = None;
-    let mut inline_delimiter = None;
-    let mut after_multiline_quote_start = false;
-    let mut current_line_is_quote = false;
-    // Track block-level state for indented code detection.
-    // CommonMark: an indented code block cannot interrupt a paragraph,
-    // but CAN follow a heading, fence close, quote, or blank line.
-    let mut in_indented_code = false;
-    let mut in_paragraph = false;
-
-    for line in preceding.split('\n') {
-        let structural = line.trim_start();
-        let fence_structural = markdown_fence_structural(line);
-        let indentation = line
-            .bytes()
-            .take_while(|b| *b == b' ' || *b == b'\t')
-            .count();
-        let line_is_indented = indentation >= 4 || line.starts_with('\t');
-
-        current_line_is_quote =
-            fenced_delimiter.is_none() && inline_delimiter.is_none() && structural.starts_with('>');
-        if fenced_delimiter.is_none() && inline_delimiter.is_none() && structural.starts_with(">>>")
-        {
-            after_multiline_quote_start = true;
-        }
-
-        // Inside a fenced code block — everything is code content.
-        if let Some(opening_length) = fenced_delimiter {
-            if fence_structural.is_some_and(|candidate| {
-                fence_delimiter(candidate).is_some_and(|length| {
-                    length >= opening_length && fence_tail_is_empty(candidate)
-                })
-            }) {
-                fenced_delimiter = None;
-                in_paragraph = false;
-            }
-            in_indented_code = false;
-            continue;
-        }
-
-        // Blank line — ends indented code blocks and paragraphs.
-        if structural.is_empty() {
-            in_indented_code = false;
-            in_paragraph = false;
-            continue;
-        }
-
-        // Opening a fenced code block (only at ≤3 spaces indent).
-        if inline_delimiter.is_none()
-            && let Some(length) = fence_structural.and_then(fence_delimiter)
-        {
-            fenced_delimiter = Some(length);
-            in_indented_code = false;
-            in_paragraph = false;
-            continue;
-        }
-
-        // Indented code block detection:
-        // - 4+ spaces (or tab) AND not currently in a paragraph AND no
-        //   open inline span → genuine indented code.
-        // - Contiguous: once in indented code, further indented lines
-        //   remain in the block until a blank or non-indented line.
-        // - CommonMark: indented code cannot interrupt a paragraph, but
-        //   CAN follow headings, fence closes, block quotes, blank lines,
-        //   and document start.
-        if line_is_indented && (in_indented_code || !in_paragraph) && inline_delimiter.is_none() {
-            in_indented_code = true;
-            // Backtick runs are literal code content — do not scan.
-            continue;
-        }
-
-        // Exiting indented code or starting/continuing a paragraph.
-        in_indented_code = false;
-
-        // ATX headings end any paragraph — next line starts a fresh block.
-        if structural.starts_with('#') {
-            let hashes = structural.bytes().take_while(|b| *b == b'#').count();
-            if hashes <= 6 && (structural.len() == hashes || structural.as_bytes()[hashes] == b' ')
-            {
-                in_paragraph = false;
-                scan_inline_delimiters(line, &mut inline_delimiter);
-                continue;
-            }
-        }
-
-        // Block quotes are not paragraph content.
-        if current_line_is_quote {
-            in_paragraph = false;
-            scan_inline_delimiters(line, &mut inline_delimiter);
-            continue;
-        }
-
-        // Regular content — we are in a paragraph.
-        in_paragraph = true;
-        scan_inline_delimiters(line, &mut inline_delimiter);
+    let mut scanner = BlockScanner::new();
+    for line in content[..suffix_start].split('\n') {
+        scanner.push(line);
     }
-
-    current_line_is_quote
-        || after_multiline_quote_start
-        || fenced_delimiter.is_some()
-        || inline_delimiter.is_some()
-        || in_indented_code
-}
-
-/// CommonMark permits at most three leading spaces before a fenced-code
-/// delimiter. Four spaces make the backticks indented code content instead,
-/// so they must not open or close the surrounding fence.
-fn markdown_fence_structural(line: &str) -> Option<&str> {
-    let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
-    (indentation <= 3).then(|| &line[indentation..])
-}
-
-fn fence_delimiter(line: &str) -> Option<usize> {
-    let length = line.bytes().take_while(|byte| *byte == b'`').count();
-    (length >= 3).then_some(length)
-}
-
-fn fence_tail_is_empty(line: &str) -> bool {
-    let delimiter_length = line.bytes().take_while(|byte| *byte == b'`').count();
-    line[delimiter_length..].trim().is_empty()
-}
-
-fn scan_inline_delimiters(line: &str, delimiter: &mut Option<usize>) {
-    let bytes = line.as_bytes();
-    let mut index = 0;
-
-    while index < bytes.len() {
-        if bytes[index] != b'`' {
-            index += 1;
-            continue;
-        }
-
-        let start = index;
-        while index < bytes.len() && bytes[index] == b'`' {
-            index += 1;
-        }
-        let run_length = index - start;
-        let escaped = bytes[..start]
-            .iter()
-            .rev()
-            .take_while(|byte| **byte == b'\\')
-            .count()
-            % 2
-            == 1;
-        if escaped && delimiter.is_none() {
-            continue;
-        }
-
-        match *delimiter {
-            Some(opening_length) if opening_length == run_length => *delimiter = None,
-            None => *delimiter = Some(run_length),
-            Some(_) => {}
-        }
-    }
+    scanner.inside_quote_or_code()
 }
 
 fn validate_marker_bytes(handles: &SentexHandles) -> Result<(), String> {
