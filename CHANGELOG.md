@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.46.3]
+
+### Added
+- Install `cargo xfmt` alias via `.cargo/config.toml` with the custom import
+  grouping documented in CODING_STANDARDS.md (#381).
+- Update justfile `fmt` and `fmt-check` recipes to use `xfmt`.
+
 ## [0.46.2]
 
 ### Changed

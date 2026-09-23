@@ -3,10 +3,9 @@
 //! The bridge deliberately records provenance, not message content or a truth
 //! claim. It is disabled unless a Vaelii server URL is configured.
 
-use std::time::Duration;
-
 use reqwest::{StatusCode, Url, redirect::Policy};
 use serde::Deserialize;
+use std::time::Duration;
 use thiserror::Error;
 
 const DEFAULT_TIMEOUT_MS: u64 = 3_000;
@@ -302,12 +301,12 @@ fn escape_edn_string(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
-
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-
     use super::*;
+    use std::sync::{Arc, Mutex};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
 
     async fn one_shot_server(
         status: &'static str,

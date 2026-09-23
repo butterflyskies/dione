@@ -1097,13 +1097,16 @@ impl AttentionHealth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attention::{
-        admission::{AdmissionController, Submission},
-        config::{AttentionBrief, AttentionConfig, NoticeMode, RoomAttention},
-        provider::TypeSafeProvider,
-        source::now_ms,
+    use crate::{
+        attention::{
+            admission::{AdmissionController, Submission},
+            config::{AttentionBrief, AttentionConfig, NoticeMode, RoomAttention},
+            provider::TypeSafeProvider,
+            source::now_ms,
+        },
+        config::ConfigRuntime,
+        discord::events::NotificationEvent,
     };
-    use crate::{config::ConfigRuntime, discord::events::NotificationEvent};
     use camino::Utf8PathBuf;
     use parking_lot::Mutex as SyncMutex;
     use serde_json::{Value, json};

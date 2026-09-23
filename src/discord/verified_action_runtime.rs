@@ -639,8 +639,9 @@ mod tests {
     // a trusted creator's webhook whose human is not in `allow_from` is denied.
     #[test]
     fn trusted_creator_does_not_bypass_represented_principal_gate() {
-        use super::super::verified_action::PLURALKIT_APPLICATION_ID;
-        use super::super::verified_action::{VerifiedActionGate, VerifiedGateVerdict};
+        use super::super::verified_action::{
+            PLURALKIT_APPLICATION_ID, VerifiedActionGate, VerifiedGateVerdict,
+        };
 
         let mut raw = crate::config::Config::default();
         raw.access.trusted_webhook_creators =

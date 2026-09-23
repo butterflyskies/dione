@@ -885,8 +885,10 @@ pub fn scrub_token(detail: &str, token: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ChannelConfig, Config};
-    use crate::contradictionary::{Action, Entry, MatchMode};
+    use crate::{
+        config::{ChannelConfig, Config},
+        contradictionary::{Action, Entry, MatchMode},
+    };
 
     fn config_with(channel: &str, mutate: impl FnOnce(&mut Config)) -> LoadedConfig {
         let mut raw = Config::default();

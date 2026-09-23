@@ -1,13 +1,13 @@
 # Run all checks in CI order
 check: fmt-check lint test
 
-# Format all code
+# Format all code (with custom import grouping)
 fmt:
-    cargo fmt
+    cargo xfmt
 
 # Check formatting without modifying
 fmt-check:
-    cargo fmt --check
+    cargo fmt --check -- --config imports_granularity=Crate --config group_imports=One --config format_code_in_doc_comments=true
 
 # Run clippy with all warnings as errors
 lint:

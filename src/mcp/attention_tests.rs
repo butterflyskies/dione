@@ -6,19 +6,19 @@ mod boundary_acceptance;
 mod lifecycle_acceptance;
 
 use super::*;
-use crate::attention::{
-    admission::{AdmissionController, JudgmentWork, Submission},
-    config::{AttentionBrief, AttentionConfig, AttentionMode, NoticeMode, RoomAttention},
-    control::{AttentionCommand, execute},
-    provider::TypeSafeProvider,
-    runtime::AttentionRuntime,
-    source::{SourceResolver, now_ms},
-    types::{
-        Admission, ArtifactDigest, DecisionRecord, DeliveryState, SourceAuthorKind, SourceKey,
-        SourceVersion, content_hash,
-    },
-};
 use crate::{
+    attention::{
+        admission::{AdmissionController, JudgmentWork, Submission},
+        config::{AttentionBrief, AttentionConfig, AttentionMode, NoticeMode, RoomAttention},
+        control::{AttentionCommand, execute},
+        provider::TypeSafeProvider,
+        runtime::AttentionRuntime,
+        source::{SourceResolver, now_ms},
+        types::{
+            Admission, ArtifactDigest, DecisionRecord, DeliveryState, SourceAuthorKind, SourceKey,
+            SourceVersion, content_hash,
+        },
+    },
     config::ConfigRuntime,
     discord::events::{MessageEvent, MessageTargeting},
 };
