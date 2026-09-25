@@ -373,6 +373,60 @@ mod unix {
     }
 
     #[test]
+    fn oidc_request_uses_internal_forgejo_service_for_public_host() {
+        // cilium#47768: in-cluster calls to the public Gateway host get a bare
+        // 403, so the token request must go to the internal Service with the
+        // public Host header preserved (lacuna/docs#35 pattern).
+        let fixture = fixture();
+        write_release(&fixture.repo, "0.2.0", "## [0.2.0]");
+        let head = commit(&fixture.repo, "release 0.2.0");
+        let bin = fixture._temp.path().join("bin");
+        fs::create_dir(&bin).expect("test command directory must be created");
+        let curl_wrapper = bin.join("curl");
+        fs::write(
+            &curl_wrapper,
+            "#!/bin/sh\ncat >> \"$OIDC_TEST_LOG\"\nfor last; do :; done\nprintf 'URL %s\\n' \"$last\" >> \"$OIDC_TEST_LOG\"\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --output ]; then\n    shift\n    output=$1\n  fi\n  shift\ndone\n: > \"$output\"\nprintf 403\n",
+        )
+        .expect("test curl wrapper must be written");
+        fs::set_permissions(&curl_wrapper, fs::Permissions::from_mode(0o755))
+            .expect("test curl wrapper must be executable");
+        let log = fixture._temp.path().join("curl.log");
+        let output = Command::new("sh")
+            .arg("scripts/tag-qualified-release.sh")
+            .current_dir(&fixture.repo)
+            .env(
+                "PATH",
+                format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+            )
+            .env("EXPECTED_COMMIT", &head)
+            .env("PUSH_BEFORE", &fixture.initial)
+            .env("RELEASE_AUTH_MODE", "oidc")
+            .env("RELEASE_AUDIENCE", "u:1:test")
+            .env(
+                "RELEASE_REMOTE_URL",
+                "https://forgejo.svc.echoes/lacuna/dione.git",
+            )
+            .env(
+                "ACTIONS_ID_TOKEN_REQUEST_URL",
+                "https://forgejo.svc.echoes/api/actions/_apis/pipelines/workflows/1/idtoken?api-version=2.0",
+            )
+            .env("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "test-request-token")
+            .env("SSL_CERT_FILE", "/etc/ssl/echoes-ca.pem")
+            .env("OIDC_TEST_LOG", &log)
+            .output()
+            .expect("OIDC release tagger must execute");
+        assert!(!output.status.success(), "the mocked 403 must fail closed");
+        let seen = fs::read_to_string(&log).expect("curl must have been called");
+        assert!(
+            seen.contains("URL https://forgejo-http.forgejo.svc.cluster.local:3443/api/actions/_apis/pipelines/workflows/1/idtoken?api-version=2.0&audience=u:1:test"),
+            "token request must use the internal Service: {seen}"
+        );
+        assert!(seen.contains("header = \"Host: forgejo.svc.echoes\""));
+        assert!(seen.contains("cacert = \"/etc/ssl/echoes-ca.pem\""));
+        assert!(!remote_ref(&fixture, "refs/tags/v0.2.0").status.success());
+    }
+
+    #[test]
     fn oidc_http_and_transport_failures_report_safely_before_remote_access() {
         let fixture = fixture();
         write_release(&fixture.repo, "0.2.0", "## [0.2.0]");

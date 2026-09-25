@@ -136,10 +136,27 @@ sys.stdout.write(value)
     oidc_response="$(umask 077; mktemp "${TMPDIR:-/tmp}/dione-oidc.XXXXXX")"
     trap 'rm -f "$oidc_response"' EXIT
     trap 'exit 1' HUP INT TERM
-    if ! oidc_status="$(printf 'header = "Authorization: bearer %s"\n' \
-        "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" |
-        curl --silent --config - --output "$oidc_response" --write-out '%{http_code}' \
-        "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${RELEASE_AUDIENCE}" 2>/dev/null)"; then
+    # Inside the goddess cluster, a pod calling Forgejo's public Gateway host
+    # hits the Cilium pod-to-Gateway hairpin (cilium#47768) and gets a bare
+    # 403. Route the token request to the internal Service instead, keeping
+    # the public Host header for proxy routing (same fix as lacuna/docs#35).
+    oidc_url="${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${RELEASE_AUDIENCE}"
+    oidc_host_header=
+    oidc_cacert=
+    case "$oidc_url" in
+        https://forgejo.svc.echoes/*)
+            oidc_url="https://forgejo-http.forgejo.svc.cluster.local:3443/${oidc_url#https://forgejo.svc.echoes/}"
+            oidc_host_header='header = "Host: forgejo.svc.echoes"'
+            if [ -n "${SSL_CERT_FILE:-}" ]; then
+                oidc_cacert="cacert = \"${SSL_CERT_FILE}\""
+            fi
+            ;;
+    esac
+    if ! oidc_status="$(printf 'header = "Authorization: bearer %s"\n%s\n%s\n' \
+        "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$oidc_host_header" "$oidc_cacert" |
+        curl --silent --config - --connect-timeout 10 --max-time 30 \
+        --output "$oidc_response" --write-out '%{http_code}' \
+        "$oidc_url" 2>/dev/null)"; then
         echo "Forgejo OIDC request failed during transport" >&2
         exit 1
     fi
