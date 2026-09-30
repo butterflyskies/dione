@@ -7,7 +7,7 @@ use crate::{
         locator_metadata, parse_sentex_locators, project_sentexes,
     },
     gate::OutboundGate,
-    ingress_ledger::IngressLedger,
+    ingress_ledger::{IngressLedger, VerifyResult},
     no_rly::{
         consent::{
             BounceTicket, ConsentGate, DeliverError, DeliverReply, RejectedHandle, Rephrased,
@@ -29,7 +29,7 @@ use serenity::{
     http::MessagePagination,
     model::{
         Timestamp,
-        channel::Message,
+        channel::{Channel, Message},
         id::{ChannelId, MessageId, UserId},
     },
 };
@@ -56,11 +56,28 @@ pub(crate) fn phantom_canary_alert(
     });
 }
 
-/// Verify a message target against the ingress ledger before performing a
-/// Discord mutation. Returns `Err(json)` and raises a canary alert on
-/// `Unknown`, blocking the operation. `ChannelMismatch` is also blocked but is
-/// reported directly without a phantom alert. `Expired` and `Unavailable` log
-/// but allow the operation to proceed (legitimate edge cases).
+fn canonical_requires_ingress() -> Value {
+    json!({
+        "error": "target requires an admitted ingress receipt for this audience",
+        "reason": "canonical_requires_ingress",
+    })
+}
+
+/// Canonical existence is sufficient for conversational targets, not for
+/// management operations that can change someone else's older message.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TargetPolicy {
+    CanonicalReplyOrReact(bool),
+    IngressOrOwnSend(bool),
+}
+
+/// Verify a message target before performing a Discord mutation. The ingress
+/// ledger is session-scoped: an unknown target may be an older real message.
+/// Only reply and react may verify a direct-author target when neither mention
+/// nor identity filtering applies. Management requires ingress or own-send.
+/// Missing canonical targets raise the canary; unledgered management attempts
+/// are separately alerted and blocked. Inconclusive lookups block without accusation.
+/// `Expired` and `Unavailable` still allow the operation.
 ///
 /// `own_send` exempts one specific `Unknown` case: a target this seat itself
 /// authored. Our own sends are (correctly) absent from the ingress ledger,
@@ -74,17 +91,155 @@ pub(crate) fn phantom_canary_alert(
 ///
 /// `operation` names the egress path for tracing and alerts (e.g. "react",
 /// "pin_message").
-pub(crate) fn verify_message_target(
+pub(crate) async fn verify_message_target(
     ledger: &IngressLedger,
     http: &Arc<serenity::http::Http>,
     config: &LoadedConfig,
     message_id: MessageId,
     channel_id: ChannelId,
     operation: &str,
-    own_send: bool,
+    policy: TargetPolicy,
 ) -> Result<(), Value> {
-    verify_message_target_with_alert(
+    verify_message_target_with_mute_store(
+        TargetVerificationContext {
+            ledger,
+            http,
+            config,
+            mute_store_override: None,
+        },
+        message_id,
+        channel_id,
+        operation,
+        policy,
+    )
+    .await
+}
+
+struct TargetVerificationContext<'a> {
+    ledger: &'a IngressLedger,
+    http: &'a Arc<serenity::http::Http>,
+    config: &'a LoadedConfig,
+    mute_store_override: Option<&'a crate::mute_store::MuteStore>,
+}
+
+async fn verify_message_target_with_mute_store(
+    context: TargetVerificationContext<'_>,
+    message_id: MessageId,
+    channel_id: ChannelId,
+    operation: &str,
+    policy: TargetPolicy,
+) -> Result<(), Value> {
+    let TargetVerificationContext {
         ledger,
+        http,
+        config,
+        mute_store_override,
+    } = context;
+    let own_send = match policy {
+        TargetPolicy::CanonicalReplyOrReact(own_send)
+        | TargetPolicy::IngressOrOwnSend(own_send) => own_send,
+    };
+    let verdict = ledger.verify(message_id, channel_id);
+    if matches!(&verdict, VerifyResult::Unknown) && !own_send {
+        if matches!(policy, TargetPolicy::IngressOrOwnSend(_)) {
+            tracing::warn!(
+                message_id = message_id.get(),
+                channel_id = channel_id.get(),
+                operation,
+                "egress: unledgered management target blocked"
+            );
+            if let Some(alert_ch) = config.phantom_canary_channel {
+                phantom_canary_alert(
+                    http,
+                    alert_ch,
+                    &format!(
+                        "⚠️ PHANTOM CANARY: {operation} target message {} in channel {} absent from ingress ledger; management blocked",
+                        message_id.get(),
+                        channel_id.get()
+                    ),
+                );
+            }
+            return Err(json!({
+                "error": "message target requires an ingress receipt or own send",
+                "reason": "ingress_required",
+            }));
+        }
+        let unrestricted = config
+            .channel_policy(channel_id.get())
+            .is_some_and(|policy| !policy.require_mention && !policy.has_identity_filter());
+        match http.get_message(channel_id, message_id).await {
+            Ok(message) if message.id == message_id && message.channel_id == channel_id => {
+                if !unrestricted
+                    || config.is_ignored(message.author.id.get())
+                    || message.webhook_id.is_some()
+                    || (message.author.bot && !config.is_allowed(message.author.id.get()))
+                {
+                    return Err(canonical_requires_ingress());
+                }
+                // REST messages need not carry guild_id; resolve it rather
+                // than treating an unknown guild as unmuted.
+                let guild_id = match message.guild_id {
+                    Some(id) => id,
+                    None => match http.get_channel(channel_id).await {
+                        Ok(Channel::Guild(channel)) => channel.guild_id,
+                        Ok(_) => return Err(canonical_requires_ingress()),
+                        Err(error) => {
+                            return Err(json!({
+                                "error": format!("could not verify target guild: {error}"),
+                                "reason": "canonical_lookup_failed",
+                            }));
+                        }
+                    },
+                };
+                let parent_id = message
+                    .message_reference
+                    .as_ref()
+                    .and_then(|reference| reference.message_id)
+                    .or_else(|| {
+                        message
+                            .referenced_message
+                            .as_deref()
+                            .map(|parent| parent.id)
+                    });
+                let drops = crate::drop_ledger::global();
+                let guild_muted = match mute_store_override {
+                    Some(store) => store.is_guild_muted(guild_id.get()),
+                    None => crate::mute_store::global()
+                        .is_some_and(|store| store.is_guild_muted(guild_id.get())),
+                };
+                if guild_muted
+                    || drops.contains(channel_id, message_id)
+                    || drops.reply_inherits_drop(channel_id, parent_id)
+                {
+                    return Err(canonical_requires_ingress());
+                }
+                tracing::info!(
+                    message_id = message_id.get(),
+                    channel_id = channel_id.get(),
+                    operation,
+                    "egress: canonical target exists but is absent from ingress ledger"
+                );
+                return Ok(());
+            }
+            Ok(_) => {
+                return Err(json!({
+                    "error": "canonical message did not match the requested target",
+                    "reason": "canonical_mismatch",
+                }));
+            }
+            Err(serenity::Error::Http(serenity::http::HttpError::UnsuccessfulRequest(
+                response,
+            ))) if response.status_code.as_u16() == 404 && response.error.code == 10008 => {}
+            Err(error) => {
+                return Err(json!({
+                    "error": format!("could not verify message target: {error}"),
+                    "reason": "canonical_lookup_failed",
+                }));
+            }
+        }
+    }
+    verify_message_target_with_alert(
+        verdict,
         config,
         message_id,
         channel_id,
@@ -94,8 +249,10 @@ pub(crate) fn verify_message_target(
     )
 }
 
+// The Unknown arm is reached only after Discord confirmed code 10008, except
+// for authenticated own-sends. Do not pass an unchecked ledger miss here.
 fn verify_message_target_with_alert(
-    ledger: &IngressLedger,
+    verdict: VerifyResult,
     config: &LoadedConfig,
     message_id: MessageId,
     channel_id: ChannelId,
@@ -103,7 +260,7 @@ fn verify_message_target_with_alert(
     own_send: bool,
     mut alert: impl FnMut(ChannelId, String),
 ) -> Result<(), Value> {
-    match ledger.verify(message_id, channel_id) {
+    match verdict {
         crate::ingress_ledger::VerifyResult::Admitted { .. } => Ok(()),
         crate::ingress_ledger::VerifyResult::Unknown if own_send => {
             // The acting seat authored this target. It is correctly absent from
@@ -123,13 +280,13 @@ fn verify_message_target_with_alert(
                 message_id = message_id.get(),
                 channel_id = channel_id.get(),
                 operation,
-                "egress: message_id not in ingress ledger"
+                "egress: Discord confirmed Unknown Message after ingress miss"
             );
             if let Some(alert_ch) = config.phantom_canary_channel {
                 alert(
                     alert_ch,
                     format!(
-                        "⚠️ PHANTOM CANARY: {operation} target message {msg} in channel {ch} not in ingress ledger (Unknown)",
+                        "⚠️ PHANTOM CANARY: {operation} target message {msg} in channel {ch} returned Discord Unknown Message (10008)",
                         msg = message_id.get(),
                         ch = channel_id.get(),
                     ),
@@ -137,9 +294,10 @@ fn verify_message_target_with_alert(
             }
             Err(json!({
                 "error": format!(
-                    "message {} not in ingress ledger — possible phantom. {operation} blocked.",
-                    message_id.get()
-                )
+                    "message {} was not found by Discord in channel {}; {operation} blocked",
+                    message_id.get(), channel_id.get()
+                ),
+                "reason": "target_not_found",
             }))
         }
         crate::ingress_ledger::VerifyResult::ChannelMismatch {
@@ -651,8 +809,10 @@ pub(crate) async fn reply_with_evidence_and_hook_overrides(
             ref_id,
             channel_id,
             "reply_to",
-            own_send,
-        ) {
+            TargetPolicy::CanonicalReplyOrReact(own_send),
+        )
+        .await
+        {
             return error;
         }
     }
@@ -1221,8 +1381,10 @@ pub async fn react(
         message_id,
         channel_id,
         "react",
-        own_send,
-    ) {
+        TargetPolicy::CanonicalReplyOrReact(own_send),
+    )
+    .await
+    {
         return e;
     }
 
@@ -1892,6 +2054,7 @@ mod tests {
     use crate::{
         config::{ChannelConfig, Config},
         contradictionary::{Action, Entry, MatchMode},
+        mute_store::{GuildMute, MuteState, MuteStore},
         no_rly::judge::{ReasonEntry, RejectReason},
         pre_send::{
             Assessment, AuditSink, AuditTrail, ConstructFeedback, FeedbackSink, HookContext,
@@ -2140,6 +2303,7 @@ mod tests {
         let mut raw = Config::default();
         raw.channels.push(ChannelConfig {
             id: "42".into(),
+            require_mention: false,
             ..Default::default()
         });
         raw.phantom_canary.alert_channel_id = "99".into();
@@ -2159,7 +2323,7 @@ mod tests {
         let mut alerts = Vec::new();
 
         let mismatch = verify_message_target_with_alert(
-            &ledger,
+            ledger.verify(MessageId::new(7), ChannelId::new(42)),
             &config,
             MessageId::new(7),
             ChannelId::new(42),
@@ -2186,7 +2350,7 @@ mod tests {
         );
 
         let unknown = verify_message_target_with_alert(
-            &ledger,
+            ledger.verify(MessageId::new(8), ChannelId::new(42)),
             &config,
             MessageId::new(8),
             ChannelId::new(42),
@@ -2196,13 +2360,9 @@ mod tests {
         )
         .expect_err("an unknown target must be blocked");
 
-        assert!(unknown["error"].as_str().is_some_and(|error| {
-            error.contains("possible phantom") && error.contains("react blocked")
-        }));
+        assert_eq!(unknown["reason"], "target_not_found");
         assert_eq!(alerts.len(), 1);
         assert_eq!(alerts[0].0, ChannelId::new(99));
-        assert!(alerts[0].1.contains("PHANTOM CANARY"));
-        assert!(alerts[0].1.contains("Unknown"));
     }
 
     /// dione#334: the acting seat's own-authored targets are exempt from the
@@ -2218,7 +2378,7 @@ mod tests {
         // received-message ledger, so its `Unknown` is expected — exempt, no
         // alert, no block. RED if the `Unknown if own_send` arm is deleted.
         verify_message_target_with_alert(
-            &ledger,
+            ledger.verify(MessageId::new(500), ChannelId::new(42)),
             &config,
             MessageId::new(500),
             ChannelId::new(42),
@@ -2238,7 +2398,7 @@ mod tests {
         // the fail-closed case: no authenticated own-send evidence => not exempt.
         // RED if the arm is weakened to `Unknown =>` (drops the `if own_send`).
         let spoof = verify_message_target_with_alert(
-            &ledger,
+            ledger.verify(MessageId::new(500), ChannelId::new(42)),
             &config,
             MessageId::new(500),
             ChannelId::new(42),
@@ -2247,12 +2407,9 @@ mod tests {
             |channel, content| alerts.push((channel, content)),
         )
         .expect_err("a target with no authenticated own-send record must be blocked");
-        assert!(spoof["error"].as_str().is_some_and(|error| {
-            error.contains("possible phantom") && error.contains("react blocked")
-        }));
+        assert_eq!(spoof["reason"], "target_not_found");
         assert_eq!(alerts.len(), 1, "the spoof case must page exactly once");
         assert_eq!(alerts[0].0, ChannelId::new(99));
-        assert!(alerts[0].1.contains("PHANTOM CANARY"));
 
         // (3) scope: own_send must NOT rescue a channel mismatch — the exemption
         // is `Unknown`-only. Admitted in channel 41, claimed in 42, own_send=true
@@ -2265,7 +2422,7 @@ mod tests {
             "known message",
         );
         let mismatch = verify_message_target_with_alert(
-            &ledger,
+            ledger.verify(MessageId::new(7), ChannelId::new(42)),
             &config,
             MessageId::new(7),
             ChannelId::new(42),
@@ -2280,6 +2437,364 @@ mod tests {
             1,
             "a channel mismatch must not page even when own_send is set"
         );
+    }
+
+    #[tokio::test]
+    async fn reply_to_canonical_message_outside_ingress_window() {
+        let (http, requests, server) = fake_discord_http().await;
+        let ctx = MessagingCtx::new(
+            http,
+            new_state(),
+            Arc::new(configured_ingress_test_config()),
+            "/tmp".into(),
+            Arc::new(ConsentGate::new(camino::Utf8Path::new("/tmp"))),
+            Arc::new(IngressLedger::new()),
+        );
+
+        let result = reply(
+            &ctx,
+            ChannelId::new(42),
+            "answer to earlier message",
+            Some(MessageId::new(9001)),
+            false,
+        )
+        .await;
+
+        assert_eq!(
+            result["ok"], true,
+            "old canonical target should be replyable: {result}"
+        );
+        let paths: Vec<_> = requests
+            .lock()
+            .expect("request capture lock")
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect();
+        assert!(
+            paths
+                .iter()
+                .any(|path| path.ends_with("/channels/42/messages/9001"))
+        );
+        assert!(
+            paths
+                .iter()
+                .any(|path| path.ends_with("/channels/42/messages"))
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn react_to_canonical_message_outside_ingress_window() {
+        let (http, requests, server) = fake_discord_http().await;
+        let ctx = messaging_ctx_with_http(configured_ingress_test_config(), http);
+        let result = react(&ctx, ChannelId::new(42), MessageId::new(9001), "✅").await;
+        assert_eq!(
+            result["ok"], true,
+            "canonical target should be reactable: {result}"
+        );
+        let seen = requests.lock().expect("request capture lock");
+        assert!(
+            seen.iter()
+                .any(|(path, _)| path.ends_with("/channels/42/messages/9001"))
+        );
+        assert!(
+            seen.iter()
+                .any(|(path, _)| path.contains("/messages/9001/reactions/")),
+            "reaction mutation must reach Discord: {seen:?}"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn mention_gated_channel_rejects_unmentioned_canonical_target() {
+        let (http, requests, server) = fake_discord_http().await;
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), http);
+        let result = reply(
+            &ctx,
+            ChannelId::new(42),
+            "must not reply",
+            Some(MessageId::new(9001)),
+            false,
+        )
+        .await;
+        assert_eq!(result["reason"], "canonical_requires_ingress");
+        let seen = requests.lock().expect("request capture lock");
+        assert_eq!(seen.len(), 1, "no reply may be sent: {seen:?}");
+        assert!(seen[0].0.ends_with("/channels/42/messages/9001"));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn unledgered_management_attempt_alerts_without_claiming_discord_404() {
+        let (http, requests, server) = fake_discord_http().await;
+        let config = configured_ingress_test_config();
+        let result = verify_message_target(
+            &IngressLedger::new(),
+            &http,
+            &config,
+            MessageId::new(9001),
+            ChannelId::new(42),
+            "delete_message",
+            TargetPolicy::IngressOrOwnSend(false),
+        )
+        .await
+        .expect_err("unledgered management must block");
+        assert_eq!(result["reason"], "ingress_required");
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if !requests.lock().expect("request capture lock").is_empty() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("canary alert delivered");
+        let seen = requests.lock().expect("request capture lock");
+        assert_eq!(seen.len(), 1, "no target fetch or mutation: {seen:?}");
+        assert!(seen[0].0.ends_with("/channels/99/messages"));
+        assert!(seen[0].1.contains("absent from ingress ledger"));
+        assert!(!seen[0].1.contains("Unknown Message"));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn restricted_channel_does_not_admit_old_message_by_existence_alone() {
+        let (http, requests, server) = fake_discord_http().await;
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            allow_from: vec!["100".into()],
+            require_mention: false,
+            ..Default::default()
+        });
+        raw.phantom_canary.alert_channel_id = "99".into();
+        let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), http);
+
+        let result = reply(
+            &ctx,
+            ChannelId::new(42),
+            "do not cross audience gate",
+            Some(MessageId::new(9001)),
+            false,
+        )
+        .await;
+
+        assert_eq!(result["reason"], "canonical_requires_ingress");
+        {
+            let seen = requests.lock().expect("request capture lock");
+            assert_eq!(seen.len(), 1, "real target must not reach a mutation");
+            assert!(seen[0].0.ends_with("/channels/42/messages/9001"));
+        }
+
+        let missing = react(&ctx, ChannelId::new(42), MessageId::new(8), "✅").await;
+        assert_eq!(missing["reason"], "target_not_found");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn ignored_author_is_not_admitted_by_canonical_lookup() {
+        let (http, requests, server) = fake_discord_http().await;
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            require_mention: false,
+            ..Default::default()
+        });
+        raw.access.ignore_from.push("210987654321098765".into());
+        let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), http);
+        let result = reply(
+            &ctx,
+            ChannelId::new(42),
+            "do not reply to ignored author",
+            Some(MessageId::new(9001)),
+            false,
+        )
+        .await;
+
+        assert_eq!(result["reason"], "canonical_requires_ingress");
+        let seen = requests.lock().expect("request capture lock");
+        assert_eq!(seen.len(), 1, "ignored author must not reach a mutation");
+        assert!(seen[0].0.ends_with("/channels/42/messages/9001"));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn canonical_fallback_rejects_filtered_bot_and_dropped_reply_chain() {
+        let (http, requests, server) = fake_discord_http().await;
+        let ctx = messaging_ctx_with_http(configured_ingress_test_config(), http);
+        let channel = ChannelId::new(42);
+        crate::drop_ledger::global().record(channel, MessageId::new(9006));
+        for id in [9004, 9006, 9007] {
+            let result = reply(
+                &ctx,
+                channel,
+                "must not send",
+                Some(MessageId::new(id)),
+                false,
+            )
+            .await;
+            assert_eq!(
+                result["reason"], "canonical_requires_ingress",
+                "target {id}"
+            );
+        }
+        let seen = requests.lock().expect("request capture lock");
+        assert_eq!(
+            seen.len(),
+            3,
+            "filtered targets cannot reach mutation or alert: {seen:?}"
+        );
+        assert!(seen.iter().all(|(path, _)| path.contains("/messages/")));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn canonical_fallback_checks_active_mute_and_resolves_missing_rest_guild() {
+        let (http, requests, server) = fake_discord_http().await;
+        let now = chrono::Utc::now();
+        let mut state = MuteState::default();
+        state.mutes.insert(
+            500,
+            GuildMute {
+                guild_id: 500,
+                muted_until: now + chrono::Duration::minutes(5),
+                muted_by: "test".into(),
+                reason: None,
+                muted_at: now,
+                cutoff_event_id: String::new(),
+            },
+        );
+        let muted = MuteStore::from_state(state, camino::Utf8Path::new("/tmp"));
+        let config = configured_ingress_test_config();
+        let ledger = IngressLedger::new();
+        for id in [9001, 9008] {
+            let result = verify_message_target_with_mute_store(
+                TargetVerificationContext {
+                    ledger: &ledger,
+                    http: &http,
+                    config: &config,
+                    mute_store_override: Some(&muted),
+                },
+                MessageId::new(id),
+                ChannelId::new(42),
+                "reply_to",
+                TargetPolicy::CanonicalReplyOrReact(false),
+            )
+            .await
+            .expect_err("muted guild must not admit a canonical target");
+            assert_eq!(
+                result["reason"], "canonical_requires_ingress",
+                "target {id}"
+            );
+        }
+        let seen = requests.lock().expect("request capture lock");
+        assert_eq!(
+            seen.len(),
+            3,
+            "only two target GETs and one channel GET: {seen:?}"
+        );
+        assert!(seen.iter().any(|(path, _)| path.ends_with("/channels/42")));
+        assert!(seen.iter().all(|(path, _)| !path.ends_with("/messages")));
+        server.abort();
+    }
+
+    // Isolate the process-global OnceLock from parallel unit tests.
+    #[tokio::test]
+    async fn reply_and_react_respect_global_mute_on_old_canonical_targets() {
+        const CHILD: &str = "DIONE_GLOBAL_MUTE_REGRESSION_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .arg("--exact")
+                .arg("mcp::tools::messaging::tests::reply_and_react_respect_global_mute_on_old_canonical_targets")
+                .env(CHILD, "1")
+                .status()
+                .expect("run isolated mute regression");
+            assert!(
+                status.success(),
+                "isolated production-path mute regression failed"
+            );
+            return;
+        }
+
+        let now = chrono::Utc::now();
+        let mut state = MuteState::default();
+        state.mutes.insert(
+            500,
+            GuildMute {
+                guild_id: 500,
+                muted_until: now + chrono::Duration::minutes(5),
+                muted_by: "test".into(),
+                reason: None,
+                muted_at: now,
+                cutoff_event_id: String::new(),
+            },
+        );
+        crate::mute_store::init_global(MuteStore::from_state(state, camino::Utf8Path::new("/tmp")));
+        assert!(
+            crate::mute_store::global()
+                .expect("global store installed")
+                .is_guild_muted(500)
+        );
+
+        let (http, requests, server) = fake_discord_http().await;
+        let ctx = messaging_ctx_with_http(configured_ingress_test_config(), http);
+        let replied = reply(
+            &ctx,
+            ChannelId::new(42),
+            "must not reply",
+            Some(MessageId::new(9001)),
+            false,
+        )
+        .await;
+        assert_eq!(replied["reason"], "canonical_requires_ingress");
+        let reacted = react(&ctx, ChannelId::new(42), MessageId::new(9008), "✅").await;
+        assert_eq!(reacted["reason"], "canonical_requires_ingress");
+        let seen = requests.lock().expect("request capture lock");
+        assert_eq!(
+            seen.len(),
+            3,
+            "only target and channel GETs allowed: {seen:?}"
+        );
+        assert!(
+            seen.iter()
+                .any(|(path, _)| path.ends_with("/channels/42/messages/9001"))
+        );
+        assert!(
+            seen.iter()
+                .any(|(path, _)| path.ends_with("/channels/42/messages/9008"))
+        );
+        assert!(seen.iter().any(|(path, _)| path.ends_with("/channels/42")));
+        assert!(
+            seen.iter()
+                .all(|(path, _)| !path.contains("/reactions/") && !path.ends_with("/messages"))
+        );
+        server.abort();
+    }
+    #[tokio::test]
+    async fn inaccessible_old_target_does_not_raise_phantom_canary() {
+        let (http, requests, server) = fake_discord_http().await;
+        let ctx = messaging_ctx_with_http(configured_ingress_test_config(), http);
+
+        let result = reply(
+            &ctx,
+            ChannelId::new(42),
+            "do not send",
+            Some(MessageId::new(9003)),
+            false,
+        )
+        .await;
+
+        assert_eq!(result["reason"], "canonical_lookup_failed");
+        let seen = requests.lock().expect("request capture lock");
+        assert_eq!(seen.len(), 1, "lookup failures must not mutate or alert");
+        assert!(seen[0].0.ends_with("/channels/42/messages/9003"));
+        server.abort();
     }
 
     #[tokio::test]
@@ -2335,27 +2850,18 @@ mod tests {
 
         assert_eq!(mismatch["reason"], "channel_mismatch");
         assert_eq!(mismatched_reply["reason"], "channel_mismatch");
-        assert!(
-            unknown["error"]
-                .as_str()
-                .is_some_and(|error| error.contains("possible phantom"))
-        );
-        assert!(
-            unknown_reply["error"]
-                .as_str()
-                .is_some_and(|error| error.contains("possible phantom"))
-        );
-        assert_eq!(
-            disallowed_reply["error"],
-            "channel 43 is not a permitted outbound target"
-        );
+        assert_eq!(unknown["reason"], "target_not_found");
+        assert_eq!(unknown_reply["reason"], "target_not_found");
         assert!(
             disallowed_reply.get("admitted_channel_id").is_none(),
             "an unauthorized destination must not expose ledger provenance"
         );
+        let seen = requests.lock().expect("request capture lock");
+        assert_eq!(seen.len(), 2, "only unknown targets need canonical lookup");
         assert!(
-            requests.lock().expect("request capture lock").is_empty(),
-            "neither rejection may reach the Discord HTTP boundary"
+            seen.iter()
+                .all(|(path, _)| path.ends_with("/channels/42/messages/8")),
+            "rejections must not reach a Discord mutation: {seen:?}"
         );
         server.abort();
     }
@@ -2388,23 +2894,12 @@ mod tests {
 
         // Non-own target: blocked by the canary before any Discord mutation.
         let blocked = react(&ctx, ChannelId::new(42), MessageId::new(8), "✅").await;
-        assert!(
-            blocked["error"]
-                .as_str()
-                .is_some_and(|error| error.contains("possible phantom")),
-            "a non-own unknown target must trip the canary; got {blocked}"
-        );
+        assert_eq!(blocked["reason"], "target_not_found");
 
         // Own send recorded via note_sent: exempt, reaction reaches Discord.
         ctx.state.write().await.note_sent(500);
         let exempt = react(&ctx, ChannelId::new(42), MessageId::new(500), "✅").await;
-        assert!(
-            !exempt["error"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("possible phantom"),
-            "our own recorded message must be exempt from the canary; got {exempt}"
-        );
+        assert_ne!(exempt["reason"], "target_not_found");
 
         let seen = requests.lock().expect("request capture lock");
         assert!(
@@ -2517,6 +3012,53 @@ mod tests {
                     )
                 } else if path.ends_with("/typing") {
                     ("204 No Content", String::new())
+                } else if request_line.starts_with("GET ")
+                    && [9001, 9004, 9006, 9007, 9008]
+                        .iter()
+                        .any(|id| path.ends_with(&format!("/channels/42/messages/{id}")))
+                {
+                    let id: u64 = path.rsplit('/').next().unwrap().parse().unwrap();
+                    let mut message = wire_message(
+                        id,
+                        "explicit read",
+                        "2026-08-15T09:00:00.000000+00:00",
+                        json!([]),
+                    );
+                    message["channel_id"] = json!("42");
+                    if id != 9008 {
+                        message["guild_id"] = json!("500");
+                    }
+                    if id == 9004 {
+                        message["author"]["bot"] = json!(true);
+                    }
+                    if id == 9007 {
+                        message["message_reference"] =
+                            json!({"message_id":"9006", "channel_id":"42", "guild_id":"500"});
+                    }
+                    ("200 OK", message.to_string())
+                } else if request_line.starts_with("GET ") && path.ends_with("/channels/42") {
+                    (
+                        "200 OK",
+                        json!({"id":"42", "type":0, "guild_id":"500",
+                        "position":0, "permission_overwrites":[], "name":"fixture",
+                        "nsfw":false, "parent_id":null, "topic":null,
+                        "last_message_id":null})
+                        .to_string(),
+                    )
+                } else if request_line.starts_with("GET ")
+                    && path.ends_with("/channels/42/messages/8")
+                {
+                    (
+                        "404 Not Found",
+                        json!({ "message": "Unknown Message", "code": 10008 }).to_string(),
+                    )
+                } else if request_line.starts_with("GET ")
+                    && path.ends_with("/channels/42/messages/9003")
+                {
+                    (
+                        "403 Forbidden",
+                        json!({ "message": "Missing Access", "code": 50001 }).to_string(),
+                    )
                 } else if request_line.starts_with("GET ") && path.contains("/messages/") {
                     (
                         "200 OK",
@@ -2539,6 +3081,8 @@ mod tests {
                         )])
                         .to_string(),
                     )
+                } else if request_line.starts_with("PUT ") && path.contains("/reactions/") {
+                    ("204 No Content", String::new())
                 } else if request_line.starts_with("POST ") && path.ends_with("/messages") {
                     let content = serde_json::from_str::<Value>(body)
                         .ok()
@@ -3249,21 +3793,31 @@ mod tests {
     /// self-reaction filter isn't quietly bypassed for everything else.
     #[tokio::test]
     async fn ordinary_react_does_not_emit_synthetic_notifications() {
+        let (http, requests, server) = fake_discord_http().await;
         let mut raw = Config::default();
         raw.channels.push(ChannelConfig {
             id: "42".to_owned(),
+            require_mention: false,
             ..Default::default()
         });
         let (tx, mut rx) = mpsc::channel(4);
-        let mut ctx = messaging_ctx(LoadedConfig::from_raw(raw));
+        let mut ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), http);
         ctx.event_tx = Some(tx);
 
-        let _ = react(&ctx, ChannelId::new(42), MessageId::new(7), "👍").await;
-
+        let result = react(&ctx, ChannelId::new(42), MessageId::new(9001), "👍").await;
+        assert_eq!(result["ok"], true);
+        assert!(
+            requests
+                .lock()
+                .expect("request capture lock")
+                .iter()
+                .any(|(path, _)| path.contains("/messages/9001/reactions/"))
+        );
         assert!(
             rx.try_recv().is_err(),
             "ordinary reacts must not synthesize notification events"
         );
+        server.abort();
     }
 
     #[tokio::test]
@@ -3355,7 +3909,9 @@ mod tests {
             UserId::new(99),
             "wrong channel",
         );
+        let (http, requests, server) = fake_discord_http().await;
         let (mut ctx, _) = messaging_ctx_with_halt_pipeline(LoadedConfig::from_raw(raw));
+        ctx.http = http;
         ctx.ingress_ledger = Arc::clone(&ledger);
 
         // Admitted reply (msg 7 in ch 42) → reaches halt hook.
@@ -3370,21 +3926,19 @@ mod tests {
         .await;
         assert_eq!(admitted["error"], "blocked by test hook");
 
-        // Unknown reply (msg 9 not in ledger) → blocked before halt hook.
+        // Unknown reply (msg 9003 not in ledger; REST 403) → blocked before halt hook.
         let unknown = reply_with_hook_overrides(
             &ctx,
             ChannelId::new(42),
             "text",
-            Some(MessageId::new(9)),
+            Some(MessageId::new(9003)),
             false,
             &[],
         )
         .await;
-        assert!(
-            unknown["error"]
-                .as_str()
-                .is_some_and(|e| e.contains("possible phantom")),
-            "unknown reply_to must be blocked before reaching hooks: {unknown}"
+        assert_eq!(
+            unknown["reason"], "canonical_lookup_failed",
+            "unverified reply_to must be blocked before reaching hooks: {unknown}"
         );
 
         // Mismatch reply (msg 8 admitted in ch 41, claimed ch 42) → blocked before halt hook.
@@ -3415,6 +3969,14 @@ mod tests {
                 },
             ]
         );
+        assert!(
+            requests
+                .lock()
+                .expect("request capture lock")
+                .iter()
+                .any(|(path, _)| path.ends_with("/channels/42/messages/9003"))
+        );
+        server.abort();
     }
 
     #[tokio::test]

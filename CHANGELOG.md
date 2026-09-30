@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.46.5]
+
+### Fixed
+- Verify targets missing from the session ingress ledger against Discord only
+  for replies and reactions. Older direct-author messages work in directly
+  configured channels requiring neither mention nor identity filtering; ignored,
+  proxied, non-allowlisted bot, muted-guild, and drop-ledger targets (including
+  replies to dropped roots) still require ingress. Inherited threads fail closed.
+  Delete, pin, unpin, and thread-from-message require ingress or an authenticated
+  own-send. Unledgered management attempts alert without claiming Discord 404;
+  only Discord's Unknown Message response raises a missing-target alert for
+  replies or reactions. Permission and transport failures block without accusation.
+
 ## [0.46.4]
 
 ### Added

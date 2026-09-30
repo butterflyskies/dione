@@ -59,3 +59,29 @@ still trip the canary on an own message:
 Both are **fail-safe**: they yield a false phantom *alert + block* on our own hand, never admit a spoof (Ari's guard is unaffected — a spoof still has no authenticated own-send record). They bound rather than fully eliminate #334 for old own-messages. The common/deterministic reproductions (send → act within the recency window) are fixed.
 
 **Follow-up to fully eliminate the residual (not in this PR):** on `Unknown && !own_send`, before alerting, fetch the target and exempt iff `author.id == bot_id` (then `note_sent` it) — the same authenticated pattern `events.rs` already uses for reaction targets, with the HTTP cost paid only on the rare would-alert path. This makes `verify_message_target` async. Left as a scoped follow-up because it grows a lowest-priority fix; the reviewer/maintainer can pull it forward.
+
+## Follow-up implemented on 2026-09-29
+
+The later session-ledger false-positive repair checks an unknown reply or
+reaction target against Discord in its claimed channel. Older direct-author
+messages are accepted only where neither mention nor identity filtering applies;
+ignored and proxied targets still require ingress. Delete, pin, unpin, and
+thread-from-message require ingress or an authenticated own-send. Unledgered
+management attempts alert the canary without asserting Discord returned 404.
+For replies and reactions, Discord Unknown Message still alerts and blocks;
+inconclusive lookups block without a phantom accusation.
+
+Canonical existence alone does not override inbound eligibility: non-allowlisted
+bot authors, ignored/proxied authors, active guild mutes, recent drop-ledger
+entries, and replies to dropped roots require an ingress receipt. REST messages
+without a guild id resolve their channel before the mute check; lookup failures
+block without a phantom claim. Only directly configured ambient channels use
+this fallback. Older messages in inherited threads still fail closed because
+the direct channel policy is absent; resolving the parent policy and gate scope
+is separate work, not an admission shortcut.
+
+Drop ancestry is process-local and bounded to 1,024 IDs per scope. Eviction or
+restart loses that history; canonical lookup cannot reconstruct a historical
+dropped ancestor. An older real target may then be eligible if the current
+mention, identity, bot, ignore, and mute checks permit it. This is the existing
+inbound reply-inheritance retention limit, not a durable drop guarantee.

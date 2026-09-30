@@ -1,6 +1,9 @@
 use crate::{
-    config::LoadedConfig, gate::OutboundGate, ingress_ledger::IngressLedger,
-    mcp::tools::messaging::verify_message_target, state::State,
+    config::LoadedConfig,
+    gate::OutboundGate,
+    ingress_ledger::IngressLedger,
+    mcp::tools::messaging::{TargetPolicy, verify_message_target},
+    state::State,
 };
 use serde_json::{Value, json};
 use serenity::{
@@ -51,8 +54,10 @@ pub async fn pin_message(
         message_id,
         channel_id,
         "pin_message",
-        own_send,
-    ) {
+        TargetPolicy::IngressOrOwnSend(own_send),
+    )
+    .await
+    {
         return e;
     }
     match ctx.http.pin_message(channel_id, message_id, None).await {
@@ -79,8 +84,10 @@ pub async fn unpin_message(
         message_id,
         channel_id,
         "unpin_message",
-        own_send,
-    ) {
+        TargetPolicy::IngressOrOwnSend(own_send),
+    )
+    .await
+    {
         return e;
     }
     match ctx.http.unpin_message(channel_id, message_id, None).await {
@@ -109,8 +116,10 @@ pub async fn create_thread(
             mid,
             channel_id,
             "create_thread",
-            own_send,
-        ) {
+            TargetPolicy::IngressOrOwnSend(own_send),
+        )
+        .await
+        {
             return e;
         }
     }
@@ -166,8 +175,10 @@ pub async fn delete_message(
         message_id,
         channel_id,
         "delete_message",
-        own_send,
-    ) {
+        TargetPolicy::IngressOrOwnSend(own_send),
+    )
+    .await
+    {
         return e;
     }
     match ctx.http.delete_message(channel_id, message_id, None).await {
@@ -248,18 +259,28 @@ mod tests {
             "thread whose parent is absent from config must be denied"
         );
     }
-
-    /// dione#334: every management call site must consult the own-send signal.
-    /// With an empty ledger and empty `recent_sent_ids`, `own_send` is false and
-    /// every target is Unknown, so the phantom canary must block before any
-    /// Discord call. This goes red if any site hardcodes `own_send = true`
-    /// (the exact mutation that otherwise survives the whole suite) — or drops
-    /// the check entirely.
+    /// Even if Discord would resolve an old message, management must not
+    /// reach its REST API without ingress or a recorded own-send.
     #[tokio::test]
-    async fn management_ops_block_non_own_unknown_targets() {
-        let ctx = ctx(config_with_channel(42));
+    async fn management_ops_require_ingress_for_old_non_own_targets() {
+        use tokio::{
+            net::TcpListener,
+            time::{Duration, timeout},
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake Discord");
+        let address = listener.local_addr().expect("fake Discord address");
+        let mut ctx = ctx(config_with_channel(42));
+        ctx.http = Arc::new(
+            serenity::http::HttpBuilder::new("fake")
+                .proxy(format!("http://{address}"))
+                .ratelimiter_disabled(true)
+                .build(),
+        );
         let ch = ChannelId::new(42);
-        let target = MessageId::new(8);
+        let target = MessageId::new(9001);
         let cases = [
             ("delete_message", delete_message(&ctx, ch, target).await),
             ("pin_message", pin_message(&ctx, ch, target).await),
@@ -270,12 +291,13 @@ mod tests {
             ),
         ];
         for (op, result) in cases {
-            assert!(
-                result["error"]
-                    .as_str()
-                    .is_some_and(|error| error.contains("possible phantom")),
-                "{op} on a non-own unknown target must trip the phantom canary; got {result}"
-            );
+            assert_eq!(result["reason"], "ingress_required", "{op}: {result}");
         }
+        assert!(
+            timeout(Duration::from_millis(50), listener.accept())
+                .await
+                .is_err(),
+            "no management operation may fetch or mutate an unledgered target"
+        );
     }
 }
