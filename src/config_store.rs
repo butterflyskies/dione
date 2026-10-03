@@ -55,18 +55,6 @@ impl ConfigStore {
         })
     }
 
-    pub async fn load(state_dir: &Utf8Path) -> Result<Self, BoxError> {
-        let config_path = crate::config::config_path(state_dir);
-        let contents = match tokio::fs::read_to_string(&config_path).await {
-            Ok(s) => s,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(e) => return Err(e.into()),
-        };
-        Ok(Self {
-            doc: contents.parse()?,
-        })
-    }
-
     /// Serializes the edited document back to TOML text.
     pub fn document(&self) -> String {
         self.doc.to_string()

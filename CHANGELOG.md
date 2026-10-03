@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-10-03
+
+### Removed
+- Remove the unused public `ConfigStore::load` async constructor. Configuration
+  mutations continue to use `ConfigRuntime::mutate` and its blocking loader.
+
 ## [0.47.1] - 2026-10-03
 
 ### Changed
