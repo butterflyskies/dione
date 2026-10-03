@@ -1266,8 +1266,8 @@ impl LoadedConfig {
             };
         let pre_send_author_id = raw.pre_send.author_id;
         // Coordinators identify as `pre_send.author_id` when set, else as the
-        // gateway's own bot id once Ready (#445): a missing key no longer
-        // switches coordination off silently.
+        // gateway's own bot id once Ready (#445), so a missing key does not
+        // switch coordination off silently.
         let coordinator_bot_id = pre_send_author_id.map(|id| id.get().to_string());
         if coordinator_bot_id.is_none()
             && crate::coordination::gateway_bot_id().is_none()

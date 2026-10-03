@@ -883,8 +883,9 @@ async fn channel_coordinator(
 }
 
 /// Claim the right to answer `message_id` before sending. `Err` is the tool
-/// error returned to the construct; `Ok` lets the send proceed, carrying
-/// `true` when this seat holds a claim it must `done` or `release`. That
+/// error returned to the construct: when another seat holds the claim, it
+/// names who is ahead. `Ok` lets the send proceed, carrying `true` when this
+/// seat holds a claim it must `done` or `release`. That
 /// includes a fail-open send whose claim reached the server unanswered: the
 /// server may have made this seat the owner, and a `done` it does not
 /// recognise is only refused.
@@ -1031,7 +1032,7 @@ async fn deliver_prepared_reply(
 
     // Claim the right to answer only now, after the hooks, the evidence
     // checks and the judge, so a reply that never goes out never holds the
-    // claim. `Wait` becomes the tool error naming who is ahead.
+    // claim.
     let claimed = match reply_to_message_id {
         Some(ref_id) => match coordinate_reply(ctx, channel_id, ref_id).await {
             Ok(claimed) => claimed.then_some(ref_id),
@@ -4900,11 +4901,9 @@ mod tests {
     struct ClaimLog {
         /// Message ids claimed (every claim, whatever the outcome).
         claimed: Vec<String>,
-        /// Message ids reported `done`.
         done: Vec<String>,
         /// The reply message id each `done` carried, parallel to `done`.
         done_replies: Vec<String>,
-        /// Message ids released by their owner.
         released: Vec<String>,
     }
 

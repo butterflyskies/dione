@@ -308,11 +308,10 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Spawn the reply-coordination forwarder: claim-once pushes become
-    // NotificationEvents on the construct stream. It subscribes to the
-    // process-wide bus, not to the startup config's coordinators, so it keeps
-    // working after a config reload builds new ones (and when coordination is
-    // first configured by a reload).
+    // The reply-coordination forwarder subscribes to the process-wide bus,
+    // not to the startup config's coordinators, so it keeps working after a
+    // config reload builds new ones (and when coordination is first
+    // configured by a reload).
     let mut coordination_rx = dione::coordination::subscribe_shared();
     let coordination_tx = event_tx.clone();
     tokio::spawn(async move {

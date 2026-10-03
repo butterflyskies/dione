@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.47.1] - 2026-10-03
+
+### Changed
+- Reply-coordination comments follow CODING_STANDARDS.md §Documentation:
+  section banners and "what" labels removed, a few reworded for the API
+  consumer. No behaviour change. (lacuna/dione#456)
+
 ## [0.47.0] - 2026-09-25
 
 ### Added

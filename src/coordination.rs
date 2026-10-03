@@ -99,9 +99,9 @@ pub struct CoordinationConfig {
         deserialize_with = "deserialize_connect_timeout_ms"
     )]
     pub connect_timeout_ms: u64,
-    /// When `true`, an [`ClaimOutcome::Unavailable`] result should be
-    /// treated by the caller as permission to reply. The client records the
-    /// setting; the reply path applies it.
+    /// When `true`, the caller should treat [`ClaimOutcome::Unavailable`] as
+    /// permission to reply. The client only records the setting; the reply
+    /// path applies it.
     #[serde(default = "default_fail_open")]
     pub fail_open: bool,
 }
@@ -549,7 +549,8 @@ struct Session {
 }
 
 impl Session {
-    /// Connect, send `hello`, and check that it was accepted.
+    /// Connect and complete the `hello` handshake; a rejected `hello` is an
+    /// error.
     async fn open(config: &CoordinationConfig, bot_id: &str) -> Result<Self, CoordinationError> {
         let timeout = Duration::from_millis(config.connect_timeout_ms);
         let stream = tokio::time::timeout(timeout, TcpStream::connect(&config.addr))
@@ -624,7 +625,7 @@ mod tests {
     const MSG: &str = "1001";
     const REPLY: &str = "2001";
 
-    // ---- in-process fake server (port of claim-once server/server.py) -----
+    // The fake server below is a port of claim-once's `server/server.py`.
 
     type Push = mpsc::UnboundedSender<Value>;
 
@@ -710,7 +711,6 @@ mod tests {
                 return json!({ "status": "proceed", "lease_ms": self.lease_ms });
             }
             if let Some(reply_id) = &key.done {
-                // Already answered: the wait shape, then the done push at once.
                 let _ = waiter.push.send(json!({
                     "event": "done",
                     "message_id": message_id,
@@ -859,8 +859,6 @@ mod tests {
             .expect("broadcast open")
     }
 
-    // ---- tests -------------------------------------------------------------
-
     #[tokio::test]
     async fn first_claim_proceeds_with_server_lease() {
         let addr = spawn_server(4321).await;
@@ -1004,7 +1002,6 @@ mod tests {
             b.claim(CHANNEL, MSG).await,
             ClaimOutcome::Wait { .. }
         ));
-        // Owner says nothing.
         assert_eq!(
             recv_event(&mut events, Duration::from_secs(2)).await,
             CoordinationEvent::Promoted {
@@ -1029,7 +1026,6 @@ mod tests {
             raw
         };
         let startup = crate::config::LoadedConfig::from_raw(raw());
-        // As main.rs does at startup.
         let mut events = startup.coordinators["claim-once"].subscribe();
         let reloaded = crate::config::LoadedConfig::from_raw(raw());
 
@@ -1088,7 +1084,6 @@ mod tests {
                 lease_ms: 1_500,
             }
         );
-        // Neither A nor (once promoted) B says anything.
         assert_eq!(
             recv_event(&mut events, Duration::from_secs(5)).await,
             CoordinationEvent::Promoted {
@@ -1277,8 +1272,6 @@ mod tests {
             other => panic!("expected Unavailable, got {other:?}"),
         };
 
-        // A claim reply with no status, with an unknown status, and one that
-        // is JSON but not an object.
         for claim_reply in [
             json!({ "error": HOSTILE }).to_string(),
             json!({ "status": HOSTILE, "note": HOSTILE }).to_string(),
@@ -1292,7 +1285,6 @@ mod tests {
             );
         }
 
-        // A rejected hello.
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         tokio::spawn(async move {
@@ -1323,7 +1315,6 @@ mod tests {
                     if let Ok(Some(_hello)) = lines.next_line().await {
                         let _ = write.write_all(b"{\"ok\":true}\n").await;
                     }
-                    // Hold the connection open, never answering again.
                     while let Ok(Some(_)) = lines.next_line().await {}
                 });
             }
