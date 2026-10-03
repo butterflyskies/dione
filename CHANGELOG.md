@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-09-25
+
+### Added
+- Reply coordination for co-hosted constructs (`src/coordination.rs`): a
+  per-channel `coordinate = "<name>"` opts a channel (and its threads) into
+  a `[coordination.<name>]` claim-once coordinator (`addr`, `lease_ms`,
+  `connect_timeout_ms`, `fail_open`; unknown keys and a zero connect
+  timeout are rejected). `reply` claims the target message just before
+  delivery, after the pre-send hooks and the contradictionary judge; a
+  losing seat gets a tool error naming who is ahead, a winning seat
+  reports `done` after the send and `release`s if delivery fails, both in
+  the background. Every request is bounded by a 2 s ack timeout, so a
+  stalled server fails open instead of blocking `reply`. The coordinator's
+  `done` / `promoted` pushes arrive as `NotificationEvent::Coordination`
+  (message and channel ids in the content) through one process-wide
+  forwarder that survives config reloads. Identifies as
+  `[pre_send] author_id` when set, else as the gateway's own bot user id
+  (lacuna/dione#445). Off by default, fail-open by default.
+  (butterflyskies/dione#341)
+
 ## [0.46.5]
 
 ### Fixed

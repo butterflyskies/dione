@@ -372,6 +372,23 @@ fn write_event_entry(out: &mut String, event: &NotificationEvent, roster: &Roste
         NotificationEvent::ConfigError { error } => {
             writeln!(out, "!config_error|{error}").unwrap();
         }
+        NotificationEvent::Coordination(event) => match event {
+            crate::coordination::CoordinationEvent::Done {
+                message_id,
+                bot_id,
+                reply_message_id,
+                ..
+            } => {
+                writeln!(
+                    out,
+                    "!coordination|done|{message_id}|{bot_id}|{reply_message_id}"
+                )
+                .unwrap();
+            }
+            crate::coordination::CoordinationEvent::Promoted { message_id, .. } => {
+                writeln!(out, "!coordination|promoted|{message_id}").unwrap();
+            }
+        },
     }
 }
 
@@ -838,5 +855,33 @@ hey everyone!
             content.contains("allow"),
             "PermissionResponse behavior must survive coalescing"
         );
+    }
+
+    /// Coordination events coalesce with other non-channel events, which keeps
+    /// only each notification's `content`. The ids the construct needs to act
+    /// must survive that.
+    #[test]
+    fn coalesced_coordination_events_keep_their_ids() {
+        use crate::coordination::CoordinationEvent;
+        let events = vec![
+            NotificationEvent::Coordination(CoordinationEvent::Promoted {
+                message_id: "1001".to_owned(),
+                channel_id: "42".to_owned(),
+            }),
+            NotificationEvent::Coordination(CoordinationEvent::Done {
+                message_id: "1002".to_owned(),
+                channel_id: "43".to_owned(),
+                bot_id: "111".to_owned(),
+                reply_message_id: "2002".to_owned(),
+            }),
+        ];
+        let v = match coalesce(events, None) {
+            Some(CoalesceResult::Coalesced(v)) => v,
+            other => panic!("expected Coalesced, got {other:?}"),
+        };
+        let content = v["params"]["content"].as_str().unwrap();
+        for id in ["1001", "42", "1002", "43", "111", "2002"] {
+            assert!(content.contains(id), "{id} lost in coalescing: {content}");
+        }
     }
 }

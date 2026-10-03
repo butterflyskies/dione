@@ -80,6 +80,7 @@ trusted_webhook_creators = ["466378653216014359"]   # PluralKit
 # [[channels]]
 # id = ""               # Discord channel ID
 # require_mention = true
+# coordinate = "claim-once"   # name of a [coordination.*] block; absent = no reply coordination
 # allow_from = []       # Discord user IDs (direct messages)
 # allow_pk_systems = [] # PluralKit system UUIDs (8-4-4-4-12 hex) or 5-char short IDs
 # allow_pk_members = [] # PluralKit member UUIDs (8-4-4-4-12 hex) or 5-char short IDs
@@ -88,6 +89,16 @@ trusted_webhook_creators = ["466378653216014359"]   # PluralKit
 # # Missing or failed webhook-creator observation -> drop.
 # # Observed non-PK creator -> app-only; admitted only on unrestricted channels.
 # # PK creator -> resolver-bound; restricted channels require an allowed identity.
+
+# Reply coordination: a channel's `coordinate` names one of these blocks. The
+# block points at the claim-once server that orders replies between co-hosted
+# constructs so exactly one answers a message. Omit entirely = today's behaviour.
+# Identity: [pre_send] author_id if set, else the bot's own id from the gateway.
+# [coordination.claim-once]
+# addr = "127.0.0.1:7431"     # host:port of the claim-once server
+# lease_ms = 240000           # fallback only: the server's lease (it echoes its own); bounds how long a waiting seat listens for done/promoted
+# connect_timeout_ms = 2000   # TCP connect budget (ms); must be > 0
+# fail_open = true            # reply anyway when the coordinator is unreachable
 
 [delivery]
 text_chunk_limit = 2000

@@ -5,6 +5,7 @@
 //! line — no batch wrapping.
 
 use crate::{
+    coordination::CoordinationEvent,
     discord::events::{MessageEvent, NotificationEvent},
     evidence::project_sentexes,
 };
@@ -236,6 +237,54 @@ impl IntoNotification for NotificationEvent {
                         "meta": {
                             "type": "config_error",
                         },
+                    }
+                })
+            }
+            NotificationEvent::Coordination(event) => {
+                let message_id = event.message_id().to_owned();
+                let channel_id = event.channel_id().to_owned();
+                let (kind, by, reply_id) = match &event {
+                    CoordinationEvent::Done {
+                        bot_id,
+                        reply_message_id,
+                        ..
+                    } => (
+                        "done",
+                        Some(bot_id.as_str()),
+                        Some(reply_message_id.as_str()),
+                    ),
+                    CoordinationEvent::Promoted { .. } => ("promoted", None, None),
+                };
+                let mut meta = json!({
+                    "type": "coordination",
+                    "event": kind,
+                    "chat_id": channel_id,
+                    "message_id": message_id,
+                });
+                if let Some(by) = by {
+                    meta["by"] = json!(by);
+                }
+                if let Some(reply_id) = reply_id {
+                    meta["reply_message_id"] = json!(reply_id);
+                }
+                // The ids live in `content` too: coalescing keeps only the
+                // content of non-channel events.
+                let content = match kind {
+                    "done" => format!(
+                        "claim-once: {} replied to message {message_id} in channel {channel_id} (reply {}); no reply needed",
+                        by.unwrap_or("another construct"),
+                        reply_id.unwrap_or("unknown"),
+                    ),
+                    _ => format!(
+                        "claim-once: you may now reply to message {message_id} in channel {channel_id}"
+                    ),
+                };
+                json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/claude/channel",
+                    "params": {
+                        "content": content,
+                        "meta": meta,
                     }
                 })
             }
@@ -700,5 +749,41 @@ mod tests {
         ] {
             assert!(meta.get(forbidden).is_none(), "leaked {forbidden}");
         }
+    }
+
+    #[test]
+    fn coordination_done_event_serializes_with_metadata() {
+        let event = NotificationEvent::Coordination(crate::coordination::CoordinationEvent::Done {
+            message_id: "7".to_owned(),
+            channel_id: "42".to_owned(),
+            bot_id: "111".to_owned(),
+            reply_message_id: "99".to_owned(),
+        });
+        let json = event.into_notification();
+        assert_eq!(json["method"], "notifications/claude/channel");
+        let meta = &json["params"]["meta"];
+        assert_eq!(meta["type"], "coordination");
+        assert_eq!(meta["event"], "done");
+        assert_eq!(meta["message_id"], "7");
+        assert_eq!(meta["chat_id"], "42");
+        assert_eq!(meta["by"], "111");
+        assert_eq!(meta["reply_message_id"], "99");
+    }
+
+    #[test]
+    fn coordination_promoted_event_serializes_without_reply_fields() {
+        let event =
+            NotificationEvent::Coordination(crate::coordination::CoordinationEvent::Promoted {
+                message_id: "7".to_owned(),
+                channel_id: "42".to_owned(),
+            });
+        let json = event.into_notification();
+        let meta = &json["params"]["meta"];
+        assert_eq!(meta["type"], "coordination");
+        assert_eq!(meta["event"], "promoted");
+        assert_eq!(meta["message_id"], "7");
+        assert_eq!(meta["chat_id"], "42");
+        assert!(meta.get("by").is_none());
+        assert!(meta.get("reply_message_id").is_none());
     }
 }

@@ -8,6 +8,7 @@ pub(crate) mod config_candidate;
 pub mod config_store;
 pub mod config_watcher;
 pub mod contradictionary;
+pub mod coordination;
 pub mod delivery_buffer;
 pub mod discord;
 pub mod drop_ledger;

@@ -311,6 +311,9 @@ pub enum NotificationEvent {
     ConfigError {
         error: String,
     },
+    /// A push from the reply-coordination client: the construct ahead replied
+    /// (`Done`) or everyone ahead released/timed out (`Promoted`).
+    Coordination(crate::coordination::CoordinationEvent),
 }
 
 impl NotificationEvent {
@@ -486,6 +489,7 @@ impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: Ready) {
         let id = ready.user.id.get();
         self.bot_user_id.store(id, Ordering::Relaxed);
+        crate::coordination::set_gateway_bot_id(id);
         tracing::info!(
             user = %ready.user.name,
             id,

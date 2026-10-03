@@ -1,6 +1,7 @@
 use crate::{
     config::{ChunkMode, DmPolicy, LoadedConfig},
     contradictionary::{Action, BlockOutcome, DiaryRecord, append_diary_record},
+    coordination::{ClaimOutcome, Coordinator},
     discord::{chunk, chunk_preserving_fences_with_context, events::NotificationEvent},
     evidence::{
         SentexHandles, SentexRole, SentexTransport, append_markers, has_terminal_sentex_syntax,
@@ -853,6 +854,117 @@ pub(crate) async fn reply_with_evidence_and_hook_overrides(
     .await
 }
 
+/// The coordinator (and its config-block name) for a channel, if one is
+/// configured and the channel is opted in via `coordinate`. A thread without
+/// its own policy uses its parent's, as the inbound and outbound gates do.
+async fn channel_coordinator(
+    ctx: &MessagingCtx,
+    channel_id: ChannelId,
+) -> Option<(&str, &Coordinator)> {
+    let policy = match ctx.config.channel_policy(channel_id.get()) {
+        Some(policy) => policy,
+        None => {
+            let parent = ctx
+                .state
+                .read()
+                .await
+                .thread_parents
+                .get(&channel_id.get())
+                .copied()
+                .flatten()?;
+            ctx.config.channel_policy(parent)?
+        }
+    };
+    let name = policy.coordinate.as_deref()?;
+    ctx.config
+        .coordinators
+        .get(name)
+        .map(|coordinator| (name, coordinator))
+}
+
+/// Claim the right to answer `message_id` before sending. `Err` is the tool
+/// error returned to the construct; `Ok` lets the send proceed, carrying
+/// `true` when this seat holds a claim it must `done` or `release`. That
+/// includes a fail-open send whose claim reached the server unanswered: the
+/// server may have made this seat the owner, and a `done` it does not
+/// recognise is only refused.
+async fn coordinate_reply(
+    ctx: &MessagingCtx,
+    channel_id: ChannelId,
+    message_id: MessageId,
+) -> Result<bool, Value> {
+    let Some((name, coordinator)) = channel_coordinator(ctx, channel_id).await else {
+        return Ok(false);
+    };
+    let mid = message_id.get().to_string();
+    match coordinator.claim(&channel_id.get().to_string(), &mid).await {
+        ClaimOutcome::Proceed { .. } => Ok(true),
+        ClaimOutcome::Unavailable { reason, claim_sent } if coordinator.config().fail_open => {
+            tracing::warn!(
+                channel = %channel_id,
+                coordinator = %name,
+                %reason,
+                claim_sent,
+                "claim-once unavailable; failing open and replying"
+            );
+            Ok(claim_sent)
+        }
+        ClaimOutcome::Unavailable { reason, claim_sent } => {
+            // The refused reply will not go out; do not leave a claim the
+            // server may have recorded to run out its lease.
+            if claim_sent {
+                release_reply_claim(ctx, channel_id, message_id).await;
+            }
+            Err(json!({
+                "error": format!("claim-once unavailable and fail-closed: {reason}")
+            }))
+        }
+        ClaimOutcome::Wait { ahead, .. } => {
+            let who = ahead
+                .first()
+                .map(String::as_str)
+                .unwrap_or("another construct");
+            Err(json!({
+                "error": format!("claim-once: {who} is already answering this message")
+            }))
+        }
+    }
+}
+
+/// Report a successful reply back to the coordinator so waiters are released.
+/// Fire-and-forget: the report runs in a background task, so a slow or
+/// blackholed server never delays the reply; failures only log inside the
+/// client.
+async fn report_reply_done(
+    ctx: &MessagingCtx,
+    channel_id: ChannelId,
+    message_id: MessageId,
+    reply_id: MessageId,
+) {
+    let Some((_name, coordinator)) = channel_coordinator(ctx, channel_id).await else {
+        return;
+    };
+    let coordinator = coordinator.clone();
+    tokio::spawn(async move {
+        coordinator
+            .done(&message_id.get().to_string(), &reply_id.get().to_string())
+            .await;
+    });
+}
+
+/// Step aside on a claimed `message_id` whose reply did not go out, so the
+/// next seat in line is promoted now rather than at lease expiry.
+/// Fire-and-forget, like [`report_reply_done`].
+async fn release_reply_claim(ctx: &MessagingCtx, channel_id: ChannelId, message_id: MessageId) {
+    let Some((_name, coordinator)) = channel_coordinator(ctx, channel_id).await else {
+        return;
+    };
+    let coordinator = coordinator.clone();
+    tokio::spawn(async move {
+        coordinator.release(&message_id.get().to_string()).await;
+    });
+}
+
 struct ReplyTransportOptions {
     suppress_ping: bool,
 }
@@ -917,8 +1029,27 @@ async fn deliver_prepared_reply(
         return bounce_json(&ticket);
     }
 
+    // Claim the right to answer only now, after the hooks, the evidence
+    // checks and the judge, so a reply that never goes out never holds the
+    // claim. `Wait` becomes the tool error naming who is ahead.
+    let claimed = match reply_to_message_id {
+        Some(ref_id) => match coordinate_reply(ctx, channel_id, ref_id).await {
+            Ok(claimed) => claimed.then_some(ref_id),
+            Err(error) => return error,
+        },
+        None => None,
+    };
+
     match deliver_reply(ctx, &request).await {
         Ok(sent_ids) => {
+            if let Some(ref_id) = claimed {
+                match sent_ids.first() {
+                    Some(reply_id) => {
+                        report_reply_done(ctx, channel_id, ref_id, MessageId::new(*reply_id)).await;
+                    }
+                    None => release_reply_claim(ctx, channel_id, ref_id).await,
+                }
+            }
             let mut response = json!({ "ok": true, "message_ids": sent_ids });
             let locators = parse_sentex_locators(&content);
             if ctx.config.delivery.evidence_markers_enabled && !locators.is_empty() {
@@ -941,7 +1072,20 @@ async fn deliver_prepared_reply(
             }
             response
         }
-        Err(e) => json!({ "error": e.message }),
+        Err(e) => {
+            // A chunk that already posted is a visible reply: report `done`
+            // with the first posted id, or the other seat is promoted into a
+            // second answer. Release only when nothing went out.
+            if let Some(ref_id) = claimed {
+                match e.sent_ids.first() {
+                    Some(reply_id) => {
+                        report_reply_done(ctx, channel_id, ref_id, MessageId::new(*reply_id)).await;
+                    }
+                    None => release_reply_claim(ctx, channel_id, ref_id).await,
+                }
+            }
+            json!({ "error": e.message })
+        }
     }
 }
 
@@ -2065,7 +2209,7 @@ mod tests {
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
+        io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
 
@@ -2946,6 +3090,9 @@ mod tests {
         let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
         let captured = Arc::clone(&requests);
         let server = tokio::spawn(async move {
+            // Each posted message gets its own id (9001, 9002, ...), so a
+            // test can tell one chunk's id from another's.
+            let mut next_post_id = 9001u64;
             loop {
                 let Ok((mut stream, _)) = listener.accept().await else {
                     return;
@@ -3013,7 +3160,9 @@ mod tests {
                 } else if path.ends_with("/typing") {
                     ("204 No Content", String::new())
                 } else if request_line.starts_with("GET ")
-                    && [9001, 9004, 9006, 9007, 9008]
+                    // 7001 is a source message whose id no posted reply
+                    // shares (posted ids start at 9001).
+                    && [7001, 9001, 9004, 9006, 9007, 9008]
                         .iter()
                         .any(|id| path.ends_with(&format!("/channels/42/messages/{id}")))
                 {
@@ -3083,20 +3232,25 @@ mod tests {
                     )
                 } else if request_line.starts_with("PUT ") && path.contains("/reactions/") {
                     ("204 No Content", String::new())
+                } else if request_line.starts_with("POST ")
+                    && path.ends_with("/messages")
+                    && body.contains("force-delivery-failure")
+                {
+                    (
+                        "403 Forbidden",
+                        json!({ "message": "Missing Permissions", "code": 50013 }).to_string(),
+                    )
                 } else if request_line.starts_with("POST ") && path.ends_with("/messages") {
                     let content = serde_json::from_str::<Value>(body)
                         .ok()
                         .and_then(|body| body["content"].as_str().map(str::to_owned))
                         .unwrap_or_default();
+                    let id = next_post_id;
+                    next_post_id += 1;
                     (
                         "200 OK",
-                        wire_message(
-                            9001,
-                            &content,
-                            "2026-08-15T09:00:00.000000+00:00",
-                            json!([]),
-                        )
-                        .to_string(),
+                        wire_message(id, &content, "2026-08-15T09:00:00.000000+00:00", json!([]))
+                            .to_string(),
                     )
                 } else {
                     ("404 Not Found", "{}".to_owned())
@@ -4739,5 +4893,619 @@ mod tests {
         assert_eq!(resp["count"], 0);
         assert_eq!(resp["has_more"], false);
         assert!(resp["messages"].as_array().unwrap().is_empty());
+    }
+
+    /// What the fake claim-once server saw, by message id.
+    #[derive(Default)]
+    struct ClaimLog {
+        /// Message ids claimed (every claim, whatever the outcome).
+        claimed: Vec<String>,
+        /// Message ids reported `done`.
+        done: Vec<String>,
+        /// The reply message id each `done` carried, parallel to `done`.
+        done_replies: Vec<String>,
+        /// Message ids released by their owner.
+        released: Vec<String>,
+    }
+
+    /// Minimal in-process claim-once server speaking the real server's
+    /// shapes: first claim on a key proceeds, later ones from other bots
+    /// wait behind the owner; the owner may `done` or `release`.
+    async fn fake_claim_server() -> (String, Arc<std::sync::Mutex<ClaimLog>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake claim-once");
+        let addr = listener
+            .local_addr()
+            .expect("fake claim-once addr")
+            .to_string();
+        let owners = Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+            String,
+            String,
+        >::new()));
+        let log = Arc::new(std::sync::Mutex::new(ClaimLog::default()));
+        let (owners2, log2) = (Arc::clone(&owners), Arc::clone(&log));
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let (owners, log) = (Arc::clone(&owners2), Arc::clone(&log2));
+                tokio::spawn(async move {
+                    let (read_half, mut write_half) = stream.into_split();
+                    let mut lines = tokio::io::BufReader::new(read_half).lines();
+                    let mut bot = String::new();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let req: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
+                        let mid = req["message_id"].as_str().unwrap_or("").to_owned();
+                        let resp = match req.get("msg").and_then(Value::as_str) {
+                            Some("hello") => {
+                                bot = req["bot_id"].as_str().unwrap_or("").to_owned();
+                                json!({ "ok": true })
+                            }
+                            Some("claim") => {
+                                log.lock().unwrap().claimed.push(mid.clone());
+                                let mut owners = owners.lock().unwrap();
+                                let owner = owners.entry(mid).or_insert_with(|| bot.clone());
+                                if *owner == bot {
+                                    json!({ "status": "proceed", "lease_ms": 10000 })
+                                } else {
+                                    json!({ "status": "wait", "ahead": [owner], "lease_ms": 10000 })
+                                }
+                            }
+                            Some(kind @ ("done" | "release")) => {
+                                let mut owners = owners.lock().unwrap();
+                                if owners.get(&mid) != Some(&bot) {
+                                    json!({ "error": "not owner" })
+                                } else {
+                                    let mut log = log.lock().unwrap();
+                                    if kind == "done" {
+                                        log.done.push(mid);
+                                        log.done_replies.push(
+                                            req["reply_message_id"]
+                                                .as_str()
+                                                .unwrap_or("")
+                                                .to_owned(),
+                                        );
+                                    } else {
+                                        owners.remove(&mid);
+                                        log.released.push(mid);
+                                    }
+                                    json!({ "ok": true })
+                                }
+                            }
+                            _ => continue,
+                        };
+                        if write_half
+                            .write_all(format!("{resp}\n").as_bytes())
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (addr, log)
+    }
+
+    /// Poll `check` against the fake server's log for up to two seconds.
+    async fn eventually(
+        log: &std::sync::Mutex<ClaimLog>,
+        check: impl Fn(&ClaimLog) -> bool,
+    ) -> bool {
+        for _ in 0..40 {
+            if check(&log.lock().unwrap()) {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        false
+    }
+
+    /// A `LoadedConfig` with channel 42 opted into a `claim-once` block at
+    /// `addr`, identifying as `bot_id`.
+    fn coordinated_config(addr: &str, bot_id: u64) -> LoadedConfig {
+        let mut raw = Config::default();
+        raw.pre_send.author_id = Some(UserId::new(bot_id));
+        raw.coordination.insert(
+            "claim-once".to_owned(),
+            crate::coordination::CoordinationConfig {
+                addr: addr.to_owned(),
+                lease_ms: 10_000,
+                connect_timeout_ms: 2_000,
+                fail_open: true,
+            },
+        );
+        raw.channels.push(ChannelConfig {
+            id: "42".to_owned(),
+            require_mention: false,
+            coordinate: Some("claim-once".to_owned()),
+            ..Default::default()
+        });
+        raw.phantom_canary.alert_channel_id = "99".into();
+        LoadedConfig::from_raw(raw)
+    }
+
+    /// A thread under an opted-in channel resolves to its parent's policy (as
+    /// the inbound and outbound gates do), so the second seat waits there too.
+    #[tokio::test]
+    async fn thread_under_coordinated_channel_is_coordinated() {
+        let (addr, _done) = fake_claim_server().await;
+        let http = Arc::new(serenity::http::Http::new("fake"));
+        let ctx_a = messaging_ctx_with_http(coordinated_config(&addr, 111), Arc::clone(&http));
+        let ctx_b = messaging_ctx_with_http(coordinated_config(&addr, 222), Arc::clone(&http));
+        for ctx in [&ctx_a, &ctx_b] {
+            ctx.state.write().await.record_thread_parent(4242, Some(42));
+        }
+
+        assert!(
+            coordinate_reply(&ctx_a, ChannelId::new(4242), MessageId::new(7))
+                .await
+                .is_ok(),
+            "first claim in the thread must proceed"
+        );
+        let err = coordinate_reply(&ctx_b, ChannelId::new(4242), MessageId::new(7))
+            .await
+            .expect_err("second seat must wait in a thread of a coordinated channel");
+        assert!(
+            err["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("already answering")),
+            "{err}"
+        );
+    }
+
+    /// A reply refused by a pre-send hook never goes out, so it must not hold
+    /// the claim (the other seat would sit out the whole lease).
+    #[tokio::test]
+    async fn hook_refused_reply_does_not_hold_the_claim() {
+        let (addr, log) = fake_claim_server().await;
+        let (http, _requests, server) = fake_discord_http().await;
+        let pipeline = PreSendPipeline::new(vec![Box::new(SurfaceHaltHook {
+            surfaces: Arc::new(std::sync::Mutex::new(Vec::new())),
+        })])
+        .expect("valid pipeline")
+        .with_mode(PipelineMode::Enforce);
+        let ctx_a = messaging_ctx_with_http(coordinated_config(&addr, 111), Arc::clone(&http))
+            .with_pre_send_pipeline(Arc::new(pipeline));
+        let ctx_b = messaging_ctx_with_http(coordinated_config(&addr, 222), http);
+
+        let refused = reply(
+            &ctx_a,
+            ChannelId::new(42),
+            "no",
+            Some(MessageId::new(9001)),
+            false,
+        )
+        .await;
+        assert!(
+            refused.get("error").is_some(),
+            "hook must refuse: {refused}"
+        );
+        assert!(
+            !log.lock().unwrap().claimed.iter().any(|mid| mid == "9001"),
+            "a hook-refused reply must not claim"
+        );
+        assert!(
+            coordinate_reply(&ctx_b, ChannelId::new(42), MessageId::new(9001))
+                .await
+                .is_ok(),
+            "a refused reply must leave the message free for the other seat"
+        );
+        server.abort();
+    }
+
+    /// A claimed reply whose delivery fails releases the claim so the next seat
+    /// is promoted at once.
+    #[tokio::test]
+    async fn failed_delivery_releases_the_claim() {
+        let (addr, log) = fake_claim_server().await;
+        let (http, _requests, server) = fake_discord_http().await;
+        let ctx_a = messaging_ctx_with_http(coordinated_config(&addr, 111), Arc::clone(&http));
+        let ctx_b = messaging_ctx_with_http(coordinated_config(&addr, 222), http);
+
+        let failed = reply(
+            &ctx_a,
+            ChannelId::new(42),
+            "force-delivery-failure",
+            Some(MessageId::new(9001)),
+            false,
+        )
+        .await;
+        assert!(
+            failed.get("error").is_some(),
+            "delivery must fail: {failed}"
+        );
+        assert!(
+            eventually(&log, |log| log.released.iter().any(|mid| mid == "9001")).await,
+            "a failed delivery must release its claim"
+        );
+        assert!(
+            coordinate_reply(&ctx_b, ChannelId::new(42), MessageId::new(9001))
+                .await
+                .is_ok(),
+            "after the release the other seat may answer"
+        );
+        server.abort();
+    }
+
+    /// A multi-chunk reply whose first chunk posted before a later chunk failed
+    /// is already visible, so it reports `done` with the first posted id.
+    /// Releasing would promote the other seat into a double reply.
+    ///
+    /// The source message (7001) and the posted chunks (9001, 9002) have
+    /// distinct ids, so `done` carrying the source id or a later chunk's id
+    /// fails here.
+    #[tokio::test]
+    async fn partly_delivered_reply_reports_done_not_release() {
+        let (addr, log) = fake_claim_server().await;
+        let (http, requests, server) = fake_discord_http().await;
+        let mut raw = coordinated_config(&addr, 111).raw;
+        raw.delivery.text_chunk_limit = 24;
+        let ctx_a = messaging_ctx_with_http(LoadedConfig::from_raw(raw), Arc::clone(&http));
+        let ctx_b = messaging_ctx_with_http(coordinated_config(&addr, 222), http);
+
+        let partial = reply(
+            &ctx_a,
+            ChannelId::new(42),
+            "first chunk goes out\n\nsecond chunk goes too\n\nforce-delivery-failure",
+            Some(MessageId::new(7001)),
+            false,
+        )
+        .await;
+        assert!(
+            partial.get("error").is_some(),
+            "the third chunk must fail: {partial}"
+        );
+        assert_eq!(
+            requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(path, _)| path.ends_with("/channels/42/messages"))
+                .count(),
+            3,
+            "two chunks post (9001, 9002) before the third fails"
+        );
+        assert!(
+            eventually(&log, |log| log.done.iter().any(|mid| mid == "7001")).await,
+            "a partly-delivered reply must report done"
+        );
+        {
+            let log = log.lock().unwrap();
+            assert_eq!(
+                log.done_replies,
+                vec!["9001".to_owned()],
+                "done must carry the first posted chunk's id, not the source's or a later chunk's"
+            );
+            assert!(
+                !log.released.iter().any(|mid| mid == "7001"),
+                "a partly-delivered reply must not release its claim"
+            );
+        }
+        assert!(
+            coordinate_reply(&ctx_b, ChannelId::new(42), MessageId::new(7001))
+                .await
+                .is_err(),
+            "the other seat must not be promoted into a second reply"
+        );
+        server.abort();
+    }
+
+    /// Reporting `done` is fire-and-forget, so a server that accepts the
+    /// connection but never acknowledges must not hold the reply for the ack
+    /// timeout.
+    #[tokio::test]
+    async fn done_report_does_not_block_on_a_stalled_server() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let (read_half, _write_half) = stream.into_split();
+                    let mut lines = tokio::io::BufReader::new(read_half).lines();
+                    while let Ok(Some(_)) = lines.next_line().await {}
+                });
+            }
+        });
+        let ctx = messaging_ctx(coordinated_config(&addr, 111));
+        let started = std::time::Instant::now();
+        report_reply_done(
+            &ctx,
+            ChannelId::new(42),
+            MessageId::new(7),
+            MessageId::new(99),
+        )
+        .await;
+        release_reply_claim(&ctx, ChannelId::new(42), MessageId::new(8)).await;
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(500),
+            "done/release must not wait on the server: took {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// A claim-once server that records a `claim` but never answers it,
+    /// while answering `hello`, `done` and `release` at once: a claim ack
+    /// slower than the client's timeout.
+    async fn fake_claim_server_silent_on_claim() -> (String, Arc<std::sync::Mutex<ClaimLog>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let log = Arc::new(std::sync::Mutex::new(ClaimLog::default()));
+        let log2 = Arc::clone(&log);
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let log = Arc::clone(&log2);
+                tokio::spawn(async move {
+                    let (read_half, mut write_half) = stream.into_split();
+                    let mut lines = tokio::io::BufReader::new(read_half).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let req: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
+                        let mid = req["message_id"].as_str().unwrap_or("").to_owned();
+                        match req.get("msg").and_then(Value::as_str) {
+                            Some("hello") => {}
+                            Some("claim") => {
+                                log.lock().unwrap().claimed.push(mid);
+                                continue;
+                            }
+                            Some("done") => {
+                                let mut log = log.lock().unwrap();
+                                log.done.push(mid);
+                                log.done_replies.push(
+                                    req["reply_message_id"].as_str().unwrap_or("").to_owned(),
+                                );
+                            }
+                            Some("release") => log.lock().unwrap().released.push(mid),
+                            _ => continue,
+                        }
+                        if write_half.write_all(b"{\"ok\":true}\n").await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (addr, log)
+    }
+
+    /// A claim the server received but acknowledged too late fails open, and
+    /// the server still holds this seat as owner. The reply must report `done`
+    /// anyway, or the other seat is promoted at lease expiry into a second
+    /// answer.
+    #[tokio::test]
+    async fn fail_open_after_unanswered_claim_still_reports_done() {
+        let (addr, log) = fake_claim_server_silent_on_claim().await;
+        let (http, _requests, server) = fake_discord_http().await;
+        let ctx = messaging_ctx_with_http(coordinated_config(&addr, 111), http);
+        let sent = reply(
+            &ctx,
+            ChannelId::new(42),
+            "answer",
+            Some(MessageId::new(7001)),
+            false,
+        )
+        .await;
+        assert_eq!(sent["ok"], true, "the reply must fail open: {sent}");
+        assert!(
+            eventually(&log, |log| log.done.iter().any(|mid| mid == "7001")).await,
+            "a fail-open reply whose claim was sent must still report done"
+        );
+        let log = log.lock().unwrap();
+        assert_eq!(log.claimed, vec!["7001".to_owned()]);
+        assert_eq!(log.done_replies, vec!["9001".to_owned()]);
+        assert!(log.released.is_empty());
+        server.abort();
+    }
+
+    /// The same unanswered claim when the reply does not go out: fail-open
+    /// with a failed delivery, and fail-closed, both release the claim the
+    /// server may hold rather than leave it to the lease.
+    #[tokio::test]
+    async fn unanswered_claim_is_released_when_no_reply_goes_out() {
+        let (addr, log) = fake_claim_server_silent_on_claim().await;
+        let (http, _requests, server) = fake_discord_http().await;
+        let ctx = messaging_ctx_with_http(coordinated_config(&addr, 111), Arc::clone(&http));
+        let failed = reply(
+            &ctx,
+            ChannelId::new(42),
+            "force-delivery-failure",
+            Some(MessageId::new(7001)),
+            false,
+        )
+        .await;
+        assert!(
+            failed.get("error").is_some(),
+            "delivery must fail: {failed}"
+        );
+        assert!(
+            eventually(&log, |log| log.released.iter().any(|mid| mid == "7001")).await,
+            "a failed fail-open delivery must release the unanswered claim"
+        );
+
+        let mut raw = coordinated_config(&addr, 111).raw.clone();
+        raw.coordination.get_mut("claim-once").unwrap().fail_open = false;
+        let closed = messaging_ctx_with_http(LoadedConfig::from_raw(raw), http);
+        coordinate_reply(&closed, ChannelId::new(42), MessageId::new(7002))
+            .await
+            .expect_err("fail_open = false must refuse");
+        assert!(
+            eventually(&log, |log| log.released.iter().any(|mid| mid == "7002")).await,
+            "a fail-closed refusal must release the unanswered claim"
+        );
+        assert!(log.lock().unwrap().done.is_empty());
+        server.abort();
+    }
+
+    /// With no `pre_send.author_id`, coordination must not silently switch off;
+    /// it identifies as the gateway's own bot user id, learned at Ready.
+    #[tokio::test]
+    async fn coordination_without_author_id_uses_gateway_bot_id() {
+        let (addr, log) = fake_claim_server().await;
+        let mut raw = coordinated_config(&addr, 1).raw.clone();
+        raw.pre_send.author_id = None;
+        let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
+        crate::coordination::set_gateway_bot_id(424_242);
+        assert_eq!(
+            coordinate_reply(&ctx, ChannelId::new(42), MessageId::new(445)).await,
+            Ok(true),
+            "an opted-in channel must claim even without pre_send.author_id"
+        );
+        assert!(log.lock().unwrap().claimed.iter().any(|mid| mid == "445"));
+    }
+
+    /// A coordinated config whose claim-once server is a closed port.
+    async fn unreachable_coordinator_config(fail_open: bool) -> LoadedConfig {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        drop(listener);
+        let mut raw = coordinated_config(&addr, 111).raw.clone();
+        let block = raw.coordination.get_mut("claim-once").unwrap();
+        block.connect_timeout_ms = 500;
+        block.fail_open = fail_open;
+        LoadedConfig::from_raw(raw)
+    }
+
+    /// An unreachable coordinator lets the reply through when `fail_open`, and
+    /// refuses it when not.
+    #[tokio::test]
+    async fn unreachable_coordinator_fails_open_or_closed_as_configured() {
+        let open = messaging_ctx(unreachable_coordinator_config(true).await);
+        assert_eq!(
+            coordinate_reply(&open, ChannelId::new(42), MessageId::new(7)).await,
+            Ok(false),
+            "fail_open = true must let the reply through, holding no claim"
+        );
+        let closed = messaging_ctx(unreachable_coordinator_config(false).await);
+        let err = coordinate_reply(&closed, ChannelId::new(42), MessageId::new(7))
+            .await
+            .expect_err("fail_open = false must refuse");
+        assert!(
+            err["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("fail-closed")),
+            "{err}"
+        );
+    }
+
+    /// A real coordinated `reply` that reaches Discord reports `done` with the
+    /// sent message's id.
+    ///
+    /// The source message (7001) and the posted reply (9001) have distinct ids,
+    /// so `done` carrying the source id fails here.
+    #[tokio::test]
+    async fn coordinated_reply_reports_done_after_send() {
+        let (addr, log) = fake_claim_server().await;
+        let (http, requests, server) = fake_discord_http().await;
+        let ctx = messaging_ctx_with_http(coordinated_config(&addr, 111), http);
+        let sent = reply(
+            &ctx,
+            ChannelId::new(42),
+            "answer",
+            Some(MessageId::new(7001)),
+            false,
+        )
+        .await;
+        assert_eq!(sent["ok"], true, "{sent}");
+        assert!(
+            requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(path, _)| path.ends_with("/channels/42/messages")),
+            "the reply must reach Discord"
+        );
+        assert!(
+            eventually(&log, |log| log.done.iter().any(|mid| mid == "7001")).await,
+            "a sent reply must report done"
+        );
+        assert_eq!(
+            log.lock().unwrap().done_replies,
+            vec!["9001".to_owned()],
+            "done must carry the posted reply's id, not the source message's"
+        );
+        server.abort();
+    }
+
+    /// A channel that does not opt in never touches the coordinator.
+    #[tokio::test]
+    async fn channel_without_coordinate_makes_no_claim() {
+        let (addr, log) = fake_claim_server().await;
+        let mut raw = coordinated_config(&addr, 111).raw.clone();
+        raw.channels.push(ChannelConfig {
+            id: "43".to_owned(),
+            require_mention: false,
+            ..Default::default()
+        });
+        let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
+        assert_eq!(
+            coordinate_reply(&ctx, ChannelId::new(43), MessageId::new(7)).await,
+            Ok(false)
+        );
+        assert!(
+            log.lock().unwrap().claimed.is_empty(),
+            "no claim for an opted-out channel"
+        );
+    }
+
+    /// Two constructs sharing one coordination block: the first claim proceeds,
+    /// the second is told who is ahead, and the winner's `done` reaches the
+    /// server.
+    #[tokio::test]
+    async fn coordination_orders_two_constructs_one_proceed_one_wait() {
+        let (addr, done) = fake_claim_server().await;
+        let http = Arc::new(serenity::http::Http::new("fake"));
+
+        let config = |bot_id: u64| {
+            let mut raw = Config::default();
+            raw.pre_send.author_id = Some(UserId::new(bot_id));
+            raw.coordination.insert(
+                "claim-once".to_owned(),
+                crate::coordination::CoordinationConfig {
+                    addr: addr.clone(),
+                    lease_ms: 10_000,
+                    connect_timeout_ms: 2_000,
+                    fail_open: true,
+                },
+            );
+            raw.channels.push(ChannelConfig {
+                id: "42".to_owned(),
+                coordinate: Some("claim-once".to_owned()),
+                ..Default::default()
+            });
+            LoadedConfig::from_raw(raw)
+        };
+
+        let ctx_a = messaging_ctx_with_http(config(111), Arc::clone(&http));
+        let ctx_b = messaging_ctx_with_http(config(222), Arc::clone(&http));
+
+        assert!(
+            coordinate_reply(&ctx_a, ChannelId::new(42), MessageId::new(7))
+                .await
+                .is_ok(),
+            "first claim must proceed"
+        );
+        let err = coordinate_reply(&ctx_b, ChannelId::new(42), MessageId::new(7))
+            .await
+            .expect_err("second claim must wait");
+        assert!(
+            err["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("already answering")),
+            "wait must name who is ahead: {err}"
+        );
+
+        report_reply_done(
+            &ctx_a,
+            ChannelId::new(42),
+            MessageId::new(7),
+            MessageId::new(99),
+        )
+        .await;
+        assert!(
+            eventually(&done, |log| log.done.iter().any(|mid| mid == "7")).await,
+            "done must reach the claim server"
+        );
     }
 }

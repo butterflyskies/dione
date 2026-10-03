@@ -2,6 +2,7 @@ use crate::{
     config_candidate::{compose_candidate, resolve_sidecar_path},
     config_store::{BoxError, ConfigStore},
     contradictionary::{Contradictionary, ContradictionaryConfig, Entry, load_sidecar_entries},
+    coordination::{CoordinationConfig, Coordinator},
     discord::verified_action::PLURALKIT_APPLICATION_ID,
     pre_send::ConstructId,
     timestamp::Timestamp,
@@ -113,6 +114,9 @@ pub struct Config {
     pub rate_limit: RateLimitTomlConfig,
     pub contradictionary: ContradictionaryConfig,
     pub pre_send: PreSendConfig,
+    /// Named reply-coordination backends, keyed by the name a channel's
+    /// `coordinate` field references (`[coordination.<name>]` in TOML).
+    pub coordination: HashMap<String, CoordinationConfig>,
     /// Optional Vaelii receipt writer for explicit message reads.
     pub vaelii: crate::vaelii::VaeliiConfig,
     /// Inbound memory-bell shadow evaluation.
@@ -810,6 +814,10 @@ pub enum DmPolicy {
 pub struct ChannelConfig {
     pub id: String,
     pub require_mention: bool,
+    /// Name of a `[coordination.<name>]` block to coordinate replies through.
+    /// Absent = replies are sent without coordination.
+    #[serde(default)]
+    pub coordinate: Option<String>,
     pub allow_from: Vec<String>,
     /// PluralKit system UUIDs allowed on this channel.
     /// When non-empty, a PK-proxied message whose system UUID matches is admitted.
@@ -832,6 +840,7 @@ impl Default for ChannelConfig {
         Self {
             id: String::new(),
             require_mention: true,
+            coordinate: None,
             allow_from: Vec::new(),
             allow_pk_systems: Vec::new(),
             allow_pk_members: Vec::new(),
@@ -1110,12 +1119,18 @@ pub struct LoadedConfig {
     pub pronoun_excluded: HashSet<u64>,
     /// Parsed phantom canary alert channel ID. None = alerts disabled.
     pub phantom_canary_channel: Option<ChannelId>,
+    /// Reply coordinators keyed by `[coordination.<name>]` block name. Empty
+    /// when coordination is unconfigured. Without `pre_send.author_id` they
+    /// identify as the gateway's bot user id once Ready (#445).
+    pub coordinators: HashMap<String, Coordinator>,
 }
 
 /// Pre-parsed per-channel access policy.
 #[derive(Debug, Clone)]
 pub struct ChannelPolicy {
     pub require_mention: bool,
+    /// Resolved coordination block name (validated to exist), if any.
+    pub coordinate: Option<String>,
     pub allow_from: HashSet<u64>,
     /// PluralKit system UUIDs allowed on this channel.
     pub allow_pk_systems: HashSet<String>,
@@ -1182,7 +1197,7 @@ impl LoadedConfig {
         let admin_ids = parse_id_set(&raw.access.admins);
         let trusted_webhook_creators =
             TrustedWebhookCreators::from_raw(&raw.access.trusted_webhook_creators);
-        let channel_policies = raw
+        let channel_policies: HashMap<u64, ChannelPolicy> = raw
             .channels
             .iter()
             .filter_map(|ch| {
@@ -1194,6 +1209,18 @@ impl LoadedConfig {
                     id,
                     ChannelPolicy {
                         require_mention: ch.require_mention,
+                        coordinate: ch.coordinate.as_ref().and_then(|name| {
+                            if raw.coordination.contains_key(name) {
+                                Some(name.clone())
+                            } else {
+                                tracing::warn!(
+                                    channel = %ch.id,
+                                    coordinate = %name,
+                                    "channel coordinate names an unknown [coordination] block; replies will not be coordinated"
+                                );
+                                None
+                            }
+                        }),
                         allow_from: parse_id_set(&ch.allow_from),
                         allow_pk_systems: validate_pk_uuids(
                             &ch.allow_pk_systems,
@@ -1238,6 +1265,30 @@ impl LoadedConfig {
                 None
             };
         let pre_send_author_id = raw.pre_send.author_id;
+        // Coordinators identify as `pre_send.author_id` when set, else as the
+        // gateway's own bot id once Ready (#445): a missing key no longer
+        // switches coordination off silently.
+        let coordinator_bot_id = pre_send_author_id.map(|id| id.get().to_string());
+        if coordinator_bot_id.is_none()
+            && crate::coordination::gateway_bot_id().is_none()
+            && channel_policies
+                .values()
+                .any(|policy| policy.coordinate.is_some())
+        {
+            tracing::warn!(
+                "pre_send.author_id is unset and the gateway is not ready yet; reply coordination will identify as the gateway's bot user id once it is (coordinated replies before that fail open)"
+            );
+        }
+        let coordinators = raw
+            .coordination
+            .iter()
+            .map(|(name, cfg)| {
+                (
+                    name.clone(),
+                    Coordinator::shared(cfg.clone(), coordinator_bot_id.clone()),
+                )
+            })
+            .collect::<HashMap<_, _>>();
         let pre_send_construct_id = match ConstructId::parse(raw.pre_send.construct_id.clone()) {
             Ok(construct_id) => construct_id,
             Err(_) => {
@@ -1278,6 +1329,7 @@ impl LoadedConfig {
             pre_send_construct_id,
             pronoun_excluded,
             phantom_canary_channel,
+            coordinators,
         }
     }
 
