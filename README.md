@@ -231,7 +231,7 @@ just check   # fmt, clippy, test
 just install # cargo install --path .
 ```
 
-Requires Rust 1.93+.
+Requires Rust 1.98+.
 
 ## License
 
