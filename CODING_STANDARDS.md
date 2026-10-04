@@ -103,7 +103,8 @@ pub enum ConfigErrorKind {
   user with a friendly error. Never crash the bot.
 - No `#[non_exhaustive]` — public error enums stay exhaustive (banned across all
   projects, 2026-06-27). Adding a variant is an honest breaking change, caught by
-  `cargo-semver-checks` in CI and exhaustiveness lints, and versioned deliberately.
+  downstream exhaustive matches. Check affected consumers and version the change
+  deliberately. See [Compatibility and review](#compatibility-and-review).
 
 ---
 
@@ -313,8 +314,8 @@ path handling.
   serenity/poise.)
 - **Builder patterns** for complex construction.
 - **Exhaustive public enums** — `#[non_exhaustive]` is banned (all projects,
-  2026-06-27). Breaking changes are managed via `cargo-semver-checks` in CI and
-  exhaustiveness lints, not hedged with the attribute.
+  2026-06-27). Review downstream compatibility and version breaking changes
+  deliberately. Do not use the attribute to avoid that review.
 - **Lifetimes** used to avoid cloning when data has natural tree structure.
   But don't add lifetime annotations where they aren't needed.
 
@@ -366,6 +367,22 @@ path handling.
 
 ---
 
+## Compatibility and review
+
+The checked-in workflows do not run `cargo-semver-checks`. For `src/` changes,
+release hygiene checks version ordering and changelog entries; it does not prove
+Rust API compatibility. For changes outside `src/`, the script exits without
+those checks.
+For public API changes, identify affected consumers and verify their builds and
+behavior. Keep the compile-fail tests that protect verified-action boundaries.
+
+Every PR requires one construct review and one human review before
+merge. Review the final candidate and resolve findings before either approval.
+These are contribution requirements. Verify the repository's current branch
+protection settings separately before claiming that the server enforces them.
+
+---
+
 ## Task completion checklist
 
 After every code change, run these steps in order:
@@ -376,4 +393,4 @@ After every code change, run these steps in order:
 4. `cargo build --release` — confirm release build succeeds.
 5. Commit and push.
 
-Do **not** consider a change complete until all five steps pass.
+Do **not** consider a change complete until all steps pass.
