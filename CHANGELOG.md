@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-10-04
+
+### Added
+- Add the public `CodexQueueError::InboxDurabilityUncertain` variant for inbox
+  writes whose visible commit has unconfirmed crash durability.
+
+### Fixed
+- Retain visible Codex inbox commits when directory synchronization fails and
+  report the uncertainty for affected writes. Return a retained uncertain
+  lease with its original token and a warning so the next event cannot pass
+  it. Retry pending directory synchronization before further mutations or
+  duplicate checks; a later successful sync does not prove that the failed
+  call was crash durable at return. Keep live delivery retrying, preserve
+  attention backoff after a retained uncertain deferral, and reconcile the
+  thread binding with the retained commit. Retrying events without
+  deduplication IDs can still create duplicates.
+
+### Changed
+- Make `CodexQueueError` exhaustively matchable by removing its pre-existing
+  `#[non_exhaustive]` attribute, as required by the project coding standards.
+
 ## [0.49.0] - 2026-10-04
 
 ### Added

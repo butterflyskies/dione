@@ -264,10 +264,23 @@ struct InboxState {
     entries: VecDeque<QueuedEvent>,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PersistFailure {
+    BeforeWrite,
+    BeforeRename,
+    AfterRename,
+}
+
 struct DurableInbox {
     path: Utf8PathBuf,
     temporary_path: Utf8PathBuf,
+    directory_sync_pending: bool,
     _lock_file: File,
+    #[cfg(test)]
+    persist_failure: Option<PersistFailure>,
+    #[cfg(test)]
+    directory_sync_attempts: usize,
     state: InboxState,
     message_ids: HashSet<DiscordMessageId>,
     processed_message_ids: HashSet<DiscordMessageId>,
@@ -278,6 +291,14 @@ struct DurableInbox {
 pub struct CodexEventQueue {
     inbox: Arc<Mutex<DurableInbox>>,
     changed: Arc<Notify>,
+    #[cfg(test)]
+    binding_publish_gate: Arc<std::sync::Mutex<Option<BindingPublishGate>>>,
+}
+
+#[cfg(test)]
+struct BindingPublishGate {
+    reached: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
 }
 
 /// Event returned to a Codex consumer under a time-bounded lease.
@@ -341,10 +362,23 @@ pub struct HandoffResult {
 }
 
 #[derive(Debug, Error)]
-#[non_exhaustive]
 pub enum CodexQueueError {
     #[error("failed to access Codex inbox `{path}`")]
     InboxIo {
+        path: Utf8PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    /// A visible commit remains in memory, but its crash durability is unconfirmed.
+    ///
+    /// Further mutations and duplicate checks retry the directory sync first.
+    /// This error can also reject a new operation before mutation while a
+    /// previous commit still needs its directory sync.
+    /// Retrying an acknowledgement can then return `UnknownDeliveryToken` because
+    /// its original removal committed. Inspect queue state before retrying a
+    /// non-idempotent operation such as consumer registration.
+    #[error("visible Codex inbox commit at `{path}` has unconfirmed crash durability")]
+    InboxDurabilityUncertain {
         path: Utf8PathBuf,
         #[source]
         source: io::Error,
@@ -407,21 +441,27 @@ impl DurableInbox {
 
         let path = state_dir.join(INBOX_FILE_NAME);
         let temporary_path = state_dir.join(format!("{INBOX_FILE_NAME}.tmp"));
-        let mut state: InboxState = match std::fs::read(path.as_std_path()) {
-            Ok(bytes) => {
-                serde_json::from_slice(&bytes).map_err(|source| CodexQueueError::InboxDecode {
-                    path: path.clone(),
-                    source,
-                })?
-            }
-            Err(source) if source.kind() == io::ErrorKind::NotFound => InboxState::default(),
-            Err(source) => {
-                return Err(CodexQueueError::InboxIo {
-                    path: path.clone(),
-                    source,
-                });
-            }
-        };
+        let (mut state, directory_sync_pending): (InboxState, bool) =
+            match std::fs::read(path.as_std_path()) {
+                Ok(bytes) => (
+                    serde_json::from_slice(&bytes).map_err(|source| {
+                        CodexQueueError::InboxDecode {
+                            path: path.clone(),
+                            source,
+                        }
+                    })?,
+                    true,
+                ),
+                Err(source) if source.kind() == io::ErrorKind::NotFound => {
+                    (InboxState::default(), false)
+                }
+                Err(source) => {
+                    return Err(CodexQueueError::InboxIo {
+                        path: path.clone(),
+                        source,
+                    });
+                }
+            };
         for event in &mut state.entries {
             if event.discord_message_id.is_none() {
                 event.discord_message_id = discord_message_id(&event.payload);
@@ -438,7 +478,12 @@ impl DurableInbox {
         Ok(Self {
             path,
             temporary_path,
+            directory_sync_pending,
             _lock_file: lock_file,
+            #[cfg(test)]
+            persist_failure: None,
+            #[cfg(test)]
+            directory_sync_attempts: 0,
             state,
             message_ids,
             processed_message_ids,
@@ -446,8 +491,8 @@ impl DurableInbox {
     }
 
     fn enqueue(&mut self, payload: Value) -> Result<bool, CodexQueueError> {
+        self.sync_directory()?;
         let now = Utc::now();
-        self.expire_consumers(now);
         let discord_message_id = discord_message_id(&payload);
         let attention = parse_attention_scheduling(&payload)?;
         if discord_message_id.as_ref().is_some_and(|id| {
@@ -457,6 +502,7 @@ impl DurableInbox {
         }
 
         self.transaction(move |inbox| {
+            inbox.expire_consumers(now);
             let id = EventId::new(inbox.state.next_id);
             inbox.state.next_id = inbox.state.next_id.saturating_add(1);
             if let Some(message_id) = &discord_message_id {
@@ -483,7 +529,8 @@ impl DurableInbox {
         lease_duration: Duration,
         live_thread_id: Option<&CodexThreadId>,
     ) -> Result<LeasePoll, CodexQueueError> {
-        self.transaction(|inbox| {
+        let mut retained_lease = None;
+        let result = self.transaction(|inbox| {
             inbox.touch_consumer(consumer_id, now)?;
             for event in &mut inbox.state.entries {
                 if event
@@ -534,7 +581,7 @@ impl DurableInbox {
                 consumer_id: Some(consumer_id.clone()),
                 expires_at,
             });
-            Ok(LeasePoll {
+            let poll = LeasePoll {
                 event: Some(LeasedEvent {
                     event_id: event.id,
                     delivery_token: token,
@@ -544,8 +591,28 @@ impl DurableInbox {
                     attention: event.attention.clone(),
                 }),
                 deferred_for: None,
-            })
-        })
+            };
+            retained_lease = Some(poll.clone());
+            Ok(poll)
+        });
+        match result {
+            Err(error @ CodexQueueError::InboxDurabilityUncertain { .. }) => {
+                let Some(poll) = retained_lease else {
+                    // A pending prior directory sync failed before this
+                    // operation could mutate the inbox.
+                    return Err(error);
+                };
+                if let Some(event) = &poll.event {
+                    tracing::warn!(
+                        event_id = %event.event_id,
+                        error = %error,
+                        "Codex lease is visible with unconfirmed crash durability; delivery may replay after a crash"
+                    );
+                }
+                Ok(poll)
+            }
+            other => other,
+        }
     }
 
     fn bind_live_thread(
@@ -908,6 +975,7 @@ impl DurableInbox {
         &mut self,
         mutate: impl FnOnce(&mut Self) -> Result<T, CodexQueueError>,
     ) -> Result<T, CodexQueueError> {
+        self.sync_directory()?;
         let state = self.state.clone();
         let message_ids = self.message_ids.clone();
         let processed_message_ids = self.processed_message_ids.clone();
@@ -915,6 +983,7 @@ impl DurableInbox {
         match result {
             Ok(value) => match self.persist() {
                 Ok(()) => Ok(value),
+                Err(error @ CodexQueueError::InboxDurabilityUncertain { .. }) => Err(error),
                 Err(error) => {
                     self.state = state;
                     self.message_ids = message_ids;
@@ -931,13 +1000,27 @@ impl DurableInbox {
         }
     }
 
-    fn persist(&self) -> Result<(), CodexQueueError> {
+    #[cfg(test)]
+    fn fail_persist_at(&self, stage: PersistFailure) -> io::Result<()> {
+        if self.persist_failure == Some(stage) {
+            return Err(io::Error::other("injected persistence failure"));
+        }
+        Ok(())
+    }
+
+    fn persist(&mut self) -> Result<(), CodexQueueError> {
         let bytes = serde_json::to_vec_pretty(&self.state).map_err(|source| {
             CodexQueueError::InboxDecode {
                 path: self.path.clone(),
                 source,
             }
         })?;
+        #[cfg(test)]
+        self.fail_persist_at(PersistFailure::BeforeWrite)
+            .map_err(|source| CodexQueueError::InboxIo {
+                path: self.temporary_path.clone(),
+                source,
+            })?;
         let mut temporary = OpenOptions::new()
             .create(true)
             .write(true)
@@ -954,21 +1037,45 @@ impl DurableInbox {
                 path: self.temporary_path.clone(),
                 source,
             })?;
+        #[cfg(test)]
+        self.fail_persist_at(PersistFailure::BeforeRename)
+            .map_err(|source| CodexQueueError::InboxIo {
+                path: self.path.clone(),
+                source,
+            })?;
         std::fs::rename(self.temporary_path.as_std_path(), self.path.as_std_path()).map_err(
             |source| CodexQueueError::InboxIo {
                 path: self.path.clone(),
                 source,
             },
         )?;
+        self.directory_sync_pending = true;
+        self.sync_directory()
+    }
+
+    fn sync_directory(&mut self) -> Result<(), CodexQueueError> {
+        if !self.directory_sync_pending {
+            return Ok(());
+        }
+        #[cfg(test)]
+        {
+            self.directory_sync_attempts += 1;
+        }
         let Some(parent) = self.path.parent() else {
             return Ok(());
         };
-        File::open(parent.as_std_path())
-            .and_then(|directory| directory.sync_all())
-            .map_err(|source| CodexQueueError::InboxIo {
-                path: parent.to_owned(),
-                source,
-            })
+        let sync = || File::open(parent.as_std_path()).and_then(|directory| directory.sync_all());
+        #[cfg(test)]
+        let sync = || {
+            self.fail_persist_at(PersistFailure::AfterRename)
+                .and_then(|()| sync())
+        };
+        sync().map_err(|source| CodexQueueError::InboxDurabilityUncertain {
+            path: self.path.clone(),
+            source,
+        })?;
+        self.directory_sync_pending = false;
+        Ok(())
     }
 }
 
@@ -977,18 +1084,27 @@ impl CodexEventQueue {
         Ok(Self {
             inbox: Arc::new(Mutex::new(DurableInbox::load(state_dir)?)),
             changed: Arc::new(Notify::new()),
+            #[cfg(test)]
+            binding_publish_gate: Arc::new(std::sync::Mutex::new(None)),
         })
     }
 
     /// Persist an event before making it visible to consumers.
     ///
-    /// Returns `false` when the Discord message id is already queued.
+    /// Returns `false` when the Discord message id is already queued or processed.
+    /// A durability-uncertain error retains the visible commit and requires a
+    /// successful directory sync before another mutation or duplicate result.
+    /// Retrying events without a deduplicated Discord message id, including
+    /// lifecycle and reaction events, can insert a second entry after uncertainty.
     pub async fn enqueue(&self, payload: Value) -> Result<bool, CodexQueueError> {
-        let inserted = self.inbox.lock().await.enqueue(payload)?;
-        if inserted {
+        let result = self.inbox.lock().await.enqueue(payload);
+        if matches!(
+            result,
+            Ok(true) | Err(CodexQueueError::InboxDurabilityUncertain { .. })
+        ) {
             self.changed.notify_waiters();
         }
-        Ok(inserted)
+        result
     }
 
     pub async fn next_event(
@@ -1059,6 +1175,40 @@ impl CodexEventQueue {
         self.inbox.lock().await.bind_live_thread(thread_id)?;
         self.changed.notify_waiters();
         Ok(())
+    }
+
+    pub(crate) async fn bind_live_thread_and_publish(
+        &self,
+        thread_id: Option<CodexThreadId>,
+        binding: &tokio::sync::watch::Sender<Option<CodexThreadId>>,
+    ) -> Result<(), CodexQueueError> {
+        let mut inbox = self.inbox.lock().await;
+        let result = inbox.bind_live_thread(thread_id);
+        #[cfg(test)]
+        let gate = self.binding_publish_gate.lock().unwrap().take();
+        #[cfg(test)]
+        if let Some(BindingPublishGate { reached, release }) = gate {
+            let _ = reached.send(());
+            let _ = release.await;
+        }
+        binding.send_if_modified(|current| {
+            #[cfg(test)]
+            assert!(
+                self.inbox.try_lock().is_err(),
+                "watch publication must still hold the inbox guard"
+            );
+            if *current == inbox.state.live_thread_id {
+                false
+            } else {
+                *current = inbox.state.live_thread_id.clone();
+                true
+            }
+        });
+        drop(inbox);
+        // The watch publication wakes the live worker when the binding changes.
+        // This operation changes no queued event; enqueue and queue mutations
+        // provide their own queue notifications.
+        result
     }
 
     pub async fn acknowledge(
@@ -1924,6 +2074,451 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    async fn binding_server(
+        path: &Utf8Path,
+        queue: &CodexEventQueue,
+    ) -> (
+        crate::mcp::server::DioneServer,
+        tokio::sync::watch::Receiver<Option<CodexThreadId>>,
+    ) {
+        let (notification_tx, _notification_rx) = tokio::sync::mpsc::channel(1);
+        let (binding_tx, binding_rx) = tokio::sync::watch::channel(None);
+        let server = crate::mcp::server::DioneServer::new(
+            crate::state::new_state(),
+            Arc::new(Mutex::new(crate::queue::AccessQueue::load(path))),
+            Arc::new(serenity::http::Http::new("fake")),
+            path.to_owned(),
+            notification_tx,
+            crate::tracing_channel::TraceLevelController::noop(),
+            TransportMode::Codex,
+            Arc::new(crate::no_rly::consent::ConsentGate::new(path)),
+            Arc::new(crate::ingress_ledger::IngressLedger::new()),
+        )
+        .await
+        .with_codex_queue(Some(queue.clone()))
+        .with_codex_thread_binding(Some(binding_tx));
+        (server, binding_rx)
+    }
+
+    async fn dispatch_binding(
+        server: &crate::mcp::server::DioneServer,
+        thread_id: &str,
+    ) -> Result<Value, String> {
+        crate::mcp::dispatch::call_tool(
+            server,
+            "bind_codex_thread",
+            json!({ "thread_id": thread_id }),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn dispatch_binding_publishes_retained_commit_on_failure() {
+        for stage in [
+            PersistFailure::BeforeWrite,
+            PersistFailure::BeforeRename,
+            PersistFailure::AfterRename,
+        ] {
+            let dir = TempDir::new().unwrap();
+            let path = temp_path(&dir);
+            let queue = CodexEventQueue::load(&path).unwrap();
+            let (server, binding_rx) = binding_server(&path, &queue).await;
+            dispatch_binding(&server, "thread-a").await.unwrap();
+            let consumer = queue.register_live_consumer().await.unwrap();
+            queue.inbox.lock().await.persist_failure = Some(stage);
+
+            let error = dispatch_binding(&server, "thread-b").await.unwrap_err();
+            let committed = stage == PersistFailure::AfterRename;
+            assert_eq!(error.contains("unconfirmed crash durability"), committed);
+            let expected =
+                CodexThreadId::parse(if committed { "thread-b" } else { "thread-a" }).unwrap();
+            assert_eq!(binding_rx.borrow().as_ref(), Some(&expected));
+            assert_eq!(
+                queue.inbox.lock().await.state.live_thread_id.as_ref(),
+                Some(&expected)
+            );
+            let disk: InboxState =
+                serde_json::from_slice(&std::fs::read(path.join(INBOX_FILE_NAME)).unwrap())
+                    .unwrap();
+            assert_eq!(disk.live_thread_id.as_ref(), Some(&expected));
+            if committed {
+                let error = dispatch_binding(&server, "thread-c").await.unwrap_err();
+                assert!(error.contains("unconfirmed crash durability"));
+                assert_eq!(binding_rx.borrow().as_ref(), Some(&expected));
+                assert_eq!(
+                    queue.inbox.lock().await.state.live_thread_id.as_ref(),
+                    Some(&expected)
+                );
+            }
+
+            queue.inbox.lock().await.persist_failure = None;
+            queue
+                .enqueue(message("1", "retained binding"))
+                .await
+                .unwrap();
+            let watched = binding_rx.borrow().clone().unwrap();
+            let event = queue
+                .next_live_event(&consumer, &watched, Duration::ZERO, DEFAULT_LEASE)
+                .await
+                .unwrap()
+                .expect("delivery without another bind or enqueue");
+            assert_eq!(event.event["params"]["content"], "retained binding");
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_binding_recovery_barrier_publishes_actual_binding() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let (server, binding_rx) = binding_server(&path, &queue).await;
+        dispatch_binding(&server, "thread-a").await.unwrap();
+        let consumer = queue.register_live_consumer().await.unwrap();
+        queue.inbox.lock().await.persist_failure = Some(PersistFailure::AfterRename);
+        assert!(queue.enqueue(message("1", "already queued")).await.is_err());
+        let before = std::fs::read(path.join(INBOX_FILE_NAME)).unwrap();
+
+        let error = dispatch_binding(&server, "thread-b").await.unwrap_err();
+        assert!(error.contains("unconfirmed crash durability"));
+        let expected = CodexThreadId::parse("thread-a").unwrap();
+        assert_eq!(binding_rx.borrow().as_ref(), Some(&expected));
+        assert_eq!(std::fs::read(path.join(INBOX_FILE_NAME)).unwrap(), before);
+        queue.inbox.lock().await.persist_failure = None;
+        let watched = binding_rx.borrow().clone().unwrap();
+        let event = queue
+            .next_live_event(&consumer, &watched, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .expect("recovery delivers the existing event without another mutation");
+        assert_eq!(event.event["params"]["content"], "already queued");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn dispatch_binding_concurrent_publication_matches_commit_order() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let (server, binding_rx) = binding_server(&path, &queue).await;
+        dispatch_binding(&server, "thread-initial").await.unwrap();
+        let server = Arc::new(server);
+        let (reached_tx, reached_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        *queue.binding_publish_gate.lock().unwrap() = Some(BindingPublishGate {
+            reached: reached_tx,
+            release: release_rx,
+        });
+
+        let first_server = Arc::clone(&server);
+        let first =
+            tokio::spawn(async move { dispatch_binding(&first_server, "thread-first").await });
+        tokio::time::timeout(Duration::from_secs(2), reached_rx)
+            .await
+            .expect("first bind reaches committed but unpublished state")
+            .unwrap();
+        let first_id = CodexThreadId::parse("thread-first").unwrap();
+        assert!(queue.inbox.try_lock().is_err());
+        assert_eq!(
+            binding_rx.borrow().as_ref(),
+            Some(&CodexThreadId::parse("thread-initial").unwrap())
+        );
+        let committed: InboxState =
+            serde_json::from_slice(&std::fs::read(path.join(INBOX_FILE_NAME)).unwrap()).unwrap();
+        assert_eq!(committed.live_thread_id.as_ref(), Some(&first_id));
+
+        let second_server = Arc::clone(&server);
+        let mut second =
+            tokio::spawn(async move { dispatch_binding(&second_server, "thread-second").await });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut second)
+                .await
+                .is_err(),
+            "second bind must not complete before first watch publication"
+        );
+        release_tx.send(()).unwrap();
+        first.await.unwrap().unwrap();
+        second.await.unwrap().unwrap();
+        let second_id = CodexThreadId::parse("thread-second").unwrap();
+        assert_eq!(binding_rx.borrow().as_ref(), Some(&second_id));
+        let disk: InboxState =
+            serde_json::from_slice(&std::fs::read(path.join(INBOX_FILE_NAME)).unwrap()).unwrap();
+        assert_eq!(disk.live_thread_id.as_ref(), Some(&second_id));
+    }
+
+    #[tokio::test]
+    async fn post_rename_enqueue_keeps_memory_consistent_with_disk() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        queue.inbox.lock().await.persist_failure = Some(PersistFailure::AfterRename);
+        assert!(queue.enqueue(message("1", "committed")).await.is_err());
+        let persisted: Value =
+            serde_json::from_slice(&std::fs::read(path.join(INBOX_FILE_NAME)).unwrap()).unwrap();
+        assert_eq!(persisted["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(queue.status().await.queued, 1);
+        queue.inbox.lock().await.persist_failure = None;
+        assert!(queue.enqueue(message("2", "later")).await.unwrap());
+        drop(queue);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        assert_eq!(queue.status().await.queued, 2);
+        assert!(!queue.enqueue(message("1", "duplicate")).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn uncertain_lease_does_not_hide_first_event_behind_second() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let consumer = primary_consumer(&queue).await;
+        queue.enqueue(message("1", "first")).await.unwrap();
+        queue.enqueue(message("2", "second")).await.unwrap();
+
+        queue.inbox.lock().await.persist_failure = Some(PersistFailure::AfterRename);
+        let first_attempt = queue
+            .next_event(&consumer, Duration::ZERO, DEFAULT_LEASE)
+            .await;
+        queue.inbox.lock().await.persist_failure = None;
+        let first = match first_attempt {
+            Ok(Some(event)) => event,
+            Err(CodexQueueError::InboxDurabilityUncertain { .. }) => queue
+                .next_event(&consumer, Duration::ZERO, DEFAULT_LEASE)
+                .await
+                .unwrap()
+                .expect("first event after directory sync recovery"),
+            other => panic!("unexpected first lease outcome: {other:?}"),
+        };
+        assert_eq!(
+            first.event["params"]["content"], "first",
+            "a retained uncertain lease must not let a later event pass first"
+        );
+
+        let visible: InboxState =
+            serde_json::from_slice(&std::fs::read(path.join(INBOX_FILE_NAME)).unwrap()).unwrap();
+        let visible_first = visible.entries.front().unwrap();
+        assert_eq!(
+            visible_first.lease.as_ref().unwrap().token,
+            first.delivery_token
+        );
+        drop(queue);
+        let restarted = CodexEventQueue::load(&path).unwrap();
+        restarted
+            .acknowledge(&consumer, &first.delivery_token)
+            .await
+            .unwrap();
+        let second = restarted
+            .next_event(&consumer, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .expect("second event after first is settled");
+        assert_eq!(second.event["params"]["content"], "second");
+    }
+
+    #[tokio::test]
+    async fn pending_directory_sync_rejects_lease_before_mutation() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let consumer = primary_consumer(&queue).await;
+        queue.enqueue(message("1", "first")).await.unwrap();
+        queue.inbox.lock().await.persist_failure = Some(PersistFailure::AfterRename);
+        assert!(matches!(
+            queue.enqueue(message("2", "second")).await,
+            Err(CodexQueueError::InboxDurabilityUncertain { .. })
+        ));
+        let before = std::fs::read(path.join(INBOX_FILE_NAME)).unwrap();
+        let generation = queue.inbox.lock().await.state.next_lease_generation;
+        assert!(matches!(
+            queue
+                .next_event(&consumer, Duration::ZERO, DEFAULT_LEASE)
+                .await,
+            Err(CodexQueueError::InboxDurabilityUncertain { .. })
+        ));
+        let inbox = queue.inbox.lock().await;
+        assert_eq!(inbox.state.next_lease_generation, generation);
+        assert!(
+            inbox
+                .state
+                .entries
+                .iter()
+                .all(|event| event.lease.is_none())
+        );
+        drop(inbox);
+        assert_eq!(std::fs::read(path.join(INBOX_FILE_NAME)).unwrap(), before);
+        queue.inbox.lock().await.persist_failure = None;
+        let first = queue
+            .next_event(&consumer, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.event["params"]["content"], "first");
+    }
+
+    #[tokio::test]
+    async fn enqueue_persistence_failure_outcomes() {
+        for stage in [
+            PersistFailure::BeforeWrite,
+            PersistFailure::BeforeRename,
+            PersistFailure::AfterRename,
+        ] {
+            let dir = TempDir::new().unwrap();
+            let path = temp_path(&dir);
+            let queue = CodexEventQueue::load(&path).unwrap();
+            let consumer = primary_consumer(&queue).await;
+            queue.enqueue(message("1", "existing")).await.unwrap();
+            let before = std::fs::read(path.join(INBOX_FILE_NAME)).unwrap();
+            queue.inbox.lock().await.persist_failure = Some(stage);
+            let result = queue.enqueue(message("2", "candidate")).await;
+            let committed = stage == PersistFailure::AfterRename;
+            if committed {
+                assert!(matches!(
+                    result,
+                    Err(CodexQueueError::InboxDurabilityUncertain { .. })
+                ));
+            } else {
+                assert!(matches!(result, Err(CodexQueueError::InboxIo { .. })));
+            }
+            assert_eq!(queue.status().await.queued, if committed { 2 } else { 1 });
+            let visible = std::fs::read(path.join(INBOX_FILE_NAME)).unwrap();
+            let inbox = queue.inbox.lock().await;
+            assert_eq!(
+                serde_json::to_value(&inbox.state).unwrap(),
+                serde_json::from_slice::<Value>(&visible).unwrap()
+            );
+            assert_eq!(
+                inbox
+                    .message_ids
+                    .contains(&DiscordMessageId(MessageId::new(2))),
+                committed
+            );
+            drop(inbox);
+            if committed {
+                assert!(matches!(
+                    queue.enqueue(message("2", "duplicate")).await,
+                    Err(CodexQueueError::InboxDurabilityUncertain { .. })
+                ));
+                assert!(matches!(
+                    queue.enqueue(message("3", "blocked")).await,
+                    Err(CodexQueueError::InboxDurabilityUncertain { .. })
+                ));
+                assert!(matches!(
+                    queue
+                        .next_event(&consumer, Duration::ZERO, DEFAULT_LEASE)
+                        .await,
+                    Err(CodexQueueError::InboxDurabilityUncertain { .. })
+                ));
+                assert_eq!(std::fs::read(path.join(INBOX_FILE_NAME)).unwrap(), visible);
+                assert_eq!(queue.status().await.queued, 2);
+            } else {
+                assert_eq!(visible, before);
+            }
+            drop(queue);
+            let queue = CodexEventQueue::load(&path).unwrap();
+            assert_eq!(queue.status().await.queued, if committed { 2 } else { 1 });
+            if committed {
+                queue.inbox.lock().await.persist_failure = Some(PersistFailure::AfterRename);
+                assert!(matches!(
+                    queue.enqueue(message("2", "duplicate after reopen")).await,
+                    Err(CodexQueueError::InboxDurabilityUncertain { .. })
+                ));
+                queue.inbox.lock().await.persist_failure = None;
+            }
+            assert_eq!(
+                queue.enqueue(message("2", "retry")).await.unwrap(),
+                !committed
+            );
+            assert!(queue.enqueue(message("3", "later")).await.unwrap());
+            drop(queue);
+            let queue = CodexEventQueue::load(&path).unwrap();
+            assert_eq!(queue.status().await.queued, 3);
+            for id in ["1", "2", "3"] {
+                assert!(!queue.enqueue(message(id, "duplicate")).await.unwrap());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn acknowledgement_persistence_failure_outcomes() {
+        for stage in [
+            PersistFailure::BeforeWrite,
+            PersistFailure::BeforeRename,
+            PersistFailure::AfterRename,
+        ] {
+            let dir = TempDir::new().unwrap();
+            let path = temp_path(&dir);
+            let queue = CodexEventQueue::load(&path).unwrap();
+            let consumer = primary_consumer(&queue).await;
+            queue.enqueue(message("1", "handled")).await.unwrap();
+            let event = queue
+                .next_event(&consumer, Duration::ZERO, DEFAULT_LEASE)
+                .await
+                .unwrap()
+                .unwrap();
+            let before = std::fs::read(path.join(INBOX_FILE_NAME)).unwrap();
+            queue.inbox.lock().await.persist_failure = Some(stage);
+            let result = queue.acknowledge(&consumer, &event.delivery_token).await;
+            let committed = stage == PersistFailure::AfterRename;
+            if committed {
+                assert!(matches!(
+                    result,
+                    Err(CodexQueueError::InboxDurabilityUncertain { .. })
+                ));
+            } else {
+                assert!(matches!(result, Err(CodexQueueError::InboxIo { .. })));
+            }
+            assert_eq!(queue.status().await.queued, if committed { 0 } else { 1 });
+            let visible = std::fs::read(path.join(INBOX_FILE_NAME)).unwrap();
+            let inbox = queue.inbox.lock().await;
+            assert_eq!(
+                serde_json::to_value(&inbox.state).unwrap(),
+                serde_json::from_slice::<Value>(&visible).unwrap()
+            );
+            assert_eq!(
+                inbox
+                    .processed_message_ids
+                    .contains(&DiscordMessageId(MessageId::new(1))),
+                committed
+            );
+            assert_eq!(
+                inbox
+                    .message_ids
+                    .contains(&DiscordMessageId(MessageId::new(1))),
+                !committed
+            );
+            drop(inbox);
+            if committed {
+                assert!(matches!(
+                    queue.acknowledge(&consumer, &event.delivery_token).await,
+                    Err(CodexQueueError::InboxDurabilityUncertain { .. })
+                ));
+                assert!(matches!(
+                    queue.enqueue(message("1", "duplicate")).await,
+                    Err(CodexQueueError::InboxDurabilityUncertain { .. })
+                ));
+                assert!(matches!(
+                    queue.enqueue(message("2", "blocked")).await,
+                    Err(CodexQueueError::InboxDurabilityUncertain { .. })
+                ));
+                assert_eq!(std::fs::read(path.join(INBOX_FILE_NAME)).unwrap(), visible);
+            } else {
+                assert_eq!(visible, before);
+            }
+            drop(queue);
+            let queue = CodexEventQueue::load(&path).unwrap();
+            assert_eq!(queue.status().await.queued, if committed { 0 } else { 1 });
+            let retry = queue.acknowledge(&consumer, &event.delivery_token).await;
+            if committed {
+                assert!(matches!(retry, Err(CodexQueueError::UnknownDeliveryToken)));
+            } else {
+                retry.unwrap();
+            }
+            assert!(!queue.enqueue(message("1", "duplicate")).await.unwrap());
+            assert!(queue.enqueue(message("2", "later")).await.unwrap());
+            drop(queue);
+            let queue = CodexEventQueue::load(&path).unwrap();
+            assert_eq!(queue.status().await.queued, 1);
+            assert!(!queue.enqueue(message("1", "duplicate")).await.unwrap());
+        }
     }
 
     #[tokio::test]
