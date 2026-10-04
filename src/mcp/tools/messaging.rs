@@ -1,6 +1,8 @@
 use crate::{
     config::{ChunkMode, DmPolicy, LoadedConfig},
-    contradictionary::{Action, BlockOutcome, DiaryRecord, append_diary_record},
+    contradictionary::{
+        Action, AutoRewrite, AutoRewritten, BlockOutcome, DiaryRecord, append_diary_record,
+    },
     coordination::{ClaimOutcome, Coordinator},
     discord::{chunk, chunk_preserving_fences_with_context, events::NotificationEvent},
     evidence::{
@@ -12,7 +14,7 @@ use crate::{
     no_rly::{
         consent::{
             BounceTicket, ConsentGate, DeliverError, DeliverReply, RejectedHandle, Rephrased,
-            ReplyRequest,
+            Replacement, ReplyRequest,
         },
         judge::{AlwaysClear, OutboundJudge, Verdict},
         queue::HoldHandle,
@@ -554,6 +556,16 @@ struct PreparedOutbound {
     text: String,
     reply_to: Option<MessageId>,
     surface: OutboundSurface,
+    /// The contradictionary's `auto` rewrites applied to the draft, if any.
+    auto: Option<AutoApplied>,
+}
+
+/// What the `auto` tier changed in a draft: the text as written and each
+/// rewrite, for the sender-facing lines and the diary.
+#[derive(Debug)]
+struct AutoApplied {
+    written: String,
+    rewrites: Vec<AutoRewrite>,
 }
 
 impl PreparedOutbound {
@@ -603,12 +615,31 @@ async fn prepare_outbound(
     if let OutboundDestination::Channel(channel_id) = draft.destination {
         check_outbound(ctx, channel_id).await?;
     }
+    // The `auto` rewrite runs first, so the hooks judge, and the evidence
+    // markers are appended to, the text that will be sent.
+    let rewritten = match draft.pre_send.surface {
+        OutboundSurface::Reply | OutboundSurface::SendDm => apply_auto_rewrites(ctx, draft.text),
+        _ => None,
+    };
+    let (rewritten_text, auto) = match rewritten {
+        Some(rewritten) => (
+            Some(rewritten.content),
+            Some(AutoApplied {
+                written: draft.text.to_owned(),
+                rewrites: rewritten.rewrites,
+            }),
+        ),
+        None => (None, None),
+    };
+    let text = rewritten_text.as_deref().unwrap_or(draft.text);
+    reject_raw_sentex_locators(text)?;
     let Some((pipeline, no_rly)) = prepared_pipeline else {
         return Ok(PreparedOutbound {
             destination: draft.destination,
-            text: append_markers(draft.text, sentex_handles),
+            text: append_markers(text, sentex_handles),
             reply_to: draft.reply_to,
             surface: draft.pre_send.surface,
+            auto,
         });
     };
 
@@ -630,7 +661,7 @@ async fn prepare_outbound(
         }
     };
     let mut hook_context = HookContext::new(
-        draft.text,
+        text,
         draft.destination,
         channel_type,
         ctx.construct_id.clone(),
@@ -700,13 +731,14 @@ async fn prepare_outbound(
         HookDecision::Continue | HookDecision::Rewrite { .. } => {}
     }
 
-    let final_text = outcome.final_text().unwrap_or(draft.text);
+    let final_text = outcome.final_text().unwrap_or(text);
     reject_raw_sentex_locators(final_text)?;
     Ok(PreparedOutbound {
         destination,
         text: append_markers(final_text, sentex_handles),
         reply_to,
         surface: draft.pre_send.surface,
+        auto,
     })
 }
 
@@ -970,9 +1002,25 @@ struct ReplyTransportOptions {
     suppress_ping: bool,
 }
 
+/// Deliver a prepared reply or DM. Every result — sent, held or failed —
+/// lists the `auto` rewrites applied to the text, under `auto_rewrites`.
 async fn deliver_prepared_reply(
     ctx: &MessagingCtx,
+    mut prepared: PreparedOutbound,
+    options: ReplyTransportOptions,
+) -> Value {
+    let auto = prepared.auto.take();
+    let mut response = deliver_prepared_text(ctx, prepared, auto.as_ref(), options).await;
+    if let Some(auto) = auto {
+        add_auto_rewrite_lines(&mut response, &auto.rewrites);
+    }
+    response
+}
+
+async fn deliver_prepared_text(
+    ctx: &MessagingCtx,
     prepared: PreparedOutbound,
+    auto: Option<&AutoApplied>,
     options: ReplyTransportOptions,
 ) -> Value {
     debug_assert!(matches!(
@@ -988,12 +1036,18 @@ async fn deliver_prepared_reply(
         return error;
     }
 
+    // A rewritten send owes its `auto` records alongside the usual send-side
+    // ones, all written once every chunk lands.
+    let pending_diary_records = match auto {
+        Some(auto) => auto_send_records(ctx, &auto.rewrites, &auto.written, &content),
+        None => Vec::new(),
+    };
     let request = ReplyRequest {
         channel_id,
         content: content.to_string(),
         reply_to_message_id,
         suppress_ping: options.suppress_ping,
-        pending_diary_records: Vec::new(),
+        pending_diary_records,
         fence_context: Default::default(),
     };
 
@@ -1085,6 +1139,16 @@ async fn deliver_prepared_reply(
                     None => release_reply_claim(ctx, channel_id, ref_id).await,
                 }
             }
+            // Rewritten text that reached the room is recorded even though
+            // the rest of the message did not follow.
+            if !e.sent_ids.is_empty() {
+                let auto_records: Vec<DiaryRecord> = e
+                    .diary_records
+                    .into_iter()
+                    .filter(|record| record.action == Action::Auto)
+                    .collect();
+                append_diary_records(ctx, &auto_records);
+            }
             json!({ "error": e.message })
         }
     }
@@ -1111,6 +1175,72 @@ fn validate_evidence_chunking(config: &LoadedConfig, content: &str) -> Result<()
         }));
     }
     Ok(())
+}
+
+/// Apply the contradictionary's `auto` rewrites to outbound `content`.
+///
+/// The rewrite is kept only when it is clean
+/// ([`Contradictionary::apply_auto`]). Otherwise the original text goes on to
+/// the judge unrewritten, and the judge holds it: its `auto` hit still gates
+/// like `block`.
+///
+/// [`Contradictionary::apply_auto`]: crate::contradictionary::Contradictionary::apply_auto
+fn apply_auto_rewrites(ctx: &MessagingCtx, content: &str) -> Option<AutoRewritten> {
+    ctx.config
+        .contradictionary
+        .as_ref()
+        .and_then(|contradictionary| contradictionary.apply_auto(content))
+}
+
+/// The diary records a rewritten send owes once it lands: one
+/// `action: "auto"` record per rewrite, then the send-side records for the
+/// sent text (see [`send_side_records`]). Carried as the request's
+/// `pending_diary_records`, which take the place of the send-side scan.
+fn auto_send_records(
+    ctx: &MessagingCtx,
+    rewrites: &[AutoRewrite],
+    written: &str,
+    sent: &str,
+) -> Vec<DiaryRecord> {
+    let mut records: Vec<DiaryRecord> = rewrites
+        .iter()
+        .map(|rewrite| DiaryRecord::auto_now(rewrite, written, sent))
+        .collect();
+    if let Some(ref contradictionary) = ctx.config.contradictionary {
+        records.extend(send_side_records(
+            contradictionary,
+            &contradictionary.check(sent),
+            sent,
+        ));
+    }
+    records
+}
+
+/// The records a send of `content` owes the diary once every chunk lands:
+/// its `log`/`celebrate` hits, and the override when a held block is
+/// released.
+fn send_side_records(
+    contradictionary: &crate::contradictionary::Contradictionary,
+    hits: &[crate::contradictionary::Hit],
+    content: &str,
+) -> Vec<DiaryRecord> {
+    match contradictionary.evaluate_block(hits, content, true) {
+        BlockOutcome::Clear => Vec::new(),
+        BlockOutcome::Overridden(records) | BlockOutcome::Recorded(records) => records,
+        BlockOutcome::Rejected { .. } => {
+            // Should not happen with `no_rly` set — the judge already ruled.
+            Vec::new()
+        }
+    }
+}
+
+/// Make every `auto` rewrite visible to the sender: one
+/// `auto: <match> → <replace>` line each, under `auto_rewrites`.
+fn add_auto_rewrite_lines(response: &mut Value, rewrites: &[AutoRewrite]) {
+    if !rewrites.is_empty() {
+        response["auto_rewrites"] =
+            json!(rewrites.iter().map(AutoRewrite::line).collect::<Vec<_>>());
+    }
 }
 
 /// The construct-facing shape of a bounce: the error names the reason, and
@@ -1184,14 +1314,7 @@ async fn deliver_reply(
         // publication. A partial delivery is intentionally not represented as
         // a successful full-message record; a retry evaluates its remainder
         // independently.
-        match contradictionary.evaluate_block(&contradictionary_hits, content, true) {
-            BlockOutcome::Clear => Vec::new(),
-            BlockOutcome::Overridden(records) | BlockOutcome::Recorded(records) => records,
-            BlockOutcome::Rejected { .. } => {
-                // Should not happen in deliver_reply — the judge already cleared.
-                Vec::new()
-            }
-        }
+        send_side_records(contradictionary, &contradictionary_hits, content)
     } else {
         Vec::new()
     };
@@ -1395,6 +1518,23 @@ pub async fn rephrase_held(ctx: &MessagingCtx, handle: &str, content: &str) -> V
     if let Err(error) = reject_raw_sentex_locators(content) {
         return error;
     }
+    let auto = apply_auto_rewrites(ctx, content);
+    let (replacement, auto_rewrites) = match auto {
+        Some(ref rewritten) => (
+            Replacement {
+                written: content,
+                send: &rewritten.content,
+                diary_records: auto_send_records(
+                    ctx,
+                    &rewritten.rewrites,
+                    content,
+                    &rewritten.content,
+                ),
+            },
+            rewritten.rewrites.as_slice(),
+        ),
+        None => (Replacement::from(content), &[][..]),
+    };
     let handle = HoldHandle::new(handle);
     let ttl = ctx.config.no_rly_hold_ttl();
     let now = Instant::now();
@@ -1407,10 +1547,10 @@ pub async fn rephrase_held(ctx: &MessagingCtx, handle: &str, content: &str) -> V
     };
     let result = ctx
         .no_rly
-        .rephrase(ctx, judge, &handle, content, ttl, now)
+        .rephrase(ctx, judge, &handle, replacement, ttl, now)
         .await;
 
-    match result {
+    let mut response = match result {
         Ok(Rephrased::Sent { message_ids }) => {
             tracing::info!(handle = %handle, "rephrase sent replacement for held message");
             json!({
@@ -1433,7 +1573,9 @@ pub async fn rephrase_held(ctx: &MessagingCtx, handle: &str, content: &str) -> V
             bounce_json(&ticket)
         }
         Err(e) => rejected_handle_json(e),
-    }
+    };
+    add_auto_rewrite_lines(&mut response, auto_rewrites);
+    response
 }
 
 /// Map a handle rejection to the construct-facing error shape. A still-live
@@ -2482,6 +2624,7 @@ mod tests {
             pattern: "straightforward".into(),
             action: Action::Block,
             match_mode: MatchMode::Word,
+            replace: None,
             reason: Some("nothing is ever straightforward".into()),
         });
         LoadedConfig::from_raw(raw)
@@ -4219,6 +4362,376 @@ mod tests {
                 assert_eq!(ctx.no_rly.pending().await, 1);
             }
         }
+    }
+
+    /// `blocking_test_config` plus an `auto` entry: utilize → use.
+    fn auto_test_config() -> Config {
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        raw.contradictionary.enabled = true;
+        raw.contradictionary.entries.push(Entry {
+            pattern: "straightforward".into(),
+            action: Action::Block,
+            match_mode: MatchMode::Word,
+            replace: None,
+            reason: Some("nothing is ever straightforward".into()),
+        });
+        raw.contradictionary.entries.push(Entry {
+            pattern: "utilize".into(),
+            action: Action::Auto,
+            match_mode: MatchMode::Word,
+            replace: Some("use".into()),
+            reason: None,
+        });
+        raw
+    }
+
+    /// A messaging context on the fake Discord API, with its own state dir
+    /// (so the diary lands somewhere the test can read).
+    async fn auto_test_ctx() -> (
+        MessagingCtx,
+        Arc<std::sync::Mutex<Vec<(String, String)>>>,
+        tokio::task::JoinHandle<()>,
+        tempfile::TempDir,
+    ) {
+        auto_test_ctx_with(auto_test_config()).await
+    }
+
+    async fn auto_test_ctx_with(
+        raw: Config,
+    ) -> (
+        MessagingCtx,
+        Arc<std::sync::Mutex<Vec<(String, String)>>>,
+        tokio::task::JoinHandle<()>,
+        tempfile::TempDir,
+    ) {
+        let (http, requests, server) = fake_discord_http().await;
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let state_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf-8 path");
+        let ctx = MessagingCtx::new(
+            http,
+            new_state(),
+            Arc::new(LoadedConfig::from_raw(raw)),
+            state_dir.clone(),
+            Arc::new(ConsentGate::new(&state_dir)),
+            Arc::new(crate::ingress_ledger::IngressLedger::new()),
+        );
+        (ctx, requests, server, dir)
+    }
+
+    /// The `content` of every message POSTed to the fake Discord API.
+    fn posted_contents(requests: &std::sync::Mutex<Vec<(String, String)>>) -> Vec<String> {
+        requests
+            .lock()
+            .expect("request capture lock")
+            .iter()
+            .filter(|(path, _)| path.ends_with("/messages"))
+            .filter_map(|(_, body)| {
+                serde_json::from_str::<Value>(body).ok()?["content"]
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .collect()
+    }
+
+    /// The pre-send hooks judge the text that will be sent, so the rewrite
+    /// runs before them.
+    #[tokio::test]
+    async fn auto_rewrite_runs_before_the_pre_send_hooks() {
+        let (ctx, requests, server, _dir) = auto_test_ctx().await;
+        let captured = Arc::new(std::sync::Mutex::new(None));
+        let ctx = ctx.with_pre_send_pipeline(Arc::new(
+            PreSendPipeline::new(vec![Box::new(ContextCaptureHook(Arc::clone(&captured)))])
+                .unwrap()
+                .with_mode(PipelineMode::Enforce),
+        ));
+
+        let response = reply(&ctx, ChannelId::new(42), "we utilize it", None, false).await;
+
+        assert_eq!(response["error"], "captured", "{response}");
+        let context = captured.lock().unwrap().clone().expect("the hook ran");
+        assert_eq!(context.text(), "we use it");
+        assert!(posted_contents(&requests).is_empty());
+        server.abort();
+    }
+
+    /// The rewrite runs before the evidence markers are appended, so it
+    /// never reaches inside one, and a sentex-bearing reply still sends.
+    #[tokio::test]
+    async fn auto_rewrite_leaves_evidence_markers_intact() {
+        let mut raw = auto_test_config();
+        raw.delivery.evidence_markers_enabled = true;
+        let (ctx, requests, server, _dir) = auto_test_ctx_with(raw).await;
+        let handles = crate::evidence::parse_tool_sentex_handles(&json!({
+            "claim_handles": ["34"]
+        }))
+        .unwrap();
+
+        let response = reply_with_evidence_and_hook_overrides(
+            &ctx,
+            ChannelId::new(42),
+            "we utilize it",
+            None,
+            ReplyToolOptions {
+                suppress_ping: false,
+                no_rly_hooks: &[],
+                sentex_handles: &handles,
+            },
+        )
+        .await;
+
+        assert_eq!(response["ok"], true, "{response}");
+        assert_eq!(
+            posted_contents(&requests),
+            vec![append_markers("we use it", &handles)]
+        );
+        assert_eq!(
+            response["auto_rewrites"],
+            json!(["auto: utilize \u{2192} use"])
+        );
+        assert!(response["claim_locators"].is_array(), "{response}");
+        server.abort();
+    }
+
+    /// An `auto` pattern that names a marker's own token (`citation`) never
+    /// rewrites the marker: the marker's hit is not rewritable, and a
+    /// sentex-bearing message cannot be held, so the send is refused.
+    #[tokio::test]
+    async fn auto_never_rewrites_inside_an_evidence_marker() {
+        let mut raw = auto_test_config();
+        raw.delivery.evidence_markers_enabled = true;
+        raw.contradictionary.entries.push(Entry {
+            pattern: "citation".into(),
+            action: Action::Auto,
+            match_mode: MatchMode::Word,
+            replace: Some("source".into()),
+            reason: None,
+        });
+        let (ctx, requests, server, _dir) = auto_test_ctx_with(raw).await;
+        let handles = crate::evidence::parse_tool_sentex_handles(&json!({
+            "citation_handles": ["12"]
+        }))
+        .unwrap();
+
+        let response = reply_with_evidence_and_hook_overrides(
+            &ctx,
+            ChannelId::new(42),
+            "see this",
+            None,
+            ReplyToolOptions {
+                suppress_ping: false,
+                no_rly_hooks: &[],
+                sentex_handles: &handles,
+            },
+        )
+        .await;
+
+        assert!(response["error"].is_string(), "{response}");
+        assert!(posted_contents(&requests).is_empty());
+        server.abort();
+    }
+
+    /// The `action: "auto"` records in the diary under `dir`.
+    fn auto_diary_records(dir: &tempfile::TempDir) -> Vec<Value> {
+        diary_records(dir)
+            .into_iter()
+            .filter(|record| record["action"] == "auto")
+            .collect()
+    }
+
+    fn diary_records(dir: &tempfile::TempDir) -> Vec<Value> {
+        std::fs::read_to_string(dir.path().join(crate::contradictionary::DIARY_FILE_NAME))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn reply_sends_auto_rewrite_reports_and_records_it() {
+        let (ctx, requests, server, dir) = auto_test_ctx().await;
+
+        let response = reply(
+            &ctx,
+            ChannelId::new(42),
+            "we utilize it and utilize it again",
+            None,
+            false,
+        )
+        .await;
+
+        assert_eq!(response["ok"], true, "a clean auto hit sends: {response}");
+        assert_eq!(
+            posted_contents(&requests),
+            vec!["we use it and use it again"]
+        );
+        assert_eq!(
+            response["auto_rewrites"],
+            json!(vec!["auto: utilize \u{2192} use"; 2])
+        );
+        assert_eq!(ctx.no_rly.pending().await, 0);
+        let records = auto_diary_records(&dir);
+        assert_eq!(records.len(), 2, "one record per rewrite: {records:?}");
+        for record in records {
+            assert_eq!(record["pattern"], "utilize");
+            assert_eq!(record["matched"], "utilize");
+            assert_eq!(record["replacement"], "use");
+            assert_eq!(record["message"], "we utilize it and utilize it again");
+            assert_eq!(record["sent"], "we use it and use it again");
+            assert_eq!(record["override"], false);
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn send_dm_sends_auto_rewrite_and_reports_it() {
+        let (ctx, requests, server, dir) = auto_test_ctx().await;
+
+        let response = send_dm(&ctx, UserId::new(77), "we utilize the cache").await;
+
+        assert_eq!(response["ok"], true, "{response}");
+        assert_eq!(posted_contents(&requests), vec!["we use the cache"]);
+        assert_eq!(
+            response["auto_rewrites"],
+            json!(["auto: utilize \u{2192} use"])
+        );
+        assert_eq!(auto_diary_records(&dir).len(), 1);
+        server.abort();
+    }
+
+    /// An `auto` hit that cannot be rewritten (in a marked span, or beside a
+    /// `block` hit) holds the message as written: nothing is rewritten,
+    /// sent, or recorded but the hold, and releasing it sends the original.
+    #[tokio::test]
+    async fn held_auto_hit_holds_and_releases_the_original() {
+        for content in ["run `utilize` now", "a straightforward way to utilize it"] {
+            let (ctx, requests, server, dir) = auto_test_ctx().await;
+
+            let response = reply(&ctx, ChannelId::new(42), content, None, false).await;
+
+            let handle = response["held"]["handle"].as_str().expect("held");
+            assert!(response.get("auto_rewrites").is_none(), "{response}");
+            assert!(posted_contents(&requests).is_empty());
+            let records = diary_records(&dir);
+            assert_eq!(records.len(), 1, "only the hold: {records:?}");
+            assert_eq!(records[0]["action"], "block");
+            assert_eq!(records[0]["message"], content);
+
+            let released = release_held(&ctx, handle).await;
+            assert_eq!(released["ok"], true, "{released}");
+            assert_eq!(posted_contents(&requests), vec![content]);
+            assert!(auto_diary_records(&dir).is_empty());
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn rephrase_sends_auto_rewrite_reports_and_records_it() {
+        let (ctx, requests, server, dir) = auto_test_ctx().await;
+        let bounce = reply(&ctx, ChannelId::new(42), "straightforward", None, false).await;
+        let handle = bounce["held"]["handle"].as_str().expect("held");
+
+        let response = rephrase_held(&ctx, handle, "we utilize the cache").await;
+
+        assert_eq!(response["ok"], true, "{response}");
+        assert_eq!(posted_contents(&requests), vec!["we use the cache"]);
+        assert_eq!(
+            response["auto_rewrites"],
+            json!(["auto: utilize \u{2192} use"])
+        );
+        let records = auto_diary_records(&dir);
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0]["message"], "we utilize the cache");
+        assert_eq!(records[0]["sent"], "we use the cache");
+        server.abort();
+    }
+
+    /// A rewritten reply whose later chunk fails has already shown the
+    /// rewrite in the room: the error says so, and the diary records it.
+    #[tokio::test]
+    async fn partly_delivered_auto_rewrite_is_reported_and_recorded() {
+        let mut raw = auto_test_config();
+        raw.delivery.text_chunk_limit = 24;
+        let (ctx, requests, server, dir) = auto_test_ctx_with(raw).await;
+
+        let response = reply(
+            &ctx,
+            ChannelId::new(42),
+            "we utilize it now\n\nforce-delivery-failure",
+            None,
+            false,
+        )
+        .await;
+
+        assert!(response["error"].is_string(), "{response}");
+        assert!(posted_contents(&requests)[0].starts_with("we use it now"));
+        assert_eq!(
+            response["auto_rewrites"],
+            json!(["auto: utilize \u{2192} use"])
+        );
+        let records = auto_diary_records(&dir);
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0]["matched"], "utilize");
+        server.abort();
+    }
+
+    /// A rewritten reply that fails outright still reports the rewrite it
+    /// attempted, and records nothing: nothing reached the room.
+    #[tokio::test]
+    async fn failed_auto_reply_reports_the_rewrite() {
+        let (ctx, requests, server, dir) = auto_test_ctx().await;
+
+        let response = reply(
+            &ctx,
+            ChannelId::new(42),
+            "we utilize force-delivery-failure",
+            None,
+            false,
+        )
+        .await;
+
+        assert!(response["error"].is_string(), "{response}");
+        assert_eq!(
+            posted_contents(&requests),
+            vec!["we use force-delivery-failure"]
+        );
+        assert_eq!(
+            response["auto_rewrites"],
+            json!(["auto: utilize \u{2192} use"])
+        );
+        assert!(auto_diary_records(&dir).is_empty());
+        server.abort();
+    }
+
+    /// A rewritten replacement that fails to deliver stays held as the
+    /// construct wrote it: a later `no_rly` sends that text verbatim.
+    #[tokio::test]
+    async fn failed_rephrase_holds_the_replacement_as_written() {
+        let (ctx, requests, server, dir) = auto_test_ctx().await;
+        let bounce = reply(&ctx, ChannelId::new(42), "straightforward", None, false).await;
+        let handle = bounce["held"]["handle"].as_str().expect("held");
+
+        let response = rephrase_held(&ctx, handle, "we utilize force-delivery-failure").await;
+        assert_eq!(response["handle_still_live"], handle, "{response}");
+
+        let released = release_held(&ctx, handle).await;
+        assert!(released["error"].is_string(), "{released}");
+        assert_eq!(
+            posted_contents(&requests),
+            vec![
+                "we use force-delivery-failure",
+                "we utilize force-delivery-failure"
+            ]
+        );
+        assert!(auto_diary_records(&dir).is_empty());
+        assert_eq!(
+            response["auto_rewrites"],
+            json!(["auto: utilize \u{2192} use"])
+        );
+        server.abort();
     }
 
     #[tokio::test]

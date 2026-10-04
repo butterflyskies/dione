@@ -45,7 +45,7 @@ pub(crate) fn tools_list(mode: TransportMode, evidence_markers_enabled: bool) ->
     let mut response = json!({
         "tools": [
             tool("attention", "Recipient-local attention controls: status/configure, authorized source review/retrieval and feedback, offline replay/fitting, held-out evaluation and explicit digest promotion/rollback. Configure replaces settings from status. No command is accepted from Discord message text; this authenticated seat supplies recipient identity.", crate::attention::control::schema()),
-            tool("reply", "Send a reply to a Discord channel or DM. A contradictionary block-tier match does not send: the message is held under a single-use handle and the error names the matched pattern(s) plus the handle. Act on it with no_rly (send verbatim), rephrase (replacement, re-checked), or ignore it to let it expire.", json!({
+            tool("reply", "Send a reply to a Discord channel or DM. A contradictionary block-tier match does not send: the message is held under a single-use handle and the error names the matched pattern(s) plus the handle. Act on it with no_rly (send verbatim), rephrase (replacement, re-checked), or ignore it to let it expire. An auto-tier match is rewritten to its replacement and sent; the result lists each rewrite under auto_rewrites (`auto: <match> → <replace>`).", json!({
                 "type": "object",
                 "required": ["channel_id", "content"],
                 "properties": {
@@ -65,7 +65,7 @@ pub(crate) fn tools_list(mode: TransportMode, evidence_markers_enabled: bool) ->
                     "handle": { "type": "string", "description": "The hold handle returned by the bounced send (e.g. nr-3f92-7)" }
                 }
             })),
-            tool("rephrase", "Replace a held message with new text. The replacement is re-checked by the contradictionary: a clean verdict sends it (original addressing preserved) and journals the (original, reason, replacement) triple; a re-bounce kills the old handle and returns a NEW handle chained to it. Like no_rly, the sent text lands when released, not at its original conversation position.", json!({
+            tool("rephrase", "Replace a held message with new text. The replacement is re-checked by the contradictionary: a clean verdict sends it (original addressing preserved) and journals the (original, reason, replacement) triple; a re-bounce kills the old handle and returns a NEW handle chained to it. An auto-tier match in the replacement is rewritten before the check, and the result lists each rewrite under auto_rewrites (`auto: <match> → <replace>`); if the send fails, the handle holds the replacement as written. Like no_rly, the sent text lands when released, not at its original conversation position.", json!({
                 "type": "object",
                 "required": ["handle", "content"],
                 "properties": {
@@ -205,7 +205,7 @@ pub(crate) fn tools_list(mode: TransportMode, evidence_markers_enabled: bool) ->
                     "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for the caption; every bypass is audited." }
                 }
             })),
-            tool("send_dm", "Initiate a DM conversation with a Discord user and send a message", json!({
+            tool("send_dm", "Initiate a DM conversation with a Discord user and send a message. Contradictionary matches gate it as on reply: a block-tier match holds it under a handle, and an auto-tier match is rewritten and sent, with each rewrite listed under auto_rewrites (`auto: <match> → <replace>`).", json!({
                 "type": "object",
                 "required": ["user_id", "content"],
                 "properties": {

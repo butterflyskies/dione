@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-10-04
+
+### Added
+- Contradictionary `auto` action (lacuna/dione#461): an entry with
+  `action = "auto"` and a `replace` text rewrites each match and sends,
+  instead of holding. Casing carries over (utilize → use, Utilize → Use,
+  UTILIZE → USE). Rewrites run on reply, send_dm and rephrase, in
+  `prepare_outbound`, before the pre-send hooks and the evidence markers.
+  Every result lists them under `auto_rewrites` (`auto: <match> →
+  <replace>`), including errors and holds, and the diary gets one
+  `action: "auto"` record per rewrite carrying `matched`, `replacement`,
+  the text as written and the text sent. Fails closed: an entry without
+  `replace`, in substring mode, or with an identifier-shaped pattern loads
+  as `block`; a match inside code, a quotation or blockquote, a URL, path,
+  address, handle or token, or a link target holds the message, as do a
+  Capitalized match mid-sentence or in a Title Case run, a match that is
+  its whole line or bullet, a multi-word match split by anything but
+  spaces, any `block` hit, and a rewrite that creates a new hit or leaves
+  nothing to send. A rephrase whose send fails stays held as written, so
+  `no_rly` sends it verbatim. One-shot `dione-send` refuses an `auto`
+  match like a `block` one. (lacuna/dione#462)
+
 ## [0.48.1] - 2026-10-03
 
 ### Fixed

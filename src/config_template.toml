@@ -134,6 +134,31 @@ text_chunk_limit = 2000
 # # Patterns are matched case-insensitively.
 # # [[contradictionary.entries]]
 # # pattern = "load-bearing"
-# # action = "block"       # "block" (reject, default), "log" (silent), "celebrate" (✨)
+# # action = "block"       # "block" (reject, default), "log" (silent), "celebrate" (✨),
+# #                        # "auto" (rewrite to `replace` and send; see below)
 # #                        # "warn" is retired — it still parses, as "block", but update it
 # # match_mode = "word"    # "word" (default, whole-word), "substring" (anywhere in text)
+# #
+# # An "auto" entry rewrites each match to `replace` and sends, for pure
+# # substitutions. Casing carries over: utilize → use, Utilize → Use,
+# # UTILIZE → USE. The send result lists each rewrite as
+# # `auto: <match> → <replace>`, and the diary gets an `action: "auto"` record
+# # per rewrite. `replace` is required and `auto` is word-match only: an entry
+# # missing `replace`, with match_mode = "substring", or whose pattern looks
+# # like an identifier (contains `_`, starts with `-`, or is camelCase) is
+# # logged and treated as "block". A match the rewrite cannot touch safely
+# # holds the whole message like "block": one inside code (fenced, indented or
+# # inline), a quotation ("…", “…”, '…', ‘…’, «…») or blockquote, a URL, path,
+# # file or host name, email, @handle, #channel, Discord token or key=value, or
+# # a link target; a Capitalized match mid-sentence (a soft-wrapped line or an
+# # abbreviation like "e.g." does not start a sentence) or in a Title Case run;
+# # a match that is its whole line or bullet; or a multi-word match with
+# # anything but spaces between its words. Any "block" hit in the same message,
+# # or a rewrite that would create a new hit or leave nothing to send, also
+# # holds it, unrewritten. Rewrites apply on reply, send_dm and rephrase,
+# # before the pre-send hooks; one-shot dione-send does not rewrite and
+# # refuses an "auto" match as it would a "block" one.
+# # [[contradictionary.entries]]
+# # pattern = "utilize"
+# # action = "auto"
+# # replace = "use"

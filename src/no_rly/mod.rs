@@ -24,7 +24,8 @@ pub mod judge;
 pub mod queue;
 
 pub use consent::{
-    BounceTicket, ConsentGate, DeliverReply, RejectedHandle, Released, Rephrased, ReplyRequest,
+    BounceTicket, ConsentGate, DeliverReply, RejectedHandle, Released, Rephrased, Replacement,
+    ReplyRequest,
 };
 pub use journal::{BounceRecord, Journal, JournalRecord, Outcome, SummaryRecord};
 pub use judge::{OutboundJudge, ReasonEntry, RejectReason, Verdict};

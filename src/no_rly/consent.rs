@@ -189,6 +189,32 @@ pub enum Rephrased {
     ReBounced(BounceTicket),
 }
 
+/// A rephrase replacement: the text as the construct wrote it, and the text
+/// to send when it judges clear. The two differ only when the
+/// contradictionary's `auto` tier rewrote it, and then `diary_records`
+/// carries what the rewritten send owes the diary once it lands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Replacement<'a> {
+    /// The replacement as written. A failed send holds this, so a later
+    /// release sends what the construct wrote, verbatim.
+    pub written: &'a str,
+    /// The text judged and sent.
+    pub send: &'a str,
+    /// Diary records for the sent text, written once every chunk lands.
+    pub diary_records: Vec<DiaryRecord>,
+}
+
+impl<'a> From<&'a str> for Replacement<'a> {
+    /// A replacement sent as written.
+    fn from(text: &'a str) -> Self {
+        Self {
+            written: text,
+            send: text,
+            diary_records: Vec::new(),
+        }
+    }
+}
+
 /// Why an action on a handle did not go through.
 #[derive(Debug, Error)]
 pub enum RejectedHandle {
@@ -368,16 +394,20 @@ impl ConsentGate {
     /// live for retry — holding the replacement, not the original. Offering
     /// a replacement withdraws consent for the original text on every path,
     /// so a later release or rephrase of the still-live handle operates on
-    /// the rephrased content and can never silently revert.
-    pub async fn rephrase<D: DeliverReply, J: OutboundJudge + ?Sized>(
+    /// the rephrased content and can never silently revert. What is held is
+    /// the replacement as written ([`Replacement::written`]), so a release
+    /// sends it verbatim; only a partial delivery, whose sent text is already
+    /// in the room, keeps the remainder of the text that was sent.
+    pub async fn rephrase<'r, D: DeliverReply, J: OutboundJudge + ?Sized>(
         &self,
         deliver: &D,
         judge: &J,
         handle: &HoldHandle,
-        replacement: &str,
+        replacement: impl Into<Replacement<'r>>,
         ttl: Duration,
         now: Instant,
     ) -> Result<Rephrased, RejectedHandle> {
+        let replacement = replacement.into();
         let entry = {
             let mut queue = self.queue.lock().await;
             self.reserve_live(&mut queue, handle, now)?
@@ -385,16 +415,21 @@ impl ConsentGate {
 
         // Build field-by-field: only the content changes, so there is no
         // reason to clone the original content string just to overwrite it.
-        let request = ReplyRequest {
+        let as_written = ReplyRequest {
             channel_id: entry.payload.channel_id,
-            content: replacement.to_string(),
+            content: replacement.written.to_string(),
             reply_to_message_id: entry.payload.reply_to_message_id,
             suppress_ping: entry.payload.suppress_ping,
             pending_diary_records: entry.payload.pending_diary_records.clone(),
             fence_context: ReplyFenceContext::default(),
         };
+        let mut request = as_written.clone();
+        request.content = replacement.send.to_string();
+        request
+            .pending_diary_records
+            .extend(replacement.diary_records);
 
-        match judge.judge(replacement) {
+        match judge.judge(replacement.send) {
             Verdict::Clear => match deliver.deliver(&request).await {
                 Ok(ids) => {
                     {
@@ -404,7 +439,7 @@ impl ConsentGate {
                     let latency_ms = entry.latency(now).as_millis() as u64;
                     let mut message_ids = entry.sent_ids.clone();
                     message_ids.extend(ids);
-                    self.journal_rephrase(handle, &entry, replacement, latency_ms);
+                    self.journal_rephrase(handle, &entry, replacement.send, latency_ms);
                     Ok(Rephrased::Sent { message_ids })
                 }
                 Err(DeliverError {
@@ -436,7 +471,7 @@ impl ConsentGate {
                             queue.record_partial(handle, remainder_req, sent_ids, request.content);
                         }
                         _ => {
-                            queue.update_payload(handle, request);
+                            queue.update_payload(handle, as_written);
                             queue.release_reservation(handle);
                         }
                     }
@@ -454,9 +489,15 @@ impl ConsentGate {
                 let new_handle = {
                     let mut queue = self.queue.lock().await;
                     queue.settle(handle);
-                    queue.hold(request, new_reason.clone(), Some(handle.clone()), ttl, now)
+                    queue.hold(
+                        as_written,
+                        new_reason.clone(),
+                        Some(handle.clone()),
+                        ttl,
+                        now,
+                    )
                 };
-                self.journal_rephrase(handle, &entry, replacement, latency_ms);
+                self.journal_rephrase(handle, &entry, replacement.written, latency_ms);
                 Ok(Rephrased::ReBounced(BounceTicket {
                     handle: new_handle,
                     reason: new_reason,
@@ -690,6 +731,7 @@ mod tests {
             pattern: "straightforward".into(),
             action: Action::Block,
             match_mode: MatchMode::Word,
+            replace: None,
             reason: Some("nothing ever is".into()),
         }])
     }
@@ -1265,6 +1307,46 @@ mod tests {
         }
     }
 
+    /// A rewritten replacement sends its rewrite and carries the records it
+    /// owes; when part of it already landed, the retry resumes the sent
+    /// text, records still pending, rather than reverting to the original.
+    #[tokio::test]
+    async fn partial_rewritten_rephrase_resumes_the_sent_text_with_its_records() {
+        let (_dir, gate) = gate();
+        let deliver = PartialThenOk {
+            calls: StdMutex::new(0),
+            requests: StdMutex::new(Vec::new()),
+            diary_records: None,
+        };
+        let now = Instant::now();
+        let ticket = gate
+            .bounce(request("straightforward"), reason(), TTL, MAX_PENDING, now)
+            .await;
+        let records = vec![DiaryRecord::log_now("auto", "we use it")];
+
+        let replacement = Replacement {
+            written: "we utilize it",
+            send: "we use it",
+            diary_records: records.clone(),
+        };
+        match gate
+            .rephrase(&deliver, &judge(), &ticket.handle, replacement, TTL, now)
+            .await
+        {
+            Err(RejectedHandle::SendFailed { .. }) => {}
+            other => panic!("expected partial failure, got {other:?}"),
+        }
+        gate.release(&deliver, &ticket.handle, now)
+            .await
+            .expect("retry completes");
+
+        let sent = deliver.requests.lock().unwrap().clone();
+        assert_eq!(sent[0].content, "we use it");
+        assert_eq!(sent[0].pending_diary_records, records);
+        assert_eq!(sent[1].content, "the second half");
+        assert_eq!(sent[1].pending_diary_records, records);
+    }
+
     #[tokio::test]
     async fn partial_delivery_retry_resumes_from_the_remainder() {
         let (_dir, gate) = gate();
@@ -1392,7 +1474,7 @@ mod tests {
                 &deliver,
                 &judge(),
                 &ticket.handle,
-                &replacement.content,
+                replacement.content.as_str(),
                 TTL,
                 now,
             )
@@ -1405,7 +1487,7 @@ mod tests {
             &deliver,
             &judge(),
             &ticket.handle,
-            &replacement.content,
+            replacement.content.as_str(),
             TTL,
             now + Duration::from_secs(1),
         )

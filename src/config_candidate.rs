@@ -83,6 +83,7 @@ mod tests {
             pattern: pattern.into(),
             action: Action::Block,
             match_mode: MatchMode::Word,
+            replace: None,
             reason: None,
         }
     }
@@ -124,6 +125,7 @@ mod tests {
             pattern: "taken".into(),
             action: Action::Block,
             match_mode: MatchMode::Substring,
+            replace: None,
             reason: None,
         };
         let counter = AtomicU64::new(1);
@@ -157,6 +159,7 @@ mod tests {
             pattern: "taken".into(),
             action: Action::Block,
             match_mode: MatchMode::Word,
+            replace: None,
             reason: Some("sidecar wins".into()),
         };
         let counter = AtomicU64::new(1);

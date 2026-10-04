@@ -5,7 +5,7 @@
 //! a future classifier can implement [`OutboundJudge`] and slot in without the
 //! queue, handles, journal, or expiry changing shape.
 
-use crate::contradictionary::{Action, Contradictionary};
+use crate::contradictionary::Contradictionary;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -78,12 +78,13 @@ pub trait OutboundJudge: Send + Sync {
 
 /// The contradictionary judges by its `block`-tier entries. Log and celebrate
 /// hits are not the judge's concern — they ride along after the
-/// send as before.
+/// send as before. An `auto` hit still present in the judged text was not
+/// rewritten, so it fails closed and bounces like `block`.
 impl OutboundJudge for Contradictionary {
     fn judge(&self, content: &str) -> Verdict {
         let mut matches: Vec<ReasonEntry> = Vec::new();
         for hit in self.check(content) {
-            if hit.action != Action::Block {
+            if !hit.action.gates() {
                 continue;
             }
             if matches.iter().any(|m| m.pattern == hit.pattern) {
@@ -117,7 +118,7 @@ impl OutboundJudge for AlwaysClear {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contradictionary::{Entry, MatchMode};
+    use crate::contradictionary::{Action, Entry, MatchMode};
 
     fn entries() -> Vec<Entry> {
         vec![
@@ -125,24 +126,28 @@ mod tests {
                 pattern: "straightforward".into(),
                 action: Action::Block,
                 match_mode: MatchMode::Word,
+                replace: None,
                 reason: Some("nothing ever is".into()),
             },
             Entry {
                 pattern: "trivial".into(),
                 action: Action::Block,
                 match_mode: MatchMode::Word,
+                replace: None,
                 reason: None,
             },
             Entry {
                 pattern: "honestly".into(),
                 action: Action::Log,
                 match_mode: MatchMode::Word,
+                replace: None,
                 reason: Some("log tier must not bounce".into()),
             },
             Entry {
                 pattern: "prejection".into(),
                 action: Action::Celebrate,
                 match_mode: MatchMode::Word,
+                replace: None,
                 reason: None,
             },
         ]
@@ -178,6 +183,7 @@ mod tests {
             pattern: "rust".into(),
             action: Action::Block,
             match_mode: MatchMode::Substring,
+            replace: None,
             reason: None,
         }]);
         match judge.judge("rust makes me frustrated, trust me") {
@@ -195,6 +201,23 @@ mod tests {
             judge.judge("honestly, prejection is the word"),
             Verdict::Clear
         );
+    }
+
+    /// The judge sees text that was not rewritten, so an `auto` hit fails
+    /// closed: on any path that only judges, it holds like `block`.
+    #[test]
+    fn unrewritten_auto_hit_bounces() {
+        let judge = Contradictionary::new(vec![Entry {
+            pattern: "utilize".into(),
+            action: Action::Auto,
+            match_mode: MatchMode::Word,
+            reason: None,
+            replace: Some("use".into()),
+        }]);
+        match judge.judge("we utilize it") {
+            Verdict::Bounce(reason) => assert_eq!(reason.patterns(), "utilize"),
+            Verdict::Clear => panic!("an unrewritten auto hit must bounce"),
+        }
     }
 
     #[test]

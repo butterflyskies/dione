@@ -1022,6 +1022,7 @@ mod tests {
                 pattern: "straightforward".into(),
                 action: Action::Block,
                 match_mode: MatchMode::Word,
+                replace: None,
                 reason: Some("nothing ever is".into()),
             }];
         });
@@ -1034,6 +1035,24 @@ mod tests {
             judge_message(&config, 42, &identity(), "this is subtle").unwrap(),
             "this is subtle"
         );
+    }
+
+    /// One-shot sends do not rewrite: an `auto` hit refuses like `block`.
+    #[test]
+    fn contradictionary_auto_hit_refuses() {
+        let config = config_with("42", |raw| {
+            raw.contradictionary.enabled = true;
+            raw.contradictionary.entries = vec![Entry {
+                pattern: "utilize".into(),
+                action: Action::Auto,
+                match_mode: MatchMode::Word,
+                replace: Some("use".into()),
+                reason: None,
+            }];
+        });
+        let refusal = judge_message(&config, 42, &identity(), "we utilize it").unwrap_err();
+        assert_eq!(refusal.reason, Reason::ContradictionaryBounce);
+        assert!(refusal.detail.contains("utilize"));
     }
 
     #[test]
