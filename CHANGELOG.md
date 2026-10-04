@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.48.1] - 2026-10-03
+
+### Fixed
+- Preserve downloaded attachment files when later or concurrent downloads use
+  the same sanitized filename. Each download saves an independent copy without
+  overwriting existing inbox files or following destination symlinks. Collision
+  names stay within the 255-byte filename limit, retaining extensions when feasible.
+
 ## [0.48.0] - 2026-10-03
 
 ### Removed

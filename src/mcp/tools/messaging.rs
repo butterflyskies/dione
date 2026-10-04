@@ -23,7 +23,7 @@ use crate::{
     },
     state::State,
 };
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use serde_json::{Value, json};
 use serenity::{
     builder::{CreateAllowedMentions, CreateAttachment, CreateMessage, EditMessage},
@@ -34,8 +34,8 @@ use serenity::{
         id::{ChannelId, MessageId, UserId},
     },
 };
-use std::{sync::Arc, time::Instant};
-use tokio::sync::mpsc;
+use std::{io, sync::Arc, time::Instant};
+use tokio::{io::AsyncWriteExt, sync::mpsc};
 
 /// Self-react emoji for contradictionary celebrate hits (✨ — sparkles).
 const CONTRADICTIONARY_CELEBRATE_REACT: &str = "\u{2728}";
@@ -1788,30 +1788,19 @@ pub async fn download_attachment(
 
     let mut saved_paths: Vec<String> = Vec::new();
 
-    for (idx, attachment) in msg.attachments.iter().enumerate() {
+    for attachment in &msg.attachments {
         let safe_name = crate::gate::sanitize_filename(&attachment.filename);
-        let dest = {
-            let candidate = inbox_dir.join(&safe_name);
-            if candidate.exists() {
-                inbox_dir.join(format!("{idx}-{safe_name}"))
-            } else {
-                candidate
-            }
-        };
-
-        // Download attachment bytes.
         match download_url(&attachment.url).await {
-            Ok(bytes) => {
-                if let Err(e) = tokio::fs::write(&dest, &bytes).await {
+            Ok(bytes) => match save_attachment(&inbox_dir, &safe_name, &bytes).await {
+                Ok(dest) => saved_paths.push(dest.to_string()),
+                Err(e) => {
                     tracing::warn!(
                         name = %safe_name,
                         error = %e,
                         "failed to write attachment to inbox"
                     );
-                } else {
-                    saved_paths.push(dest.to_string());
                 }
-            }
+            },
             Err(e) => {
                 tracing::warn!(url = %attachment.url, error = %e, "failed to download attachment");
             }
@@ -1819,6 +1808,58 @@ pub async fn download_attachment(
     }
 
     json!({ "saved": saved_paths })
+}
+
+async fn save_attachment(
+    inbox_dir: &Utf8Path,
+    safe_name: &str,
+    bytes: &[u8],
+) -> io::Result<Utf8PathBuf> {
+    let mut suffix = 0u64;
+    loop {
+        let dest = inbox_dir.join(if suffix == 0 {
+            safe_name.to_owned()
+        } else {
+            let prefix = format!("{suffix}-");
+            let budget = 255 - prefix.len();
+            let extension = Utf8Path::new(safe_name)
+                .extension()
+                .filter(|extension| extension.len() + 1 < budget)
+                .map_or("", |extension| {
+                    &safe_name[safe_name.len() - extension.len() - 1..]
+                });
+            let stem = &safe_name[..safe_name.len() - extension.len()];
+            let mut end = stem.len().min(budget - extension.len());
+            while !stem.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{prefix}{}{extension}", &stem[..end])
+        });
+        let mut file = match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&dest)
+            .await
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                suffix += 1;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        let written = async {
+            file.write_all(bytes).await?;
+            file.flush().await
+        }
+        .await;
+        if let Err(error) = written {
+            drop(file);
+            let _ = tokio::fs::remove_file(&dest).await;
+            return Err(error);
+        }
+        return Ok(dest);
+    }
 }
 
 // ── send_attachment (shared helper) ──────────────────────────────────────────
@@ -2208,11 +2249,17 @@ mod tests {
         },
         state::new_state,
     };
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        collections::BTreeMap,
+        fmt,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
     use tokio::{
         io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
+    use tracing::instrument::WithSubscriber;
+    use tracing_subscriber::layer::SubscriberExt;
 
     #[test]
     fn outbound_surface_strings_are_canonical() {
@@ -3077,6 +3124,388 @@ mod tests {
             Arc::new(ConsentGate::new(camino::Utf8Path::new("/tmp"))),
             Arc::new(crate::ingress_ledger::IngressLedger::new()),
         )
+    }
+
+    async fn attachment_download_fixture(
+        filenames: Vec<String>,
+        concurrent_downloads: bool,
+    ) -> (MessagingCtx, tempfile::TempDir, tokio::task::JoinHandle<()>) {
+        let directory = tempfile::tempdir().expect("attachment inbox fixture");
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let barrier = concurrent_downloads.then(|| Arc::new(tokio::sync::Barrier::new(2)));
+        let server = tokio::spawn(async move {
+            let mut requests = tokio::task::JoinSet::new();
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let filenames = filenames.clone();
+                let barrier = barrier.clone();
+                requests.spawn(async move {
+                    let mut reader = tokio::io::BufReader::new(stream);
+                    let mut request_line = String::new();
+                    reader.read_line(&mut request_line).await.unwrap();
+                    loop {
+                        let mut header = String::new();
+                        if reader.read_line(&mut header).await.unwrap() == 0 || header == "\r\n" {
+                            break;
+                        }
+                    }
+                    let path = request_line.split_whitespace().nth(1).unwrap();
+                    let (status, body) = if path.contains("/messages/") {
+                        let message_id = path.rsplit('/').next().unwrap().parse::<u64>().unwrap();
+                        let attachments = filenames.iter().enumerate().map(|(index, filename)| {
+                            let url = format!("http://{address}/bytes/{message_id}/{index}");
+                            json!({
+                                "id": (index + 1).to_string(),
+                                "filename": filename,
+                                "size": 3,
+                                "url": url,
+                                "proxy_url": url,
+                            })
+                        }).collect::<Vec<_>>();
+                        ("200 OK", wire_message(message_id, "", "2026-08-15T09:00:00.000000+00:00", json!(attachments)).to_string())
+                    } else {
+                        if let Some(barrier) = barrier {
+                            barrier.wait().await;
+                        }
+                        let index = path.rsplit('/').next().unwrap().parse::<usize>().unwrap();
+                        if filenames[index] == "missing.png" {
+                            ("404 Not Found", "missing".to_owned())
+                        } else {
+                            ("200 OK", path.to_owned())
+                        }
+                    };
+                    let response = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                    reader.get_mut().write_all(response.as_bytes()).await.unwrap();
+                });
+                while requests.try_join_next().is_some() {}
+            }
+        });
+        let http = serenity::http::HttpBuilder::new("fake")
+            .proxy(format!("http://{address}"))
+            .ratelimiter_disabled(true)
+            .build();
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".into(),
+            ..Default::default()
+        });
+        let mut ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), Arc::new(http));
+        ctx.state_dir = Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
+        (ctx, directory, server)
+    }
+
+    #[tokio::test]
+    async fn attachment_download_repeated_names_preserve_returned_bytes() {
+        let (ctx, _directory, server) =
+            attachment_download_fixture(vec!["image.png".into()], false).await;
+        let mut saved = Vec::new();
+        for message_id in [1, 1, 2, 3] {
+            let result =
+                download_attachment(&ctx, ChannelId::new(42), MessageId::new(message_id)).await;
+            let paths = result["saved"].as_array().expect("saved array");
+            assert_eq!(paths.len(), 1, "{result}");
+            saved.push((
+                paths[0].as_str().unwrap().to_owned(),
+                format!("/bytes/{message_id}/0"),
+            ));
+        }
+        for (path, expected) in &saved {
+            assert!(OutboundGate::check_file_send(
+                camino::Utf8Path::new(path),
+                &ctx.state_dir
+            ));
+            assert_eq!(
+                tokio::fs::read_to_string(path).await.unwrap(),
+                *expected,
+                "previously returned {path} was overwritten"
+            );
+        }
+        let distinct = saved
+            .iter()
+            .map(|(path, _)| path)
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            distinct.len(),
+            saved.len(),
+            "repeated downloads are independent copies"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn attachment_download_concurrent_names_preserve_returned_bytes() {
+        let (ctx, _directory, server) =
+            attachment_download_fixture(vec!["image.png".into()], true).await;
+        let inbox = ctx.state_dir.join("inbox");
+        tokio::fs::create_dir_all(&inbox).await.unwrap();
+        tokio::fs::write(inbox.join("image.png"), b"existing")
+            .await
+            .unwrap();
+        let (first, second) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(
+                download_attachment(&ctx, ChannelId::new(42), MessageId::new(1)),
+                download_attachment(&ctx, ChannelId::new(42), MessageId::new(2)),
+            )
+        })
+        .await
+        .expect("concurrent fixture requests completed");
+        for (result, message_id) in [(&first, 1), (&second, 2)] {
+            let paths = result["saved"].as_array().expect("saved array");
+            assert_eq!(paths.len(), 1, "{result}");
+            let path = paths[0].as_str().unwrap();
+            assert!(OutboundGate::check_file_send(
+                camino::Utf8Path::new(path),
+                &ctx.state_dir
+            ));
+            assert_eq!(
+                tokio::fs::read_to_string(path).await.unwrap(),
+                format!("/bytes/{message_id}/0"),
+                "previously returned {path} was overwritten"
+            );
+        }
+        assert_ne!(first["saved"][0], second["saved"][0]);
+        assert_eq!(
+            tokio::fs::read_to_string(inbox.join("image.png"))
+                .await
+                .unwrap(),
+            "existing"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn attachment_download_long_names_preserve_returned_bytes() {
+        for filename in [
+            format!("{}.png", "a".repeat(250)),
+            format!("{}.png", "a".repeat(251)),
+            "a".repeat(255),
+            format!("a{}.png", "猫".repeat(83)),
+            format!("{}.rs", "猫".repeat(84)),
+            format!("a.{}", "x".repeat(253)),
+        ] {
+            let (ctx, _directory, server) =
+                attachment_download_fixture(vec![filename.clone()], false).await;
+            let mut saved = Vec::new();
+            for message_id in 1..=12 {
+                let result =
+                    download_attachment(&ctx, ChannelId::new(42), MessageId::new(message_id)).await;
+                let paths = result["saved"].as_array().expect("saved array");
+                assert_eq!(
+                    paths.len(),
+                    1,
+                    "download {message_id}, filename {filename}: {result}"
+                );
+                let path = Utf8PathBuf::from(paths[0].as_str().unwrap());
+                let name = path.file_name().unwrap();
+                assert!(name.len() <= 255, "{name}");
+                if message_id == 1 {
+                    assert_eq!(name, filename);
+                } else {
+                    assert!(name.starts_with(&format!("{}-", message_id - 1)), "{name}");
+                }
+                if filename.ends_with(".png") || filename.ends_with(".rs") {
+                    assert_eq!(path.extension(), Utf8Path::new(&filename).extension());
+                }
+                assert!(OutboundGate::check_file_send(&path, &ctx.state_dir));
+                saved.push((path, format!("/bytes/{message_id}/0")));
+            }
+            assert_eq!(
+                saved
+                    .iter()
+                    .map(|(path, _)| path)
+                    .collect::<std::collections::HashSet<_>>()
+                    .len(),
+                saved.len()
+            );
+            for (path, expected) in saved {
+                assert_eq!(
+                    tokio::fs::read_to_string(&path).await.unwrap(),
+                    expected,
+                    "{path}"
+                );
+            }
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn attachment_download_long_names_preserve_concurrent_and_existing_bytes() {
+        let filename = format!("{}.png", "a".repeat(251));
+        let (ctx, _directory, server) =
+            attachment_download_fixture(vec![filename.clone()], true).await;
+        let inbox = ctx.state_dir.join("inbox");
+        tokio::fs::create_dir_all(&inbox).await.unwrap();
+        tokio::fs::write(inbox.join(&filename), b"existing")
+            .await
+            .unwrap();
+        let (first, second) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(
+                download_attachment(&ctx, ChannelId::new(42), MessageId::new(1)),
+                download_attachment(&ctx, ChannelId::new(42), MessageId::new(2)),
+            )
+        })
+        .await
+        .expect("concurrent fixture requests completed");
+        for (result, message_id) in [(&first, 1), (&second, 2)] {
+            let paths = result["saved"].as_array().expect("saved array");
+            assert_eq!(paths.len(), 1, "{result}");
+            let path = Utf8Path::new(paths[0].as_str().unwrap());
+            assert!(path.file_name().unwrap().len() <= 255);
+            assert_eq!(path.extension(), Some("png"));
+            assert!(OutboundGate::check_file_send(path, &ctx.state_dir));
+            assert_eq!(
+                tokio::fs::read_to_string(path).await.unwrap(),
+                format!("/bytes/{message_id}/0")
+            );
+        }
+        assert_ne!(first["saved"][0], second["saved"][0]);
+        assert_eq!(
+            tokio::fs::read_to_string(inbox.join(filename))
+                .await
+                .unwrap(),
+            "existing"
+        );
+        server.abort();
+    }
+
+    #[derive(Default)]
+    struct AttachmentWarningFields(BTreeMap<String, String>);
+
+    impl tracing::field::Visit for AttachmentWarningFields {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
+            self.0.insert(field.name().to_owned(), format!("{value:?}"));
+        }
+
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.0.insert(field.name().to_owned(), value.to_owned());
+        }
+    }
+
+    struct AttachmentWarningCapture(tokio::sync::mpsc::UnboundedSender<BTreeMap<String, String>>);
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for AttachmentWarningCapture {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if *event.metadata().level() == tracing::Level::WARN {
+                let mut fields = AttachmentWarningFields::default();
+                event.record(&mut fields);
+                let _ = self.0.send(fields.0);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn attachment_download_sanitizes_names_and_keeps_partial_success() {
+        let (ctx, _directory, server) = attachment_download_fixture(
+            vec![
+                "../[image];.png".into(),
+                "missing.png".into(),
+                "x".repeat(300),
+                "image.png".into(),
+            ],
+            false,
+        )
+        .await;
+        let (warnings_tx, mut warnings_rx) = tokio::sync::mpsc::unbounded_channel();
+        let subscriber = tracing_subscriber::registry().with(AttachmentWarningCapture(warnings_tx));
+        let result = download_attachment(&ctx, ChannelId::new(42), MessageId::new(1))
+            .with_subscriber(subscriber)
+            .await;
+        let warnings: Vec<_> = std::iter::from_fn(|| warnings_rx.try_recv().ok()).collect();
+        assert_eq!(warnings.len(), 2, "one warning per failed attachment");
+        assert!(
+            warnings.iter().any(|fields| fields
+                .get("url")
+                .is_some_and(|url| url.contains("/bytes/1/1"))
+                && fields.contains_key("error")),
+            "download warning identifies the failed URL: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|fields| fields
+                .get("name")
+                .is_some_and(|name| name.contains(&"x".repeat(300)))
+                && fields.contains_key("error")),
+            "write warning identifies the failed filename: {warnings:?}"
+        );
+        assert_eq!(
+            result.as_object().unwrap().len(),
+            1,
+            "saved-only response contract"
+        );
+        let paths = result["saved"].as_array().expect("saved array");
+        assert_eq!(paths.len(), 2, "{result}");
+        for (path, index) in paths.iter().zip([0, 3]) {
+            let path = camino::Utf8Path::new(path.as_str().unwrap());
+            assert_eq!(path.parent(), Some(ctx.state_dir.join("inbox").as_path()));
+            assert!(path.file_name().unwrap().ends_with("image.png"));
+            assert!(OutboundGate::check_file_send(path, &ctx.state_dir));
+            assert_eq!(
+                tokio::fs::read_to_string(path).await.unwrap(),
+                format!("/bytes/1/{index}")
+            );
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn attachment_download_skips_existing_directories() {
+        let (ctx, _directory, server) =
+            attachment_download_fixture(vec!["image.png".into()], false).await;
+        let inbox = ctx.state_dir.join("inbox");
+        for name in ["image.png", "0-image.png", "1-image.png"] {
+            let occupied = inbox.join(name);
+            tokio::fs::create_dir_all(&occupied).await.unwrap();
+            tokio::fs::write(occupied.join("keep"), b"existing")
+                .await
+                .unwrap();
+        }
+        let result = download_attachment(&ctx, ChannelId::new(42), MessageId::new(1)).await;
+        assert_eq!(result["saved"].as_array().unwrap().len(), 1, "{result}");
+        let path = camino::Utf8Path::new(result["saved"][0].as_str().unwrap());
+        assert!(OutboundGate::check_file_send(path, &ctx.state_dir));
+        assert_eq!(tokio::fs::read_to_string(path).await.unwrap(), "/bytes/1/0");
+        for name in ["image.png", "0-image.png", "1-image.png"] {
+            assert_eq!(
+                tokio::fs::read_to_string(inbox.join(name).join("keep"))
+                    .await
+                    .unwrap(),
+                "existing"
+            );
+        }
+        server.abort();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn attachment_download_does_not_follow_existing_symlinks() {
+        let (ctx, _directory, server) =
+            attachment_download_fixture(vec!["image.png".into()], false).await;
+        let inbox = ctx.state_dir.join("inbox");
+        tokio::fs::create_dir_all(&inbox).await.unwrap();
+        let outside = ctx.state_dir.join("outside.png");
+        std::os::unix::fs::symlink(&outside, inbox.join("image.png")).unwrap();
+        std::os::unix::fs::symlink(&outside, inbox.join("1-image.png")).unwrap();
+        let result = download_attachment(&ctx, ChannelId::new(42), MessageId::new(1)).await;
+        assert_eq!(result["saved"].as_array().unwrap().len(), 1, "{result}");
+        assert!(
+            !outside.exists(),
+            "publication must not follow a dangling symlink"
+        );
+        assert!(OutboundGate::check_file_send(
+            camino::Utf8Path::new(result["saved"][0].as_str().unwrap()),
+            &ctx.state_dir
+        ));
+        assert_eq!(
+            tokio::fs::read_to_string(result["saved"][0].as_str().unwrap())
+                .await
+                .unwrap(),
+            "/bytes/1/0"
+        );
+        server.abort();
     }
 
     async fn fake_discord_http() -> (
