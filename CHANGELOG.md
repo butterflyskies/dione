@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-10-05
+
+### Added
+- Add authenticated Teams Activity ingress and single-use durable reply authority for the Codex resident, with a bounded local control socket. Signed retries use a durable provider identity so a replay does not enqueue a second Activity.
+
+### Fixed
+- Keep accepted resident requests and Teams replies owned through shutdown, drain them before stopping live delivery, and report startup or admission failures without claiming a delivered Activity.
+
 ## [0.50.0] - 2026-10-04
 
 ### Added

@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use serenity::model::id::MessageId;
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fs::{File, OpenOptions},
     io::{self, Write},
     sync::Arc,
@@ -39,6 +39,10 @@ const DEFAULT_LEASE: Duration = Duration::from_secs(2 * 60);
 const MAX_CONSUMER_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const DEFAULT_CONSUMER_TTL: Duration = Duration::from_secs(15 * 60);
 const MAX_PROCESSED_MESSAGE_IDS: usize = 10_000;
+// Local replay window after acknowledgement. This bounds durable state; it
+// does not promise suppression of a provider replay after the window expires.
+const PROCESSED_TEAMS_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+const MAX_RETAINED_TEAMS_EVENT_KEYS: usize = 10_000;
 const LIVE_CONSUMER_LABEL: &str = "dione-live-app-server";
 const MAX_ATTENTION_RECORD_ID_BYTES: usize = 512;
 const MIN_ATTENTION_DEFER: Duration = Duration::from_millis(100);
@@ -146,6 +150,50 @@ impl<'de> Deserialize<'de> for CodexThreadId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct DiscordMessageId(MessageId);
 
+/// Identity from an authenticated Teams Activity, independent of reply handle
+/// and notification timestamp. The provider tag prevents cross-transport IDs
+/// from sharing a deduplication namespace.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "provider", content = "id", rename_all = "snake_case")]
+pub(crate) enum ProviderEventKey {
+    Teams {
+        tenant_id: String,
+        bot_id: String,
+        conversation_id: String,
+        activity_id: String,
+    },
+}
+
+impl ProviderEventKey {
+    pub(crate) fn teams(
+        tenant_id: &str,
+        bot_id: &str,
+        conversation_id: &str,
+        activity_id: &str,
+    ) -> Result<Self, LiveQueueError> {
+        if [tenant_id, bot_id, conversation_id, activity_id]
+            .into_iter()
+            .any(|value| {
+                value.is_empty() || value.len() > 512 || value.chars().any(char::is_control)
+            })
+        {
+            return Err(LiveQueueError::InvalidProviderEventId);
+        }
+        Ok(Self::Teams {
+            tenant_id: tenant_id.to_owned(),
+            bot_id: bot_id.to_owned(),
+            conversation_id: conversation_id.to_owned(),
+            activity_id: activity_id.to_owned(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProcessedProviderEvent {
+    key: ProviderEventKey,
+    acknowledged_at: DateTime<Utc>,
+}
+
 /// Safe-turn scheduling requested by the attention admission layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -202,10 +250,27 @@ impl ConsumerId {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ConsumerKind {
+    #[default]
+    Pull,
+    Live,
+}
+
+impl ConsumerKind {
+    fn is_pull(&self) -> bool {
+        *self == Self::Pull
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ConsumerRegistration {
     id: ConsumerId,
     label: String,
+    /// Missing on older inboxes: a label alone never confers live authority.
+    #[serde(default, skip_serializing_if = "ConsumerKind::is_pull")]
+    kind: ConsumerKind,
     expires_at: DateTime<Utc>,
     #[serde(default = "default_consumer_ttl_seconds")]
     ttl_seconds: u64,
@@ -231,6 +296,8 @@ struct QueuedEvent {
     payload: Value,
     #[serde(default)]
     discord_message_id: Option<DiscordMessageId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider_event_key: Option<ProviderEventKey>,
     #[serde(default)]
     consumer_id: Option<ConsumerId>,
     /// Exact live thread binding at ingress. Pull consumers leave this unset.
@@ -244,6 +311,14 @@ struct QueuedEvent {
     deferred_until: Option<DateTime<Utc>>,
     #[serde(default)]
     lease: Option<Lease>,
+}
+
+impl QueuedEvent {
+    /// A persisted route or provider key remains private even after its live
+    /// registration expires or a legacy inbox loses its consumer kind.
+    fn is_live_bound(&self) -> bool {
+        self.live_thread_id.is_some() || self.provider_event_key.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -261,6 +336,8 @@ struct InboxState {
     consumers: Vec<ConsumerRegistration>,
     #[serde(default)]
     processed_message_ids: VecDeque<DiscordMessageId>,
+    #[serde(default)]
+    processed_provider_event_keys: VecDeque<ProcessedProviderEvent>,
     entries: VecDeque<QueuedEvent>,
 }
 
@@ -284,6 +361,8 @@ struct DurableInbox {
     state: InboxState,
     message_ids: HashSet<DiscordMessageId>,
     processed_message_ids: HashSet<DiscordMessageId>,
+    provider_event_keys: HashSet<ProviderEventKey>,
+    processed_provider_event_keys: HashMap<ProviderEventKey, DateTime<Utc>>,
 }
 
 /// A single-owner, durable queue shared by Discord ingress and MCP pull tools.
@@ -299,6 +378,15 @@ pub struct CodexEventQueue {
 struct BindingPublishGate {
     reached: tokio::sync::oneshot::Sender<()>,
     release: tokio::sync::oneshot::Receiver<()>,
+}
+
+/// Outcome of admitting one notification to the exact live route.
+/// An `Err` from `enqueue_live` always means this notification was not inserted.
+#[derive(Debug)]
+pub(crate) enum LiveEnqueueReceipt {
+    Committed,
+    CommittedDurabilityUncertain(CodexQueueError),
+    Duplicate,
 }
 
 /// Event returned to a Codex consumer under a time-bounded lease.
@@ -413,6 +501,20 @@ pub enum CodexQueueError {
     NotAttentionManaged,
 }
 
+/// Teams-only route and replay failures stay crate-private so the public
+/// exhaustive Codex queue error remains stable across this feature release.
+#[derive(Debug, Error)]
+pub(crate) enum LiveQueueError {
+    #[error(transparent)]
+    Queue(#[from] CodexQueueError),
+    #[error("invalid provider event id")]
+    InvalidProviderEventId,
+    #[error("no exact live resident route is ready")]
+    ResidentUnavailable,
+    #[error("teams replay-identity capacity is full")]
+    ReplayCapacity,
+}
+
 impl DurableInbox {
     fn load(state_dir: &Utf8Path) -> Result<Self, CodexQueueError> {
         std::fs::create_dir_all(state_dir.as_std_path()).map_err(|source| {
@@ -463,7 +565,7 @@ impl DurableInbox {
                 }
             };
         for event in &mut state.entries {
-            if event.discord_message_id.is_none() {
+            if event.discord_message_id.is_none() && event.provider_event_key.is_none() {
                 event.discord_message_id = discord_message_id(&event.payload);
             }
             event.attention = parse_attention_scheduling(&event.payload)?;
@@ -475,6 +577,16 @@ impl DurableInbox {
             .filter_map(|event| event.discord_message_id)
             .collect();
         let processed_message_ids = state.processed_message_ids.iter().cloned().collect();
+        let provider_event_keys = state
+            .entries
+            .iter()
+            .filter_map(|event| event.provider_event_key.clone())
+            .collect();
+        let processed_provider_event_keys = state
+            .processed_provider_event_keys
+            .iter()
+            .map(|event| (event.key.clone(), event.acknowledged_at))
+            .collect();
         Ok(Self {
             path,
             temporary_path,
@@ -487,6 +599,8 @@ impl DurableInbox {
             state,
             message_ids,
             processed_message_ids,
+            provider_event_keys,
+            processed_provider_event_keys,
         })
     }
 
@@ -512,6 +626,7 @@ impl DurableInbox {
                 id,
                 payload,
                 discord_message_id,
+                provider_event_key: None,
                 consumer_id: inbox.state.primary_consumer.clone(),
                 live_thread_id: inbox.live_event_thread_id(),
                 attention,
@@ -520,6 +635,69 @@ impl DurableInbox {
             });
             Ok(true)
         })
+    }
+
+    /// Admit only to the resident's current consumer and thread in one mutation.
+    /// The sync preflight separates a prior uncertain commit from uncertainty
+    /// caused by this insertion.
+    fn enqueue_live(
+        &mut self,
+        payload: Value,
+        provider_event_key: ProviderEventKey,
+    ) -> Result<LiveEnqueueReceipt, LiveQueueError> {
+        self.sync_directory()?;
+        let now = Utc::now();
+        if self.contains_provider_event(&provider_event_key, now) {
+            return Ok(LiveEnqueueReceipt::Duplicate);
+        }
+        let attention = parse_attention_scheduling(&payload)?;
+        let result = self.transaction(move |inbox| {
+            inbox.prune_processed_provider_events(now);
+            if inbox.teams_event_capacity_used() >= MAX_RETAINED_TEAMS_EVENT_KEYS {
+                return Err(LiveQueueError::ReplayCapacity);
+            }
+            inbox.expire_consumers(now);
+            let Some(consumer_id) = inbox.state.primary_consumer.clone() else {
+                return Err(LiveQueueError::ResidentUnavailable);
+            };
+            let Some(consumer) = inbox
+                .state
+                .consumers
+                .iter()
+                .find(|consumer| consumer.id == consumer_id)
+            else {
+                return Err(LiveQueueError::ResidentUnavailable);
+            };
+            if consumer.kind != ConsumerKind::Live || consumer.label != LIVE_CONSUMER_LABEL {
+                return Err(LiveQueueError::ResidentUnavailable);
+            }
+            let Some(live_thread_id) = inbox.state.live_thread_id.clone() else {
+                return Err(LiveQueueError::ResidentUnavailable);
+            };
+
+            let id = EventId::new(inbox.state.next_id);
+            inbox.state.next_id = inbox.state.next_id.saturating_add(1);
+            inbox.provider_event_keys.insert(provider_event_key.clone());
+            inbox.state.entries.push_back(QueuedEvent {
+                id,
+                payload,
+                discord_message_id: None,
+                provider_event_key: Some(provider_event_key),
+                consumer_id: Some(consumer_id),
+                live_thread_id: Some(live_thread_id),
+                attention,
+                deferred_until: None,
+                lease: None,
+            });
+            Ok(())
+        });
+        match result {
+            Ok(()) => Ok(LiveEnqueueReceipt::Committed),
+            Err(LiveQueueError::Queue(
+                error @ CodexQueueError::InboxDurabilityUncertain { .. },
+            )) => Ok(LiveEnqueueReceipt::CommittedDurabilityUncertain(error)),
+            Err(error) => Err(error),
+        }
     }
 
     fn lease_next(
@@ -531,6 +709,7 @@ impl DurableInbox {
     ) -> Result<LeasePoll, CodexQueueError> {
         let mut retained_lease = None;
         let result = self.transaction(|inbox| {
+            inbox.ensure_consumer_access(consumer_id, live_thread_id.is_some())?;
             inbox.touch_consumer(consumer_id, now)?;
             for event in &mut inbox.state.entries {
                 if event
@@ -545,6 +724,7 @@ impl DurableInbox {
             let matches_consumer = |event: &QueuedEvent| {
                 event.lease.is_none()
                     && event.consumer_id.as_ref() == Some(consumer_id)
+                    && (live_thread_id.is_some() || !event.is_live_bound())
                     && live_thread_id
                         .is_none_or(|thread_id| event.live_thread_id.as_ref() == Some(thread_id))
             };
@@ -627,10 +807,11 @@ impl DurableInbox {
 
     fn live_event_thread_id(&self) -> Option<CodexThreadId> {
         let primary = self.state.primary_consumer.as_ref()?;
-        self.state
-            .consumers
-            .iter()
-            .find(|consumer| consumer.id == *primary && consumer.label == LIVE_CONSUMER_LABEL)?;
+        self.state.consumers.iter().find(|consumer| {
+            consumer.id == *primary
+                && consumer.kind == ConsumerKind::Live
+                && consumer.label == LIVE_CONSUMER_LABEL
+        })?;
         self.state.live_thread_id.clone()
     }
 
@@ -639,8 +820,10 @@ impl DurableInbox {
         consumer_id: &ConsumerId,
         token: &DeliveryToken,
         now: DateTime<Utc>,
+        allow_live: bool,
     ) -> Result<(), CodexQueueError> {
         self.transaction(|inbox| {
+            inbox.ensure_consumer_access(consumer_id, allow_live)?;
             inbox.touch_consumer(consumer_id, now)?;
             let Some(index) = inbox.state.entries.iter().position(|event| {
                 event.lease.as_ref().is_some_and(|lease| {
@@ -649,12 +832,26 @@ impl DurableInbox {
             }) else {
                 return Err(CodexQueueError::UnknownDeliveryToken);
             };
+            if !allow_live && inbox.state.entries[index].is_live_bound() {
+                return Err(CodexQueueError::UnknownConsumer);
+            }
             let Some(removed) = inbox.state.entries.remove(index) else {
                 return Err(CodexQueueError::UnknownDeliveryToken);
             };
             if let Some(message_id) = removed.discord_message_id {
                 inbox.message_ids.remove(&message_id);
                 inbox.remember_processed_message(message_id);
+            }
+            if let Some(key) = removed.provider_event_key {
+                inbox.provider_event_keys.remove(&key);
+                inbox.processed_provider_event_keys.insert(key.clone(), now);
+                inbox
+                    .state
+                    .processed_provider_event_keys
+                    .push_back(ProcessedProviderEvent {
+                        key,
+                        acknowledged_at: now,
+                    });
             }
             Ok(())
         })
@@ -716,10 +913,20 @@ impl DurableInbox {
                 .filter(|event| matches(event))
                 .filter_map(|event| event.discord_message_id)
                 .collect();
+            let removed_provider_keys: Vec<_> = inbox
+                .state
+                .entries
+                .iter()
+                .filter(|event| matches(event))
+                .filter_map(|event| event.provider_event_key.clone())
+                .collect();
             let before = inbox.state.entries.len();
             inbox.state.entries.retain(|event| !matches(event));
             for message_id in removed_message_ids {
                 inbox.message_ids.remove(&message_id);
+            }
+            for key in removed_provider_keys {
+                inbox.provider_event_keys.remove(&key);
             }
             Ok(AttentionInvalidationResult {
                 removed: before - inbox.state.entries.len(),
@@ -782,6 +989,9 @@ impl DurableInbox {
         claim_unassigned: bool,
     ) -> Result<ConsumerRegistrationResult, CodexQueueError> {
         self.transaction(move |inbox| {
+            if label.trim() == LIVE_CONSUMER_LABEL {
+                return Err(CodexQueueError::InvalidConsumerId);
+            }
             inbox.expire_consumers(now);
             if make_primary && inbox.state.primary_consumer.is_some() {
                 return Err(CodexQueueError::PrimaryConsumerExists);
@@ -793,6 +1003,7 @@ impl DurableInbox {
             inbox.state.consumers.push(ConsumerRegistration {
                 id: consumer_id.clone(),
                 label,
+                kind: ConsumerKind::Pull,
                 expires_at,
                 ttl_seconds: ttl.as_secs(),
             });
@@ -800,7 +1011,7 @@ impl DurableInbox {
                 inbox.state.primary_consumer = Some(consumer_id.clone());
                 if claim_unassigned {
                     for event in &mut inbox.state.entries {
-                        if event.consumer_id.is_none() {
+                        if event.consumer_id.is_none() && !event.is_live_bound() {
                             event.consumer_id = Some(consumer_id.clone());
                         }
                     }
@@ -825,6 +1036,7 @@ impl DurableInbox {
                     .consumers
                     .iter_mut()
                     .find(|consumer| consumer.id == primary)
+                && consumer.kind == ConsumerKind::Live
                 && consumer.label == LIVE_CONSUMER_LABEL
             {
                 // The inbox lock proves the previous Dione process is gone,
@@ -845,6 +1057,7 @@ impl DurableInbox {
             inbox.state.consumers.push(ConsumerRegistration {
                 id: consumer_id.clone(),
                 label: LIVE_CONSUMER_LABEL.to_owned(),
+                kind: ConsumerKind::Live,
                 expires_at: now + duration_delta(MAX_CONSUMER_TTL),
                 ttl_seconds: MAX_CONSUMER_TTL.as_secs(),
             });
@@ -863,6 +1076,8 @@ impl DurableInbox {
         move_pending: bool,
     ) -> Result<HandoffResult, CodexQueueError> {
         self.transaction(|inbox| {
+            inbox.ensure_consumer_access(from, false)?;
+            inbox.ensure_consumer_access(to, false)?;
             inbox.expire_consumers(now);
             if inbox.state.primary_consumer.as_ref() != Some(from) {
                 return Err(CodexQueueError::NotPrimaryConsumer);
@@ -872,7 +1087,7 @@ impl DurableInbox {
             let mut invalidated_leases = 0;
             if move_pending {
                 for event in &mut inbox.state.entries {
-                    if event.consumer_id.as_ref() == Some(from) {
+                    if event.consumer_id.as_ref() == Some(from) && !event.is_live_bound() {
                         if event.lease.take().is_some() {
                             invalidated_leases += 1;
                         }
@@ -898,6 +1113,7 @@ impl DurableInbox {
         claim_orphaned: bool,
     ) -> Result<usize, CodexQueueError> {
         self.transaction(|inbox| {
+            inbox.ensure_consumer_access(consumer_id, false)?;
             inbox.expire_consumers(now);
             if inbox.state.primary_consumer.is_some() {
                 return Err(CodexQueueError::PrimaryConsumerExists);
@@ -912,10 +1128,11 @@ impl DurableInbox {
             let mut claimed = 0;
             if claim_orphaned {
                 for event in &mut inbox.state.entries {
-                    if event
-                        .consumer_id
-                        .as_ref()
-                        .is_none_or(|owner| !active_consumers.contains(owner))
+                    if !event.is_live_bound()
+                        && event
+                            .consumer_id
+                            .as_ref()
+                            .is_none_or(|owner| !active_consumers.contains(owner))
                     {
                         event.lease = None;
                         event.consumer_id = Some(consumer_id.clone());
@@ -946,6 +1163,28 @@ impl DurableInbox {
         Ok(())
     }
 
+    fn ensure_consumer_access(
+        &self,
+        consumer_id: &ConsumerId,
+        live_call: bool,
+    ) -> Result<(), CodexQueueError> {
+        if let Some(consumer) = self
+            .state
+            .consumers
+            .iter()
+            .find(|consumer| consumer.id == *consumer_id)
+        {
+            if live_call {
+                if consumer.kind != ConsumerKind::Live || consumer.label != LIVE_CONSUMER_LABEL {
+                    return Err(CodexQueueError::UnknownConsumer);
+                }
+            } else if consumer.kind == ConsumerKind::Live {
+                return Err(CodexQueueError::UnknownConsumer);
+            }
+        }
+        Ok(())
+    }
+
     fn expire_consumers(&mut self, now: DateTime<Utc>) {
         self.state
             .consumers
@@ -971,30 +1210,60 @@ impl DurableInbox {
         }
     }
 
-    fn transaction<T>(
-        &mut self,
-        mutate: impl FnOnce(&mut Self) -> Result<T, CodexQueueError>,
-    ) -> Result<T, CodexQueueError> {
-        self.sync_directory()?;
+    fn contains_provider_event(&self, key: &ProviderEventKey, now: DateTime<Utc>) -> bool {
+        let cutoff = now - duration_delta(PROCESSED_TEAMS_RETENTION);
+        self.provider_event_keys.contains(key)
+            || self
+                .processed_provider_event_keys
+                .get(key)
+                .is_some_and(|acknowledged_at| *acknowledged_at > cutoff)
+    }
+
+    fn teams_event_capacity_used(&self) -> usize {
+        self.provider_event_keys.len() + self.processed_provider_event_keys.len()
+    }
+
+    fn prune_processed_provider_events(&mut self, now: DateTime<Utc>) {
+        let cutoff = now - duration_delta(PROCESSED_TEAMS_RETENTION);
+        self.state
+            .processed_provider_event_keys
+            .retain(|event| event.acknowledged_at > cutoff);
+        self.processed_provider_event_keys
+            .retain(|_, acknowledged_at| *acknowledged_at > cutoff);
+    }
+
+    fn transaction<T, E>(&mut self, mutate: impl FnOnce(&mut Self) -> Result<T, E>) -> Result<T, E>
+    where
+        E: From<CodexQueueError>,
+    {
+        self.sync_directory().map_err(E::from)?;
         let state = self.state.clone();
         let message_ids = self.message_ids.clone();
         let processed_message_ids = self.processed_message_ids.clone();
+        let provider_event_keys = self.provider_event_keys.clone();
+        let processed_provider_event_keys = self.processed_provider_event_keys.clone();
         let result = mutate(self);
         match result {
             Ok(value) => match self.persist() {
                 Ok(()) => Ok(value),
-                Err(error @ CodexQueueError::InboxDurabilityUncertain { .. }) => Err(error),
+                Err(error @ CodexQueueError::InboxDurabilityUncertain { .. }) => {
+                    Err(E::from(error))
+                }
                 Err(error) => {
                     self.state = state;
                     self.message_ids = message_ids;
                     self.processed_message_ids = processed_message_ids;
-                    Err(error)
+                    self.provider_event_keys = provider_event_keys;
+                    self.processed_provider_event_keys = processed_provider_event_keys;
+                    Err(E::from(error))
                 }
             },
             Err(error) => {
                 self.state = state;
                 self.message_ids = message_ids;
                 self.processed_message_ids = processed_message_ids;
+                self.provider_event_keys = provider_event_keys;
+                self.processed_provider_event_keys = processed_provider_event_keys;
                 Err(error)
             }
         }
@@ -1107,6 +1376,25 @@ impl CodexEventQueue {
         result
     }
 
+    /// Persist an event for the exact resident route or reject it without insertion.
+    /// Both receipt variants describe a visible insertion and wake live pollers.
+    pub(crate) async fn enqueue_live(
+        &self,
+        payload: Value,
+        provider_event_key: ProviderEventKey,
+    ) -> Result<LiveEnqueueReceipt, LiveQueueError> {
+        let mut inbox = self.inbox.lock().await;
+        let result = inbox.enqueue_live(payload, provider_event_key);
+        if matches!(
+            &result,
+            Ok(LiveEnqueueReceipt::Committed)
+                | Ok(LiveEnqueueReceipt::CommittedDurabilityUncertain(_))
+        ) {
+            self.changed.notify_waiters();
+        }
+        result
+    }
+
     pub async fn next_event(
         &self,
         consumer_id: &ConsumerId,
@@ -1206,8 +1494,13 @@ impl CodexEventQueue {
         });
         drop(inbox);
         // The watch publication wakes the live worker when the binding changes.
-        // This operation changes no queued event; enqueue and queue mutations
-        // provide their own queue notifications.
+        // The queue notification also wakes waiting pollers after a retained commit.
+        if matches!(
+            result,
+            Ok(()) | Err(CodexQueueError::InboxDurabilityUncertain { .. })
+        ) {
+            self.changed.notify_waiters();
+        }
         result
     }
 
@@ -1219,7 +1512,20 @@ impl CodexEventQueue {
         self.inbox
             .lock()
             .await
-            .acknowledge(consumer_id, token, Utc::now())?;
+            .acknowledge(consumer_id, token, Utc::now(), false)?;
+        self.changed.notify_waiters();
+        Ok(())
+    }
+
+    pub(crate) async fn acknowledge_live(
+        &self,
+        consumer_id: &ConsumerId,
+        token: &DeliveryToken,
+    ) -> Result<(), CodexQueueError> {
+        self.inbox
+            .lock()
+            .await
+            .acknowledge(consumer_id, token, Utc::now(), true)?;
         self.changed.notify_waiters();
         Ok(())
     }
@@ -1476,6 +1782,17 @@ mod tests {
         })
     }
 
+    fn teams_key(activity_id: &str) -> ProviderEventKey {
+        ProviderEventKey::teams("tenant-a", "bot-a", "conversation-a", activity_id).unwrap()
+    }
+
+    fn tool_result(response: Value) -> Value {
+        let text = response["content"][0]["text"]
+            .as_str()
+            .expect("MCP tool result contains JSON text");
+        serde_json::from_str(text).expect("MCP tool result text is JSON")
+    }
+
     fn managed_message(id: &str, record_id: &str, delivery: &str, content: &str) -> Value {
         let mut notification = message(id, content);
         notification["params"]["meta"]["attention_delivery"] = json!(delivery);
@@ -1625,7 +1942,7 @@ mod tests {
             .inbox
             .lock()
             .await
-            .acknowledge(&consumer, &event.delivery_token, acknowledged_at)
+            .acknowledge(&consumer, &event.delivery_token, acknowledged_at, false)
             .unwrap();
         let ack_refresh = queue
             .inbox
@@ -1954,13 +2271,16 @@ mod tests {
     #[tokio::test]
     async fn live_consumer_is_reused_after_process_restart() {
         let dir = TempDir::new().unwrap();
-        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
 
         let first = queue.register_live_consumer().await.unwrap();
-        let resumed = queue.register_live_consumer().await.unwrap();
+        drop(queue);
+        let reloaded = CodexEventQueue::load(&path).unwrap();
+        let resumed = reloaded.register_live_consumer().await.unwrap();
 
         assert_eq!(resumed, first);
-        let status = queue.status().await;
+        let status = reloaded.status().await;
         assert_eq!(status.primary_consumer.as_ref(), Some(&first));
         assert_eq!(status.consumers.len(), 1);
     }
@@ -1968,8 +2288,11 @@ mod tests {
     #[tokio::test]
     async fn expired_live_consumer_keeps_routed_events_after_long_outage() {
         let dir = TempDir::new().unwrap();
-        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
         let first = queue.register_live_consumer().await.unwrap();
+        let thread = CodexThreadId::parse("thread-outage").unwrap();
+        queue.bind_live_thread(Some(thread.clone())).await.unwrap();
         queue.enqueue(message("1", "still pending")).await.unwrap();
         {
             let mut inbox = queue.inbox.lock().await;
@@ -1980,14 +2303,16 @@ mod tests {
                 .find(|consumer| consumer.id == first)
                 .unwrap()
                 .expires_at = Utc::now() - TimeDelta::seconds(1);
+            inbox.persist().unwrap();
         }
-
-        let resumed = queue.register_live_consumer().await.unwrap();
+        drop(queue);
+        let reloaded = CodexEventQueue::load(&path).unwrap();
+        let resumed = reloaded.register_live_consumer().await.unwrap();
 
         assert_eq!(resumed, first);
         assert!(
-            queue
-                .next_event(&resumed, Duration::ZERO, DEFAULT_LEASE)
+            reloaded
+                .next_live_event(&resumed, &thread, Duration::ZERO, DEFAULT_LEASE)
                 .await
                 .unwrap()
                 .is_some()
@@ -2519,6 +2844,862 @@ mod tests {
             assert_eq!(queue.status().await.queued, 1);
             assert!(!queue.enqueue(message("1", "duplicate")).await.unwrap());
         }
+    }
+
+    #[tokio::test]
+    async fn live_enqueue_requires_exact_resident_and_preserves_failed_route_state() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        assert!(matches!(
+            queue
+                .enqueue_live(message("1", "no resident"), teams_key("1"))
+                .await,
+            Err(LiveQueueError::ResidentUnavailable)
+        ));
+        let consumer = queue.register_live_consumer().await.unwrap();
+        assert!(matches!(
+            queue
+                .enqueue_live(message("2", "no thread"), teams_key("2"))
+                .await,
+            Err(LiveQueueError::ResidentUnavailable)
+        ));
+        assert_eq!(queue.status().await.queued, 0);
+
+        let thread = CodexThreadId::parse("thread-a").unwrap();
+        queue.bind_live_thread(Some(thread.clone())).await.unwrap();
+        assert!(matches!(
+            queue
+                .enqueue_live(message("3", "routed"), teams_key("3"))
+                .await,
+            Ok(LiveEnqueueReceipt::Committed)
+        ));
+        let event = queue
+            .next_live_event(&consumer, &thread, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .expect("exact resident event");
+        assert_eq!(event.event["params"]["content"], "routed");
+
+        {
+            let mut inbox = queue.inbox.lock().await;
+            inbox.state.consumers[0].expires_at = Utc::now() - TimeDelta::seconds(1);
+        }
+        assert!(matches!(
+            queue
+                .enqueue_live(message("4", "expired route"), teams_key("4"))
+                .await,
+            Err(LiveQueueError::ResidentUnavailable)
+        ));
+        let inbox = queue.inbox.lock().await;
+        assert_eq!(inbox.state.primary_consumer.as_ref(), Some(&consumer));
+        assert_eq!(inbox.state.consumers.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_forged_live_label_cannot_admit_or_receive_teams_event() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let (server, binding_rx) = binding_server(&path, &queue).await;
+        dispatch_binding(&server, "thread-a").await.unwrap();
+        let forged = crate::mcp::dispatch::call_tool(
+            &server,
+            "register_event_consumer",
+            json!({
+                "label": LIVE_CONSUMER_LABEL,
+                "make_primary": true,
+                "claim_unassigned": true
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(forged, CodexQueueError::InvalidConsumerId.to_string());
+        assert!(queue.status().await.primary_consumer.is_none());
+
+        let resident = queue.register_live_consumer().await.unwrap();
+        assert!(matches!(
+            queue
+                .enqueue_live(message("1", "for resident"), teams_key("activity-1"))
+                .await,
+            Ok(LiveEnqueueReceipt::Committed)
+        ));
+        let thread = binding_rx.borrow().clone().unwrap();
+        let event = queue
+            .next_live_event(&resident, &thread, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .expect("only dedicated live consumer receives Teams event");
+        assert_eq!(event.event["params"]["content"], "for resident");
+    }
+
+    #[tokio::test]
+    async fn dispatch_public_poll_cannot_lease_status_disclosed_live_consumer() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let (server, binding_rx) = binding_server(&path, &queue).await;
+        dispatch_binding(&server, "thread-a").await.unwrap();
+        let resident = queue.register_live_consumer().await.unwrap();
+        queue
+            .enqueue_live(
+                message("1", "private Teams activity"),
+                teams_key("activity-1"),
+            )
+            .await
+            .unwrap();
+
+        let status = crate::mcp::dispatch::call_tool(&server, "event_queue_status", json!({}))
+            .await
+            .unwrap();
+        let status = tool_result(status);
+        let disclosed = status["primary_consumer"].as_str().unwrap();
+        assert_eq!(disclosed, resident.0.as_str());
+        let public_poll = crate::mcp::dispatch::call_tool(
+            &server,
+            "next_event",
+            json!({ "consumer_id": disclosed, "wait_seconds": 0 }),
+        )
+        .await;
+        assert!(
+            public_poll.is_err(),
+            "public poll leased live event: {public_poll:?}"
+        );
+
+        let thread = binding_rx.borrow().clone().unwrap();
+        let event = queue
+            .next_live_event(&resident, &thread, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .expect("resident still receives private activity");
+        assert_eq!(event.event["params"]["content"], "private Teams activity");
+    }
+
+    #[tokio::test]
+    async fn dispatch_public_ack_cannot_remove_resident_lease() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let (server, binding_rx) = binding_server(&path, &queue).await;
+        dispatch_binding(&server, "thread-a").await.unwrap();
+        let resident = queue.register_live_consumer().await.unwrap();
+        queue
+            .enqueue_live(
+                message("1", "private Teams activity"),
+                teams_key("activity-1"),
+            )
+            .await
+            .unwrap();
+        let thread = binding_rx.borrow().clone().unwrap();
+        let leased = queue
+            .next_live_event(&resident, &thread, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let public_ack = crate::mcp::dispatch::call_tool(
+            &server,
+            "ack_event",
+            json!({
+                "consumer_id": resident.0.as_str(),
+                "delivery_token": leased.delivery_token.0.as_str()
+            }),
+        )
+        .await;
+        assert!(
+            public_ack.is_err(),
+            "public ack removed resident lease: {public_ack:?}"
+        );
+        assert_eq!(queue.status().await.queued, 1);
+        assert_eq!(queue.status().await.leased, 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_public_handoff_cannot_move_live_primary_or_pending_activity() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let (server, binding_rx) = binding_server(&path, &queue).await;
+        dispatch_binding(&server, "thread-a").await.unwrap();
+        let resident = queue.register_live_consumer().await.unwrap();
+        queue
+            .enqueue_live(
+                message("1", "private Teams activity"),
+                teams_key("activity-1"),
+            )
+            .await
+            .unwrap();
+        let pull = crate::mcp::dispatch::call_tool(
+            &server,
+            "register_event_consumer",
+            json!({ "label": "forged pull" }),
+        )
+        .await
+        .unwrap();
+        let pull = tool_result(pull);
+        let pull_id = pull["consumer_id"].as_str().unwrap();
+
+        let handoff = crate::mcp::dispatch::call_tool(
+            &server,
+            "handoff_event_consumer",
+            json!({
+                "from_consumer_id": resident.0.as_str(),
+                "to_consumer_id": pull_id,
+                "move_pending": true
+            }),
+        )
+        .await;
+        assert!(
+            handoff.is_err(),
+            "public handoff moved live route: {handoff:?}"
+        );
+        assert_eq!(
+            queue.status().await.primary_consumer.as_ref(),
+            Some(&resident)
+        );
+
+        let thread = binding_rx.borrow().clone().unwrap();
+        let event = queue
+            .next_live_event(&resident, &thread, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .expect("live event remains with resident");
+        assert_eq!(event.event["params"]["content"], "private Teams activity");
+    }
+
+    #[tokio::test]
+    async fn dispatch_public_claim_cannot_take_expired_live_activity_after_reload() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let (server, _binding_rx) = binding_server(&path, &queue).await;
+        dispatch_binding(&server, "thread-a").await.unwrap();
+        queue.register_live_consumer().await.unwrap();
+        queue
+            .enqueue_live(
+                message("1", "private Teams activity"),
+                teams_key("activity-1"),
+            )
+            .await
+            .unwrap();
+        {
+            let mut inbox = queue.inbox.lock().await;
+            inbox.state.consumers[0].expires_at = Utc::now() - TimeDelta::seconds(1);
+            inbox.persist().unwrap();
+        }
+        drop(server);
+        drop(queue);
+
+        let reloaded = CodexEventQueue::load(&path).unwrap();
+        let (server, _) = binding_server(&path, &reloaded).await;
+        let pull = crate::mcp::dispatch::call_tool(
+            &server,
+            "register_event_consumer",
+            json!({ "label": "ordinary pull" }),
+        )
+        .await
+        .unwrap();
+        let pull = tool_result(pull);
+        let pull_id = pull["consumer_id"].as_str().unwrap();
+        let claimed = crate::mcp::dispatch::call_tool(
+            &server,
+            "claim_event_consumer",
+            json!({ "consumer_id": pull_id, "claim_orphaned": true }),
+        )
+        .await
+        .unwrap();
+        let claimed = tool_result(claimed);
+        assert_eq!(claimed["claimed_events"], 0);
+        let poll = crate::mcp::dispatch::call_tool(
+            &server,
+            "next_event",
+            json!({ "consumer_id": pull_id, "wait_seconds": 0 }),
+        )
+        .await
+        .unwrap();
+        let poll = tool_result(poll);
+        assert!(poll["event"].is_null());
+        assert_eq!(reloaded.status().await.queued, 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_public_registration_cannot_claim_unassigned_live_activity() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let (server, _binding_rx) = binding_server(&path, &queue).await;
+        dispatch_binding(&server, "thread-a").await.unwrap();
+        queue.register_live_consumer().await.unwrap();
+        queue
+            .enqueue_live(
+                message("1", "private Teams activity"),
+                teams_key("activity-1"),
+            )
+            .await
+            .unwrap();
+        {
+            let mut inbox = queue.inbox.lock().await;
+            inbox.state.primary_consumer = None;
+            inbox.state.consumers.clear();
+            inbox.state.entries[0].consumer_id = None;
+            inbox.persist().unwrap();
+        }
+
+        let pull = crate::mcp::dispatch::call_tool(
+            &server,
+            "register_event_consumer",
+            json!({
+                "label": "ordinary pull",
+                "make_primary": true,
+                "claim_unassigned": true
+            }),
+        )
+        .await
+        .unwrap();
+        let pull = tool_result(pull);
+        let pull_id = pull["consumer_id"].as_str().unwrap();
+        let poll = crate::mcp::dispatch::call_tool(
+            &server,
+            "next_event",
+            json!({ "consumer_id": pull_id, "wait_seconds": 0 }),
+        )
+        .await
+        .unwrap();
+        let poll = tool_result(poll);
+        assert!(poll["event"].is_null());
+        assert_eq!(queue.status().await.queued, 1);
+        assert_eq!(queue.status().await.unassigned, 1);
+    }
+
+    #[tokio::test]
+    async fn public_live_consumer_guard_waits_for_prior_sync_barrier() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        let resident = queue.register_live_consumer().await.unwrap();
+        queue.inbox.lock().await.persist_failure = Some(PersistFailure::AfterRename);
+        assert!(matches!(
+            queue.enqueue(message("1", "committed before guard")).await,
+            Err(CodexQueueError::InboxDurabilityUncertain { .. })
+        ));
+        assert!(matches!(
+            queue
+                .next_event(&resident, Duration::ZERO, DEFAULT_LEASE)
+                .await,
+            Err(CodexQueueError::InboxDurabilityUncertain { .. })
+        ));
+        queue.inbox.lock().await.persist_failure = None;
+        assert!(matches!(
+            queue
+                .next_event(&resident, Duration::ZERO, DEFAULT_LEASE)
+                .await,
+            Err(CodexQueueError::UnknownConsumer)
+        ));
+        assert_eq!(queue.status().await.queued, 1);
+    }
+
+    #[tokio::test]
+    async fn legacy_same_label_pull_record_never_becomes_live_after_reload_or_expiry() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let thread = CodexThreadId::parse("thread-a").unwrap();
+        queue.bind_live_thread(Some(thread.clone())).await.unwrap();
+        drop(queue);
+
+        // A pre-kind inbox could persist a public pull registration with the
+        // live label. Missing kind must not upgrade that record to a resident.
+        let inbox_path = path.join(INBOX_FILE_NAME);
+        let mut disk: Value = serde_json::from_slice(&std::fs::read(&inbox_path).unwrap()).unwrap();
+        disk["next_consumer_generation"] = json!(1);
+        disk["primary_consumer"] = json!("codex-consumer-0");
+        disk["consumers"] = json!([{
+            "id": "codex-consumer-0",
+            "label": LIVE_CONSUMER_LABEL,
+            "expires_at": Utc::now() + TimeDelta::hours(1),
+            "ttl_seconds": 3600
+        }]);
+        std::fs::write(&inbox_path, serde_json::to_vec_pretty(&disk).unwrap()).unwrap();
+
+        let reloaded = CodexEventQueue::load(&path).unwrap();
+        assert!(matches!(
+            reloaded
+                .enqueue_live(message("1", "must reject"), teams_key("activity-1"))
+                .await,
+            Err(LiveQueueError::ResidentUnavailable)
+        ));
+        assert!(matches!(
+            reloaded.register_live_consumer().await,
+            Err(CodexQueueError::PrimaryConsumerExists)
+        ));
+        {
+            let mut inbox = reloaded.inbox.lock().await;
+            inbox.state.consumers[0].expires_at = Utc::now() - TimeDelta::seconds(1);
+            inbox.persist().unwrap();
+        }
+        drop(reloaded);
+
+        let recovered = CodexEventQueue::load(&path).unwrap();
+        let resident = recovered.register_live_consumer().await.unwrap();
+        assert_ne!(resident, ConsumerId::parse("codex-consumer-0").unwrap());
+        assert!(matches!(
+            recovered
+                .enqueue_live(message("2", "for real resident"), teams_key("activity-2"))
+                .await,
+            Ok(LiveEnqueueReceipt::Committed)
+        ));
+        let event = recovered
+            .next_live_event(&resident, &thread, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .expect("recovered resident receives only fresh event");
+        assert_eq!(event.event["params"]["content"], "for real resident");
+    }
+
+    #[tokio::test]
+    async fn reserved_live_label_rejection_waits_for_prior_sync_barrier() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        queue.register_live_consumer().await.unwrap();
+        queue.inbox.lock().await.persist_failure = Some(PersistFailure::AfterRename);
+        assert!(matches!(
+            queue.enqueue(message("1", "already committed")).await,
+            Err(CodexQueueError::InboxDurabilityUncertain { .. })
+        ));
+        assert!(matches!(
+            queue
+                .register_consumer(
+                    LIVE_CONSUMER_LABEL.to_owned(),
+                    DEFAULT_CONSUMER_TTL,
+                    true,
+                    true,
+                )
+                .await,
+            Err(CodexQueueError::InboxDurabilityUncertain { .. })
+        ));
+        queue.inbox.lock().await.persist_failure = None;
+        assert!(matches!(
+            queue
+                .register_consumer(
+                    format!(" {LIVE_CONSUMER_LABEL} "),
+                    DEFAULT_CONSUMER_TTL,
+                    true,
+                    true,
+                )
+                .await,
+            Err(CodexQueueError::InvalidConsumerId)
+        ));
+        assert_eq!(queue.status().await.consumers.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn live_enqueue_distinguishes_precommit_from_visible_uncertainty_and_wakes() {
+        for stage in [
+            PersistFailure::BeforeWrite,
+            PersistFailure::BeforeRename,
+            PersistFailure::AfterRename,
+        ] {
+            let dir = TempDir::new().unwrap();
+            let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+            let consumer = queue.register_live_consumer().await.unwrap();
+            let thread = CodexThreadId::parse("thread-a").unwrap();
+            queue.bind_live_thread(Some(thread.clone())).await.unwrap();
+            queue.inbox.lock().await.persist_failure = Some(stage);
+            let notified = queue.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
+            let result = queue
+                .enqueue_live(message("1", "for resident"), teams_key("1"))
+                .await;
+            let committed = stage == PersistFailure::AfterRename;
+            if committed {
+                assert!(matches!(
+                    result,
+                    Ok(LiveEnqueueReceipt::CommittedDurabilityUncertain(
+                        CodexQueueError::InboxDurabilityUncertain { .. }
+                    ))
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(LiveQueueError::Queue(CodexQueueError::InboxIo { .. }))
+                ));
+            }
+            assert_eq!(queue.status().await.queued, usize::from(committed));
+            if committed {
+                tokio::time::timeout(Duration::from_millis(100), notified)
+                    .await
+                    .expect("committed event wakes resident");
+                assert!(matches!(
+                    queue
+                        .enqueue_live(message("1", "replay while unsynced"), teams_key("1"))
+                        .await,
+                    Err(LiveQueueError::Queue(
+                        CodexQueueError::InboxDurabilityUncertain { .. }
+                    ))
+                ));
+            } else {
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(20), notified)
+                        .await
+                        .is_err()
+                );
+            }
+            queue.inbox.lock().await.persist_failure = None;
+            if committed {
+                assert!(matches!(
+                    queue
+                        .enqueue_live(message("1", "replay after recovery"), teams_key("1"))
+                        .await,
+                    Ok(LiveEnqueueReceipt::Duplicate)
+                ));
+            } else {
+                assert!(matches!(
+                    queue
+                        .enqueue_live(message("1", "retry after rollback"), teams_key("1"))
+                        .await,
+                    Ok(LiveEnqueueReceipt::Committed)
+                ));
+            }
+            let event = queue
+                .next_live_event(&consumer, &thread, Duration::ZERO, DEFAULT_LEASE)
+                .await
+                .unwrap();
+            assert!(event.is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn live_enqueue_prior_sync_barrier_rejects_this_event_before_mutation() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        let consumer = queue.register_live_consumer().await.unwrap();
+        let thread = CodexThreadId::parse("thread-a").unwrap();
+        queue.bind_live_thread(Some(thread.clone())).await.unwrap();
+        queue.inbox.lock().await.persist_failure = Some(PersistFailure::AfterRename);
+        assert!(matches!(
+            queue.enqueue(message("1", "prior event")).await,
+            Err(CodexQueueError::InboxDurabilityUncertain { .. })
+        ));
+        let before = std::fs::read(queue.inbox.lock().await.path.as_std_path()).unwrap();
+        // Even an unavailable route must not bypass an older sync barrier.
+        queue.inbox.lock().await.state.live_thread_id = None;
+        assert!(matches!(
+            queue
+                .enqueue_live(message("2", "must not insert"), teams_key("2"))
+                .await,
+            Err(LiveQueueError::Queue(
+                CodexQueueError::InboxDurabilityUncertain { .. }
+            ))
+        ));
+        assert_eq!(
+            std::fs::read(queue.inbox.lock().await.path.as_std_path()).unwrap(),
+            before
+        );
+        queue.inbox.lock().await.state.live_thread_id = Some(thread.clone());
+        queue.inbox.lock().await.persist_failure = None;
+        let event = queue
+            .next_live_event(&consumer, &thread, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .expect("prior event remains deliverable after recovery");
+        assert_eq!(event.event["params"]["content"], "prior event");
+        let status = queue.status().await;
+        assert_eq!(status.queued, 1);
+        assert_eq!(status.leased, 1);
+    }
+
+    #[tokio::test]
+    async fn live_enqueue_reloaded_inbox_clears_barrier_before_admission() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let consumer = queue.register_live_consumer().await.unwrap();
+        let thread = CodexThreadId::parse("thread-a").unwrap();
+        queue.bind_live_thread(Some(thread.clone())).await.unwrap();
+        drop(queue);
+
+        let reloaded = CodexEventQueue::load(&path).unwrap();
+        reloaded.inbox.lock().await.persist_failure = Some(PersistFailure::AfterRename);
+        let before = std::fs::read(path.join(INBOX_FILE_NAME)).unwrap();
+        assert!(matches!(
+            reloaded
+                .enqueue_live(message("1", "not inserted"), teams_key("1"))
+                .await,
+            Err(LiveQueueError::Queue(
+                CodexQueueError::InboxDurabilityUncertain { .. }
+            ))
+        ));
+        assert_eq!(std::fs::read(path.join(INBOX_FILE_NAME)).unwrap(), before);
+        assert_eq!(reloaded.status().await.queued, 0);
+
+        reloaded.inbox.lock().await.persist_failure = None;
+        assert!(matches!(
+            reloaded
+                .enqueue_live(message("2", "after recovery"), teams_key("2"))
+                .await,
+            Ok(LiveEnqueueReceipt::Committed)
+        ));
+        let event = reloaded
+            .next_live_event(&consumer, &thread, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .expect("recovered exact route");
+        assert_eq!(event.event["params"]["content"], "after recovery");
+    }
+
+    #[tokio::test]
+    async fn live_enqueue_suppresses_queued_and_acknowledged_replays_across_restart() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let consumer = queue.register_live_consumer().await.unwrap();
+        let thread = CodexThreadId::parse("thread-a").unwrap();
+        queue.bind_live_thread(Some(thread.clone())).await.unwrap();
+        let key = teams_key("activity/a");
+        assert!(matches!(
+            queue
+                .enqueue_live(message("1", "original"), key.clone())
+                .await,
+            Ok(LiveEnqueueReceipt::Committed)
+        ));
+        {
+            let notified = queue.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            assert!(matches!(
+                queue
+                    .enqueue_live(message("1", "replayed with new handle"), key.clone())
+                    .await,
+                Ok(LiveEnqueueReceipt::Duplicate)
+            ));
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), notified)
+                    .await
+                    .is_err()
+            );
+        }
+        assert_eq!(queue.status().await.queued, 1);
+        drop(queue);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        assert!(matches!(
+            queue
+                .enqueue_live(message("1", "replayed pending after restart"), key.clone())
+                .await,
+            Ok(LiveEnqueueReceipt::Duplicate)
+        ));
+        let leased = queue
+            .next_live_event(&consumer, &thread, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(leased.event["params"]["content"], "original");
+        queue
+            .acknowledge_live(&consumer, &leased.delivery_token)
+            .await
+            .unwrap();
+        assert!(matches!(
+            queue
+                .enqueue_live(message("1", "after ack"), key.clone())
+                .await,
+            Ok(LiveEnqueueReceipt::Duplicate)
+        ));
+        drop(queue);
+
+        let reloaded = CodexEventQueue::load(&path).unwrap();
+        assert!(matches!(
+            reloaded
+                .enqueue_live(message("1", "after restart"), key.clone())
+                .await,
+            Ok(LiveEnqueueReceipt::Duplicate)
+        ));
+        assert_eq!(reloaded.status().await.queued, 0);
+        let other_conversation =
+            ProviderEventKey::teams("tenant-a", "bot-a", "conversation-b", "activity/a").unwrap();
+        assert!(matches!(
+            reloaded
+                .enqueue_live(message("1", "other conversation"), other_conversation)
+                .await,
+            Ok(LiveEnqueueReceipt::Committed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn live_enqueue_replay_key_validates_identity_and_expires_after_ack_window() {
+        assert!(matches!(
+            ProviderEventKey::teams("", "bot", "conversation", "activity"),
+            Err(LiveQueueError::InvalidProviderEventId)
+        ));
+        assert!(matches!(
+            ProviderEventKey::teams("tenant", "bot", "conversation", "x\n"),
+            Err(LiveQueueError::InvalidProviderEventId)
+        ));
+        assert!(matches!(
+            ProviderEventKey::teams("tenant", "bot", "conversation", &"x".repeat(513)),
+            Err(LiveQueueError::InvalidProviderEventId)
+        ));
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let consumer = queue.register_live_consumer().await.unwrap();
+        let thread = CodexThreadId::parse("thread-a").unwrap();
+        queue.bind_live_thread(Some(thread.clone())).await.unwrap();
+        let key = teams_key("activity/a");
+        queue
+            .enqueue_live(message("1", "original"), key.clone())
+            .await
+            .unwrap();
+        let leased = queue
+            .next_live_event(&consumer, &thread, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .unwrap();
+        queue
+            .acknowledge_live(&consumer, &leased.delivery_token)
+            .await
+            .unwrap();
+        {
+            let mut inbox = queue.inbox.lock().await;
+            let expired =
+                Utc::now() - duration_delta(PROCESSED_TEAMS_RETENTION) - TimeDelta::seconds(1);
+            inbox.state.processed_provider_event_keys[0].acknowledged_at = expired;
+            inbox
+                .processed_provider_event_keys
+                .insert(key.clone(), expired);
+            inbox.persist().unwrap();
+        }
+        drop(queue);
+
+        let reloaded = CodexEventQueue::load(&path).unwrap();
+        assert!(matches!(
+            reloaded
+                .enqueue_live(message("1", "fresh after expiry"), key.clone())
+                .await,
+            Ok(LiveEnqueueReceipt::Committed)
+        ));
+        let inbox = reloaded.inbox.lock().await;
+        assert!(inbox.state.processed_provider_event_keys.is_empty());
+        assert_eq!(inbox.provider_event_keys.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn live_enqueue_acknowledgement_uncertainty_retains_processed_replay_key() {
+        let dir = TempDir::new().unwrap();
+        let path = temp_path(&dir);
+        let queue = CodexEventQueue::load(&path).unwrap();
+        let consumer = queue.register_live_consumer().await.unwrap();
+        let thread = CodexThreadId::parse("thread-a").unwrap();
+        queue.bind_live_thread(Some(thread.clone())).await.unwrap();
+        let key = teams_key("activity/a");
+        queue
+            .enqueue_live(message("1", "original"), key.clone())
+            .await
+            .unwrap();
+        let leased = queue
+            .next_live_event(&consumer, &thread, Duration::ZERO, DEFAULT_LEASE)
+            .await
+            .unwrap()
+            .unwrap();
+        queue.inbox.lock().await.persist_failure = Some(PersistFailure::AfterRename);
+        assert!(matches!(
+            queue
+                .acknowledge_live(&consumer, &leased.delivery_token)
+                .await,
+            Err(CodexQueueError::InboxDurabilityUncertain { .. })
+        ));
+        assert_eq!(queue.status().await.queued, 0);
+        assert!(matches!(
+            queue
+                .enqueue_live(message("1", "before sync"), key.clone())
+                .await,
+            Err(LiveQueueError::Queue(
+                CodexQueueError::InboxDurabilityUncertain { .. }
+            ))
+        ));
+        queue.inbox.lock().await.persist_failure = None;
+        assert!(matches!(
+            queue
+                .enqueue_live(message("1", "after sync"), key.clone())
+                .await,
+            Ok(LiveEnqueueReceipt::Duplicate)
+        ));
+        drop(queue);
+        let reloaded = CodexEventQueue::load(&path).unwrap();
+        assert!(matches!(
+            reloaded
+                .enqueue_live(message("1", "after reload"), key)
+                .await,
+            Ok(LiveEnqueueReceipt::Duplicate)
+        ));
+    }
+
+    #[tokio::test]
+    async fn live_enqueue_replay_capacity_fails_closed_but_allows_duplicates() {
+        let dir = TempDir::new().unwrap();
+        let queue = CodexEventQueue::load(&temp_path(&dir)).unwrap();
+        queue.register_live_consumer().await.unwrap();
+        queue
+            .bind_live_thread(Some(CodexThreadId::parse("thread-a").unwrap()))
+            .await
+            .unwrap();
+        {
+            let mut inbox = queue.inbox.lock().await;
+            let now = Utc::now();
+            for index in 0..MAX_RETAINED_TEAMS_EVENT_KEYS {
+                let key = teams_key(&format!("activity-{index}"));
+                inbox.processed_provider_event_keys.insert(key.clone(), now);
+                inbox
+                    .state
+                    .processed_provider_event_keys
+                    .push_back(ProcessedProviderEvent {
+                        key,
+                        acknowledged_at: now,
+                    });
+            }
+            inbox.persist().unwrap();
+        }
+        assert!(matches!(
+            queue
+                .enqueue_live(message("1", "duplicate"), teams_key("activity-0"))
+                .await,
+            Ok(LiveEnqueueReceipt::Duplicate)
+        ));
+        let before = std::fs::read(queue.inbox.lock().await.path.as_std_path()).unwrap();
+        assert!(matches!(
+            queue
+                .enqueue_live(message("2", "new"), teams_key("activity-new"))
+                .await,
+            Err(LiveQueueError::ReplayCapacity)
+        ));
+        assert_eq!(
+            std::fs::read(queue.inbox.lock().await.path.as_std_path()).unwrap(),
+            before
+        );
+        assert_eq!(queue.status().await.queued, 0);
+        {
+            let mut inbox = queue.inbox.lock().await;
+            let expired =
+                Utc::now() - duration_delta(PROCESSED_TEAMS_RETENTION) - TimeDelta::seconds(1);
+            inbox.state.processed_provider_event_keys[0].acknowledged_at = expired;
+            inbox
+                .processed_provider_event_keys
+                .insert(teams_key("activity-0"), expired);
+            inbox.persist().unwrap();
+        }
+        let path = temp_path(&dir);
+        drop(queue);
+        let reloaded = CodexEventQueue::load(&path).unwrap();
+        assert!(matches!(
+            reloaded
+                .enqueue_live(message("2", "after expiry"), teams_key("activity-new"))
+                .await,
+            Ok(LiveEnqueueReceipt::Committed)
+        ));
+        let inbox = reloaded.inbox.lock().await;
+        assert_eq!(inbox.provider_event_keys.len(), 1);
+        assert_eq!(
+            inbox.processed_provider_event_keys.len(),
+            MAX_RETAINED_TEAMS_EVENT_KEYS - 1
+        );
     }
 
     #[tokio::test]

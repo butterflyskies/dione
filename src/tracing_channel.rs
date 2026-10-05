@@ -18,6 +18,7 @@ type ReloadFn = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 ///
 /// Wraps reload handles behind closures so the concrete subscriber type
 /// doesn't leak into the server struct.
+#[derive(Clone)]
 pub struct TraceLevelController {
     reload_stderr: ReloadFn,
     reload_channel: ReloadFn,

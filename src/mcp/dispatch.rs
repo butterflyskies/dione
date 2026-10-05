@@ -234,6 +234,23 @@ pub(crate) async fn call_tool(
             )
             .await
         }
+        "teams_reply" => {
+            let authority = server
+                .teams_reply
+                .as_ref()
+                .ok_or_else(|| "Teams reply authority is unavailable".to_string())?;
+            let handle = parse_str(&args, "reply_handle")?;
+            let content = parse_str(&args, "content")?;
+            let receipt = authority
+                .reply(handle, content)
+                .await
+                .map_err(|error| error.to_string())?;
+            json!({
+                "incoming_activity_id": receipt.incoming_activity_id,
+                "outgoing_activity_id": receipt.outgoing_activity_id,
+                "conversation_id": receipt.conversation_id,
+            })
+        }
         "no_rly" => {
             let ctx = server.messaging_ctx(config.clone());
             let handle = parse_str(&args, "handle")?;

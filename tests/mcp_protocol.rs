@@ -12,6 +12,8 @@ use dione::{
     no_rly::consent::ConsentGate,
     queue::AccessQueue,
     state::new_state,
+    teams_edge::LiveReplyReceipt,
+    teams_runtime::{TeamsReplyAuthority, TeamsRuntimeError},
     timestamp::Timestamp,
     tracing_channel::TraceLevelController,
 };
@@ -20,7 +22,7 @@ use serenity::{
     http::{Http, HttpBuilder},
     model::id::{ChannelId, MessageId, UserId},
 };
-use std::sync::Arc;
+use std::{future::Future, pin::Pin, sync::Arc};
 use tempfile::TempDir;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -97,6 +99,32 @@ async fn make_server_with_http(state_dir: &camino::Utf8PathBuf, http: Arc<Http>)
         Arc::new(dione::ingress_ledger::IngressLedger::new()),
     )
     .await
+}
+
+#[derive(Default)]
+struct CapturingTeamsReply {
+    calls: std::sync::Mutex<Vec<(String, String)>>,
+}
+
+impl TeamsReplyAuthority for CapturingTeamsReply {
+    fn reply<'a>(
+        &'a self,
+        handle: &'a str,
+        text: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<LiveReplyReceipt, TeamsRuntimeError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            self.calls
+                .lock()
+                .expect("capture Teams reply")
+                .push((handle.to_owned(), text.to_owned()));
+            Ok(LiveReplyReceipt {
+                incoming_activity_id: "incoming".to_owned(),
+                outgoing_activity_id: "outgoing".to_owned(),
+                conversation_id: "conversation".to_owned(),
+            })
+        })
+    }
 }
 
 async fn missing_access_http() -> (Arc<Http>, Arc<Mutex<Vec<String>>>, JoinHandle<()>) {
@@ -494,6 +522,44 @@ async fn test_client_notification_no_response() {
 }
 
 // ── tools/call — gate rejection path ─────────────────────────────────────────
+
+#[tokio::test]
+async fn teams_reply_tool_forwards_only_opaque_handle_and_resident_speech() {
+    let (_dir, state_dir) = temp_state_dir();
+    let authority = Arc::new(CapturingTeamsReply::default());
+    let server = make_server(&state_dir)
+        .await
+        .with_teams_reply(Some(authority.clone()));
+    let response = test_helpers::dispatch_request(
+        &server,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "teams_reply",
+                "arguments": {
+                    "reply_handle": "teams-opaque",
+                    "content": "resident speech"
+                }
+            }
+        }),
+    )
+    .await
+    .expect("dispatch Teams reply");
+    assert!(response.get("error").is_none(), "{response}");
+    assert_eq!(
+        authority.calls.lock().unwrap().as_slice(),
+        &[("teams-opaque".to_owned(), "resident speech".to_owned())]
+    );
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .expect("receipt text");
+    let receipt: serde_json::Value = serde_json::from_str(text).expect("receipt JSON");
+    assert_eq!(receipt["incoming_activity_id"], "incoming");
+    assert_eq!(receipt["outgoing_activity_id"], "outgoing");
+    assert_eq!(receipt["conversation_id"], "conversation");
+}
 
 #[tokio::test]
 async fn test_tools_call_send_typing_rejected_unknown_channel() {

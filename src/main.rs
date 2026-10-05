@@ -4,12 +4,17 @@ use color_eyre::eyre::{Result, WrapErr};
 use dione::{
     codex::{CodexDeliveryConfig, CodexEventQueue, TransportMode},
     discord::events::{Handler, NotificationEvent},
-    mcp::server::DioneServer,
+    mcp::server::{DioneServer, StdioExitPolicy},
     state::SharedState,
+    teams::{AdmissionPolicy, ChannelPolicy},
+    teams_edge::{ClientSecretTokenProvider, TeamsEdge},
+    teams_runtime::{TeamsReplyAuthority, TeamsResidentBridge},
     tracing_channel::{TraceLevelController, TracingChannelLayer},
 };
 use std::{
+    collections::{BTreeMap, BTreeSet},
     env,
+    net::SocketAddr,
     sync::{Arc, atomic::AtomicU64},
     time::Duration,
 };
@@ -48,10 +53,20 @@ struct Cli {
     #[arg(long)]
     codex_thread_id: Option<dione::codex::CodexThreadId>,
 
+    /// Operator-owned Unix socket for the minimum resident queue/publication API
+    #[arg(long)]
+    resident_control_socket: Option<Utf8PathBuf>,
+
     /// Execute an attention JSON command file (or - for stdin) without starting the gateway.
     /// Metadata commands require exclusive store ownership; use MCP while the daemon runs.
     #[arg(long)]
     attention_command: Option<Utf8PathBuf>,
+}
+
+struct TeamsStartup {
+    reply: Option<Arc<dyn TeamsReplyAuthority>>,
+    bridge: Option<Arc<TeamsResidentBridge<ClientSecretTokenProvider>>>,
+    listen: Option<SocketAddr>,
 }
 
 #[tokio::main]
@@ -177,6 +192,74 @@ async fn main() -> Result<()> {
         None
     };
 
+    // Restore Teams reply authority before starting any ingress listener. The
+    // listener starts only after the Codex delivery worker is installed.
+    let TeamsStartup {
+        reply: teams_reply,
+        bridge: teams_bridge,
+        listen: teams_listen,
+    } = if let Ok(app_id) = env::var("TEAMS_APP_ID") {
+        let live_queue = codex_queue.clone().ok_or_else(|| {
+            color_eyre::eyre::eyre!("Teams resident ingress requires --mode codex")
+        })?;
+        let tenant_id = env::var("TEAMS_TENANT_ID")
+            .wrap_err("TEAMS_TENANT_ID is required when TEAMS_APP_ID is set")?;
+        let client_secret = secrecy::SecretString::from(
+            env::var("TEAMS_CLIENT_SECRET")
+                .wrap_err("TEAMS_CLIENT_SECRET is required when TEAMS_APP_ID is set")?,
+        );
+        let allowed_host = env::var("TEAMS_ALLOWED_SERVICE_HOST")
+            .wrap_err("TEAMS_ALLOWED_SERVICE_HOST is required when TEAMS_APP_ID is set")?;
+        let listen: SocketAddr = env::var("TEAMS_LISTEN_ADDR")
+            .unwrap_or_else(|_| "127.0.0.1:3978".to_owned())
+            .parse()
+            .wrap_err("TEAMS_LISTEN_ADDR is invalid")?;
+        let client = reqwest::Client::builder()
+            .https_only(true)
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(15))
+            .build()
+            .wrap_err("failed to build Teams HTTP client")?;
+        let provider = ClientSecretTokenProvider::new(
+            client.clone(),
+            &tenant_id,
+            app_id.clone(),
+            client_secret,
+        )?;
+        let edge = TeamsEdge::new(
+            client,
+            provider,
+            AdmissionPolicy {
+                app_id,
+                tenant_id,
+                allowed_service_hosts: BTreeSet::from([allowed_host]),
+                channels: BTreeMap::from([(
+                    "msteams".to_owned(),
+                    ChannelPolicy {
+                        requires_key_endorsement: true,
+                    },
+                )]),
+            },
+        )?;
+        let bridge = Arc::new(
+            TeamsResidentBridge::new_durable(edge, live_queue, &state_dir)
+                .await
+                .wrap_err("failed to restore Teams reply authority")?,
+        );
+        let authority: Arc<dyn TeamsReplyAuthority> = bridge.clone();
+        TeamsStartup {
+            reply: Some(authority),
+            bridge: Some(bridge),
+            listen: Some(listen),
+        }
+    } else {
+        TeamsStartup {
+            reply: None,
+            bridge: None,
+            listen: None,
+        }
+    };
+
     // MCP → Discord gateway command channel (for presence updates, etc.).
     let (discord_cmd_tx, discord_cmd_rx) =
         mpsc::channel::<dione::mcp::tools::bot_state::DiscordCommand>(16);
@@ -258,6 +341,7 @@ async fn main() -> Result<()> {
     .with_event_tx(Some(event_tx.clone()));
 
     // The delivery worker shares the server's source/access and durable receipt authority.
+    let delivery_cancel = CancellationToken::new();
     let (codex_handle, codex_thread_binding) = if let Some(codex_queue) = &codex_queue {
         let mut delivery_config = CodexDeliveryConfig::resolve(cli.codex_app_server_socket)
             .wrap_err("failed to configure Codex live delivery")?;
@@ -278,24 +362,69 @@ async fn main() -> Result<()> {
             .wrap_err("failed to persist initial Codex thread binding")?;
         let (binding_tx, binding_rx) = watch::channel(initial_thread);
         let delivery_queue = codex_queue.clone();
-        let delivery_cancel = cancel.clone();
+        let worker_cancel = delivery_cancel.clone();
+        let shutdown_on_worker_failure = cancel.clone();
         let handle = tokio::spawn(async move {
             if let Err(error) = dione::codex::run_delivery_worker(
                 delivery_queue,
                 delivery_config,
                 binding_rx,
-                delivery_cancel,
+                worker_cancel,
             )
             .await
             {
                 tracing::error!(error = %error, "Codex live delivery worker exited");
+                shutdown_on_worker_failure.cancel();
             }
         });
         (Some(handle), Some(binding_tx))
     } else {
         (None, None)
     };
-    let server = server.with_codex_thread_binding(codex_thread_binding);
+    let server = Arc::new(
+        server
+            .with_codex_thread_binding(codex_thread_binding)
+            .with_teams_reply(teams_reply),
+    );
+
+    let teams_handle = if let (Some(bridge), Some(listen)) = (teams_bridge.clone(), teams_listen) {
+        let ingress_cancel = cancel.clone();
+        let shutdown_on_failure = cancel.clone();
+        Some(tokio::spawn(async move {
+            if let Err(error) =
+                dione::teams_runtime::run_listener(bridge, listen, ingress_cancel).await
+            {
+                tracing::error!(%error, "Teams resident listener failed");
+                shutdown_on_failure.cancel();
+            }
+        }))
+    } else {
+        None
+    };
+
+    let resident_control_handle = if let Some(socket_path) = cli.resident_control_socket {
+        let control_server = server.clone();
+        let control_cancel = cancel.clone();
+        Some(tokio::spawn(async move {
+            if let Err(error) = dione::mcp::server::run_resident_control(
+                control_server,
+                socket_path,
+                control_cancel.clone(),
+            )
+            .await
+            {
+                tracing::error!(%error, "resident control server failed");
+                control_cancel.cancel();
+            }
+        }))
+    } else {
+        None
+    };
+    let stdio_exit_policy = if resident_control_handle.is_some() {
+        StdioExitPolicy::DetachUntilCancellation
+    } else {
+        StdioExitPolicy::ShutdownProcess
+    };
 
     // Spawn the tracing-channel forwarder: converts tracing events into NotificationEvents.
     let trace_event_tx = event_tx.clone();
@@ -363,7 +492,9 @@ async fn main() -> Result<()> {
     // Spawn MCP server (owns stdin/stdout).
     let cancel_mcp = cancel.clone();
     let mcp_handle = tokio::spawn(async move {
-        if let Err(e) = dione::mcp::server::run(server, event_rx, cancel_mcp).await {
+        if let Err(e) =
+            dione::mcp::server::run(server, event_rx, cancel_mcp, stdio_exit_policy).await
+        {
             tracing::error!(error = ?e, "MCP server exited with error");
         }
     });
@@ -387,16 +518,34 @@ async fn main() -> Result<()> {
 
     cancel.cancel();
 
-    // Allow up to 2 seconds for tasks to wind down.
-    let _ = tokio::time::timeout(Duration::from_secs(2), async {
-        expiry_handle.abort();
-        discord_handle.abort();
-        let _ = mcp_handle.await;
-        if let Some(codex_handle) = codex_handle {
-            let _ = codex_handle.await;
-        }
-    })
-    .await;
+    // Stop new ingress first. Accepted resident requests and signed Teams
+    // Activities retain their own task ownership until their queue settlement
+    // completes. A stalled drain keeps the process and inbox lock alive; it
+    // must never be reported as a clean shutdown.
+    expiry_handle.abort();
+    discord_handle.abort();
+    if let Some(handle) = teams_handle {
+        handle
+            .await
+            .wrap_err("Teams ingress task panicked during drain")?;
+    }
+    if let Some(handle) = resident_control_handle {
+        handle
+            .await
+            .wrap_err("resident control task panicked during drain")?;
+    }
+    mcp_handle
+        .await
+        .wrap_err("MCP server task panicked during drain")?;
+    if let Some(bridge) = teams_bridge {
+        bridge.drain_replies().await;
+    }
+    delivery_cancel.cancel();
+    if let Some(handle) = codex_handle {
+        handle
+            .await
+            .wrap_err("Codex delivery worker panicked during drain")?;
+    }
 
     tracing::info!("dione stopped");
     Ok(())

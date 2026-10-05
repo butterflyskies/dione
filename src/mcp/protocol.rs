@@ -42,6 +42,14 @@ pub(crate) fn initialize_response(
 
 /// Build the MCP `tools/list` response.
 pub(crate) fn tools_list(mode: TransportMode, evidence_markers_enabled: bool) -> Value {
+    tools_list_with_teams(mode, evidence_markers_enabled, false)
+}
+
+pub(crate) fn tools_list_with_teams(
+    mode: TransportMode,
+    evidence_markers_enabled: bool,
+    teams_enabled: bool,
+) -> Value {
     let mut response = json!({
         "tools": [
             tool("attention", "Recipient-local attention controls: status/configure, authorized source review/retrieval and feedback, offline replay/fitting, held-out evaluation and explicit digest promotion/rollback. Configure replaces settings from status. No command is accepted from Discord message text; this authenticated seat supplies recipient identity.", crate::attention::control::schema()),
@@ -534,6 +542,16 @@ pub(crate) fn tools_list(mode: TransportMode, evidence_markers_enabled: bool) ->
             }
         }
     }
+    if teams_enabled && let Some(tools) = response["tools"].as_array_mut() {
+        tools.push(tool("teams_reply", "Reply once to an authenticated Microsoft Teams Activity using the opaque single-use authority handle delivered with that event.", json!({
+                "type": "object",
+                "required": ["reply_handle", "content"],
+                "properties": {
+                    "reply_handle": { "type": "string", "description": "Opaque single-use reply authority from a Teams inbound event" },
+                    "content": { "type": "string", "description": "Reply text" }
+                }
+        })));
+    }
     response
 }
 
@@ -575,6 +593,26 @@ mod tests {
             .find(|t| t["name"] == "fetch_messages")
             .expect("fetch_messages must be in tools list")
             .clone()
+    }
+
+    #[test]
+    fn teams_reply_is_discoverable_only_with_a_live_authority() {
+        for enabled in [false, true] {
+            let list = tools_list_with_teams(TransportMode::Codex, false, enabled);
+            let advertised = list["tools"]
+                .as_array()
+                .expect("tools list")
+                .iter()
+                .any(|tool| tool["name"] == "teams_reply");
+            assert_eq!(advertised, enabled);
+        }
+        assert!(
+            !tools_list(TransportMode::ClaudeCode, false)["tools"]
+                .as_array()
+                .expect("tools list")
+                .iter()
+                .any(|tool| tool["name"] == "teams_reply")
+        );
     }
 
     /// Boundary pin for the presence tools: deleting either from the

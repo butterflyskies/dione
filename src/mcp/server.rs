@@ -22,7 +22,7 @@ use crate::{
     mcp::{
         dispatch::call_tool,
         notifications::IntoNotification,
-        protocol::{initialize_response, tools_list},
+        protocol::{initialize_response, tools_list_with_teams},
         tools::{
             access::AccessCtx,
             bot_state::{BotStateCtx, DiscordCommand},
@@ -39,18 +39,21 @@ use crate::{
 use camino::Utf8PathBuf;
 use serde_json::{Value, json};
 use std::{
+    os::unix::{fs::FileTypeExt, fs::MetadataExt, fs::PermissionsExt},
     sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    sync::{Mutex, mpsc, watch},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+    net::{UnixListener, UnixStream},
+    sync::{Mutex, Semaphore, mpsc, watch},
 };
-use tokio_util::sync::CancellationToken;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 // ── Server struct ─────────────────────────────────────────────────────────────
 
 /// Runtime context for the MCP server.
+#[derive(Clone)]
 pub struct DioneServer {
     pub state: crate::state::State,
     pub queue: Arc<Mutex<crate::queue::AccessQueue>>,
@@ -67,6 +70,7 @@ pub struct DioneServer {
     pub event_tx: Option<mpsc::Sender<NotificationEvent>>,
     pub ingress_ledger: Arc<crate::ingress_ledger::IngressLedger>,
     pub attention: Arc<crate::attention::runtime::AttentionRuntime>,
+    pub teams_reply: Option<Arc<dyn crate::teams_runtime::TeamsReplyAuthority>>,
 }
 
 // ── Construction ──────────────────────────────────────────────────────────────
@@ -118,6 +122,7 @@ impl DioneServer {
             event_tx: None,
             ingress_ledger,
             attention,
+            teams_reply: None,
         }
     }
 
@@ -144,6 +149,14 @@ impl DioneServer {
         binding: Option<watch::Sender<Option<crate::codex::CodexThreadId>>>,
     ) -> Self {
         self.codex_thread_binding = binding;
+        self
+    }
+
+    pub fn with_teams_reply(
+        mut self,
+        authority: Option<Arc<dyn crate::teams_runtime::TeamsReplyAuthority>>,
+    ) -> Self {
+        self.teams_reply = authority;
         self
     }
 
@@ -216,6 +229,12 @@ impl DioneServer {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StdioExitPolicy {
+    ShutdownProcess,
+    DetachUntilCancellation,
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 /// Runs the MCP server: reads JSON-RPC from stdin, writes to stdout.
@@ -223,9 +242,10 @@ impl DioneServer {
 /// Also spawns a task that converts [`NotificationEvent`]s from Discord into
 /// MCP notifications and writes them to stdout.
 pub async fn run(
-    server: DioneServer,
+    server: Arc<DioneServer>,
     event_rx: mpsc::Receiver<NotificationEvent>,
     cancel: CancellationToken,
+    stdio_exit_policy: StdioExitPolicy,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let stdin = BufReader::new(tokio::io::stdin());
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
@@ -607,15 +627,23 @@ pub async fn run(
                         // same graceful shutdown as Ctrl-C: fire the cancel so
                         // the sweeper drains pending no_rly handles into the
                         // journal instead of parking until the timeout.
-                        tracing::info!("stdin EOF, MCP server shutting down");
-                        cancel.cancel();
+                        if stdio_exit_policy == StdioExitPolicy::ShutdownProcess {
+                            tracing::info!("stdin EOF, MCP server shutting down");
+                            cancel.cancel();
+                        } else {
+                            tracing::info!("stdin EOF, stdio transport detached");
+                        }
                         break;
                     }
                     Err(e) => {
                         // A read error is also a terminal exit — cancel so the
                         // background tasks run their drain paths.
-                        tracing::warn!(error = %e, "stdin read error, shutting down");
-                        cancel.cancel();
+                        if stdio_exit_policy == StdioExitPolicy::ShutdownProcess {
+                            tracing::warn!(error = %e, "stdin read error, shutting down");
+                            cancel.cancel();
+                        } else {
+                            tracing::warn!(error = %e, "stdin read error, stdio transport detached");
+                        }
                         break;
                     }
                 }
@@ -623,15 +651,229 @@ pub async fn run(
         }
     }
 
-    // Every exit from the loop above has fired `cancel` (the cancellation
-    // branch by definition, the EOF/read-error branches explicitly). So
-    // notif_task will break out of its loop and flush_all() any buffered
-    // events, and the sweeper will drain pending no_rly handles into the
-    // journal. Give them a short window.
+    // The resident socket may keep the process alive after stdio detaches.
+    // Drain notification and sweeper tasks only after process cancellation.
+    cancel.cancelled().await;
     drop(server);
     let _ = tokio::time::timeout(Duration::from_millis(500), notif_task).await;
     let _ = tokio::time::timeout(Duration::from_millis(500), sweep_task).await;
 
+    Ok(())
+}
+
+const RESIDENT_QUEUE_TOOLS: &[&str] = &[
+    "register_event_consumer",
+    "handoff_event_consumer",
+    "next_event",
+    "ack_event",
+    "event_queue_status",
+];
+const RESIDENT_SOCIAL_TOOLS: &[&str] = &[
+    "fetch_messages",
+    "fetch_new_since",
+    "fetch_pins",
+    "get_message",
+    "search_messages",
+    "get_channel",
+    "get_user",
+    "get_member",
+    "list_channels",
+    "list_guilds",
+    "list_emojis",
+    "list_roles",
+    "download_attachment",
+    "reply",
+    "teams_reply",
+    "react",
+    "edit_message",
+    "delete_message",
+    "send_file",
+    "create_thread",
+    "pin_message",
+    "unpin_message",
+    "render_latex",
+    "render_latex_to_channel",
+];
+const RESIDENT_MAX_FRAME_BYTES: usize = 1024 * 1024;
+const RESIDENT_MAX_CONNECTIONS: usize = 4;
+const RESIDENT_READ_TIMEOUT: Duration = Duration::from_secs(15);
+
+fn resident_request_allowed(request: &Value) -> bool {
+    match request.get("method").and_then(Value::as_str).unwrap_or("") {
+        "initialize" | "notifications/initialized" => true,
+        "tools/call" => request
+            .pointer("/params/name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| {
+                RESIDENT_QUEUE_TOOLS.contains(&name) || RESIDENT_SOCIAL_TOOLS.contains(&name)
+            }),
+        _ => false,
+    }
+}
+
+async fn read_resident_frame<R>(
+    reader: &mut R,
+    input: &mut Vec<u8>,
+) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut chunk = [0_u8; 8192];
+    loop {
+        if let Some(newline) = input.iter().position(|byte| *byte == b'\n') {
+            if newline > RESIDENT_MAX_FRAME_BYTES {
+                return Err("resident control frame exceeds byte limit".into());
+            }
+            let mut frame: Vec<u8> = input.drain(..=newline).collect();
+            frame.pop();
+            return Ok(Some(frame));
+        }
+        if input.len() > RESIDENT_MAX_FRAME_BYTES {
+            return Err("resident control frame exceeds byte limit".into());
+        }
+        let count = tokio::time::timeout(RESIDENT_READ_TIMEOUT, reader.read(&mut chunk))
+            .await
+            .map_err(|_| "resident control read timed out")??;
+        if count == 0 {
+            if input.is_empty() {
+                return Ok(None);
+            }
+            return Err("resident control frame ended without newline".into());
+        }
+        input.extend_from_slice(&chunk[..count]);
+    }
+}
+
+async fn serve_resident_connection(
+    server: Arc<DioneServer>,
+    stream: UnixStream,
+    cancel: CancellationToken,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let (mut reader, writer) = stream.into_split();
+    let writer = Arc::new(Mutex::new(writer));
+    let mut input = Vec::new();
+    loop {
+        // Only idle reads are cancellable. Once a request is accepted its
+        // dispatch and durable settlement remain owned through shutdown.
+        let frame = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => break,
+            frame = read_resident_frame(&mut reader, &mut input) => frame?,
+        };
+        let Some(frame) = frame else { break };
+        let text = std::str::from_utf8(&frame)?;
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let request = match serde_json::from_str::<Value>(trimmed) {
+            Ok(request) => request,
+            Err(_) => {
+                write_line(
+                    &writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": null,
+                        "error": { "code": -32700, "message": "parse error" }
+                    }),
+                )
+                .await;
+                continue;
+            }
+        };
+        if !resident_request_allowed(&request) {
+            let id = request.get("id").cloned().unwrap_or(Value::Null);
+            write_line(
+                    &writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": { "code": -32601, "message": "method is unavailable on the resident control socket" }
+                    }),
+                )
+                .await;
+            continue;
+        }
+        if let Some(response) = handle_request(&server, request).await {
+            write_line(&writer, &response).await;
+        }
+    }
+    Ok(())
+}
+
+/// Serve the minimum resident queue/publication API on an operator-owned Unix
+/// socket. The socket has no Discord ingress stream and intentionally omits
+/// configuration, access-control, diagnostics, and arbitrary messaging tools.
+pub async fn run_resident_control(
+    server: Arc<DioneServer>,
+    socket_path: Utf8PathBuf,
+    cancel: CancellationToken,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if server.mode != TransportMode::Codex {
+        return Err("resident control requires Codex mode".into());
+    }
+    let parent = socket_path
+        .parent()
+        .ok_or("resident control socket needs a parent directory")?;
+    match tokio::fs::symlink_metadata(parent).await {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            tokio::fs::create_dir_all(parent).await?;
+            tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).await?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let parent_metadata = tokio::fs::symlink_metadata(parent).await?;
+    if !parent_metadata.is_dir()
+        || parent_metadata.file_type().is_symlink()
+        || parent_metadata.uid() != unsafe { libc::geteuid() }
+        || parent_metadata.permissions().mode() & 0o777 != 0o700
+    {
+        return Err("resident control parent must be an owned mode-0700 directory".into());
+    }
+    match tokio::fs::symlink_metadata(&socket_path).await {
+        Ok(metadata)
+            if metadata.file_type().is_socket() && metadata.uid() == unsafe { libc::geteuid() } =>
+        {
+            tokio::fs::remove_file(&socket_path).await?;
+        }
+        Ok(_) => return Err("refusing to replace a non-owned or non-socket control path".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let listener = UnixListener::bind(socket_path.as_std_path())?;
+    tokio::fs::set_permissions(
+        socket_path.as_std_path(),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .await?;
+    let connections = Arc::new(Semaphore::new(RESIDENT_MAX_CONNECTIONS));
+    let accepted_tasks = TaskTracker::new();
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => break,
+            accepted = listener.accept() => {
+                let (stream, _) = accepted?;
+                let Ok(permit) = connections.clone().try_acquire_owned() else {
+                    drop(stream);
+                    continue;
+                };
+                let connection_server = server.clone();
+                let connection_cancel = cancel.clone();
+                accepted_tasks.spawn(async move {
+                    let _permit = permit;
+                    if let Err(error) = serve_resident_connection(connection_server, stream, connection_cancel).await {
+                        tracing::warn!(error = %error, "resident control connection failed");
+                    }
+                });
+            }
+        }
+    }
+    drop(listener);
+    accepted_tasks.close();
+    accepted_tasks.wait().await;
+    tokio::fs::remove_file(socket_path.as_std_path()).await?;
     Ok(())
 }
 
@@ -674,9 +916,10 @@ async fn dispatch(server: &DioneServer, method: &str, params: Value) -> Result<V
         // ── Tool discovery ────────────────────────────────────────────────────
         "tools/list" => {
             let config = crate::config::load_config(&server.state_dir);
-            Ok(tools_list(
+            Ok(tools_list_with_teams(
                 server.mode,
                 config.delivery.evidence_markers_enabled,
+                server.teams_reply.is_some(),
             ))
         }
 
@@ -778,7 +1021,7 @@ impl NotificationSink {
     }
 }
 
-async fn write_line(stdout: &Arc<Mutex<tokio::io::Stdout>>, value: &Value) {
+async fn write_line<W: tokio::io::AsyncWrite + Unpin>(stdout: &Arc<Mutex<W>>, value: &Value) {
     let mut line = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string());
     line.push('\n');
     let mut out = stdout.lock().await;
@@ -997,6 +1240,232 @@ mod tests {
     };
     use serenity::model::id::{ChannelId, MessageId, UserId};
     use std::collections::HashMap;
+
+    #[test]
+    fn resident_control_allows_only_bounded_tools() {
+        for name in RESIDENT_QUEUE_TOOLS.iter().chain(RESIDENT_SOCIAL_TOOLS) {
+            let allowed = json!({
+                "method": "tools/call",
+                "params": { "name": name, "arguments": {} }
+            });
+            assert!(resident_request_allowed(&allowed), "{name} must be allowed");
+        }
+        let denied = json!({
+            "method": "tools/call",
+            "params": { "name": "reload_config", "arguments": {} }
+        });
+        assert!(!resident_request_allowed(&denied));
+        assert!(!resident_request_allowed(
+            &json!({ "method": "tools/list" })
+        ));
+    }
+
+    #[test]
+    fn resident_social_tools_are_the_exact_closed_bridge_surface() {
+        assert_eq!(
+            RESIDENT_SOCIAL_TOOLS,
+            &[
+                "fetch_messages",
+                "fetch_new_since",
+                "fetch_pins",
+                "get_message",
+                "search_messages",
+                "get_channel",
+                "get_user",
+                "get_member",
+                "list_channels",
+                "list_guilds",
+                "list_emojis",
+                "list_roles",
+                "download_attachment",
+                "reply",
+                "teams_reply",
+                "react",
+                "edit_message",
+                "delete_message",
+                "send_file",
+                "create_thread",
+                "pin_message",
+                "unpin_message",
+                "render_latex",
+                "render_latex_to_channel",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn resident_control_frames_are_bounded_and_newline_delimited() {
+        let mut exact = vec![b'x'; RESIDENT_MAX_FRAME_BYTES];
+        exact.push(b'\n');
+        exact.extend_from_slice(b"second\n");
+        let mut reader = std::io::Cursor::new(exact);
+        let mut buffered = Vec::new();
+        let first = read_resident_frame(&mut reader, &mut buffered)
+            .await
+            .expect("maximum-size frame")
+            .expect("first frame");
+        assert_eq!(first.len(), RESIDENT_MAX_FRAME_BYTES);
+        let second = read_resident_frame(&mut reader, &mut buffered)
+            .await
+            .expect("buffered second frame")
+            .expect("second frame");
+        assert_eq!(second, b"second");
+
+        let mut oversized = vec![b'x'; RESIDENT_MAX_FRAME_BYTES + 1];
+        oversized.push(b'\n');
+        let error = read_resident_frame(&mut std::io::Cursor::new(oversized), &mut Vec::new())
+            .await
+            .expect_err("oversized frame must fail");
+        assert!(error.to_string().contains("exceeds byte limit"));
+
+        let error = read_resident_frame(
+            &mut std::io::Cursor::new(b"partial".to_vec()),
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("unterminated frame must fail");
+        assert!(error.to_string().contains("without newline"));
+    }
+
+    #[tokio::test]
+    async fn resident_shutdown_waits_for_accepted_reply_after_client_disconnect() {
+        use std::{
+            os::unix::fs::PermissionsExt,
+            sync::atomic::{AtomicBool, Ordering},
+        };
+        use tokio::{io::AsyncWriteExt, sync::oneshot};
+
+        struct HeldReply {
+            started: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+            release: std::sync::Mutex<Option<oneshot::Receiver<()>>>,
+            settled: Arc<AtomicBool>,
+        }
+
+        impl crate::teams_runtime::TeamsReplyAuthority for HeldReply {
+            fn reply<'a>(
+                &'a self,
+                _handle: &'a str,
+                _text: &'a str,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<
+                            Output = Result<
+                                crate::teams_edge::LiveReplyReceipt,
+                                crate::teams_runtime::TeamsRuntimeError,
+                            >,
+                        > + Send
+                        + 'a,
+                >,
+            > {
+                Box::pin(async move {
+                    self.started
+                        .lock()
+                        .expect("started lock")
+                        .take()
+                        .expect("single accepted request")
+                        .send(())
+                        .expect("test waits for acceptance");
+                    let release = self
+                        .release
+                        .lock()
+                        .expect("release lock")
+                        .take()
+                        .expect("single release");
+                    release.await.expect("test releases settlement");
+                    self.settled.store(true, Ordering::SeqCst);
+                    Ok(crate::teams_edge::LiveReplyReceipt {
+                        incoming_activity_id: "inbound".to_owned(),
+                        outgoing_activity_id: "outbound".to_owned(),
+                        conversation_id: "conversation".to_owned(),
+                    })
+                })
+            }
+        }
+
+        let dir = tempfile::TempDir::new().expect("private socket directory");
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("owned mode-0700 socket directory");
+        let state_dir = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf())
+            .expect("UTF-8 fixture path");
+        let socket_path = state_dir.join("s");
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let settled = Arc::new(AtomicBool::new(false));
+        let authority = Arc::new(HeldReply {
+            started: std::sync::Mutex::new(Some(started_tx)),
+            release: std::sync::Mutex::new(Some(release_rx)),
+            settled: settled.clone(),
+        });
+        let (notification_tx, _notification_rx) = mpsc::channel(1);
+        let server = DioneServer::new(
+            crate::state::new_state(),
+            Arc::new(Mutex::new(crate::queue::AccessQueue::load(&state_dir))),
+            Arc::new(serenity::http::Http::new("fake")),
+            state_dir.clone(),
+            notification_tx,
+            TraceLevelController::noop(),
+            TransportMode::Codex,
+            Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
+            Arc::new(crate::ingress_ledger::IngressLedger::new()),
+        )
+        .await
+        .with_teams_reply(Some(authority));
+        let cancel = CancellationToken::new();
+        let mut listener = tokio::spawn(run_resident_control(
+            Arc::new(server),
+            socket_path.clone(),
+            cancel.clone(),
+        ));
+        let mut client = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(stream) = UnixStream::connect(socket_path.as_std_path()).await {
+                    break stream;
+                }
+                if listener.is_finished() {
+                    let result = (&mut listener).await;
+                    panic!("resident listener exited before bind: {result:?}");
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("resident socket binds");
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "teams_reply",
+                "arguments": { "reply_handle": "opaque", "content": "resident reply" }
+            }
+        });
+        client
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .expect("write accepted tool request");
+        tokio::time::timeout(Duration::from_secs(2), started_rx)
+            .await
+            .expect("request reaches authority")
+            .expect("acceptance signal survives");
+
+        drop(client);
+        cancel.cancel();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut listener)
+                .await
+                .is_err(),
+            "shutdown must wait for accepted request settlement"
+        );
+        assert!(!settled.load(Ordering::SeqCst));
+        release_tx.send(()).expect("release accepted settlement");
+        tokio::time::timeout(Duration::from_secs(2), listener)
+            .await
+            .expect("resident server drains")
+            .expect("resident task joins")
+            .expect("resident server exits cleanly");
+        assert!(settled.load(Ordering::SeqCst));
+        assert!(!socket_path.exists());
+    }
 
     #[tokio::test]
     async fn messaging_context_uses_process_installed_pipeline() {

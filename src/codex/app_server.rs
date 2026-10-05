@@ -903,7 +903,10 @@ async fn acknowledge_with_retry(
 ) -> Result<(), CodexDeliveryError> {
     let mut delay = INITIAL_RETRY_DELAY;
     loop {
-        match queue.acknowledge(consumer_id, &event.delivery_token).await {
+        match queue
+            .acknowledge_live(consumer_id, &event.delivery_token)
+            .await
+        {
             Ok(()) => return Ok(()),
             Err(CodexQueueError::UnknownDeliveryToken) => {
                 // The durable event may already have been acknowledged, or a
@@ -3192,10 +3195,12 @@ mod tests {
         let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         let queue = CodexEventQueue::load(&path).unwrap();
         let consumer = queue.register_live_consumer().await.unwrap();
+        let thread = CodexThreadId::parse("thread-ack-retry").unwrap();
+        queue.bind_live_thread(Some(thread.clone())).await.unwrap();
         let payload = json!({ "params": { "meta": { "message_id": "123" } } });
         queue.enqueue(payload.clone()).await.unwrap();
         let event = queue
-            .next_event(&consumer, Duration::ZERO, Duration::from_secs(60))
+            .next_live_event(&consumer, &thread, Duration::ZERO, Duration::from_secs(60))
             .await
             .unwrap()
             .unwrap();
@@ -3256,7 +3261,7 @@ mod tests {
         .unwrap()
         .unwrap();
         queue
-            .acknowledge(&consumer_id, &current.delivery_token)
+            .acknowledge_live(&consumer_id, &current.delivery_token)
             .await
             .unwrap();
     }
