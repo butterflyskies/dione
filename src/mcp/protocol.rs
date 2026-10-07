@@ -57,6 +57,7 @@ pub(crate) fn tools_list_with_teams(
                 "type": "object",
                 "required": ["channel_id", "content"],
                 "properties": {
+                    "suppress_embeds": { "type": "boolean", "description": "Suppress Discord link previews (default: false)" },
                     "channel_id": { "type": "string", "description": "Discord channel ID" },
                     "content": { "type": "string", "description": "Message content" },
                     "reply_to_message_id": { "type": "string", "description": "Optional message ID to reply to" },
@@ -114,6 +115,7 @@ pub(crate) fn tools_list_with_teams(
                 "type": "object",
                 "required": ["channel_id", "message_id", "content"],
                 "properties": {
+                    "suppress_embeds": { "type": "boolean", "description": "Suppress Discord link previews; false restores previews, omission preserves the current setting" },
                     "channel_id": { "type": "string" },
                     "message_id": { "type": "string" },
                     "content": { "type": "string" },
@@ -217,6 +219,7 @@ pub(crate) fn tools_list_with_teams(
                 "type": "object",
                 "required": ["user_id", "content"],
                 "properties": {
+                    "suppress_embeds": { "type": "boolean", "description": "Suppress Discord link previews (default: false)" },
                     "user_id": { "type": "string", "description": "Discord user ID to send the DM to" },
                     "content": { "type": "string", "description": "Message content to send" },
                     "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass; every bypass is audited." },

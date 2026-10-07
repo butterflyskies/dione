@@ -59,6 +59,8 @@ pub struct ReplyRequest {
     pub reply_to_message_id: Option<MessageId>,
     /// Whether to suppress the reply ping.
     pub suppress_ping: bool,
+    /// Whether to suppress Discord link previews.
+    pub suppress_embeds: bool,
     /// Full-message contradictionary records pending completion after a
     /// partial chunked delivery. This is internal retry context, not wire data.
     pub(crate) pending_diary_records: Vec<DiaryRecord>,
@@ -420,6 +422,7 @@ impl ConsentGate {
             content: replacement.written.to_string(),
             reply_to_message_id: entry.payload.reply_to_message_id,
             suppress_ping: entry.payload.suppress_ping,
+            suppress_embeds: entry.payload.suppress_embeds,
             pending_diary_records: entry.payload.pending_diary_records.clone(),
             fence_context: ReplyFenceContext::default(),
         };
@@ -723,6 +726,7 @@ mod tests {
             fence_context: ReplyFenceContext::default(),
             reply_to_message_id: Some(MessageId::new(7)),
             suppress_ping: true,
+            suppress_embeds: true,
         }
     }
 
@@ -989,6 +993,7 @@ mod tests {
         );
         assert_eq!(sent[0].reply_to_message_id, original.reply_to_message_id);
         assert_eq!(sent[0].suppress_ping, original.suppress_ping);
+        assert_eq!(sent[0].suppress_embeds, original.suppress_embeds);
 
         let bounces = journal_bounces(&gate).await;
         assert_eq!(bounces.len(), 1);
@@ -1345,6 +1350,7 @@ mod tests {
         assert_eq!(sent[0].pending_diary_records, records);
         assert_eq!(sent[1].content, "the second half");
         assert_eq!(sent[1].pending_diary_records, records);
+        assert!(sent.iter().all(|request| request.suppress_embeds));
     }
 
     #[tokio::test]
@@ -1378,6 +1384,7 @@ mod tests {
             .await
             .expect("retry resumes and completes");
         let sent = deliver.requests.lock().unwrap().clone();
+        assert!(sent.iter().all(|request| request.suppress_embeds));
         assert_eq!(sent.len(), 2);
         assert_eq!(sent[0].content, "the first half the second half");
         assert_eq!(sent[0].pending_diary_records, expected_diary);

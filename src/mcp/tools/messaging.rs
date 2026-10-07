@@ -26,22 +26,31 @@ use crate::{
     state::State,
 };
 use camino::{Utf8Path, Utf8PathBuf};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use serenity::{
     builder::{CreateAllowedMentions, CreateAttachment, CreateMessage, EditMessage},
-    http::MessagePagination,
+    http::{LightMethod, MessagePagination, Request, Route},
     model::{
         Timestamp,
-        channel::{Channel, Message},
+        channel::{Channel, Message, MessageFlags},
         id::{ChannelId, MessageId, UserId},
     },
 };
 use std::{io, sync::Arc, time::Instant};
 use tokio::{io::AsyncWriteExt, sync::mpsc};
 
+/// Preserve wire bits that the installed SDK's typed message flags would truncate.
+#[derive(Deserialize)]
+struct ExistingMessageFlags {
+    flags: Option<u64>,
+}
+
 /// Self-react emoji for contradictionary celebrate hits (✨ — sparkles).
 const CONTRADICTIONARY_CELEBRATE_REACT: &str = "\u{2728}";
 static NO_SENTEX_HANDLES: SentexHandles = SentexHandles::empty();
+#[cfg(test)]
+const MESSAGE_FLAG_NOT_IN_SDK: u64 = 1 << 14;
 
 /// Fire-and-forget phantom canary alert to the configured alert channel.
 pub(crate) fn phantom_canary_alert(
@@ -809,6 +818,7 @@ pub async fn reply_with_hook_overrides(
         reply_to_message_id,
         ReplyToolOptions {
             suppress_ping,
+            suppress_embeds: false,
             no_rly_hooks,
             sentex_handles: &NO_SENTEX_HANDLES,
         },
@@ -818,6 +828,7 @@ pub async fn reply_with_hook_overrides(
 
 pub(crate) struct ReplyToolOptions<'a> {
     pub(crate) suppress_ping: bool,
+    pub(crate) suppress_embeds: bool,
     pub(crate) no_rly_hooks: &'a [HookName],
     pub(crate) sentex_handles: &'a SentexHandles,
 }
@@ -881,6 +892,7 @@ pub(crate) async fn reply_with_evidence_and_hook_overrides(
         prepared,
         ReplyTransportOptions {
             suppress_ping: options.suppress_ping,
+            suppress_embeds: options.suppress_embeds,
         },
     )
     .await
@@ -1000,6 +1012,7 @@ async fn release_reply_claim(ctx: &MessagingCtx, channel_id: ChannelId, message_
 
 struct ReplyTransportOptions {
     suppress_ping: bool,
+    suppress_embeds: bool,
 }
 
 /// Deliver a prepared reply or DM. Every result — sent, held or failed —
@@ -1047,6 +1060,7 @@ async fn deliver_prepared_text(
         content: content.to_string(),
         reply_to_message_id,
         suppress_ping: options.suppress_ping,
+        suppress_embeds: options.suppress_embeds,
         pending_diary_records,
         fence_context: Default::default(),
     };
@@ -1359,6 +1373,9 @@ async fn deliver_reply(
 
     for (i, chunk) in chunks.iter().enumerate() {
         let mut builder = CreateMessage::new().content(&chunk.rendered);
+        if request.suppress_embeds {
+            builder = builder.flags(MessageFlags::SUPPRESS_EMBEDS);
+        }
 
         // Reply threading.
         let should_reply = match reply_mode {
@@ -1707,6 +1724,18 @@ pub async fn edit_message_with_hook_overrides(
     new_content: &str,
     no_rly_hooks: &[HookName],
 ) -> Value {
+    edit_message_with_embed_control(ctx, channel_id, message_id, new_content, no_rly_hooks, None)
+        .await
+}
+
+pub(crate) async fn edit_message_with_embed_control(
+    ctx: &MessagingCtx,
+    channel_id: ChannelId,
+    message_id: MessageId,
+    new_content: &str,
+    no_rly_hooks: &[HookName],
+    suppress_embeds: Option<bool>,
+) -> Value {
     let prepared = match prepare_outbound(
         ctx,
         OutboundDraft::channel(
@@ -1724,7 +1753,26 @@ pub async fn edit_message_with_hook_overrides(
         Ok(prepared) => prepared,
         Err(error) => return error,
     };
-    let builder = EditMessage::new().content(prepared.text);
+    let mut builder = EditMessage::new().content(prepared.text);
+    if let Some(suppress) = suppress_embeds {
+        let message = match ctx
+            .http
+            .fire::<ExistingMessageFlags>(Request::new(
+                Route::ChannelMessage {
+                    channel_id,
+                    message_id,
+                },
+                LightMethod::Get,
+            ))
+            .await
+        {
+            Ok(message) => message,
+            Err(error) => return json!({ "error": error.to_string() }),
+        };
+        let mut flags = MessageFlags::from_bits_retain(message.flags.unwrap_or_default());
+        flags.set(MessageFlags::SUPPRESS_EMBEDS, suppress);
+        builder = builder.flags(flags);
+    }
     match ctx
         .http
         .edit_message(channel_id, message_id, &builder, vec![])
@@ -2145,6 +2193,7 @@ pub async fn send_dm_with_hook_overrides(
         content,
         no_rly_hooks,
         &NO_SENTEX_HANDLES,
+        false,
     )
     .await
 }
@@ -2155,6 +2204,7 @@ pub(crate) async fn send_dm_with_evidence_and_hook_overrides(
     content: &str,
     no_rly_hooks: &[HookName],
     sentex_handles: &SentexHandles,
+    suppress_embeds: bool,
 ) -> Value {
     if ctx.config.access.dm_policy == DmPolicy::Disabled {
         return json!({ "error": "dm_policy is set to disabled; cannot initiate DMs" });
@@ -2196,6 +2246,7 @@ pub(crate) async fn send_dm_with_evidence_and_hook_overrides(
             prepared,
             ReplyTransportOptions {
                 suppress_ping: false,
+                suppress_embeds,
             },
         )
         .await;
@@ -2218,6 +2269,7 @@ pub(crate) async fn send_dm_with_evidence_and_hook_overrides(
         prepared.resolve_dm_channel(channel_id),
         ReplyTransportOptions {
             suppress_ping: false,
+            suppress_embeds,
         },
     )
     .await;
@@ -3782,16 +3834,26 @@ mod tests {
                         json!({ "message": "Missing Access", "code": 50001 }).to_string(),
                     )
                 } else if request_line.starts_with("GET ") && path.contains("/messages/") {
-                    (
-                        "200 OK",
-                        wire_message(
+                    ("200 OK", {
+                        let mut message = wire_message(
                             9001,
                             "explicit read",
                             "2026-08-15T09:00:00.000000+00:00",
                             json!([]),
-                        )
-                        .to_string(),
-                    )
+                        );
+                        if path.ends_with("/messages/9015") {
+                            message["flags"] = json!(
+                                (MessageFlags::SUPPRESS_NOTIFICATIONS
+                                    | MessageFlags::SUPPRESS_EMBEDS)
+                                    .bits()
+                                    | MESSAGE_FLAG_NOT_IN_SDK
+                            );
+                        }
+                        if path.ends_with("/messages/9016") {
+                            message["flags"] = json!("invalid");
+                        }
+                        message.to_string()
+                    })
                 } else if request_line.starts_with("GET ") && path.contains("/messages?") {
                     (
                         "200 OK",
@@ -3812,6 +3874,18 @@ mod tests {
                     (
                         "403 Forbidden",
                         json!({ "message": "Missing Permissions", "code": 50013 }).to_string(),
+                    )
+                } else if request_line.starts_with("PATCH ") && path.contains("/messages/") {
+                    let body: Value = serde_json::from_str(body).expect("edit body");
+                    (
+                        "200 OK",
+                        wire_message(
+                            9001,
+                            body["content"].as_str().unwrap_or_default(),
+                            "2026-08-15T09:00:00.000000+00:00",
+                            json!([]),
+                        )
+                        .to_string(),
                     )
                 } else if request_line.starts_with("POST ") && path.ends_with("/messages") {
                     let content = serde_json::from_str::<Value>(body)
@@ -4261,6 +4335,7 @@ mod tests {
             None,
             ReplyToolOptions {
                 suppress_ping: false,
+                suppress_embeds: false,
                 no_rly_hooks: &[],
                 sentex_handles: &handles,
             },
@@ -4319,6 +4394,7 @@ mod tests {
             None,
             ReplyToolOptions {
                 suppress_ping: false,
+                suppress_embeds: false,
                 no_rly_hooks: &[],
                 sentex_handles: &handles,
             },
@@ -4422,6 +4498,160 @@ mod tests {
         (ctx, requests, server, dir)
     }
 
+    #[tokio::test]
+    async fn suppress_embeds_is_carried_through_chunks_and_held_rephrases() {
+        let mut raw = auto_test_config();
+        raw.delivery.text_chunk_limit = 40;
+        let (ctx, requests, server, _dir) = auto_test_ctx_with(raw).await;
+        for suppress_embeds in [false, true] {
+            let content = "https://example.com/ ".repeat(5);
+            let response = reply_with_evidence_and_hook_overrides(
+                &ctx,
+                ChannelId::new(42),
+                &content,
+                None,
+                ReplyToolOptions {
+                    suppress_ping: false,
+                    suppress_embeds,
+                    no_rly_hooks: &[],
+                    sentex_handles: &NO_SENTEX_HANDLES,
+                },
+            )
+            .await;
+            assert_eq!(response["ok"], true, "{response}");
+            let mut captured = requests.lock().expect("capture");
+            let posted: Vec<Value> = captured
+                .iter()
+                .filter(|(path, _)| path.ends_with("/messages"))
+                .map(|(_, body)| serde_json::from_str(body).unwrap())
+                .collect();
+            assert!(posted.len() > 1);
+            for body in posted {
+                assert_eq!(body.get("flags"), suppress_embeds.then_some(&json!(4)));
+            }
+            captured.clear();
+        }
+        for rephrase in [false, true] {
+            let bounce = reply_with_evidence_and_hook_overrides(
+                &ctx,
+                ChannelId::new(42),
+                "straightforward https://example.com/",
+                None,
+                ReplyToolOptions {
+                    suppress_ping: false,
+                    suppress_embeds: true,
+                    no_rly_hooks: &[],
+                    sentex_handles: &NO_SENTEX_HANDLES,
+                },
+            )
+            .await;
+            let handle = bounce["held"]["handle"].as_str().expect("held");
+            assert!(posted_contents(&requests).is_empty());
+            let sent = if rephrase {
+                rephrase_held(&ctx, handle, "https://example.com/").await
+            } else {
+                release_held(&ctx, handle).await
+            };
+            assert_eq!(sent["ok"], true, "{sent}");
+            let mut captured = requests.lock().expect("capture");
+            for (_, body) in captured
+                .iter()
+                .filter(|(path, _)| path.ends_with("/messages"))
+            {
+                let body: Value = serde_json::from_str(body).unwrap();
+                assert_eq!(body["flags"], 4);
+            }
+            captured.clear();
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn suppress_embeds_dm_and_edit_wire_semantics() {
+        let (ctx, requests, server, _dir) = auto_test_ctx().await;
+        for suppress in [false, true] {
+            let result = send_dm_with_evidence_and_hook_overrides(
+                &ctx,
+                UserId::new(77),
+                "https://example.com/",
+                &[],
+                &NO_SENTEX_HANDLES,
+                suppress,
+            )
+            .await;
+            assert_eq!(result["ok"], true, "{result}");
+            let mut captured = requests.lock().expect("capture");
+            let (_, body) = captured
+                .iter()
+                .find(|(path, _)| path.ends_with("/messages"))
+                .expect("DM sent");
+            let body: Value = serde_json::from_str(body).unwrap();
+            assert_eq!(body.get("flags"), suppress.then_some(&json!(4)));
+            captured.clear();
+        }
+        for suppress in [None, Some(true), Some(false)] {
+            let result = edit_message_with_embed_control(
+                &ctx,
+                ChannelId::new(42),
+                MessageId::new(9015),
+                "https://example.com/",
+                &[],
+                suppress,
+            )
+            .await;
+            assert_eq!(result["ok"], true, "{result}");
+            let mut captured = requests.lock().expect("capture");
+            assert_eq!(
+                captured
+                    .iter()
+                    .filter(|(path, _)| path.ends_with("/messages/9015"))
+                    .count(),
+                if suppress.is_some() { 2 } else { 1 },
+                "omission must not fetch the existing message"
+            );
+            let (_, body) = captured
+                .iter()
+                .rev()
+                .find(|(path, _)| path.ends_with("/messages/9015"))
+                .expect("edited");
+            let body: Value = serde_json::from_str(body).unwrap();
+            assert_eq!(
+                body.get("flags"),
+                suppress
+                    .map(|v| json!(
+                        MessageFlags::SUPPRESS_NOTIFICATIONS.bits()
+                            | MESSAGE_FLAG_NOT_IN_SDK
+                            | if v { 4 } else { 0 }
+                    ))
+                    .as_ref()
+            );
+            captured.clear();
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn suppress_embeds_edit_fetch_errors_never_patch() {
+        let (ctx, requests, server, _dir) = auto_test_ctx().await;
+        for message_id in [9003, 9016] {
+            let result = edit_message_with_embed_control(
+                &ctx,
+                ChannelId::new(42),
+                MessageId::new(message_id),
+                "new text",
+                &[],
+                Some(true),
+            )
+            .await;
+            assert!(result["error"].is_string(), "{result}");
+            let mut captured = requests.lock().expect("capture");
+            assert_eq!(captured.len(), 1, "failed flag fetch must not edit");
+            assert!(captured[0].1.is_empty(), "only a GET, no PATCH payload");
+            captured.clear();
+        }
+        server.abort();
+    }
+
     /// The `content` of every message POSTed to the fake Discord API.
     fn posted_contents(requests: &std::sync::Mutex<Vec<(String, String)>>) -> Vec<String> {
         requests
@@ -4477,6 +4707,7 @@ mod tests {
             None,
             ReplyToolOptions {
                 suppress_ping: false,
+                suppress_embeds: false,
                 no_rly_hooks: &[],
                 sentex_handles: &handles,
             },
@@ -4523,6 +4754,7 @@ mod tests {
             None,
             ReplyToolOptions {
                 suppress_ping: false,
+                suppress_embeds: false,
                 no_rly_hooks: &[],
                 sentex_handles: &handles,
             },
@@ -4757,6 +4989,7 @@ mod tests {
             "grounded",
             &[],
             &handles,
+            false,
         )
         .await;
         server.abort();

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.51.1]
+
+### Added
+- Add optional `suppress_embeds` to Discord `reply`, `send_dm`, and `edit_message`. Sends retain normal previews by default; edits preserve the current setting when omitted. Held, rephrased, and chunked sends retain the requested suppression.
+
 ## [0.51.0] - 2026-10-05
 
 ### Added

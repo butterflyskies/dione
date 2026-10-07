@@ -20,7 +20,7 @@ use crate::{
             },
             management::{create_thread, delete_message, pin_message, unpin_message},
             messaging::{
-                ReplyToolOptions, download_attachment, edit_message_with_hook_overrides,
+                ReplyToolOptions, download_attachment, edit_message_with_embed_control,
                 fetch_messages, fetch_new_since, fetch_pins, get_message, react as discord_react,
                 release_held, rephrase_held, reply_with_evidence_and_hook_overrides,
                 send_dm_with_evidence_and_hook_overrides, send_file_with_hook_overrides,
@@ -228,6 +228,8 @@ pub(crate) async fn call_tool(
                 reply_to,
                 ReplyToolOptions {
                     suppress_ping,
+                    suppress_embeds: parse_optional_bool(&args, "suppress_embeds")?
+                        .unwrap_or(false),
                     no_rly_hooks: &no_rly_hooks,
                     sentex_handles: &sentex_handles,
                 },
@@ -304,8 +306,15 @@ pub(crate) async fn call_tool(
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing content".to_string())?;
             let no_rly_hooks = parse_hook_overrides(&args)?;
-            edit_message_with_hook_overrides(&ctx, channel_id, message_id, content, &no_rly_hooks)
-                .await
+            edit_message_with_embed_control(
+                &ctx,
+                channel_id,
+                message_id,
+                content,
+                &no_rly_hooks,
+                parse_optional_bool(&args, "suppress_embeds")?,
+            )
+            .await
         }
         "fetch_messages" => {
             let ctx = server.messaging_ctx(config.clone());
@@ -375,6 +384,7 @@ pub(crate) async fn call_tool(
                 content,
                 &no_rly_hooks,
                 &sentex_handles,
+                parse_optional_bool(&args, "suppress_embeds")?.unwrap_or(false),
             )
             .await
         }
@@ -852,6 +862,16 @@ pub(crate) fn parse_optional_id(args: &Value, key: &str) -> Result<Option<Snowfl
     Ok(None)
 }
 
+fn parse_optional_bool(args: &Value, name: &str) -> Result<Option<bool>, String> {
+    args.get(name)
+        .map(|value| {
+            value
+                .as_bool()
+                .ok_or_else(|| format!("{name} must be a boolean"))
+        })
+        .transpose()
+}
+
 fn parse_strict_optional_id(args: &Value, key: &str) -> Result<Option<Snowflake>, String> {
     match args.get(key) {
         None => Ok(None),
@@ -1186,5 +1206,25 @@ mod tests {
     #[test]
     fn strict_optional_id_rejects_non_numeric_string() {
         assert!(parse_strict_optional_id(&json!({"id": "abc"}), "id").is_err());
+    }
+}
+
+#[cfg(test)]
+mod embed_control_tests {
+    use super::*;
+    #[test]
+    fn suppress_embeds_requires_boolean_when_present() {
+        assert_eq!(parse_optional_bool(&json!({}), "suppress_embeds"), Ok(None));
+        for value in [true, false] {
+            assert_eq!(
+                parse_optional_bool(&json!({"suppress_embeds": value}), "suppress_embeds"),
+                Ok(Some(value))
+            );
+        }
+        for value in [Value::Null, json!("true"), json!(1), json!([]), json!({})] {
+            assert!(
+                parse_optional_bool(&json!({"suppress_embeds": value}), "suppress_embeds").is_err()
+            );
+        }
     }
 }
