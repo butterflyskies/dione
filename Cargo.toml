@@ -62,7 +62,7 @@ oneshot-test-seam = []
 
 [dev-dependencies]
 axum-server = { version = "0.8", features = ["tls-rustls"] }
-rcgen = "0.13"
+rcgen = "0.14"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 insta = { version = "1", features = ["json", "redactions"] }
 proptest = "1"
