@@ -41,7 +41,7 @@ futures-util = "0.3"
 notify = "8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
-secrecy = { version = "0.8", features = ["serde"] }
+secrecy = { version = "0.10", features = ["serde"] }
 url = "2"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
