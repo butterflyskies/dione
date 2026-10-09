@@ -482,6 +482,60 @@ fn package_privacy_verifier_rejects_each_private_material_class() {
 }
 
 #[test]
+fn package_privacy_verifier_rejects_private_source_with_crlf_pattern_files() {
+    let temp = tempfile::tempdir().expect("temporary directory must be created");
+    let scripts = temp.path().join("scripts");
+    fs::create_dir(&scripts).expect("scripts directory must be created");
+    let source_scripts = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts");
+    fs::copy(
+        source_scripts.join("verify-public-package-privacy.sh"),
+        scripts.join("verify-public-package-privacy.sh"),
+    )
+    .expect("privacy verifier must be copied");
+    for name in [
+        "public-package-structural-patterns.txt",
+        "public-package-member-patterns.txt",
+    ] {
+        let source = fs::read(source_scripts.join(name)).expect("pattern file must be read");
+        let crlf = String::from_utf8(source)
+            .expect("pattern file must be UTF-8")
+            .replace("\r\n", "\n")
+            .replace('\n', "\r\n");
+        fs::write(scripts.join(name), crlf).expect("CRLF pattern file must be written");
+    }
+
+    let verify = |archive: &Path| {
+        Command::new("sh")
+            .arg("scripts/verify-public-package-privacy.sh")
+            .arg(archive)
+            .current_dir(temp.path())
+            .output()
+            .expect("privacy verifier must execute")
+    };
+
+    let public_archive =
+        create_package_fixture(&temp, "public-crlf-patterns", b"use serde::Serialize;\n");
+    let public_output = verify(&public_archive);
+    assert!(
+        public_output.status.success(),
+        "CRLF pattern files must still allow public source: {}",
+        String::from_utf8_lossy(&public_output.stderr)
+    );
+
+    let source = format!("use {}::PatternSet;\n", private_dependency_name());
+    let archive = create_package_fixture(&temp, "private-crlf-patterns", source.as_bytes());
+    let output = verify(&archive);
+    assert!(
+        !output.status.success(),
+        "CRLF pattern files must still reject private source"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("rule=structural-content:rust-use"),
+        "privacy verifier must identify the private use rule"
+    );
+}
+
+#[test]
 fn package_privacy_verifier_uses_external_forbidden_markers_without_echoing_them() {
     for (name, marker, line_ending) in [
         ("synthetic-marker", ["fixture", "8f13c2"].join(":"), "\r\n"),
@@ -720,7 +774,6 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
 #[test]
 fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
     let workflow = include_str!("../.forgejo/workflows/linux.yml");
-    let release_hygiene = include_str!("../.forgejo/workflows/release-hygiene.yml");
     let release_hygiene_script = include_str!("../.forgejo/scripts/release-hygiene.sh");
     let semver_helper = include_str!("../scripts/semver-is-greater.sh");
     let rust_toolchain = include_str!("../rust-toolchain.toml");
@@ -730,12 +783,8 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
     let forgejo_triggers =
         "on:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\n";
     assert!(workflow.contains(forgejo_triggers));
-    assert!(release_hygiene.contains(forgejo_triggers));
-    assert!(workflow.contains("\npermissions: {}\n"));
-    assert!(release_hygiene.contains("\npermissions: {}\n"));
     assert!(!workflow.contains("\n  workflow_dispatch:"));
-    assert!(!release_hygiene.contains("\n  workflow_dispatch:"));
-    assert_eq!(workflow.matches("toolchain: \"1.98.0\"").count(), 6);
+    assert_eq!(workflow.matches("toolchain: \"1.98.0\"").count(), 7);
     assert!(!workflow.contains("1.95.0"));
     assert!(workflow.contains("cargo +1.98.0 check --workspace --all-targets --locked"));
     assert!(!workflow.contains("toolchain: stable"));
@@ -744,12 +793,19 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
     assert!(rust_toolchain.contains("channel = \"1.98.0\""));
     assert!(rust_toolchain.contains("components = [\"clippy\", \"rustfmt\"]"));
 
-    assert!(release_hygiene.contains("EVENT_NAME: ${{ forgejo.event_name }}"));
-    assert!(release_hygiene.contains("PR_BASE: ${{ forgejo.event.pull_request.base.sha }}"));
-    assert!(release_hygiene.contains("PR_HEAD: ${{ forgejo.event.pull_request.head.sha }}"));
-    assert!(release_hygiene.contains("PUSH_BEFORE: ${{ forgejo.event.before }}"));
-    assert!(release_hygiene.contains("PUSH_AFTER: ${{ forgejo.sha }}"));
-    assert!(release_hygiene.contains("run: sh .forgejo/scripts/release-hygiene.sh"));
+    let hygiene = workflow
+        .split_once("\n  hygiene:")
+        .expect("release hygiene must be part of the required workflow")
+        .1
+        .split_once("\n  format:")
+        .expect("format must follow release hygiene")
+        .0;
+    assert!(hygiene.contains("EVENT_NAME: ${{ forgejo.event_name }}"));
+    assert!(hygiene.contains("PR_BASE: ${{ forgejo.event.pull_request.base.sha }}"));
+    assert!(hygiene.contains("PR_HEAD: ${{ forgejo.event.pull_request.head.sha }}"));
+    assert!(hygiene.contains("PUSH_BEFORE: ${{ forgejo.event.before }}"));
+    assert!(hygiene.contains("PUSH_AFTER: ${{ forgejo.sha }}"));
+    assert!(hygiene.contains("run: sh .forgejo/scripts/release-hygiene.sh"));
     assert!(release_hygiene_script.contains("git merge-base \"$PR_BASE\" \"$PR_HEAD\""));
     assert!(release_hygiene_script.contains("VERSION_BASE=\"$PR_BASE\""));
     assert!(release_hygiene_script.contains("AFTER=\"$PR_HEAD\""));
@@ -809,6 +865,36 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
         "cargo package -p dione --locked\n          dione_version=\"$(scripts/workspace-package-version.sh dione)\"\n          dione_crate=\"target/package/dione-${dione_version}.crate\"\n          scripts/verify-public-package-privacy.sh \"${dione_crate}\""
     ));
 
+    let required = workflow
+        .split_once("\n  required:")
+        .expect("all PR checks must feed one required status")
+        .1
+        .split_once("\n  release-tag:")
+        .expect("required checks must precede release tagging")
+        .0;
+    assert!(required.starts_with("\n    name: Required checks\n"));
+    assert!(required.contains("needs: [hygiene, format, lint, test, package, msrv, build, audit]"));
+    assert!(required.contains("if: ${{ always() }}"));
+    assert!(
+        required.contains("run: |\n          sh .forgejo/scripts/require-successful-checks.sh")
+    );
+    for job in [
+        "hygiene", "format", "lint", "test", "package", "msrv", "build", "audit",
+    ] {
+        assert_eq!(
+            required
+                .matches(&format!("\"{job}=${{{{ needs.{job}.result }}}}\""))
+                .count(),
+            1,
+            "required status must inspect {job} exactly once"
+        );
+    }
+    let legacy_hygiene = include_str!("../.forgejo/workflows/release-hygiene.yml");
+    assert!(legacy_hygiene.contains("name: Release Hygiene"));
+    assert!(legacy_hygiene.contains("name: Version + changelog accompany source changes"));
+    assert!(legacy_hygiene.contains("  pull_request:\n    branches: [main]"));
+    assert!(legacy_hygiene.contains("run: sh .forgejo/scripts/release-hygiene.sh"));
+
     let release_tag = workflow
         .split_once("\n  release-tag:")
         .expect("Forgejo CI must retain its trusted-main release tag job")
@@ -816,11 +902,11 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
     assert!(release_tag.starts_with(
         "\n    name: Annotated release tag\n    if: ${{ forgejo.event_name == 'push' && forgejo.ref == 'refs/heads/main' }}"
     ));
-    assert!(release_tag.contains("needs: [format, lint, test, package, msrv, audit]"));
+    assert!(release_tag.contains("needs: [required]"));
     assert!(release_tag.contains("fetch-depth: 0"));
     assert!(release_tag.contains("ref: ${{ forgejo.sha }}"));
     assert_eq!(workflow.matches("persist-credentials: true").count(), 0);
-    assert_eq!(workflow.matches("persist-credentials: false").count(), 7);
+    assert_eq!(workflow.matches("persist-credentials: false").count(), 10);
     assert!(release_tag.contains("persist-credentials: false"));
     assert!(!release_tag.contains("token:"));
     assert!(!release_tag.contains("contents: write"));
@@ -877,15 +963,79 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
         .split_once("\n  msrv:")
         .expect("Forgejo CI must preserve the GitHub MSRV gate")
         .1
-        .split_once("\n  audit:")
-        .expect("MSRV must remain a separate gate")
+        .split_once("\n  build:")
+        .expect("MSRV must remain separate from the release build")
         .0;
     assert!(msrv.contains("toolchain: \"1.98.0\""));
     assert!(msrv.contains("cargo +1.98.0 check --workspace --all-targets --locked"));
     assert!(msrv.contains("persist-credentials: false"));
+    let build = workflow
+        .split_once("\n  build:")
+        .expect("Forgejo CI must build release binaries")
+        .1
+        .split_once("\n  audit:")
+        .expect("the release build must remain separate from the audit")
+        .0;
+    assert!(build.contains("cargo build --release --workspace --bins --locked"));
+    assert!(build.contains("./target/release/dione --version"));
+    assert!(build.contains("persist-credentials: false"));
     assert!(github_ci.contains("toolchain: \"1.98.0\""));
     assert!(github_ci.contains("key: msrv-1.98"));
     assert!(github_ci.contains("cargo +1.98.0 check --workspace --all-targets --locked"));
+}
+
+#[test]
+fn forgejo_workflows_reject_ignored_permissions_fields() {
+    for entry in fs::read_dir(".forgejo/workflows").expect("Forgejo workflows must be readable") {
+        let path = entry.expect("workflow entry must be readable").path();
+        if !matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("yml" | "yaml")
+        ) {
+            continue;
+        }
+        let workflow = fs::read_to_string(&path).expect("Forgejo workflow must be UTF-8");
+        assert!(
+            !workflow
+                .lines()
+                .any(|line| line.trim_start().starts_with("permissions:")),
+            "{} declares a permissions field that Forgejo ignores",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn forgejo_required_check_rejects_failed_skipped_and_missing_jobs() {
+    let script = ".forgejo/scripts/require-successful-checks.sh";
+    let jobs = [
+        "hygiene", "format", "lint", "test", "package", "msrv", "build", "audit",
+    ];
+    let mut results = jobs.map(|job| format!("{job}=success"));
+    let run = |values: &[String]| {
+        Command::new("sh")
+            .arg(script)
+            .args(values)
+            .output()
+            .expect("required-check script must execute")
+    };
+
+    assert!(run(&results).status.success());
+    for (index, job) in jobs.iter().enumerate() {
+        for outcome in ["failure", "skipped", "cancelled", ""] {
+            results[index] = format!("{job}={outcome}");
+            let output = run(&results);
+            assert!(
+                !output.status.success(),
+                "a {outcome:?} {job} job must block the required status"
+            );
+            assert!(String::from_utf8_lossy(&output.stderr).contains(&format!("{job}=")));
+        }
+        results[index] = format!("{job}=success");
+    }
+    assert!(!run(&results[..7]).status.success());
+    let unknown = jobs.map(|_| "x=success".to_owned());
+    assert!(!run(&unknown).status.success(), "job names must be checked");
 }
 
 #[test]

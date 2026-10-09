@@ -16,6 +16,9 @@ through interaction.
 | Document | Purpose |
 |----------|---------|
 | [CODING_STANDARDS.md](CODING_STANDARDS.md) | Rust coding conventions, error handling, async patterns, testing, linting, serde discipline, commit rules. The authoritative reference. |
+| [docs/pr-ready.md](docs/pr-ready.md) | Local checks and pre-PR review references. |
+| [Group design principles](https://forgejo.svc.echoes/lacuna/lacuna-marketplace/src/commit/d999379d1e62d6dfc9ff24086149503f51313bac/plugins/lacuna/design-principles/v2/INDEX.md) | Pinned principle corpus to consult for design and review decisions. |
+| [Six review lenses](https://forgejo.svc.echoes/lacuna/lacuna-marketplace/src/commit/d999379d1e62d6dfc9ff24086149503f51313bac/plugins/lacuna-core/skills/elbow-grease/references/lenses.md) | Pinned Safety, Design, Security, Privacy, Idiomacy, and Tests reference. |
 
 ### Architecture & design
 

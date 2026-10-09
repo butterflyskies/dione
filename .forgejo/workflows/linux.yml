@@ -2,9 +2,9 @@ name: Forgejo Linux CI
 
 # Forgejo pull-request runs execute only the non-mutating checks below. The
 # release tag remains a trusted-main job and is guarded at the job boundary.
-# This mirrors the Linux build from GitHub CI, but deliberately omits GitHub's
-# macOS runner, release creation, and package publishing. After all six gates
-# pass, a version-and-changelog bump is bound to an annotated exact-head tag.
+# This mirrors the Linux build from GitHub CI, but omits GitHub's macOS runner,
+# release creation, and package publishing. The main-only tag job follows the
+# eight checks and checks the version and changelog bump before tagging.
 on:
   push:
     branches: [main]
@@ -13,7 +13,6 @@ on:
 
 # Checkout credentials are discarded before repository code runs. Every
 # repository-mutating step remains outside the pull-request path.
-permissions: {}
 
 concurrency:
   group: forgejo-linux-${{ forgejo.ref }}
@@ -23,6 +22,24 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  hygiene:
+    name: Release hygiene
+    runs-on: docker
+    timeout-minutes: 10
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Require version bump + changelog entry when src/ changes
+        env:
+          EVENT_NAME: ${{ forgejo.event_name }}
+          PR_BASE: ${{ forgejo.event.pull_request.base.sha }}
+          PR_HEAD: ${{ forgejo.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ forgejo.event.before }}
+          PUSH_AFTER: ${{ forgejo.sha }}
+        run: sh .forgejo/scripts/release-hygiene.sh
+
   format:
     name: Formatting
     runs-on: docker
@@ -74,6 +91,8 @@ jobs:
       - run: cargo nextest run --workspace --locked --no-fail-fast --features oneshot-test-seam
       # Production feature set: proves the endpoint-override seam is absent.
       - run: cargo nextest run --workspace --locked --no-fail-fast --test oneshot_send
+      - name: Test trusted review receipt checker
+        run: python3 -B -m unittest discover -s .forgejo/scripts -p 'test_*.py'
 
   package:
     name: Public package boundary
@@ -108,6 +127,20 @@ jobs:
           toolchain: "1.98.0"
       - run: cargo +1.98.0 check --workspace --all-targets --locked
 
+  build:
+    name: Release binaries
+    runs-on: docker
+    timeout-minutes: 120
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: https://github.com/dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
+        with:
+          toolchain: "1.98.0"
+      - run: cargo build --release --workspace --bins --locked
+      - run: ./target/release/dione --version
+
   audit:
     name: Dependency audit
     runs-on: docker
@@ -120,13 +153,35 @@ jobs:
         with:
           command: check
 
+  required:
+    name: Required checks
+    needs: [hygiene, format, lint, test, package, msrv, build, audit]
+    if: ${{ always() }}
+    runs-on: docker
+    timeout-minutes: 5
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Require every check to succeed
+        run: |
+          sh .forgejo/scripts/require-successful-checks.sh \
+            "hygiene=${{ needs.hygiene.result }}" \
+            "format=${{ needs.format.result }}" \
+            "lint=${{ needs.lint.result }}" \
+            "test=${{ needs.test.result }}" \
+            "package=${{ needs.package.result }}" \
+            "msrv=${{ needs.msrv.result }}" \
+            "build=${{ needs.build.result }}" \
+            "audit=${{ needs.audit.result }}"
+
   release-tag:
     name: Annotated release tag
     if: ${{ forgejo.event_name == 'push' && forgejo.ref == 'refs/heads/main' }}
     # The release account's integration is restricted to this workflow,
     # main, and push events. Other jobs cannot request its JWT.
     enable-openid-connect: true
-    needs: [format, lint, test, package, msrv, audit]
+    needs: [required]
     runs-on: docker
     timeout-minutes: 15
     steps:

@@ -164,7 +164,7 @@ mod unix {
     }
 
     #[test]
-    fn workflow_exposes_tag_writes_only_after_six_trusted_main_gates() {
+    fn workflow_exposes_tag_writes_only_after_required_checks() {
         let workflow = include_str!("../.forgejo/workflows/linux.yml");
         let release_tag = workflow
             .split_once("\n  release-tag:")
@@ -174,7 +174,7 @@ mod unix {
         assert!(release_tag.starts_with(
             "\n    name: Annotated release tag\n    if: ${{ forgejo.event_name == 'push' && forgejo.ref == 'refs/heads/main' }}"
         ));
-        assert!(release_tag.contains("needs: [format, lint, test, package, msrv, audit]"));
+        assert!(release_tag.contains("needs: [required]"));
         assert!(release_tag.contains("enable-openid-connect: true"));
         assert_eq!(workflow.matches("enable-openid-connect: true").count(), 1);
         assert!(release_tag.contains("ref: ${{ forgejo.sha }}"));
@@ -204,7 +204,7 @@ mod unix {
         assert!(toolchain_step < checkout_step);
         assert!(checkout_step < tagger_step);
         assert_eq!(workflow.matches("persist-credentials: true").count(), 0);
-        assert_eq!(workflow.matches("persist-credentials: false").count(), 7);
+        assert_eq!(workflow.matches("persist-credentials: false").count(), 10);
         assert!(!workflow.contains("\n  release-artifact:"));
         assert!(!workflow.contains("upload-artifact"));
         assert!(!Path::new(".github/workflows/tag-release.yml").exists());

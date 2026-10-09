@@ -192,6 +192,14 @@ Use `cargo nextest run` as the test runner. Not `cargo test`.
   never hit real APIs.
 - `#[tokio::test]` for async tests.
 - Test **behavior**, not implementation details.
+- Assert an observable result against a literal expectation. A test that accepts
+  every return value, only checks that code did not panic, or only writes a
+  visual artifact does not count as coverage.
+- Pair rejection and absence cases with an allowed case at the same boundary;
+  a function that rejects or drops everything must fail the test.
+- For a high-risk regression, temporarily break the protected behavior and
+  run its targeted test. Keep the test only if that run fails for the intended
+  reason, then restore the implementation.
 
 ### Testing crates
 
@@ -376,10 +384,17 @@ those checks.
 For public API changes, identify affected consumers and verify their builds and
 behavior. Keep the compile-fail tests that protect verified-action boundaries.
 
-Every PR requires one construct review and one human review before
-merge. Review the final candidate and resolve findings before either approval.
-These are contribution requirements. Verify the repository's current branch
-protection settings separately before claiming that the server enforces them.
+Every PR requires an independent six-lens review and approval of the final
+candidate. Any member of `lacuna-constructs`, `friends-of-lacuna`, or
+`lacuna-blinkers` is an official reviewer and may review and approve a PR.
+The author of a PR cannot review or approve it. Once others have reviewed and
+approved, any member of `lacuna-blinkers` may merge, including the author or
+the reviewer.
+Resolve findings before approval and check the required CI results before
+merging. Verify the repository's current branch protection settings separately
+before claiming that the server enforces these requirements.
+For pre-PR review, consult the group's pinned design principles and review
+lenses linked from [docs/pr-ready.md](docs/pr-ready.md).
 
 ---
 

@@ -37,6 +37,7 @@ patterns=${scratch}/patterns
 member_patterns=${scratch}/member-patterns
 markers=${scratch}/markers
 violations=${scratch}/violations
+pattern_source=${scratch}/pattern-source
 mkdir "${extracted}"
 : > "${markers}"
 : > "${violations}"
@@ -59,17 +60,25 @@ fi
 private_dependency=$(printf '%s%s' cingu late)
 negative_canary_long=$(printf '%s%s' Mir anda)
 negative_canary_short=$(printf '%s%s' Mi ra)
-if ! sed \
-    -e "s/{PRIVATE_DEP}/${private_dependency}/g" \
-    -e "s/{CANARY_LONG}/${negative_canary_long}/g" \
-    -e "s/{CANARY_SHORT}/${negative_canary_short}/g" \
-    scripts/public-package-structural-patterns.txt > "${patterns}"; then
+if ! tr -d '\r' < scripts/public-package-structural-patterns.txt > "${pattern_source}"; then
     echo "public package scan failed: rule=pattern-read-error" >&2
     exit 1
 fi
 if ! sed \
     -e "s/{PRIVATE_DEP}/${private_dependency}/g" \
-    scripts/public-package-member-patterns.txt > "${member_patterns}"; then
+    -e "s/{CANARY_LONG}/${negative_canary_long}/g" \
+    -e "s/{CANARY_SHORT}/${negative_canary_short}/g" \
+    "${pattern_source}" > "${patterns}"; then
+    echo "public package scan failed: rule=pattern-read-error" >&2
+    exit 1
+fi
+if ! tr -d '\r' < scripts/public-package-member-patterns.txt > "${pattern_source}"; then
+    echo "public package scan failed: rule=member-pattern-read-error" >&2
+    exit 1
+fi
+if ! sed \
+    -e "s/{PRIVATE_DEP}/${private_dependency}/g" \
+    "${pattern_source}" > "${member_patterns}"; then
     echo "public package scan failed: rule=member-pattern-read-error" >&2
     exit 1
 fi

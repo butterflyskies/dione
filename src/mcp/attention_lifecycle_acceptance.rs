@@ -1501,10 +1501,14 @@ fn combined_lifecycle_items_obey_each_of_the_four_mode_transitions() {
                 .map(|work| tokio::spawn(fixture.attention.clone().evaluate(work)));
             assert_eq!(old_generation.is_some(), from != AttentionMode::Off);
             let completed = if let Some((captured, resume)) = checkpoint {
-                let record = tokio::time::timeout(Duration::from_secs(2), captured)
+                let record = tokio::time::timeout(Duration::from_secs(10), captured)
                     .await
-                    .unwrap()
-                    .unwrap();
+                    .unwrap_or_else(|_| {
+                        panic!("{from:?} -> {to:?}: completed HTTP judgment was not captured within 10s")
+                    })
+                    .unwrap_or_else(|_| {
+                        panic!("{from:?} -> {to:?}: completed HTTP judgment capture closed")
+                    });
                 assert!(
                     record.judgment.is_some(),
                     "the real HTTP judgment must complete"

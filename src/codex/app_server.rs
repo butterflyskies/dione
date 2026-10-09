@@ -978,6 +978,7 @@ mod tests {
     use super::*;
     use crate::codex::{
         AttentionDelivery, AttentionScheduling, ConsumerId, DeliveryToken, PersistFailure,
+        ProviderEventKey,
     };
     use std::sync::{
         Arc, Mutex as StdMutex,
@@ -986,6 +987,133 @@ mod tests {
     use tempfile::TempDir;
     use tokio::{net::UnixListener, sync::mpsc};
     use tokio_tungstenite::accept_async;
+
+    #[tokio::test]
+    async fn historical_inbox_does_not_block_new_live_delivery() {
+        let dir = TempDir::new().unwrap();
+        let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
+        std::fs::create_dir(&state_path).unwrap();
+        std::fs::write(
+            state_path.join("codex-inbox.json"),
+            include_bytes!("../../tests/fixtures/codex-inbox/v0.48.0-two-pending.json"),
+        )
+        .unwrap();
+        let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
+        let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            while let Some(message) = websocket.next().await {
+                let Ok(Message::Text(text)) = message else {
+                    break;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                let result = if request["method"] == "thread/read" {
+                    json!({ "thread": { "status": { "type": "idle" } } })
+                } else {
+                    json!({})
+                };
+                if request["method"] == "turn/start" {
+                    started_tx.send(request.clone()).unwrap();
+                }
+                websocket
+                    .send(Message::Text(
+                        json!({ "id": id, "result": result }).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        });
+
+        let queue = CodexEventQueue::load(&state_path).unwrap();
+        assert_eq!(queue.status().await.queued, 2);
+        let thread = CodexThreadId::parse("thread-after-upgrade").unwrap();
+        queue.bind_live_thread(Some(thread.clone())).await.unwrap();
+        let cancel = CancellationToken::new();
+        let (_binding_tx, binding_rx) = tokio::sync::watch::channel(Some(thread));
+        let worker = tokio::spawn(run_delivery_worker(
+            queue.clone(),
+            test_delivery_config(socket_path, Duration::from_secs(1)),
+            binding_rx,
+            cancel.clone(),
+        ));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while queue.status().await.primary_consumer.is_none() {
+                assert!(
+                    !worker.is_finished(),
+                    "live worker exited during registration"
+                );
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("live worker must register with an old inbox present");
+
+        let receipt = queue
+            .enqueue_live(
+                json!({ "params": { "content": "new live event", "meta": { "message_id": "4103" } } }),
+                ProviderEventKey::teams("tenant", "bot", "conversation", "activity-4103")
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            receipt,
+            crate::codex::LiveEnqueueReceipt::Committed
+        ));
+        let request = tokio::time::timeout(Duration::from_secs(5), started_rx.recv())
+            .await
+            .expect("old inbox must not stall new live delivery")
+            .expect("mock server must receive new live event");
+        assert_eq!(request["params"]["clientUserMessageId"], "dione-2");
+        assert!(
+            request["params"]["input"]
+                .to_string()
+                .contains("new live event")
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while queue.status().await.queued != 2 {
+                assert!(
+                    !worker.is_finished(),
+                    "live worker exited before acknowledgement"
+                );
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("new event must be acknowledged while old entries remain");
+        cancel.cancel();
+        tokio::time::timeout(Duration::from_secs(5), worker)
+            .await
+            .expect("live worker must stop after cancellation")
+            .unwrap()
+            .unwrap();
+        server.abort();
+
+        drop(queue);
+        let reopened = CodexEventQueue::load(&state_path).unwrap();
+        assert_eq!(reopened.status().await.queued, 2);
+        let persisted: Value =
+            serde_json::from_slice(&std::fs::read(state_path.join("codex-inbox.json")).unwrap())
+                .unwrap();
+        for (index, message_id, content) in [
+            (0, "4101", "prior release first"),
+            (1, "4102", "prior release second"),
+        ] {
+            assert_eq!(
+                persisted["entries"][index]["payload"]["params"]["meta"]["message_id"],
+                message_id
+            );
+            assert_eq!(
+                persisted["entries"][index]["payload"]["params"]["content"],
+                content
+            );
+        }
+    }
 
     #[tokio::test]
     async fn live_worker_waits_for_pending_sync_at_registration() {
@@ -1463,7 +1591,7 @@ mod tests {
         let (_binding_tx, binding_rx) = tokio::sync::watch::channel(Some(thread_id.clone()));
         let mut worker = tokio::spawn(run_delivery_worker_with_lease(
             queue.clone(),
-            test_delivery_config(socket_path, Duration::from_secs(5)),
+            test_delivery_config(socket_path, Duration::from_secs(15)),
             binding_rx,
             cancel.clone(),
             Duration::from_secs(2),
@@ -1494,7 +1622,27 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(queue.status().await.leased, 1);
-        tokio::time::sleep(Duration::from_millis(2200)).await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let expired = queue
+                    .inbox
+                    .lock()
+                    .await
+                    .state
+                    .entries
+                    .front()
+                    .unwrap()
+                    .lease
+                    .as_ref()
+                    .is_some_and(|lease| lease.expires_at <= chrono::Utc::now());
+                if expired {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("first lease must expire while initialization is held");
         queue.inbox.lock().await.persist_failure = Some(PersistFailure::AfterRename);
         let attempts_before = if prior_sync_failure {
             assert!(matches!(
@@ -1523,7 +1671,7 @@ mod tests {
             );
             queue.inbox.lock().await.persist_failure = None;
         }
-        tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let inbox = queue.inbox.lock().await;
                 let first = inbox.state.entries.front().unwrap();

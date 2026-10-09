@@ -47,10 +47,19 @@ fn test_queue_persists_and_reloads() {
     let entries = q2.list();
     assert_eq!(entries.len(), 3, "all 3 entries must survive a reload");
 
-    let ids: Vec<u64> = entries.iter().map(|r| r.user_id).collect();
-    assert!(ids.contains(&1), "user 1 must be present after reload");
-    assert!(ids.contains(&2), "user 2 must be present after reload");
-    assert!(ids.contains(&3), "user 3 must be present after reload");
+    let mut restored: Vec<(u64, &str)> = entries
+        .iter()
+        .map(|request| (request.user_id, request.message_preview.as_str()))
+        .collect();
+    restored.sort_by_key(|(user_id, _)| *user_id);
+    assert_eq!(
+        restored,
+        vec![
+            (1, "first request"),
+            (2, "second request"),
+            (3, "third request")
+        ]
+    );
 }
 
 // TC-36: Verify atomic write — .tmp file does not persist after successful write.
@@ -58,7 +67,11 @@ fn test_queue_persists_and_reloads() {
 fn test_atomic_write_no_tmp_file_after_persist() {
     let (_dir, state_dir) = temp_state();
     let mut q = AccessQueue::load(&state_dir);
-    q.enqueue(make_request(99, "atomicity test"), 50);
+    assert!(q.enqueue(make_request(99, "atomicity test"), 50));
+
+    let restored = AccessQueue::load(&state_dir);
+    assert_eq!(restored.list().len(), 1);
+    assert_eq!(restored.list()[0].message_preview, "atomicity test");
 
     let tmp_path = state_dir.join("queue.json.tmp");
     assert!(
@@ -85,6 +98,7 @@ fn test_persisted_json_is_valid() {
         parsed.get("42").is_some(),
         "queue.json must contain entry for user 42"
     );
+    assert_eq!(parsed["42"]["message_preview"], "check json");
 }
 
 // Verify that approve removes the entry from persistence too.
@@ -93,8 +107,9 @@ fn test_approve_removes_entry_from_disk() {
     let (_dir, state_dir) = temp_state();
 
     let mut q = AccessQueue::load(&state_dir);
-    q.enqueue(make_request(7, "approve me"), 50);
-    q.approve(7);
+    assert!(q.enqueue(make_request(7, "approve me"), 50));
+    assert_eq!(AccessQueue::load(&state_dir).list().len(), 1);
+    assert_eq!(q.approve(7).map(|request| request.user_id), Some(7));
 
     // Reload and check the entry is gone.
     let q2 = AccessQueue::load(&state_dir);
@@ -111,8 +126,9 @@ fn test_deny_removes_entry_from_disk() {
     let (_dir, state_dir) = temp_state();
 
     let mut q = AccessQueue::load(&state_dir);
-    q.enqueue(make_request(8, "deny me"), 50);
-    q.deny(8);
+    assert!(q.enqueue(make_request(8, "deny me"), 50));
+    assert_eq!(AccessQueue::load(&state_dir).list().len(), 1);
+    assert_eq!(q.deny(8).map(|request| request.user_id), Some(8));
 
     let q2 = AccessQueue::load(&state_dir);
     assert_eq!(

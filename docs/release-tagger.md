@@ -1,7 +1,7 @@
 # Forgejo release tag writer
 
-The Forgejo `linux.yml` workflow runs six checks on pull requests and main
-pushes. Only its `release-tag` job can write a tag, and only after all six checks
+The Forgejo `linux.yml` workflow runs eight checks on pull requests and main
+pushes. Only its `release-tag` job can write a tag, and only after all eight checks
 pass on a push to `refs/heads/main`. The tag script verifies the exact checked
 out commit, version increase, changelog heading, and existing tags before it
 makes a non-force annotated tag push. Dione 0.42.0 remains intentionally
@@ -47,7 +47,7 @@ because its source event and ref are restricted to main pushes.
 
 After setup, merge the workflow through the normal reviewed path. A main push
 at the unchanged bootstrap version should pass with no new tag. On the next
-qualified version bump, verify all six gates pass and `release-tag` succeeds;
+qualified version bump, verify the aggregate `Required checks` status passes and `release-tag` succeeds;
 inspect the resulting `v<version>` ref and confirm it is annotated and points
 to the exact main commit. A failed push may leave a local runner tag, but no
 remote release: rerun on a later main push with the same version to reconcile

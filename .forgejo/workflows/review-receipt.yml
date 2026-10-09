@@ -1,0 +1,35 @@
+name: Dione review receipt
+
+# This workflow is loaded from main for PR and comment events. It reads receipt
+# text from official review bodies, never from editable issue comments.
+on:
+  push:
+    branches: [main]
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+  issue_comment:
+    types: [created, edited, deleted]
+
+concurrency:
+  group: dione-six-lens-${{ forgejo.repository }}-${{ forgejo.event.number || forgejo.event.issue.number || forgejo.ref }}
+  cancel-in-progress: true
+
+jobs:
+  receipt:
+    name: Six lenses
+    enable-openid-connect: true
+    runs-on: docker
+    timeout-minutes: 30
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Check trusted, exact-commit review receipt
+        env:
+          FORGEJO_API_URL: ${{ forgejo.api_url }}
+          REVIEW_AUDIENCE: ${{ vars.DIONE_REVIEW_AUDIENCE }}
+          FORGEJO_REPOSITORY: ${{ forgejo.repository }}
+          FORGEJO_EVENT_NAME: ${{ forgejo.event_name }}
+          FORGEJO_EVENT_PATH: ${{ forgejo.event_path }}
+        run: python3 .forgejo/scripts/review_receipt.py

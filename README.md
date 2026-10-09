@@ -233,6 +233,8 @@ just install # cargo install --path .
 
 Requires Rust 1.98+.
 
+Before opening a PR, follow [the PR readiness checks](docs/pr-ready.md).
+
 ## License
 
 MIT OR Apache-2.0

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.51.2]
+
+### Changed
+- Add falsifiable PR quality checks, including historical Codex inbox loading and live delivery regression tests, and require a release binary build in Forgejo CI.
+
 ## [0.51.1]
 
 ### Added

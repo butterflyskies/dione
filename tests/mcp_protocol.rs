@@ -128,6 +128,12 @@ impl TeamsReplyAuthority for CapturingTeamsReply {
 }
 
 async fn missing_access_http() -> (Arc<Http>, Arc<Mutex<Vec<String>>>, JoinHandle<()>) {
+    permission_http(false).await
+}
+
+async fn permission_http(
+    open_admin_dm: bool,
+) -> (Arc<Http>, Arc<Mutex<Vec<String>>>, JoinHandle<()>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let address = listener.local_addr().unwrap();
     let requests = Arc::new(Mutex::new(Vec::new()));
@@ -178,14 +184,37 @@ async fn missing_access_http() -> (Arc<Http>, Arc<Mutex<Vec<String>>>, JoinHandl
                 bytes.extend_from_slice(&buffer[..read]);
             }
 
-            captured_requests
-                .lock()
-                .await
-                .push(String::from_utf8(bytes).unwrap());
+            let request = String::from_utf8(bytes).unwrap();
+            let opens_dm = request
+                .lines()
+                .next()
+                .is_some_and(|line| line.contains("/users/@me/channels"));
+            captured_requests.lock().await.push(request);
 
-            let body = r#"{"message":"Missing Access","code":50001}"#;
+            let (status, body) = if open_admin_dm && opens_dm {
+                (
+                    "200 OK",
+                    json!({
+                        "id": "4242",
+                        "last_message_id": null,
+                        "last_pin_timestamp": null,
+                        "type": 1,
+                        "recipients": [{
+                            "id": "111", "username": "admin", "global_name": null,
+                            "avatar": null, "discriminator": "0", "public_flags": 0,
+                            "bot": false
+                        }]
+                    })
+                    .to_string(),
+                )
+            } else {
+                (
+                    "403 Forbidden",
+                    r#"{"message":"Missing Access","code":50001}"#.to_owned(),
+                )
+            };
             let response = format!(
-                "HTTP/1.1 403 Forbidden\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                 body.len()
             );
             stream.write_all(response.as_bytes()).await.unwrap();
@@ -1413,39 +1442,75 @@ async fn test_set_trace_level_missing_filter_param() {
 // ── Permission request handler tests ─────────────────────────────────────────
 
 #[tokio::test]
-async fn test_permission_request_empty_id_is_ignored() {
+async fn test_permission_request_ignores_missing_ids_but_relays_valid_id() {
     let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir).await;
-    let req = json!({
+    let _config = load_config_fixture(&state_dir, "[access]\nadmins = [\"111\"]\n").await;
+    let (http, requests, mock_server) = permission_http(true).await;
+    let server = make_server_with_http(&state_dir, http).await;
+
+    for request_id in [None, Some("")] {
+        let mut params = json!({
+            "tool_name": "Bash",
+            "description": "run ls",
+            "input_preview": "{\"command\":\"ls\"}"
+        });
+        if let Some(request_id) = request_id {
+            params["request_id"] = json!(request_id);
+        }
+        let req = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/claude/channel/permission_request",
+            "params": params
+        });
+        assert!(test_helpers::dispatch_request(&server, req).await.is_none());
+    }
+    assert!(
+        requests.lock().await.is_empty(),
+        "missing request IDs must not send a Discord request"
+    );
+
+    let valid = json!({
         "jsonrpc": "2.0",
         "method": "notifications/claude/channel/permission_request",
         "params": {
-            "request_id": "",
+            "request_id": "perm-123",
             "tool_name": "Bash",
             "description": "run ls",
             "input_preview": "{\"command\":\"ls\"}"
         }
     });
-    // Notifications return None (no response). The key test is it doesn't panic.
-    let resp = test_helpers::dispatch_request(&server, req).await;
-    assert!(resp.is_none());
-}
-
-#[tokio::test]
-async fn test_permission_request_missing_id_is_ignored() {
-    let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir).await;
-    let req = json!({
-        "jsonrpc": "2.0",
-        "method": "notifications/claude/channel/permission_request",
-        "params": {
-            "tool_name": "Write",
-            "description": "write file",
-            "input_preview": "{}"
-        }
-    });
-    let resp = test_helpers::dispatch_request(&server, req).await;
-    assert!(resp.is_none());
+    assert!(
+        test_helpers::dispatch_request(&server, valid)
+            .await
+            .is_none()
+    );
+    let captured = requests.lock().await.clone();
+    mock_server.abort();
+    assert_eq!(captured.len(), 2, "valid request must reach the admin DM");
+    assert!(captured[0].starts_with("POST "));
+    assert!(captured[0].contains("/users/@me/channels"));
+    let body = captured[0]
+        .split_once("\r\n\r\n")
+        .expect("Discord request must contain a body")
+        .1;
+    let payload: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(payload["recipient_id"], "111");
+    assert!(captured[1].starts_with("POST "));
+    assert!(captured[1].contains("/channels/4242/messages"));
+    let message_body = captured[1]
+        .split_once("\r\n\r\n")
+        .expect("permission message request must contain a body")
+        .1;
+    let message: serde_json::Value = serde_json::from_str(message_body).unwrap();
+    assert!(message["content"].as_str().unwrap().contains("perm-123"));
+    assert_eq!(
+        message["components"][0]["components"][0]["custom_id"],
+        "perm:allow:perm-123"
+    );
+    assert_eq!(
+        message["components"][0]["components"][1]["custom_id"],
+        "perm:deny:perm-123"
+    );
 }
 
 // ── no_rly tool dispatch tests ───────────────────────────────────────────────
