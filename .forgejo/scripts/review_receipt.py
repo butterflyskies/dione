@@ -16,6 +16,9 @@ LENSES = ("Safety", "Design", "Security", "Privacy", "Idiomacy", "Tests")
 PUBLIC_API = "https://forgejo.svc.echoes/api/v1"
 INTERNAL_HOST = "forgejo-http.forgejo.svc.cluster.local:3443"
 INTERNAL_SERVICE = f"https://{INTERNAL_HOST}"
+# The two trusted API identities: the public URL and the in-cluster service. Both name
+# the same Forgejo; requests always go to INTERNAL_SERVICE with the public Host header.
+ALLOWED_API_URLS = (PUBLIC_API, f"{INTERNAL_SERVICE}/api/v1")
 MAX_LIST_PAGES = 20
 
 
@@ -102,9 +105,13 @@ def review_token(opener, audience):
     return token
 
 
+def require_known_api_url(base_url):
+    if base_url.rstrip("/") not in ALLOWED_API_URLS:
+        raise ValueError(f"unexpected Forgejo API URL: {base_url!r}")
+
+
 def api_request(opener, base_url, token, path, payload=None, with_total=False):
-    if base_url.rstrip("/") != PUBLIC_API:
-        raise ValueError("unexpected Forgejo API URL")
+    require_known_api_url(base_url)
     url = INTERNAL_SERVICE + "/api/v1/" + path.lstrip("/")
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     request = Request(
@@ -251,8 +258,9 @@ def check_pr(opener, base_url, token, repo, number, event=None):
 def main():
     base_url = os.environ["FORGEJO_API_URL"]
     repo = os.environ["FORGEJO_REPOSITORY"]
-    if base_url.rstrip("/") != PUBLIC_API or repo != "lacuna/dione":
-        raise ValueError("unexpected Forgejo API or repository")
+    require_known_api_url(base_url)
+    if repo != "lacuna/dione":
+        raise ValueError(f"unexpected Forgejo repository: {repo!r}")
     with open(os.environ["FORGEJO_EVENT_PATH"], encoding="utf-8") as handle:
         event = json.load(handle)
     opener = build_opener(NoRedirect())

@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import re
 import tempfile
 import threading
 import unittest
@@ -345,11 +346,36 @@ class ReceiptTests(unittest.TestCase):
                 if second_pr["head"]["sha"] != HEAD:
                     self.assertEqual(1, official.call_count, "a moved PR must stop before re-reading reviews")
 
-    def test_main_rejects_unexpected_api_or_repository(self):
-        for api_url, repo in (("http://forgejo.example/api/v1", "lacuna/dione"), ("https://forgejo.example/api/v1", "lacuna/dione"), ("https://forgejo.svc.echoes/api/v1", "other/dione")):
-            with self.subTest(api_url=api_url, repo=repo), patch.dict(os.environ, {"FORGEJO_API_URL": api_url, "FORGEJO_REPOSITORY": repo}):
-                with self.assertRaisesRegex(ValueError, "unexpected Forgejo API or repository"):
+    def test_main_rejects_unexpected_api_url(self):
+        for api_url in ("http://forgejo.example/api/v1", "https://forgejo.example/api/v1", "http://forgejo-http.forgejo.svc.cluster.local:3443/api/v1"):
+            with self.subTest(api_url=api_url), patch.dict(os.environ, {"FORGEJO_API_URL": api_url, "FORGEJO_REPOSITORY": "lacuna/dione"}):
+                with self.assertRaisesRegex(ValueError, f"unexpected Forgejo API URL: '{re.escape(api_url)}'"):
                     review_receipt.main()
+
+    def test_main_rejects_unexpected_repository(self):
+        with patch.dict(os.environ, {"FORGEJO_API_URL": review_receipt.PUBLIC_API, "FORGEJO_REPOSITORY": "other/dione"}):
+            with self.assertRaisesRegex(ValueError, "unexpected Forgejo repository: 'other/dione'"):
+                review_receipt.main()
+
+    def test_main_accepts_runner_internal_api_url(self):
+        # Both trusted API identities get past the guard. Run 1442 failed closed
+        # before reading any review; its checkout used the in-cluster service.
+        with tempfile.TemporaryDirectory() as directory:
+            event_path = Path(directory) / "event.json"
+            event_path.write_text("{}", encoding="utf-8")
+            for api_url in (f"{review_receipt.INTERNAL_SERVICE}/api/v1", f"{review_receipt.INTERNAL_SERVICE}/api/v1/", review_receipt.PUBLIC_API):
+                env = {"FORGEJO_API_URL": api_url, "FORGEJO_REPOSITORY": "lacuna/dione", "FORGEJO_EVENT_PATH": str(event_path)}
+                with self.subTest(api_url=api_url), patch.dict(os.environ, env), patch.object(review_receipt, "review_token", side_effect=RuntimeError("past the guard")):
+                    with self.assertRaisesRegex(RuntimeError, "past the guard"):
+                        review_receipt.main()
+
+    def test_api_request_accepts_internal_and_rejects_unknown_api_url(self):
+        with self.assertRaisesRegex(ValueError, "unexpected Forgejo API URL: 'https://forgejo.example/api/v1'"):
+            review_receipt.api_request(None, "https://forgejo.example/api/v1", "token", "repos/lacuna/dione")
+        opener = unittest.mock.MagicMock()
+        opener.open.return_value.__enter__.return_value = io.BytesIO(b"{}")
+        self.assertEqual({}, review_receipt.api_request(opener, f"{review_receipt.INTERNAL_SERVICE}/api/v1", "token", "repos/lacuna/dione"))
+        self.assertEqual(f"{review_receipt.INTERNAL_SERVICE}/api/v1/repos/lacuna/dione", opener.open.call_args.args[0].full_url)
 
     def test_event_posts_status_for_exact_head(self):
         with tempfile.TemporaryDirectory() as directory:
