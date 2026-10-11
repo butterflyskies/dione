@@ -15,8 +15,8 @@ use crate::{
             bot_state::{get_presence, send_typing, set_presence},
             diagnostics::{get_version, set_stderr_level, set_trace_level},
             introspection::{
-                get_channel, get_member, get_user, list_channels, list_emojis, list_guilds,
-                list_roles,
+                MAX_CAN_VIEW_USER_IDS, can_view_channel, get_channel, get_member, get_user,
+                list_channels, list_emojis, list_guilds, list_roles,
             },
             management::{create_thread, delete_message, pin_message, unpin_message},
             messaging::{
@@ -419,6 +419,15 @@ pub(crate) async fn call_tool(
             let ctx = server.introspection_ctx(config.clone());
             let guild_id = parse_id(&args, "guild_id")?.guild();
             list_roles(&ctx, guild_id).await
+        }
+        "can_view_channel" => {
+            let ctx = server.introspection_ctx(config.clone());
+            let channel_id = parse_id(&args, "channel_id")?.channel();
+            let user_ids: Vec<_> = parse_id_array(&args, "user_ids", MAX_CAN_VIEW_USER_IDS)?
+                .into_iter()
+                .map(Snowflake::user)
+                .collect();
+            can_view_channel(&ctx, channel_id, &user_ids).await
         }
         "list_emojis" => {
             let ctx = server.introspection_ctx(config.clone());
@@ -827,6 +836,35 @@ pub(crate) fn parse_id(args: &Value, key: &str) -> Result<Snowflake, String> {
     Snowflake::new(id).ok_or_else(|| format!("invalid {key}: must be a nonzero Discord snowflake"))
 }
 
+/// Parses a required, non-empty array of Discord IDs given as numbers or
+/// strings, rejecting arrays longer than `max`.
+fn parse_id_array(args: &Value, key: &str, max: usize) -> Result<Vec<Snowflake>, String> {
+    let values = args
+        .get(key)
+        .ok_or_else(|| format!("missing {key}"))?
+        .as_array()
+        .ok_or_else(|| format!("invalid {key}: expected an array of IDs"))?;
+    if values.is_empty() {
+        return Err(format!("invalid {key}: must contain at least one ID"));
+    }
+    if values.len() > max {
+        return Err(format!("invalid {key}: at most {max} IDs are allowed"));
+    }
+    values
+        .iter()
+        .map(|value| {
+            let id = match value {
+                Value::Number(n) => n.as_u64(),
+                Value::String(s) => s.parse::<u64>().ok(),
+                _ => None,
+            }
+            .ok_or_else(|| format!("invalid {key}: each ID must be a numeric or string u64"))?;
+            Snowflake::new(id)
+                .ok_or_else(|| format!("invalid {key}: must be nonzero Discord snowflakes"))
+        })
+        .collect()
+}
+
 /// Parses an optional `limit` argument, clamping it into Discord's accepted
 /// `1..=100` range.
 ///
@@ -1041,6 +1079,33 @@ mod tests {
             observed.desired.map(|d| d.status),
             Some(serenity::model::user::OnlineStatus::DoNotDisturb)
         );
+    }
+
+    #[test]
+    fn parse_id_array_accepts_string_and_numeric_ids() {
+        let parsed = parse_id_array(&json!({ "user_ids": ["12", 34] }), "user_ids", 2).unwrap();
+        assert_eq!(
+            parsed.into_iter().map(Snowflake::get).collect::<Vec<_>>(),
+            [12, 34]
+        );
+    }
+
+    #[test]
+    fn parse_id_array_rejects_missing_empty_oversized_and_invalid_ids() {
+        for args in [
+            json!({}),
+            json!({ "user_ids": "12" }),
+            json!({ "user_ids": [] }),
+            json!({ "user_ids": ["1", "2", "3"] }),
+            json!({ "user_ids": ["0"] }),
+            json!({ "user_ids": ["abc"] }),
+            json!({ "user_ids": [true] }),
+        ] {
+            assert!(
+                parse_id_array(&args, "user_ids", 2).is_err(),
+                "{args} must be rejected"
+            );
+        }
     }
 
     #[test]

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.51.3]
+
+### Added
+- `get_channel` returns guild channel `permission_overwrites` (`type`, `id`, and decimal-string `allow`/`deny`) and, for threads, `parent_id`. A thread's `permission_overwrites` is empty because it inherits its parent channel's; the tool description says so.
+- `list_roles` returns each role's `permissions` as a decimal string.
+- Add the read-only `can_view_channel` tool. For each requested user it returns `can_view` (`true`, `false`, or `"unknown"`) and the deciding rule, following Discord's permission overwrite order. A thread uses its parent's overwrites; a private thread also needs thread membership or `MANAGE_THREADS`. A result also carries an `error` field when `can_view` is `"unknown"` because a member or thread-membership lookup failed. A lookup that fails because the guild or thread no longer exists, for example a thread deleted mid-call, gives `"unknown"` with an `error` rather than `false`.
+
 ## [0.51.2]
 
 ### Changed

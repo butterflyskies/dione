@@ -111,7 +111,7 @@ Dione is an MCP server (stdio transport) spawned by Claude Code or Codex. It:
 | Category | Tools |
 |----------|-------|
 | Messaging | reply, react, edit_message, fetch_messages, download_attachment, get_message |
-| Introspection | list_guilds, list_channels, get_channel, get_user, get_member, list_roles, list_emojis |
+| Introspection | list_guilds, list_channels, get_channel, get_user, get_member, list_roles, list_emojis, can_view_channel |
 | Management | pin_message, unpin_message, create_thread, delete_message |
 | Access | list_access_requests, approve_access, deny_access |
 | Bot state | send_typing |

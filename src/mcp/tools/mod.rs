@@ -7,3 +7,4 @@ pub mod messaging;
 pub mod no_rly;
 pub mod render;
 pub mod search;
+pub mod visibility;

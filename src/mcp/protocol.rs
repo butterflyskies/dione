@@ -1,6 +1,9 @@
 //! MCP protocol responses: initialize handshake and tool list.
 
-use super::tools::bot_state::{ActivityType, OnlineStatus};
+use super::tools::{
+    bot_state::{ActivityType, OnlineStatus},
+    introspection::MAX_CAN_VIEW_USER_IDS,
+};
 use crate::codex::TransportMode;
 use serde_json::{Value, json};
 
@@ -238,7 +241,7 @@ pub(crate) fn tools_list_with_teams(
                     "guild_id": { "type": "string" }
                 }
             })),
-            tool("get_channel", "Get channel details", json!({
+            tool("get_channel", "Get channel details: id, name, kind, and for guild channels the permission overwrites (allow/deny as decimal strings) and a thread's parent_id. A thread's permission_overwrites is empty because a thread inherits its parent channel's overwrites.", json!({
                 "type": "object",
                 "required": ["channel_id"],
                 "properties": {
@@ -260,7 +263,7 @@ pub(crate) fn tools_list_with_teams(
                     "user_id": { "type": "string" }
                 }
             })),
-            tool("list_roles", "List roles in a guild", json!({
+            tool("list_roles", "List roles in a guild, each with its permissions bitfield as a decimal string", json!({
                 "type": "object",
                 "required": ["guild_id"],
                 "properties": {
@@ -470,6 +473,11 @@ pub(crate) fn tools_list_with_teams(
             })),
         ]
     });
+    // The literal tool array above is at `json!`'s macro recursion limit, so
+    // later tools are appended here instead.
+    if let Some(tools) = response["tools"].as_array_mut() {
+        tools.push(can_view_channel_tool());
+    }
     if mode == TransportMode::Codex
         && let Some(tools) = response["tools"].as_array_mut()
     {
@@ -566,6 +574,26 @@ pub(crate) fn tool(name: &str, description: &str, input_schema: Value) -> Value 
     })
 }
 
+fn can_view_channel_tool() -> Value {
+    tool(
+        "can_view_channel",
+        "Report whether each user can view a guild channel or thread, using Discord's permission overwrite rules; a thread is checked against its parent channel's overwrites, since a thread's own permission_overwrites is empty. Returns can_view true, false, or \"unknown\" with the deciding reason for each user, plus an error field describing the lookup failure when can_view is \"unknown\" because a member or thread-membership lookup failed.",
+        json!({
+            "type": "object",
+            "required": ["channel_id", "user_ids"],
+            "properties": {
+                "channel_id": { "type": "string" },
+                "user_ids": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "minItems": 1,
+                    "maxItems": MAX_CAN_VIEW_USER_IDS
+                }
+            }
+        }),
+    )
+}
+
 fn sentex_handles_schema(role_description: &str) -> Value {
     json!({
         "type": "array",
@@ -616,6 +644,29 @@ mod tests {
                 .iter()
                 .any(|tool| tool["name"] == "teams_reply")
         );
+    }
+
+    /// Boundary pin for `can_view_channel`, which is appended outside the
+    /// literal tool array: dropping it from either transport must fail here.
+    #[test]
+    fn can_view_channel_is_listed_in_every_transport_with_its_schema() {
+        for mode in [TransportMode::ClaudeCode, TransportMode::Codex] {
+            let list = tools_list(mode, false);
+            let tool = list["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == "can_view_channel")
+                .expect("can_view_channel must be in tools list");
+            assert_eq!(
+                tool["inputSchema"]["required"],
+                json!(["channel_id", "user_ids"])
+            );
+            assert_eq!(
+                tool["inputSchema"]["properties"]["user_ids"]["type"],
+                "array"
+            );
+        }
     }
 
     /// Boundary pin for the presence tools: deleting either from the
