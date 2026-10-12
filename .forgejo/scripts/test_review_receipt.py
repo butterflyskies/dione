@@ -65,6 +65,52 @@ def review(author="lain-construct", number=1, state="APPROVED", official=True, h
 
 
 class ReceiptTests(unittest.TestCase):
+    def test_non_main_pr_event_needs_no_authentication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            event_path = Path(directory) / "event.json"
+            event_path.write_text(json.dumps({"number": 513, "pull_request": {"base": {"ref": "refactor/composition-cleanup"}}}), encoding="utf-8")
+            env = {
+                "FORGEJO_API_URL": review_receipt.PUBLIC_API,
+                "FORGEJO_REPOSITORY": "lacuna/dione",
+                "FORGEJO_EVENT_PATH": str(event_path),
+            }
+            for event_name in ("pull_request", "pull_request_target"):
+                with (
+                    self.subTest(event_name=event_name),
+                    patch.dict(os.environ, {**env, "FORGEJO_EVENT_NAME": event_name}, clear=True),
+                    patch.object(review_receipt, "review_token", side_effect=AssertionError("unexpected authentication")),
+                    patch.object(review_receipt, "api_request", side_effect=AssertionError("unexpected API request")),
+                    redirect_stdout(io.StringIO()) as output,
+                ):
+                    self.assertEqual(0, review_receipt.main())
+                    self.assertIn("targets another branch", output.getvalue())
+
+    def test_main_and_ambiguous_events_still_require_authentication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            event_path = Path(directory) / "event.json"
+            for event_name, event in (
+                ("pull_request", {"pull_request": {"base": {"ref": "main"}}}),
+                ("pull_request_target", {"pull_request": {"base": {"ref": "main"}}}),
+                ("pull_request", {"number": 513}),
+                ("pull_request", {"pull_request": {"base": {"ref": ""}}}),
+                ("issue_comment", {"pull_request": {"base": {"ref": "refactor/example"}}}),
+                ("push", {"ref": "refs/heads/main"}),
+            ):
+                event_path.write_text(json.dumps(event), encoding="utf-8")
+                env = {
+                    "FORGEJO_API_URL": review_receipt.PUBLIC_API,
+                    "FORGEJO_REPOSITORY": "lacuna/dione",
+                    "FORGEJO_EVENT_PATH": str(event_path),
+                    "FORGEJO_EVENT_NAME": event_name,
+                }
+                with (
+                    self.subTest(event_name=event_name, event=event),
+                    patch.dict(os.environ, env, clear=True),
+                    patch.object(review_receipt, "review_token", side_effect=RuntimeError("authentication required")),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "authentication required"):
+                        review_receipt.main()
+
     def test_redirect_does_not_forward_integration_token(self):
         requests = []
 

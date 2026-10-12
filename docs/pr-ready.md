@@ -52,6 +52,12 @@ Repository files cannot prove the server rule is enabled.
 
 ## Forgejo review status integration
 
+The receipt status applies to PRs targeting `main`. For PR events targeting
+another branch, the checker exits before requesting an integration token.
+Keep the integration restricted to `refs/heads/main`; refactor-stack PRs
+still need source review, but do not receive this main-branch approval status.
+Comments still use the authenticated API to determine the current PR target.
+
 Configure this before merging the receipt workflow. Forgejo does not apply
 GitHub-style `permissions:` keys; [Forgejo v16 introduced Authorized Integrations][forgejo-v16]
 as the alternative. The review job requests a short-lived JWT

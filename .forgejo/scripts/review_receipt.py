@@ -263,6 +263,11 @@ def main():
         raise ValueError(f"unexpected Forgejo repository: {repo!r}")
     with open(os.environ["FORGEJO_EVENT_PATH"], encoding="utf-8") as handle:
         event = json.load(handle)
+    if os.environ.get("FORGEJO_EVENT_NAME") in {"pull_request", "pull_request_target"}:
+        base_ref = event.get("pull_request", {}).get("base", {}).get("ref")
+        if isinstance(base_ref, str) and base_ref and base_ref != "main":
+            print("PR targets another branch; no status needed")
+            return 0
     opener = build_opener(NoRedirect())
     token = review_token(opener, os.environ.get("REVIEW_AUDIENCE", ""))
     if os.environ.get("FORGEJO_EVENT_NAME") == "push":
