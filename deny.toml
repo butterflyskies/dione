@@ -8,6 +8,7 @@ all-features = true
 # --- Advisories -----------------------------------------------------------
 [advisories]
 ignore = [
+    { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml: unmaintained with no patched release; retained through nameplate serde_yaml_ng and Typst serde_yaml; replacement tracked in docs/dependency-maintenance.md" },
     { id = "RUSTSEC-2026-0049", reason = "rustls-webpki 0.102: transitive via serenity → tokio-tungstenite 0.21 → rustls 0.22" },
     { id = "RUSTSEC-2026-0098", reason = "rustls-webpki 0.102: transitive via serenity → tokio-tungstenite 0.21 → rustls 0.22" },
     { id = "RUSTSEC-2026-0099", reason = "rustls-webpki 0.102: transitive via serenity → tokio-tungstenite 0.21 → rustls 0.22" },
