@@ -43,7 +43,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
 secrecy = { version = "0.8", features = ["serde"] }
 url = "2"
-sha2 = "0.10"
+sha2 = "0.11"
 uuid = { version = "1", features = ["v4"] }
 rmcp = { version = "1.1", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
 tokio-tungstenite = { version = "0.21", default-features = false, features = ["handshake"] }
