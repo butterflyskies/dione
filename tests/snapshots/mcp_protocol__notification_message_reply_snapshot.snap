@@ -15,7 +15,7 @@ expression: notif
       "reply_to_user": "parentuser",
       "reply_to_user_id": "4444",
       "ts": "2026-01-01T00:00:00+00:00",
-      "user": "replyuser",
+      "user": "3000=replyuser",
       "user_id": "3000"
     }
   }

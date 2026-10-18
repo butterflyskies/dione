@@ -4,6 +4,14 @@ Informed by Rain's (sunshowers) conventions from
 [cargo-nextest](https://github.com/nextest-rs/nextest) and
 [Rust CLI Recommendations](https://rust-cli-recommendations.sunshowers.io/).
 
+## Guidance precedence
+
+This document is the authoritative coding standard. Linked project documents
+cannot relax its mandatory requirements. When compatible project requirements
+differ, apply the stricter requirement. If project documents contradict each
+other, identify the requirements and sources in the PR review, explain the
+resolution, and update this document and the conflicting text to agree.
+
 ---
 
 ## Workspace & Cargo.toml
@@ -101,10 +109,8 @@ pub enum ConfigErrorKind {
   `"Config parsing error"`.
 - Graceful degradation: a failed API call or DB query logs and responds to the
   user with a friendly error. Never crash the bot.
-- No `#[non_exhaustive]` — public error enums stay exhaustive (banned across all
-  projects, 2026-06-27). Adding a variant is an honest breaking change, caught by
-  downstream exhaustive matches. Check affected consumers and version the change
-  deliberately. See [Compatibility and review](#compatibility-and-review).
+- Error types follow [Type system patterns](#type-system-patterns), including
+  exhaustive variants and typed errors until protocol or presentation translation.
 
 ---
 
@@ -151,9 +157,7 @@ pub enum ConfigErrorKind {
 
 - No abbreviations unless universally understood. `msg` and `ctx` are fine.
   `perm_mgr` is not.
-- Builder pattern for complex config structs (e.g., `ContextBuilder`).
-- Newtypes for domain types when it aids clarity. Don't pass raw `String` when
-  `ChannelTopic` or `UserFact` is meant.
+- Domain types follow [Type system patterns](#type-system-patterns).
 
 ---
 
@@ -244,7 +248,9 @@ test:
 - TOML config file for static settings (URLs, budget limits, role mappings).
   Use the `.config/` directory convention where appropriate.
 - Environment variables for secrets (tokens, API keys). Never in config files.
-- `config.rs` deserializes into typed structs with `serde`.
+- `config.rs` parses configuration into validated domain types under
+  [Type system patterns](#type-system-patterns). Raw deserialization structs stay
+  inside the configuration adapter.
 - Sensible defaults for everything that can have one.
 - Validate at startup. Fail fast with clear error messages if config is wrong.
 
@@ -304,6 +310,8 @@ This gives:
 - Use `serde_path_to_error` to get precise error paths in deserialization
   failures.
 - Use `serde_ignored` to detect and warn about unrecognized config keys.
+- Deserialization must preserve the construction invariants defined in
+  [Type system patterns](#type-system-patterns), including persisted state.
 
 ---
 
@@ -317,15 +325,64 @@ path handling.
 
 ## Type system patterns
 
-- **Newtypes** for domain types. Don't pass raw `String` or `u64` when a
-  `UserId` or `GuildId` is meant. (Discord IDs are already typed via
-  serenity/poise.)
-- **Builder patterns** for complex construction.
-- **Exhaustive public enums** — `#[non_exhaustive]` is banned (all projects,
-  2026-06-27). Review downstream compatibility and version breaking changes
-  deliberately. Do not use the attribute to avoid that review.
-- **Lifetimes** used to avoid cloning when data has natural tree structure.
-  But don't add lifetime annotations where they aren't needed.
+This section is the authoritative type policy. Apply it to internal code and
+public APIs. A successful build does not establish compliance with these rules.
+
+- Use distinct types for semantic domain values, including identities, reply
+  handles, credentials, units, and constrained values. A `UserId` and a `GuildId`
+  must not be interchangeable because both contain the same underlying type.
+  Reuse existing domain or SDK types, including Serenity's Discord ID types.
+  Otherwise define newtypes. Type aliases do not enforce this distinction.
+- Keep unrestricted text as `str` or `String` and ordinary counts as numeric
+  types. A wrapper must encode domain meaning or an invariant. Do not add one
+  solely to describe a value more precisely.
+- Keep a validated type's representation private. Constructors, conversions,
+  builders, and mutation methods must preserve its invariants. Do not expose
+  fields or mutable access that lets callers bypass validation. A public enum
+  variant must carry types that preserve its invariants when constructed directly.
+- Parse external data into domain types before domain logic uses it. This rule
+  includes network input, tool arguments, configuration, environment variables,
+  database rows, and persisted state. Where an external format requires raw
+  wire or storage structs, keep them inside their adapters and convert into
+  domain types at entry.
+- Deserialization must enforce the same invariants as ordinary construction.
+  Use a validating `TryFrom` through `#[serde(try_from = "...")]`, a custom
+  deserializer, or validating field parsers. A plain derived `Deserialize` must
+  not bypass constructor checks. Cover both valid and rejected input at the
+  actual boundary.
+- Trust established value invariants inside domain logic. Check facts that can
+  change, such as authorization, expiry, revocation, and resource existence,
+  when the operation requires them. A valid identifier does not prove current
+  authority to act.
+- Make invalid state combinations unrepresentable. Use enums with required
+  payloads for mutually exclusive states. Derive redundant state rather than
+  synchronize booleans and optional fields. Choose representations that make
+  required operations total, such as a head and a tail for a nonempty sequence.
+- Match domain enums exhaustively. Do not use wildcard arms that silently accept
+  future variants. `#[non_exhaustive]` is banned, including on public error enums.
+  Check affected consumers and version breaking changes deliberately under
+  [Compatibility and review](#compatibility-and-review).
+- Use checked conversions when narrowing, changing signedness, or converting
+  values in ways that can lose domain meaning. Do not bypass type guarantees
+  with unchecked casts, unsafe coercions, or assertions that substitute for
+  validation. Convert explicitly between units and semantic domains.
+- Give each domain concept one authoritative type and validation policy.
+  Generate or reuse wire types from an authoritative schema when one exists.
+  Convert explicitly when a protocol's representation differs from the domain
+  model. Do not maintain parallel definitions of the same domain contract.
+- Keep errors typed until a protocol or presentation boundary translates them.
+  Preserve categories and causes that callers need to handle. Do not replace
+  internal errors with strings for convenience. Hold secrets in
+  `secrecy::SecretString` or an equivalent protected type until consumption.
+- Use builders for complex construction and lifetimes where borrowing avoids
+  unnecessary clones. Every completed builder value must satisfy its type's
+  invariants. Do not add lifetime annotations where they are unnecessary.
+
+New code must satisfy this policy. When a change alters a semantic contract,
+migrate that contract and its callers together. Record unchanged preexisting
+violations in the PR review with their paths and scope, and do not extend them.
+A documentation update does not establish that existing code complies.
+Use the [type review checklist](docs/pr-ready.md#review-type-contracts) for evidence.
 
 ---
 

@@ -145,7 +145,6 @@ impl RepresentedPrincipal {
     }
 
     /// Returns the represented Discord user.
-    #[cfg(test)]
     pub(crate) fn discord_user_id(&self) -> UserId {
         self.discord_user_id
     }
@@ -551,14 +550,13 @@ enum AdmissionProvenance {
 
 /// A non-authoritative, read-only description of admission provenance.
 #[derive(Debug)]
-#[cfg(test)]
 pub(crate) struct AdmissionProvenanceRef<'a> {
     provenance: &'a AdmissionProvenance,
 }
 
-#[cfg(test)]
 impl AdmissionProvenanceRef<'_> {
     /// Exhaustively folds the sealed provenance without exposing construction.
+    #[cfg(test)]
     pub(crate) fn fold<T>(
         self,
         app_only: impl FnOnce() -> T,
@@ -573,6 +571,7 @@ impl AdmissionProvenanceRef<'_> {
     }
 
     /// Returns whether the approved application acted only as itself.
+    #[cfg(test)]
     pub(crate) fn is_app_only(&self) -> bool {
         matches!(self.provenance, AdmissionProvenance::AppOnly)
     }
@@ -619,7 +618,6 @@ impl AdmissionFacts {
     }
 
     /// Returns a non-authoritative view of represented provenance.
-    #[cfg(test)]
     pub(crate) fn provenance(&self) -> AdmissionProvenanceRef<'_> {
         AdmissionProvenanceRef {
             provenance: &self.provenance,

@@ -19,7 +19,7 @@ use std::io::{Read as _, Write as _};
                   2 preflight refusal; 3 Discord REST failure."
 )]
 struct Cli {
-    /// Target channel ID (must be listed in [[channels]]).
+    /// Target channel ID (must be listed in `[[channels]]`).
     #[arg(long)]
     channel: u64,
     /// Required bot user ID; the token must authenticate as exactly this user.

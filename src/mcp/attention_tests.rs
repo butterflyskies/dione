@@ -19,7 +19,9 @@ use crate::{
             SourceVersion, content_hash,
         },
     },
+    codex::CodexEventQueue,
     config::ConfigRuntime,
+    core::{ModuleInstanceId, ModuleSlotId, ProviderId},
     discord::events::{MessageEvent, MessageTargeting},
 };
 use parking_lot::Mutex as SyncMutex;
@@ -378,11 +380,22 @@ impl Fixture {
                     ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
                 },
                 true,
+                crate::core::ModuleInstanceId::new(
+                    crate::core::ProviderId::new("discord").unwrap(),
+                    crate::core::ModuleSlotId::new("primary").unwrap(),
+                ),
             )
             .await
             .with_test_provider(network.provider()),
         );
-        let queue = CodexEventQueue::load(&path).unwrap();
+        let queue = CodexEventQueue::load(
+            &path,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
         let consumer = queue
             .register_consumer(
                 "fixture consumer".into(),
@@ -401,7 +414,10 @@ impl Fixture {
             admissions: AdmissionController::default(),
             queue,
             consumer,
-            buffer: DeliveryBuffer::new(),
+            buffer: DeliveryBuffer::new(ModuleInstanceId::new(
+                ProviderId::new("discord").unwrap(),
+                ModuleSlotId::new("primary").unwrap(),
+            )),
             bells: Arc::new(BellEvaluator::new()),
         }
     }
@@ -476,7 +492,7 @@ impl Fixture {
                 &config,
                 &mut self.buffer,
                 &self.bells,
-                &NotificationSink::Codex(self.queue.clone()),
+                &test_connection_for_queue(self.queue.clone()),
             )
             .await
             .unwrap();
@@ -494,7 +510,7 @@ impl Fixture {
             &self.attention,
             &mut self.buffer,
             &self.bells,
-            &NotificationSink::Codex(self.queue.clone()),
+            &test_connection_for_queue(self.queue.clone()),
         )
         .await
         .unwrap();
@@ -518,11 +534,17 @@ impl Fixture {
             self.path.clone(),
             tx,
             crate::tracing_channel::TraceLevelController::noop(),
-            crate::codex::TransportMode::Codex,
+            test_connection_for_queue(self.queue.clone()),
             Arc::new(crate::no_rly::consent::ConsentGate::new(&self.path)),
             self.attention.resolver.ledger.clone(),
+            crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            ),
+            None,
         )
-        .await;
+        .await
+        .expect("Discord reply registration");
         server.attention = self.attention.clone();
         super::test_helpers::dispatch_request(
             &server,
@@ -555,7 +577,7 @@ impl Fixture {
             &self.attention,
             &mut self.buffer,
             &self.bells,
-            &NotificationSink::Codex(self.queue.clone()),
+            &test_connection_for_queue(self.queue.clone()),
         )
         .await
         .unwrap();
@@ -563,9 +585,11 @@ impl Fixture {
 
     async fn drain(&mut self) -> Vec<Value> {
         let config = crate::config::load_config(&self.path);
+        let pending = self.buffer.flush_all();
         let flushed = deliver_flushed(
-            &NotificationSink::Codex(self.queue.clone()),
-            self.buffer.flush_all(),
+            &test_connection_for_queue(self.queue.clone()),
+            self.buffer.module(),
+            pending,
             config.tz,
             config.delivery.evidence_markers_enabled,
         )
@@ -624,12 +648,16 @@ fn off_and_log_share_actual_forwarding_while_direct_work_bypasses_a_held_judgmen
         fixture
             .control(AttentionCommand::Configure { settings })
             .await;
-        let gate = Arc::new(Semaphore::new(0));
-        fixture.network.state.lock().provider_gate = Some(gate.clone());
         fixture.network.insert(100, 12, "prompt held ambient", None);
         let work = fixture.begin(fixture.event(100, 12).await).await.unwrap();
+        let (captured, resume) = fixture.attention.pause_completed_judgment();
         let pending = tokio::spawn(fixture.attention.clone().evaluate(work));
-        fixture.network.wait_for_provider(2).await;
+        let completed = tokio::time::timeout(Duration::from_secs(10), captured)
+            .await
+            .expect("completed HTTP judgment reaches the publication fence")
+            .expect("completed HTTP judgment capture remains open");
+        assert!(completed.judgment.is_some());
+        assert_eq!(completed.hypothetical, Admission::Prompt);
         for (channel, id, targeting) in [
             (100, 13, MessageTargeting::DirectMessage),
             (
@@ -665,7 +693,7 @@ fn off_and_log_share_actual_forwarding_while_direct_work_bypasses_a_held_judgmen
         );
         assert!(!pending.is_finished());
         assert_eq!(fixture.network.provider_requests().len(), 2);
-        gate.add_permits(1);
+        resume.send(()).unwrap();
         let record = pending.await.unwrap();
         fixture.finish(record).await;
         assert_eq!(
@@ -1579,6 +1607,10 @@ fn recipient_workflow_promotes_only_evaluated_policy_and_recovers_only_unconfirm
                     ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
                 },
                 true,
+                crate::core::ModuleInstanceId::new(
+                    crate::core::ProviderId::new("discord").unwrap(),
+                    crate::core::ModuleSlotId::new("primary").unwrap(),
+                ),
             )
             .await
             .with_test_provider(fixture.network.provider()),

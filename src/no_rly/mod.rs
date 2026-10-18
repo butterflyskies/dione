@@ -19,6 +19,7 @@
 //! be swapped for a classifier without touching the queue machinery.
 
 pub mod consent;
+pub mod delivery;
 pub mod journal;
 pub mod judge;
 pub mod queue;

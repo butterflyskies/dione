@@ -3,24 +3,34 @@ members = ["."]
 
 [package]
 name = "dione"
-version = "0.51.3"
+version = "0.84.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
-description = "Discord MCP channel server for Claude Code and Codex"
+description = "Discord MCP channel server for Claude Code, Codex, and Oh My Pi"
 repository = "https://github.com/butterflyskies/dione"
 readme = "README.md"
 keywords = ["discord", "mcp", "claude-code", "codex", "bot"]
 categories = ["command-line-utilities"]
 
+[workspace.dependencies]
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
+native-tls = { version = "0.2", features = ["vendored"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+serde_path_to_error = "0.1"
+png = "0.17.16"
+
 [dependencies]
+png.workspace = true
 arc-swap = "1"
 axum = "0.8"
 clap = { version = "4", features = ["derive", "env"] }
-serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "http", "rustls_backend", "cache"] }
+serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "http", "native_tls_backend", "cache"] }
+native-tls.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "fs", "io-util", "io-std", "net", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 serde = { version = "1", features = ["derive"] }
+serde_path_to_error.workspace = true
 serde_json = "1"
 serde_yaml_ng = "0.10"
 toml = "1"
@@ -63,14 +73,15 @@ oneshot-test-seam = []
 [dev-dependencies]
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 rcgen = "0.13"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls.workspace = true
+tokio-rustls.workspace = true
 insta = { version = "1", features = ["json", "redactions"] }
 proptest = "1"
 test-case = "3"
 pretty_assertions = "1"
 parking_lot = "0.12"
 tempfile = "3"
-tokio = { version = "1", features = ["test-util"] }
+tokio = { version = "1", features = ["test-util", "process"] }
 trybuild = "1"
 
 [profile.release]

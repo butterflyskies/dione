@@ -1,0 +1,42 @@
+[
+  {
+    "bytes": 5410,
+    "expression": "x^2 + y^2 = z^2",
+    "sha256": "014e2d3c6b5881c2b2ca21ee8a1efbe88f3f7ce88cc1d1444c91e182bc7bf180"
+  },
+  {
+    "bytes": 2420,
+    "expression": "\\sqrt{x}",
+    "sha256": "6c9c6fb944e8d55cf509a78cab44fbb304ed3957c0bacc2bf6a1d050746cf28b"
+  },
+  {
+    "bytes": 4886,
+    "expression": "\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}",
+    "sha256": "c2f45a66b45b726208a66a85e7ce5d849af4306717584fcc8b514b6896293fdf"
+  },
+  {
+    "bytes": 4945,
+    "expression": "\\begin{bmatrix} a & b \\\\ c & d \\end{bmatrix}",
+    "sha256": "98cb65ab5b97775a831abda1acb21c56cd32b081af48b71d100dc832f5e55541"
+  },
+  {
+    "bytes": 4545,
+    "expression": "\\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix}",
+    "sha256": "cc201a0860ad3c809a40cfa4a88306c3ef3aaae6efad83aa43a61b472705cede"
+  },
+  {
+    "bytes": 5003,
+    "expression": "\\begin{Bmatrix} a & b \\\\ c & d \\end{Bmatrix}",
+    "sha256": "88092138c16276ce2b5ce53f2241667edddcd18a67b8a6e540a9e026be994dcc"
+  },
+  {
+    "bytes": 1639,
+    "expression": "\\$",
+    "sha256": "deaeba65eac3f143aaee8334186c2b421e17f715e179813df93b2fd7ce9186c1"
+  },
+  {
+    "bytes": 373,
+    "expression": "",
+    "sha256": "82cd60c8c8dbf693d5194277c72bc51191c3d1fa968fe5b6924b49c54c4a89a7"
+  }
+]

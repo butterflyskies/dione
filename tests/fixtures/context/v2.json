@@ -1,0 +1,742 @@
+{
+  "fixture_version": 1,
+  "provenance": "Proposed synthetic v2 wire fixtures, not captured legacy or production traffic.",
+  "exact_success": {
+    "request": {
+      "tool": "get_message",
+      "arguments": {
+        "channel_id": "100",
+        "message_id": "1002",
+        "response_version": 2
+      }
+    },
+    "expected": {
+      "response_version": 2,
+      "status": "ok",
+      "message": {
+        "reference": {
+          "source": {
+            "provider": "discord",
+            "slot": "primary"
+          },
+          "conversation": {
+            "kind": "numeric",
+            "value": "100"
+          },
+          "message": {
+            "kind": "numeric",
+            "value": "1002"
+          }
+        },
+        "workspace": {
+          "status": "known",
+          "value": {
+            "source": {
+              "provider": "discord",
+              "slot": "primary"
+            },
+            "workspace": {
+              "kind": "numeric",
+              "value": "500"
+            }
+          }
+        },
+        "sender": {
+          "reference": {
+            "source": {
+              "provider": "discord",
+              "slot": "primary"
+            },
+            "actor": {
+              "kind": "numeric",
+              "value": "200"
+            }
+          },
+          "name": "Fixture Author",
+          "bot": {
+            "status": "known",
+            "value": false
+          },
+          "represented_identity": {
+            "status": "unavailable",
+            "reason": "not_resolved"
+          }
+        },
+        "content": "Synthetic exact-read fixture.",
+        "created_at": "2026-01-02T03:04:05.123456789Z",
+        "edited_at": {
+          "status": "known",
+          "value": "2026-01-02T03:05:06.987654321Z"
+        },
+        "relation": {
+          "status": "known",
+          "value": {
+            "kind": "reply",
+            "target": {
+              "status": "known",
+              "value": {
+                "source": {
+                  "provider": "discord",
+                  "slot": "primary"
+                },
+                "conversation": {
+                  "kind": "numeric",
+                  "value": "100"
+                },
+                "message": {
+                  "kind": "numeric",
+                  "value": "1001"
+                }
+              }
+            },
+            "resolved": {
+              "status": "known",
+              "value": {
+                "reference": {
+                  "source": {
+                    "provider": "discord",
+                    "slot": "primary"
+                  },
+                  "conversation": {
+                    "kind": "numeric",
+                    "value": "100"
+                  },
+                  "message": {
+                    "kind": "numeric",
+                    "value": "1001"
+                  }
+                },
+                "sender": {
+                  "source": {
+                    "provider": "discord",
+                    "slot": "primary"
+                  },
+                  "actor": {
+                    "kind": "numeric",
+                    "value": "201"
+                  }
+                }
+              }
+            },
+            "consistency": "matches"
+          }
+        },
+        "attachments": {
+          "status": "known",
+          "value": [
+            {
+              "name": "sample.ogg",
+              "media_type": {
+                "status": "known",
+                "value": "audio/ogg"
+              },
+              "size_bytes": 4096
+            }
+          ]
+        },
+        "observation": {
+          "origin": "exact_read",
+          "local_truncation": "none",
+          "provider_completeness": "unknown"
+        },
+        "native": {
+          "provider": "discord",
+          "message_type": 19,
+          "channel_id": "100",
+          "message_id": "1002",
+          "guild_id": "500",
+          "author": {
+            "id": "200",
+            "username": "Fixture Author",
+            "bot": false,
+            "webhook_id": null,
+            "application_id": null
+          },
+          "reference": {
+            "kind": 0,
+            "channel_id": "100",
+            "message_id": "1001",
+            "guild_id": "500",
+            "fail_if_not_exists": true
+          },
+          "resolved_reference": {
+            "channel_id": "100",
+            "message_id": "1001",
+            "guild_id": "500",
+            "author_id": "201"
+          },
+          "attachments": [
+            {
+              "id": "300",
+              "filename": "sample.ogg",
+              "description": "Synthetic audio metadata",
+              "height": null,
+              "width": null,
+              "proxy_url": "https://media.example.invalid/sample.ogg",
+              "size": 4096,
+              "url": "https://files.example.invalid/sample.ogg",
+              "content_type": "audio/ogg",
+              "ephemeral": false,
+              "duration_secs": 1.25,
+              "waveform": {
+                "encoding": "base64",
+                "value": "AAH+/w=="
+              }
+            }
+          ]
+        }
+      },
+      "receipt": {
+        "status": "not_requested"
+      }
+    }
+  },
+  "page_success": {
+    "request": {
+      "tool": "fetch_messages",
+      "arguments": {
+        "channel_id": "100",
+        "before": "1010",
+        "limit": 1,
+        "response_version": 2
+      }
+    },
+    "expected": {
+      "response_version": 2,
+      "status": "ok",
+      "page": {
+        "conversation": {
+          "source": {
+            "provider": "discord",
+            "slot": "primary"
+          },
+          "conversation": {
+            "kind": "numeric",
+            "value": "100"
+          }
+        },
+        "query": {
+          "direction": "before",
+          "requested_anchor": {
+            "source": {
+              "provider": "discord",
+              "slot": "primary"
+            },
+            "conversation": {
+              "kind": "numeric",
+              "value": "100"
+            },
+            "message": {
+              "kind": "numeric",
+              "value": "1010"
+            }
+          },
+          "effective_limit": 1
+        },
+        "count": 1,
+        "oldest_observed": {
+          "source": {
+            "provider": "discord",
+            "slot": "primary"
+          },
+          "conversation": {
+            "kind": "numeric",
+            "value": "100"
+          },
+          "message": {
+            "kind": "numeric",
+            "value": "1002"
+          }
+        },
+        "newest_observed": {
+          "source": {
+            "provider": "discord",
+            "slot": "primary"
+          },
+          "conversation": {
+            "kind": "numeric",
+            "value": "100"
+          },
+          "message": {
+            "kind": "numeric",
+            "value": "1002"
+          }
+        },
+        "has_more_hint": true
+      },
+      "messages": [
+        {
+          "reference": {
+            "source": {
+              "provider": "discord",
+              "slot": "primary"
+            },
+            "conversation": {
+              "kind": "numeric",
+              "value": "100"
+            },
+            "message": {
+              "kind": "numeric",
+              "value": "1002"
+            }
+          },
+          "workspace": {
+            "status": "unavailable",
+            "reason": "not_reported"
+          },
+          "sender": {
+            "reference": {
+              "source": {
+                "provider": "discord",
+                "slot": "primary"
+              },
+              "actor": {
+                "kind": "numeric",
+                "value": "200"
+              }
+            },
+            "name": "Fixture Author",
+            "bot": {
+              "status": "known",
+              "value": false
+            },
+            "represented_identity": {
+              "status": "unavailable",
+              "reason": "not_resolved"
+            }
+          },
+          "content": "Synthetic history fixture.",
+          "created_at": "2026-01-02T03:04:05.123456789Z",
+          "edited_at": {
+            "status": "known",
+            "value": null
+          },
+          "relation": {
+            "status": "unavailable",
+            "reason": "not_reported"
+          },
+          "attachments": {
+            "status": "known",
+            "value": []
+          },
+          "observation": {
+            "origin": "history",
+            "local_truncation": "none",
+            "provider_completeness": "unknown"
+          },
+          "native": {
+            "provider": "discord",
+            "message_type": 0,
+            "channel_id": "100",
+            "message_id": "1002",
+            "guild_id": null,
+            "author": {
+              "id": "200",
+              "username": "Fixture Author",
+              "bot": false,
+              "webhook_id": null,
+              "application_id": null
+            },
+            "reference": null,
+            "resolved_reference": null,
+            "attachments": []
+          }
+        }
+      ]
+    }
+  },
+  "empty_recent_page": {
+    "request": {
+      "tool": "fetch_messages",
+      "arguments": {
+        "channel_id": "100",
+        "response_version": 2
+      }
+    },
+    "expected": {
+      "response_version": 2,
+      "status": "ok",
+      "page": {
+        "conversation": {
+          "source": {
+            "provider": "discord",
+            "slot": "primary"
+          },
+          "conversation": {
+            "kind": "numeric",
+            "value": "100"
+          }
+        },
+        "query": {
+          "direction": "recent",
+          "requested_anchor": null,
+          "effective_limit": 20
+        },
+        "count": 0,
+        "oldest_observed": null,
+        "newest_observed": null,
+        "has_more_hint": false
+      },
+      "messages": []
+    }
+  },
+  "availability_fragments": {
+    "known_no_edit": {
+      "status": "known",
+      "value": null
+    },
+    "known_empty_attachments": {
+      "status": "known",
+      "value": []
+    },
+    "workspace_not_reported": {
+      "status": "unavailable",
+      "reason": "not_reported"
+    },
+    "represented_identity_not_resolved": {
+      "status": "unavailable",
+      "reason": "not_resolved"
+    },
+    "unsupported_field": {
+      "status": "unavailable",
+      "reason": "unsupported"
+    }
+  },
+  "identity_fragments": {
+    "numeric_message": {
+      "source": {
+        "provider": "discord",
+        "slot": "primary"
+      },
+      "conversation": {
+        "kind": "numeric",
+        "value": "100"
+      },
+      "message": {
+        "kind": "numeric",
+        "value": "1002"
+      }
+    },
+    "opaque_numeric_looking_message": {
+      "source": {
+        "provider": "fixture-provider",
+        "slot": "fixture-slot"
+      },
+      "conversation": {
+        "kind": "opaque",
+        "value": "100"
+      },
+      "message": {
+        "kind": "opaque",
+        "value": "1002"
+      }
+    },
+    "second_discord_slot": {
+      "source": {
+        "provider": "discord",
+        "slot": "secondary"
+      },
+      "conversation": {
+        "kind": "numeric",
+        "value": "100"
+      },
+      "message": {
+        "kind": "numeric",
+        "value": "1002"
+      }
+    }
+  },
+  "reference_cases": [
+    {
+      "name": "forward",
+      "input": {
+        "message_type": 0,
+        "native_reference": {
+          "kind": 1,
+          "channel_id": "100",
+          "message_id": "1001",
+          "guild_id": "500",
+          "fail_if_not_exists": true
+        },
+        "resolved_reference": null
+      },
+      "expected": {
+        "status": "known",
+        "value": {
+          "kind": "forward",
+          "target": {
+            "status": "known",
+            "value": {
+              "source": {
+                "provider": "discord",
+                "slot": "primary"
+              },
+              "conversation": {
+                "kind": "numeric",
+                "value": "100"
+              },
+              "message": {
+                "kind": "numeric",
+                "value": "1001"
+              }
+            }
+          },
+          "resolved": {
+            "status": "unavailable",
+            "reason": "not_resolved"
+          },
+          "consistency": "no_resolved_observation"
+        }
+      }
+    },
+    {
+      "name": "unknown_native_kind",
+      "input": {
+        "message_type": 0,
+        "native_reference": {
+          "kind": 243,
+          "channel_id": "100",
+          "message_id": "1001",
+          "guild_id": "500",
+          "fail_if_not_exists": true
+        },
+        "resolved_reference": null
+      },
+      "expected": {
+        "status": "known",
+        "value": {
+          "kind": "unknown",
+          "target": {
+            "status": "known",
+            "value": {
+              "source": {
+                "provider": "discord",
+                "slot": "primary"
+              },
+              "conversation": {
+                "kind": "numeric",
+                "value": "100"
+              },
+              "message": {
+                "kind": "numeric",
+                "value": "1001"
+              }
+            }
+          },
+          "resolved": {
+            "status": "unavailable",
+            "reason": "not_resolved"
+          },
+          "consistency": "no_resolved_observation"
+        }
+      }
+    },
+    {
+      "name": "default_non_reply",
+      "input": {
+        "message_type": 0,
+        "native_reference": {
+          "kind": 0,
+          "channel_id": "100",
+          "message_id": "1001",
+          "guild_id": "500",
+          "fail_if_not_exists": true
+        },
+        "resolved_reference": null
+      },
+      "expected": {
+        "status": "known",
+        "value": {
+          "kind": "unknown",
+          "target": {
+            "status": "known",
+            "value": {
+              "source": {
+                "provider": "discord",
+                "slot": "primary"
+              },
+              "conversation": {
+                "kind": "numeric",
+                "value": "100"
+              },
+              "message": {
+                "kind": "numeric",
+                "value": "1001"
+              }
+            }
+          },
+          "resolved": {
+            "status": "unavailable",
+            "reason": "not_resolved"
+          },
+          "consistency": "no_resolved_observation"
+        }
+      }
+    },
+    {
+      "name": "reply_same_message_conflicting_channel",
+      "input": {
+        "message_type": 19,
+        "native_reference": {
+          "kind": 0,
+          "channel_id": "100",
+          "message_id": "1001",
+          "guild_id": "500",
+          "fail_if_not_exists": true
+        },
+        "resolved_reference": {
+          "channel_id": "101",
+          "message_id": "1001",
+          "guild_id": "500",
+          "author_id": "201"
+        }
+      },
+      "expected": {
+        "status": "known",
+        "value": {
+          "kind": "reply",
+          "target": {
+            "status": "known",
+            "value": {
+              "source": {
+                "provider": "discord",
+                "slot": "primary"
+              },
+              "conversation": {
+                "kind": "numeric",
+                "value": "100"
+              },
+              "message": {
+                "kind": "numeric",
+                "value": "1001"
+              }
+            }
+          },
+          "resolved": {
+            "status": "known",
+            "value": {
+              "reference": {
+                "source": {
+                  "provider": "discord",
+                  "slot": "primary"
+                },
+                "conversation": {
+                  "kind": "numeric",
+                  "value": "101"
+                },
+                "message": {
+                  "kind": "numeric",
+                  "value": "1001"
+                }
+              },
+              "sender": {
+                "source": {
+                  "provider": "discord",
+                  "slot": "primary"
+                },
+                "actor": {
+                  "kind": "numeric",
+                  "value": "201"
+                }
+              }
+            }
+          },
+          "consistency": "conflicts"
+        }
+      }
+    }
+  ],
+  "errors": {
+    "local_access_denied": {
+      "response_version": 2,
+      "status": "error",
+      "error": {
+        "code": "local_access_denied",
+        "message": "Current policy does not permit this read."
+      }
+    },
+    "provider_access_denied": {
+      "response_version": 2,
+      "status": "error",
+      "error": {
+        "code": "provider_access_denied",
+        "message": "The provider denied this read."
+      }
+    },
+    "provider_not_found": {
+      "response_version": 2,
+      "status": "error",
+      "error": {
+        "code": "provider_not_found",
+        "message": "The provider did not find the requested resource."
+      }
+    },
+    "provider_timeout": {
+      "response_version": 2,
+      "status": "error",
+      "error": {
+        "code": "provider_timeout",
+        "message": "The provider request timed out."
+      }
+    },
+    "provider_error": {
+      "response_version": 2,
+      "status": "error",
+      "error": {
+        "code": "provider_error",
+        "message": "The provider request failed."
+      }
+    },
+    "invalid_observation": {
+      "response_version": 2,
+      "status": "error",
+      "error": {
+        "code": "invalid_observation",
+        "message": "The provider observation cannot be represented safely."
+      }
+    },
+    "invalid_query": {
+      "response_version": 2,
+      "status": "error",
+      "error": {
+        "code": "invalid_query",
+        "message": "The query arguments conflict."
+      }
+    },
+    "query_failed": {
+      "response_version": 2,
+      "status": "error",
+      "error": {
+        "code": "query_failed",
+        "message": "The read could not be completed."
+      }
+    }
+  },
+  "receipt_fragments": {
+    "not_requested": {
+      "status": "not_requested"
+    },
+    "recorded": {
+      "status": "recorded",
+      "invocation": "fixture-invocation",
+      "receipt": "fixture-receipt"
+    },
+    "failed": {
+      "status": "failed",
+      "code": "receipt_failed",
+      "message": "The read succeeded, but its evidence receipt could not be recorded."
+    }
+  },
+  "waveform_fixture": {
+    "decoded_bytes": [
+      0,
+      1,
+      254,
+      255
+    ],
+    "expected": {
+      "encoding": "base64",
+      "value": "AAH+/w=="
+    }
+  }
+}

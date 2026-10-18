@@ -135,6 +135,7 @@ pub async fn write_get_message_receipt(
     let body = edit_body(&sentexes);
 
     let client = reqwest::Client::builder()
+        .use_rustls_tls()
         .redirect(Policy::none())
         .timeout(Duration::from_millis(config.timeout_ms.max(1)))
         .build()?;

@@ -105,7 +105,7 @@ where
         _ctx: tracing_subscriber::layer::Context<'_, S>,
     ) {
         let metadata = event.metadata();
-        let level = metadata.level().to_string();
+        let level = *metadata.level();
         let target = metadata.target().to_string();
 
         let mut visitor = MessageVisitor::default();

@@ -5,10 +5,13 @@
 //! integration.
 
 use dione::{
-    coalesce::{CoalesceResult, coalesce},
     config::{ChannelConfig, Config, DeliveryConfig, LoadedConfig, RateLimitTomlConfig},
-    delivery_buffer::{BufferResult, DeliveryBuffer},
-    discord::events::{MessageEvent, NotificationEvent},
+    core::{ModuleInstanceId, ModuleSlotId, ProviderId},
+    delivery_buffer::BufferResult,
+    discord::{
+        events::{MessageEvent, NotificationEvent},
+        scheduling::DeliveryBuffer,
+    },
     mcp::server::test_helpers,
     rate_limiter::{
         ChannelRef, OverflowPolicy, ParticipantId, RateLimitConfig, RateLimitDecision, RateLimiter,
@@ -24,16 +27,21 @@ use std::{
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-fn msg_event(chat_id: u64, user_id: u64, content: &str) -> NotificationEvent {
-    msg_event_with_id(chat_id, user_id, 1, content)
+fn msg_event(chat_id: ChannelId, user_id: UserId, content: &str) -> NotificationEvent {
+    msg_event_with_id(chat_id, user_id, MessageId::new(1), content)
 }
 
-fn msg_event_with_id(chat_id: u64, user_id: u64, msg_id: u64, content: &str) -> NotificationEvent {
+fn msg_event_with_id(
+    chat_id: ChannelId,
+    user_id: UserId,
+    msg_id: MessageId,
+    content: &str,
+) -> NotificationEvent {
     NotificationEvent::Message(MessageEvent {
-        chat_id: ChannelId::new(chat_id),
-        message_id: MessageId::new(msg_id),
+        chat_id,
+        message_id: msg_id,
         user: format!("user-{user_id}"),
-        user_id: UserId::new(user_id),
+        user_id,
         author_kind: dione::attention::types::SourceAuthorKind::DirectHuman,
         content: content.to_string(),
         targeting: dione::discord::events::MessageTargeting::Ambient,
@@ -50,12 +58,12 @@ fn msg_event_with_id(chat_id: u64, user_id: u64, msg_id: u64, content: &str) -> 
     })
 }
 
-fn reaction_event(chat_id: u64, user_id: u64) -> NotificationEvent {
+fn reaction_event(chat_id: ChannelId, user_id: UserId) -> NotificationEvent {
     NotificationEvent::Reaction {
-        chat_id: ChannelId::new(chat_id),
+        chat_id,
         message_id: MessageId::new(1),
         user: format!("user-{user_id}"),
-        user_id: UserId::new(user_id),
+        user_id,
         emoji: "👍".to_string(),
         self_react: false,
     }
@@ -63,7 +71,7 @@ fn reaction_event(chat_id: u64, user_id: u64) -> NotificationEvent {
 
 fn trace_event() -> NotificationEvent {
     NotificationEvent::Trace {
-        level: "info".to_string(),
+        level: tracing::Level::INFO,
         target: "test".to_string(),
         message: "test trace".to_string(),
         fields: vec![],
@@ -83,12 +91,12 @@ fn config_error_event() -> NotificationEvent {
     }
 }
 
-fn edit_event(chat_id: u64, user_id: u64) -> NotificationEvent {
+fn edit_event(chat_id: ChannelId, user_id: UserId) -> NotificationEvent {
     NotificationEvent::MessageEdit {
-        chat_id: ChannelId::new(chat_id),
+        chat_id,
         message_id: MessageId::new(1),
         user: format!("user-{user_id}"),
-        user_id: UserId::new(user_id),
+        user_id,
         new_content: "edited content".to_string(),
         timestamp: Timestamp::parse("2026-01-01T00:00:01Z").unwrap(),
         thread_parent_id: None,
@@ -96,9 +104,9 @@ fn edit_event(chat_id: u64, user_id: u64) -> NotificationEvent {
     }
 }
 
-fn delete_event(chat_id: u64) -> NotificationEvent {
+fn delete_event(chat_id: ChannelId) -> NotificationEvent {
     NotificationEvent::MessageDelete {
-        chat_id: ChannelId::new(chat_id),
+        chat_id,
         message_id: MessageId::new(1),
         thread_parent_id: None,
     }
@@ -128,7 +136,7 @@ fn pipeline_step(
     event: NotificationEvent,
     rate_limiter: &mut RateLimiter,
     delivery_buffer: &mut DeliveryBuffer,
-    delay_ms: u64,
+    delay: Duration,
     now: Instant,
 ) -> Option<NotificationEvent> {
     // Rate-limit check for message events only.
@@ -149,12 +157,13 @@ fn pipeline_step(
     }
 
     // Delivery buffer: coalesce message events per channel.
-    match delivery_buffer.buffer_event(event, delay_ms) {
+    match delivery_buffer.buffer_event(event, delay) {
         BufferResult::Immediate(event) => Some(*event),
         BufferResult::FlushThenImmediate { .. } => {
             panic!("pipeline fixture did not expect buffered predecessors")
         }
         BufferResult::Buffered => None,
+        BufferResult::Rejected { error, .. } => panic!("valid fixture delay rejected: {error}"),
     }
 }
 
@@ -165,11 +174,20 @@ fn pipeline_step(
 #[test]
 fn full_pipeline_message_allowed_no_delay() {
     let mut limiter = make_limiter(true, 5);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
-    let event = msg_event(1, 100, "hello");
-    let result = pipeline_step(event, &mut limiter, &mut buffer, 0, now);
+    let event = msg_event(ChannelId::new(1), UserId::new(100), "hello");
+    let result = pipeline_step(
+        event,
+        &mut limiter,
+        &mut buffer,
+        Duration::from_millis(0),
+        now,
+    );
 
     assert!(result.is_some(), "message should pass through immediately");
     let event = result.unwrap();
@@ -182,17 +200,38 @@ fn full_pipeline_message_allowed_no_delay() {
 #[test]
 fn rate_limiter_drops_messages_after_exhaustion() {
     let mut limiter = make_limiter(true, 2);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
     // First two messages pass.
-    let r1 = pipeline_step(msg_event(1, 100, "msg1"), &mut limiter, &mut buffer, 0, now);
-    let r2 = pipeline_step(msg_event(1, 100, "msg2"), &mut limiter, &mut buffer, 0, now);
+    let r1 = pipeline_step(
+        msg_event(ChannelId::new(1), UserId::new(100), "msg1"),
+        &mut limiter,
+        &mut buffer,
+        Duration::from_millis(0),
+        now,
+    );
+    let r2 = pipeline_step(
+        msg_event(ChannelId::new(1), UserId::new(100), "msg2"),
+        &mut limiter,
+        &mut buffer,
+        Duration::from_millis(0),
+        now,
+    );
     assert!(r1.is_some(), "first message must be allowed");
     assert!(r2.is_some(), "second message must be allowed (budget=2)");
 
     // Third message is denied.
-    let r3 = pipeline_step(msg_event(1, 100, "msg3"), &mut limiter, &mut buffer, 0, now);
+    let r3 = pipeline_step(
+        msg_event(ChannelId::new(1), UserId::new(100), "msg3"),
+        &mut limiter,
+        &mut buffer,
+        Duration::from_millis(0),
+        now,
+    );
     assert!(
         r3.is_none(),
         "third message must be dropped after exhaustion"
@@ -204,22 +243,25 @@ fn rate_limiter_drops_messages_after_exhaustion() {
 #[test]
 fn delivery_buffer_coalesces_messages() {
     let mut limiter = make_limiter(false, 20);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
     // Buffer two messages with 500ms delay.
     let r1 = pipeline_step(
-        msg_event(1, 100, "first"),
+        msg_event(ChannelId::new(1), UserId::new(100), "first"),
         &mut limiter,
         &mut buffer,
-        500,
+        Duration::from_millis(500),
         now,
     );
     let r2 = pipeline_step(
-        msg_event(1, 200, "second"),
+        msg_event(ChannelId::new(1), UserId::new(200), "second"),
         &mut limiter,
         &mut buffer,
-        500,
+        Duration::from_millis(500),
         now,
     );
 
@@ -255,23 +297,26 @@ fn delivery_buffer_coalesces_messages() {
 #[test]
 fn non_channel_events_bypass_pipeline() {
     let mut limiter = make_limiter(true, 1);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
     // Exhaust the rate limiter for this sender/channel.
     let _ = pipeline_step(
-        msg_event(1, 100, "exhaust"),
+        msg_event(ChannelId::new(1), UserId::new(100), "exhaust"),
         &mut limiter,
         &mut buffer,
-        0,
+        Duration::from_millis(0),
         now,
     );
     // Verify messages are now denied.
     let denied = pipeline_step(
-        msg_event(1, 100, "denied"),
+        msg_event(ChannelId::new(1), UserId::new(100), "denied"),
         &mut limiter,
         &mut buffer,
-        0,
+        Duration::from_millis(0),
         now,
     );
     assert!(
@@ -280,16 +325,34 @@ fn non_channel_events_bypass_pipeline() {
     );
 
     // Non-channel events must still pass through, even with a delivery delay.
-    let trace = pipeline_step(trace_event(), &mut limiter, &mut buffer, 500, now);
+    let trace = pipeline_step(
+        trace_event(),
+        &mut limiter,
+        &mut buffer,
+        Duration::from_millis(500),
+        now,
+    );
     assert!(trace.is_some(), "trace must bypass rate limiter and buffer");
 
-    let perm = pipeline_step(permission_event(), &mut limiter, &mut buffer, 500, now);
+    let perm = pipeline_step(
+        permission_event(),
+        &mut limiter,
+        &mut buffer,
+        Duration::from_millis(500),
+        now,
+    );
     assert!(
         perm.is_some(),
         "permission response must bypass rate limiter and buffer"
     );
 
-    let cfg_err = pipeline_step(config_error_event(), &mut limiter, &mut buffer, 500, now);
+    let cfg_err = pipeline_step(
+        config_error_event(),
+        &mut limiter,
+        &mut buffer,
+        Duration::from_millis(500),
+        now,
+    );
     assert!(
         cfg_err.is_some(),
         "config error must bypass rate limiter and buffer"
@@ -301,18 +364,33 @@ fn non_channel_events_bypass_pipeline() {
 #[test]
 fn reactions_buffered_with_delay() {
     let mut limiter = make_limiter(true, 1);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
     // Reaction with a delivery delay should be buffered.
-    let result = pipeline_step(reaction_event(1, 100), &mut limiter, &mut buffer, 500, now);
+    let result = pipeline_step(
+        reaction_event(ChannelId::new(1), UserId::new(100)),
+        &mut limiter,
+        &mut buffer,
+        Duration::from_millis(500),
+        now,
+    );
     assert!(
         result.is_none(),
         "reaction with delay should be buffered, not immediate"
     );
 
     // Reaction with no delay should pass through immediately.
-    let result = pipeline_step(reaction_event(2, 100), &mut limiter, &mut buffer, 0, now);
+    let result = pipeline_step(
+        reaction_event(ChannelId::new(2), UserId::new(100)),
+        &mut limiter,
+        &mut buffer,
+        Duration::from_millis(0),
+        now,
+    );
     assert!(
         result.is_some(),
         "reaction with no delay should pass through immediately"
@@ -330,28 +408,43 @@ fn reactions_buffered_with_delay() {
 #[test]
 fn edit_and_delete_bypass_rate_limiter_but_buffer() {
     let mut limiter = make_limiter(true, 1);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
     // Exhaust the rate limiter.
     let _ = pipeline_step(
-        msg_event(1, 100, "exhaust"),
+        msg_event(ChannelId::new(1), UserId::new(100), "exhaust"),
         &mut limiter,
         &mut buffer,
-        0,
+        Duration::from_millis(0),
         now,
     );
 
     // Edit events are not rate-limited (the rate limiter only checks
     // NotificationEvent::Message). With a delivery delay, they get buffered.
-    let edit = pipeline_step(edit_event(1, 100), &mut limiter, &mut buffer, 500, now);
+    let edit = pipeline_step(
+        edit_event(ChannelId::new(1), UserId::new(100)),
+        &mut limiter,
+        &mut buffer,
+        Duration::from_millis(500),
+        now,
+    );
     assert!(
         edit.is_none(),
         "edit event with delay should be buffered, not immediately forwarded"
     );
 
     // Delete events similarly bypass rate limiter.
-    let delete = pipeline_step(delete_event(1), &mut limiter, &mut buffer, 500, now);
+    let delete = pipeline_step(
+        delete_event(ChannelId::new(1)),
+        &mut limiter,
+        &mut buffer,
+        Duration::from_millis(500),
+        now,
+    );
     assert!(
         delete.is_none(),
         "delete event with delay should be buffered"
@@ -372,13 +465,28 @@ fn edit_and_delete_bypass_rate_limiter_but_buffer() {
 #[test]
 fn edit_and_delete_immediate_when_no_delay() {
     let mut limiter = make_limiter(true, 10);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
-    let edit = pipeline_step(edit_event(1, 100), &mut limiter, &mut buffer, 0, now);
+    let edit = pipeline_step(
+        edit_event(ChannelId::new(1), UserId::new(100)),
+        &mut limiter,
+        &mut buffer,
+        Duration::from_millis(0),
+        now,
+    );
     assert!(edit.is_some(), "edit with no delay should pass immediately");
 
-    let delete = pipeline_step(delete_event(1), &mut limiter, &mut buffer, 0, now);
+    let delete = pipeline_step(
+        delete_event(ChannelId::new(1)),
+        &mut limiter,
+        &mut buffer,
+        Duration::from_millis(0),
+        now,
+    );
     assert!(
         delete.is_some(),
         "delete with no delay should pass immediately"
@@ -389,16 +497,19 @@ fn edit_and_delete_immediate_when_no_delay() {
 #[test]
 fn disabled_rate_limiter_passthrough() {
     let mut limiter = make_limiter(false, 1);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
     // With max_tokens=1 but disabled, all messages should pass.
     for i in 0..10 {
         let result = pipeline_step(
-            msg_event(1, 100, &format!("msg{i}")),
+            msg_event(ChannelId::new(1), UserId::new(100), &format!("msg{i}")),
             &mut limiter,
             &mut buffer,
-            0,
+            Duration::from_millis(0),
             now,
         );
         assert!(
@@ -412,14 +523,17 @@ fn disabled_rate_limiter_passthrough() {
 #[test]
 fn no_delay_means_immediate() {
     let mut limiter = make_limiter(true, 100);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
     let result = pipeline_step(
-        msg_event(1, 100, "instant"),
+        msg_event(ChannelId::new(1), UserId::new(100), "instant"),
         &mut limiter,
         &mut buffer,
-        0,
+        Duration::from_millis(0),
         now,
     );
     assert!(
@@ -436,35 +550,38 @@ fn no_delay_means_immediate() {
 #[test]
 fn rate_limiter_per_sender_per_channel_isolation() {
     let mut limiter = make_limiter(true, 1);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
     // User 100 in ch1: allowed.
     let r1 = pipeline_step(
-        msg_event(1, 100, "u100-ch1"),
+        msg_event(ChannelId::new(1), UserId::new(100), "u100-ch1"),
         &mut limiter,
         &mut buffer,
-        0,
+        Duration::from_millis(0),
         now,
     );
     assert!(r1.is_some());
 
     // User 100 in ch1: denied (exhausted).
     let r2 = pipeline_step(
-        msg_event(1, 100, "u100-ch1-again"),
+        msg_event(ChannelId::new(1), UserId::new(100), "u100-ch1-again"),
         &mut limiter,
         &mut buffer,
-        0,
+        Duration::from_millis(0),
         now,
     );
     assert!(r2.is_none(), "same sender+channel should be denied");
 
     // User 200 in ch1: allowed (different sender).
     let r3 = pipeline_step(
-        msg_event(1, 200, "u200-ch1"),
+        msg_event(ChannelId::new(1), UserId::new(200), "u200-ch1"),
         &mut limiter,
         &mut buffer,
-        0,
+        Duration::from_millis(0),
         now,
     );
     assert!(
@@ -474,10 +591,10 @@ fn rate_limiter_per_sender_per_channel_isolation() {
 
     // User 100 in ch2: allowed (different channel).
     let r4 = pipeline_step(
-        msg_event(2, 100, "u100-ch2"),
+        msg_event(ChannelId::new(2), UserId::new(100), "u100-ch2"),
         &mut limiter,
         &mut buffer,
-        0,
+        Duration::from_millis(0),
         now,
     );
     assert!(
@@ -490,24 +607,27 @@ fn rate_limiter_per_sender_per_channel_isolation() {
 #[test]
 fn multiple_channels_buffer_independently() {
     let mut limiter = make_limiter(false, 100);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
     // Buffer a message in ch1 with short delay.
     pipeline_step(
-        msg_event(1, 100, "ch1-msg"),
+        msg_event(ChannelId::new(1), UserId::new(100), "ch1-msg"),
         &mut limiter,
         &mut buffer,
-        50,
+        Duration::from_millis(50),
         now,
     );
 
     // Buffer a message in ch2 with longer delay.
     pipeline_step(
-        msg_event(2, 200, "ch2-msg"),
+        msg_event(ChannelId::new(2), UserId::new(200), "ch2-msg"),
         &mut limiter,
         &mut buffer,
-        500,
+        Duration::from_millis(500),
         now,
     );
 
@@ -537,24 +657,27 @@ fn multiple_channels_buffer_independently() {
 #[test]
 fn rate_limited_messages_dont_reach_buffer() {
     let mut limiter = make_limiter(true, 1);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
     // First message passes (buffered due to delay).
     pipeline_step(
-        msg_event(1, 100, "allowed"),
+        msg_event(ChannelId::new(1), UserId::new(100), "allowed"),
         &mut limiter,
         &mut buffer,
-        500,
+        Duration::from_millis(500),
         now,
     );
 
     // Second message is rate-limited — should never enter the buffer.
     pipeline_step(
-        msg_event(1, 100, "denied"),
+        msg_event(ChannelId::new(1), UserId::new(100), "denied"),
         &mut limiter,
         &mut buffer,
-        500,
+        Duration::from_millis(500),
         now,
     );
 
@@ -693,7 +816,10 @@ fn config_buffer_overflow_policy() {
 #[test]
 fn notification_format_preserved_through_pipeline() {
     let mut limiter = make_limiter(false, 100);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
     let event = NotificationEvent::Message(MessageEvent {
@@ -716,16 +842,22 @@ fn notification_format_preserved_through_pipeline() {
         bells_status: None,
     });
 
-    let result = pipeline_step(event, &mut limiter, &mut buffer, 0, now);
+    let result = pipeline_step(
+        event,
+        &mut limiter,
+        &mut buffer,
+        Duration::from_millis(0),
+        now,
+    );
     let event = result.expect("message should pass through");
 
     // Convert to notification JSON and verify.
-    let notification = test_helpers::make_notification(event);
+    let notification = test_helpers::make_notification(event).unwrap();
     assert_eq!(notification["method"], "notifications/claude/channel");
     assert_eq!(notification["params"]["content"], "hello world");
     assert_eq!(notification["params"]["meta"]["chat_id"], "1");
     assert_eq!(notification["params"]["meta"]["message_id"], "42");
-    assert_eq!(notification["params"]["meta"]["user"], "alice");
+    assert_eq!(notification["params"]["meta"]["user"], "100=alice");
     assert_eq!(notification["params"]["meta"]["user_id"], "100");
     assert_eq!(notification["params"]["meta"]["thread_parent_id"], "9001");
     assert_eq!(notification["params"]["meta"]["reply_to_message_id"], "777");
@@ -855,7 +987,10 @@ require_mention = true
 #[test]
 fn mixed_event_stream() {
     let mut limiter = make_limiter(true, 2);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
     let delay = 500;
 
@@ -863,10 +998,10 @@ fn mixed_event_stream() {
 
     // Message 1: allowed, buffered.
     let r = pipeline_step(
-        msg_event(1, 100, "msg1"),
+        msg_event(ChannelId::new(1), UserId::new(100), "msg1"),
         &mut limiter,
         &mut buffer,
-        delay,
+        Duration::from_millis(delay),
         now,
     );
     if r.is_some() {
@@ -875,10 +1010,10 @@ fn mixed_event_stream() {
 
     // Reaction: buffered (channel event with delay).
     let r = pipeline_step(
-        reaction_event(1, 100),
+        reaction_event(ChannelId::new(1), UserId::new(100)),
         &mut limiter,
         &mut buffer,
-        delay,
+        Duration::from_millis(delay),
         now,
     );
     if r.is_some() {
@@ -887,10 +1022,10 @@ fn mixed_event_stream() {
 
     // Message 2: allowed, buffered.
     let r = pipeline_step(
-        msg_event(1, 100, "msg2"),
+        msg_event(ChannelId::new(1), UserId::new(100), "msg2"),
         &mut limiter,
         &mut buffer,
-        delay,
+        Duration::from_millis(delay),
         now,
     );
     if r.is_some() {
@@ -898,17 +1033,23 @@ fn mixed_event_stream() {
     }
 
     // Trace: passes through immediately (non-channel event).
-    let r = pipeline_step(trace_event(), &mut limiter, &mut buffer, delay, now);
+    let r = pipeline_step(
+        trace_event(),
+        &mut limiter,
+        &mut buffer,
+        Duration::from_millis(delay),
+        now,
+    );
     if r.is_some() {
         immediate_results.push("trace");
     }
 
     // Message 3: denied (rate limit exhausted), never buffered.
     let r = pipeline_step(
-        msg_event(1, 100, "msg3"),
+        msg_event(ChannelId::new(1), UserId::new(100), "msg3"),
         &mut limiter,
         &mut buffer,
-        delay,
+        Duration::from_millis(delay),
         now,
     );
     if r.is_some() {
@@ -916,7 +1057,13 @@ fn mixed_event_stream() {
     }
 
     // Permission response: passes through immediately (non-channel event).
-    let r = pipeline_step(permission_event(), &mut limiter, &mut buffer, delay, now);
+    let r = pipeline_step(
+        permission_event(),
+        &mut limiter,
+        &mut buffer,
+        Duration::from_millis(delay),
+        now,
+    );
     if r.is_some() {
         immediate_results.push("permission");
     }
@@ -951,15 +1098,22 @@ fn mixed_event_stream() {
 #[test]
 fn buffer_preserves_message_order() {
     let mut limiter = make_limiter(false, 100);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
     for i in 0..5 {
         pipeline_step(
-            msg_event(1, i as u64 + 1, &format!("msg-{i}")),
+            msg_event(
+                ChannelId::new(1),
+                UserId::new(u64::try_from(i).unwrap() + 1),
+                &format!("msg-{i}"),
+            ),
             &mut limiter,
             &mut buffer,
-            500,
+            Duration::from_millis(500),
             now,
         );
     }
@@ -981,7 +1135,10 @@ fn buffer_preserves_message_order() {
 /// Empty flush produces no events.
 #[test]
 fn empty_buffer_flush_produces_nothing() {
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = tokio::time::Instant::now() + tokio::time::Duration::from_secs(1);
     let flushed = buffer.flush_ready(now);
     assert!(flushed.is_empty());
@@ -991,15 +1148,18 @@ fn empty_buffer_flush_produces_nothing() {
 #[test]
 fn buffer_rearms_after_flush() {
     let mut limiter = make_limiter(false, 100);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
     // First batch.
     pipeline_step(
-        msg_event(1, 100, "batch1"),
+        msg_event(ChannelId::new(1), UserId::new(100), "batch1"),
         &mut limiter,
         &mut buffer,
-        50,
+        Duration::from_millis(50),
         now,
     );
     let after = tokio::time::Instant::now() + tokio::time::Duration::from_millis(100);
@@ -1008,10 +1168,10 @@ fn buffer_rearms_after_flush() {
 
     // Second batch — new deadline should be set.
     pipeline_step(
-        msg_event(1, 200, "batch2"),
+        msg_event(ChannelId::new(1), UserId::new(200), "batch2"),
         &mut limiter,
         &mut buffer,
-        50,
+        Duration::from_millis(50),
         now,
     );
     assert!(
@@ -1037,9 +1197,12 @@ fn buffer_rearms_after_flush() {
 async fn run_notif_loop(
     mut rx: tokio::sync::mpsc::Receiver<NotificationEvent>,
     cancel: tokio_util::sync::CancellationToken,
-    delay_ms_fn: impl Fn(&NotificationEvent) -> u64 + Send + 'static,
+    delay_fn: impl Fn(&NotificationEvent) -> Duration + Send + 'static,
 ) -> Vec<NotificationEvent> {
-    let mut delivery_buffer = DeliveryBuffer::new();
+    let mut delivery_buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<NotificationEvent>(256);
 
     let loop_task = tokio::spawn(async move {
@@ -1068,8 +1231,8 @@ async fn run_notif_loop(
 
                 event = rx.recv() => {
                     let Some(event) = event else { break };
-                    let delay_ms = delay_ms_fn(&event);
-                    match delivery_buffer.buffer_event(event, delay_ms) {
+                    let delay = delay_fn(&event);
+                    match delivery_buffer.buffer_event(event, delay) {
                         BufferResult::Immediate(event) => {
                             let _ = output_tx.send(*event).await;
                         }
@@ -1080,6 +1243,7 @@ async fn run_notif_loop(
                             let _ = output_tx.send(*event).await;
                         }
                         BufferResult::Buffered => {}
+                        BufferResult::Rejected { error, .. } => panic!("valid fixture delay rejected: {error}"),
                     }
                 }
             }
@@ -1111,10 +1275,18 @@ async fn async_delayed_message_appears_after_delay() {
     let cancel = tokio_util::sync::CancellationToken::new();
     let cancel_clone = cancel.clone();
 
-    let handle = tokio::spawn(async move { run_notif_loop(rx, cancel_clone, |_| 500).await });
+    let handle = tokio::spawn(async move {
+        run_notif_loop(rx, cancel_clone, |_| Duration::from_millis(500)).await
+    });
 
     // Send a message.
-    tx.send(msg_event(1, 100, "delayed-msg")).await.unwrap();
+    tx.send(msg_event(
+        ChannelId::new(1),
+        UserId::new(100),
+        "delayed-msg",
+    ))
+    .await
+    .unwrap();
 
     // Advance time to just before the deadline — event should not have flushed yet.
     tokio::time::advance(Duration::from_millis(400)).await;
@@ -1146,11 +1318,17 @@ async fn async_reaction_buffered_with_delay() {
     let cancel = tokio_util::sync::CancellationToken::new();
     let cancel_clone = cancel.clone();
 
-    let handle = tokio::spawn(async move { run_notif_loop(rx, cancel_clone, |_| 500).await });
+    let handle = tokio::spawn(async move {
+        run_notif_loop(rx, cancel_clone, |_| Duration::from_millis(500)).await
+    });
 
     // Send a message, then a reaction to the same channel.
-    tx.send(msg_event(1, 100, "hello")).await.unwrap();
-    tx.send(reaction_event(1, 200)).await.unwrap();
+    tx.send(msg_event(ChannelId::new(1), UserId::new(100), "hello"))
+        .await
+        .unwrap();
+    tx.send(reaction_event(ChannelId::new(1), UserId::new(200)))
+        .await
+        .unwrap();
 
     // Allow the events to be processed.
     tokio::task::yield_now().await;
@@ -1178,7 +1356,9 @@ async fn async_trace_bypasses_buffer() {
     let cancel = tokio_util::sync::CancellationToken::new();
     let cancel_clone = cancel.clone();
 
-    let handle = tokio::spawn(async move { run_notif_loop(rx, cancel_clone, |_| 500).await });
+    let handle = tokio::spawn(async move {
+        run_notif_loop(rx, cancel_clone, |_| Duration::from_millis(500)).await
+    });
 
     // Send a trace event — should pass through immediately.
     tx.send(trace_event()).await.unwrap();
@@ -1204,13 +1384,23 @@ async fn async_shutdown_drains_buffered_events() {
     let cancel = tokio_util::sync::CancellationToken::new();
     let cancel_clone = cancel.clone();
 
-    let handle = tokio::spawn(async move { run_notif_loop(rx, cancel_clone, |_| 5000).await });
+    let handle = tokio::spawn(async move {
+        run_notif_loop(rx, cancel_clone, |_| Duration::from_millis(5000)).await
+    });
 
     // Buffer several events with a long delay (won't flush naturally).
-    tx.send(msg_event(1, 100, "drain-1")).await.unwrap();
-    tx.send(msg_event(1, 200, "drain-2")).await.unwrap();
-    tx.send(reaction_event(2, 100)).await.unwrap();
-    tx.send(msg_event(2, 300, "drain-3")).await.unwrap();
+    tx.send(msg_event(ChannelId::new(1), UserId::new(100), "drain-1"))
+        .await
+        .unwrap();
+    tx.send(msg_event(ChannelId::new(1), UserId::new(200), "drain-2"))
+        .await
+        .unwrap();
+    tx.send(reaction_event(ChannelId::new(2), UserId::new(100)))
+        .await
+        .unwrap();
+    tx.send(msg_event(ChannelId::new(2), UserId::new(300), "drain-3"))
+        .await
+        .unwrap();
 
     // Let events be processed by the loop.
     tokio::task::yield_now().await;
@@ -1261,7 +1451,9 @@ async fn async_shutdown_empty_buffer() {
     let cancel = tokio_util::sync::CancellationToken::new();
     let cancel_clone = cancel.clone();
 
-    let handle = tokio::spawn(async move { run_notif_loop(rx, cancel_clone, |_| 500).await });
+    let handle = tokio::spawn(async move {
+        run_notif_loop(rx, cancel_clone, |_| Duration::from_millis(500)).await
+    });
 
     // Cancel immediately with nothing buffered.
     cancel.cancel();
@@ -1294,7 +1486,10 @@ fn global_default_flows_through_pipeline() {
     let loaded = LoadedConfig::try_from_raw(raw).expect("test configuration generation");
 
     let mut limiter = make_limiter(false, 100);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
     // Use the loaded config delay for channel 100.
@@ -1303,10 +1498,10 @@ fn global_default_flows_through_pipeline() {
 
     // Event should be buffered (not immediate) with inherited delay.
     let result = pipeline_step(
-        msg_event(100, 1, "via-global"),
+        msg_event(ChannelId::new(100), UserId::new(1), "via-global"),
         &mut limiter,
         &mut buffer,
-        delay,
+        Duration::from_millis(delay),
         now,
     );
     assert!(
@@ -1321,10 +1516,10 @@ fn global_default_flows_through_pipeline() {
         "unconfigured channel inherits global"
     );
     let result2 = pipeline_step(
-        msg_event(999, 2, "unconfigured"),
+        msg_event(ChannelId::new(999), UserId::new(2), "unconfigured"),
         &mut limiter,
         &mut buffer,
-        delay_unconfigured,
+        Duration::from_millis(delay_unconfigured),
         now,
     );
     assert!(
@@ -1363,17 +1558,20 @@ fn per_channel_override_with_global_default() {
     let loaded = LoadedConfig::try_from_raw(raw).expect("test configuration generation");
 
     let mut limiter = make_limiter(false, 100);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
     // Channel 100 has 50ms override.
     let delay_100 = loaded.delivery_delay_ms(100);
     assert_eq!(delay_100, 50);
     pipeline_step(
-        msg_event(100, 1, "fast-channel"),
+        msg_event(ChannelId::new(100), UserId::new(1), "fast-channel"),
         &mut limiter,
         &mut buffer,
-        delay_100,
+        Duration::from_millis(delay_100),
         now,
     );
 
@@ -1381,10 +1579,10 @@ fn per_channel_override_with_global_default() {
     let delay_200 = loaded.delivery_delay_ms(200);
     assert_eq!(delay_200, 1000);
     pipeline_step(
-        msg_event(200, 2, "slow-channel"),
+        msg_event(ChannelId::new(200), UserId::new(2), "slow-channel"),
         &mut limiter,
         &mut buffer,
-        delay_200,
+        Duration::from_millis(delay_200),
         now,
     );
 
@@ -1411,14 +1609,14 @@ fn per_channel_override_with_global_default() {
 #[test]
 fn individual_notification_jsonrpc_structure() {
     let events = vec![
-        msg_event(1, 100, "first"),
-        reaction_event(1, 200),
-        msg_event(1, 300, "second"),
+        msg_event(ChannelId::new(1), UserId::new(100), "first"),
+        reaction_event(ChannelId::new(1), UserId::new(200)),
+        msg_event(ChannelId::new(1), UserId::new(300), "second"),
     ];
 
     let notifications: Vec<serde_json::Value> = events
         .into_iter()
-        .map(test_helpers::make_notification)
+        .map(|event| test_helpers::make_notification(event).unwrap())
         .collect();
 
     assert_eq!(notifications.len(), 3);
@@ -1439,28 +1637,31 @@ fn individual_notification_jsonrpc_structure() {
 #[test]
 fn multi_channel_flush_preserves_chat_ids() {
     let mut limiter = make_limiter(false, 100);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
     pipeline_step(
-        msg_event(1, 100, "ch1-first"),
+        msg_event(ChannelId::new(1), UserId::new(100), "ch1-first"),
         &mut limiter,
         &mut buffer,
-        200,
+        Duration::from_millis(200),
         now,
     );
     pipeline_step(
-        msg_event(2, 200, "ch2-first"),
+        msg_event(ChannelId::new(2), UserId::new(200), "ch2-first"),
         &mut limiter,
         &mut buffer,
-        200,
+        Duration::from_millis(200),
         now,
     );
     pipeline_step(
-        msg_event(1, 300, "ch1-second"),
+        msg_event(ChannelId::new(1), UserId::new(300), "ch1-second"),
         &mut limiter,
         &mut buffer,
-        200,
+        Duration::from_millis(200),
         now,
     );
 
@@ -1474,7 +1675,7 @@ fn multi_channel_flush_preserves_chat_ids() {
 
     let notifications: Vec<serde_json::Value> = flushed
         .into_iter()
-        .map(test_helpers::make_notification)
+        .map(|event| test_helpers::make_notification(event).unwrap())
         .collect();
 
     // BTreeMap orders by channel key: "1" < "2", so ch1 events come first.
@@ -1498,16 +1699,24 @@ fn multi_channel_flush_preserves_chat_ids() {
 #[test]
 fn coalesced_batch_uses_standard_method_and_contains_all_messages() {
     let mut limiter = make_limiter(false, 100);
-    let mut buffer = DeliveryBuffer::new();
+    let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    ));
     let now = Instant::now();
 
     // Buffer 4 messages in the same channel within a 500ms window.
     for i in 1..=4 {
         let result = pipeline_step(
-            msg_event_with_id(42, 100 + i, i, &format!("message {i}")),
+            msg_event_with_id(
+                ChannelId::new(42),
+                UserId::new(100 + i),
+                MessageId::new(i),
+                &format!("message {i}"),
+            ),
             &mut limiter,
             &mut buffer,
-            500,
+            Duration::from_millis(500),
             now,
         );
         assert!(result.is_none(), "message {i} must be buffered with delay");
@@ -1519,11 +1728,7 @@ fn coalesced_batch_uses_standard_method_and_contains_all_messages() {
     assert_eq!(flushed.len(), 4, "all 4 messages must flush together");
 
     // Coalesce the flushed events into a single notification.
-    let result = coalesce(flushed, None);
-    let notification = match result {
-        Some(CoalesceResult::Coalesced(v)) => v,
-        other => panic!("expected Coalesced for 4 events, got {other:?}"),
-    };
+    let notification = test_helpers::make_batch(flushed, None).unwrap().unwrap();
 
     // Critical assertion: the method MUST be the standard one that Claude Code
     // recognizes. Using `notifications/claude/channel/batch` causes silent drops.

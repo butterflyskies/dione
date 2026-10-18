@@ -17,7 +17,7 @@ cannot run this gate.
    approval of the final commit.
    A member of `lacuna-blinkers` performs the final merge.
 
-The command requires Rust 1.98, `cargo-nextest`, `cargo-deny`, and Python 3. It
+The command requires Rust 1.98, `cargo-nextest`, `cargo-deny`, and Python 3.9 or newer. It
 fails if a tool is missing. It runs release hygiene, formatting, both Clippy feature
 sets, both Nextest runs, the minimum Rust version check, the public package
 boundary, review receipt tests, dependency policy, a release build, and a binary launch check. CI
@@ -112,6 +112,10 @@ index identifies the rules relevant to the change. Keep review findings and
 their evidence with the PR; the [risk levels](design/pr-quality-plan.md#risk-levels)
 define which findings block merge. Review again if the head changes.
 
+Resolve contradictory project guidance under
+[Guidance precedence](../CODING_STANDARDS.md#guidance-precedence). Record the
+sources and resolution in the review, and reconcile the affected documents.
+
 An independent member of any of the three eligible teams submits a Forgejo
 **Approve** review with this receipt as its review body. The body is tied to
 the official review, rather than to an issue comment another repository writer
@@ -179,6 +183,29 @@ the final commit.
 This workflow cannot enforce the current PR until it lands on
 `main`; [issue #479](https://forgejo.svc.echoes/lacuna/dione/issues/479)
 tracks that rollout.
+
+## Review type contracts
+
+Apply the [type policy](../CODING_STANDARDS.md#type-system-patterns) during the
+six-lens review. Record the following evidence for each affected contract.
+If no type contract changes, state why this checklist does not apply.
+
+- Identify domain values in fields and signatures. Confirm that distinct
+  meanings use distinct types and that the contract has one authoritative owner.
+- Inspect constructors, conversions, mutation, and deserialization. Confirm that
+  callers cannot construct invalid values or incompatible state combinations.
+- Trace external input through parsing into the domain model, including stored
+  state. Check that raw representations stay in adapters and that changing
+  authorization or expiry still gets checked when required.
+- Inspect enum matches, numeric conversions, and error translation. Confirm that
+  new variants require handling, conversions preserve meaning, and errors retain
+  their types until the protocol or presentation boundary.
+- Exercise valid and rejected input at changed parsing boundaries. Use
+  compile-fail checks for important guarantees about forbidden construction or
+  interchange. Verify serialized compatibility when a representation changes.
+- Record unchanged preexisting violations with paths and scope. Confirm that the
+  change does not extend them and that altered semantic contracts migrate with
+  their callers. Do not report repository-wide compliance from a scoped review.
 
 ## Choose behavior tests from the change
 

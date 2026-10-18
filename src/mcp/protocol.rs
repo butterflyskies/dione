@@ -1,10 +1,12 @@
 //! MCP protocol responses: initialize handshake and tool list.
 
-use super::tools::{
-    bot_state::{ActivityType, OnlineStatus},
-    introspection::MAX_CAN_VIEW_USER_IDS,
+use crate::{
+    discord::{
+        presence::{ActivityType, OnlineStatus},
+        tool_arguments::sentex_handles_schema,
+    },
+    harness::HarnessConnection,
 };
-use crate::codex::TransportMode;
 use serde_json::{Value, json};
 
 const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
@@ -17,22 +19,13 @@ const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
 
 /// Build the MCP `initialize` response.
 pub(crate) fn initialize_response(
-    mode: TransportMode,
+    harness: &HarnessConnection,
     requested_protocol_version: Option<&str>,
 ) -> Value {
     let protocol_version = requested_protocol_version
         .filter(|requested| SUPPORTED_PROTOCOL_VERSIONS.contains(requested))
         .unwrap_or(LATEST_PROTOCOL_VERSION);
-    let capabilities = match mode {
-        TransportMode::ClaudeCode => json!({
-            "tools": {},
-            "experimental": {
-                "claude/channel": {},
-                "claude/channel/permission": {},
-            }
-        }),
-        TransportMode::Codex => json!({ "tools": {} }),
-    };
+    let capabilities = harness.protocol().capabilities();
     json!({
         "protocolVersion": protocol_version,
         "capabilities": capabilities,
@@ -44,32 +37,10 @@ pub(crate) fn initialize_response(
 }
 
 /// Build the MCP `tools/list` response.
-pub(crate) fn tools_list(mode: TransportMode, evidence_markers_enabled: bool) -> Value {
-    tools_list_with_teams(mode, evidence_markers_enabled, false)
-}
-
-pub(crate) fn tools_list_with_teams(
-    mode: TransportMode,
-    evidence_markers_enabled: bool,
-    teams_enabled: bool,
-) -> Value {
+pub(crate) fn tools_list(harness: &HarnessConnection, evidence_markers_enabled: bool) -> Value {
     let mut response = json!({
         "tools": [
             tool("attention", "Recipient-local attention controls: status/configure, authorized source review/retrieval and feedback, offline replay/fitting, held-out evaluation and explicit digest promotion/rollback. Configure replaces settings from status. No command is accepted from Discord message text; this authenticated seat supplies recipient identity.", crate::attention::control::schema()),
-            tool("reply", "Send a reply to a Discord channel or DM. A contradictionary block-tier match does not send: the message is held under a single-use handle and the error names the matched pattern(s) plus the handle. Act on it with no_rly (send verbatim), rephrase (replacement, re-checked), or ignore it to let it expire. An auto-tier match is rewritten to its replacement and sent; the result lists each rewrite under auto_rewrites (`auto: <match> → <replace>`).", json!({
-                "type": "object",
-                "required": ["channel_id", "content"],
-                "properties": {
-                    "suppress_embeds": { "type": "boolean", "description": "Suppress Discord link previews (default: false)" },
-                    "channel_id": { "type": "string", "description": "Discord channel ID" },
-                    "content": { "type": "string", "description": "Message content" },
-                    "reply_to_message_id": { "type": "string", "description": "Optional message ID to reply to" },
-                    "suppress_ping": { "type": "boolean", "description": "When true, the reply will not ping the user being replied to (default: false)" },
-                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for this send. Every bypass is audited. This does not bypass the contradictionary; use the no_rly(handle) tool for that." },
-                    "claim_handles": sentex_handles_schema("Claims asserted by this message"),
-                    "citation_handles": sentex_handles_schema("Claims cited as support or context")
-                }
-            })),
             tool("no_rly", "Release a message held by the contradictionary: sends the byte-identical held text with its original addressing. Handles are single-use — they die on release, rephrase, or expiry (default 3 minutes) and cannot be replayed; only a failed send leaves the handle live for a retry. Ordering: the message lands when released, not at its original position in the conversation.", json!({
                 "type": "object",
                 "required": ["handle"],
@@ -125,89 +96,6 @@ pub(crate) fn tools_list_with_teams(
                     "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass; every bypass is audited." }
                 }
             })),
-            tool("fetch_messages", "Fetch messages from a channel. Returns messages oldest-first. Without cursors, returns the most recent messages. With before/after, paginates through history; use the first returned id as the next before cursor (backward) or the last returned id as the next after cursor (forward). before and after are mutually exclusive. count and has_more (a hint, not a guarantee) are included when a cursor is provided.", json!({
-                "type": "object",
-                "required": ["channel_id"],
-                "properties": {
-                    "channel_id": { "type": "string" },
-                    "before": { "type": "string", "description": "Discord message ID (snowflake); return messages older than this ID. Mutually exclusive with after." },
-                    "after": { "type": "string", "description": "Discord message ID (snowflake); return messages newer than this ID. Mutually exclusive with before." },
-                    "limit": { "type": "integer", "default": 20, "maximum": 100 }
-                }
-            })),
-            tool("fetch_new_since", "Fetch only messages newer than a known message ID (cursor-based). Returns messages oldest-first with a count and a has_more pagination hint; the id of the last returned message is the next cursor.", json!({
-                "type": "object",
-                "required": ["channel_id", "after_message_id"],
-                "properties": {
-                    "channel_id": { "type": "string", "description": "Discord channel ID" },
-                    "after_message_id": { "type": "string", "description": "Discord message ID (snowflake); only messages after this ID are returned" },
-                    "limit": { "type": "integer", "default": 20, "maximum": 100 }
-                }
-            })),
-            tool("fetch_pins", "Fetch every pinned message visible in a channel, oldest-first. Pins are retrieved explicitly and are not injected into context automatically.", json!({
-                "type": "object",
-                "required": ["channel_id"],
-                "properties": {
-                    "channel_id": { "type": "string", "description": "Discord channel ID" }
-                }
-            })),
-            tool("download_attachment", "Download all attachments from a message to the inbox", json!({
-                "type": "object",
-                "required": ["channel_id", "message_id"],
-                "properties": {
-                    "channel_id": { "type": "string" },
-                    "message_id": { "type": "string" }
-                }
-            })),
-            tool("get_message", "Retrieve a single message", json!({
-                "type": "object",
-                "required": ["channel_id", "message_id"],
-                "properties": {
-                    "channel_id": { "type": "string" },
-                    "message_id": { "type": "string" }
-                }
-            })),
-            tool("search_messages", "Search messages in a guild. At least one filter required. Results filtered to configured channels.", json!({
-                "type": "object",
-                "required": ["guild_id"],
-                "properties": {
-                    "guild_id": { "type": "string", "description": "Discord guild (server) ID to search" },
-                    "content": { "type": "string", "description": "Text content to search for" },
-                    "author_id": {
-                        "description": "Filter by message author ID(s). Single string/number or array.",
-                        "oneOf": [
-                            { "type": "string" },
-                            { "type": "array", "items": { "type": "string" } }
-                        ]
-                    },
-                    "mentions": {
-                        "description": "Filter by mentioned user ID(s). Single string/number or array.",
-                        "oneOf": [
-                            { "type": "string" },
-                            { "type": "array", "items": { "type": "string" } }
-                        ]
-                    },
-                    "has": {
-                        "type": "array",
-                        "items": { "type": "string", "enum": ["link", "embed", "file", "video", "image", "sound", "sticker"] },
-                        "description": "Filter by attachment type"
-                    },
-                    "before": { "type": "string", "description": "ISO 8601 date (YYYY-MM-DD); return messages before this date" },
-                    "after": { "type": "string", "description": "ISO 8601 date (YYYY-MM-DD); return messages after this date" },
-                    "channel_id": {
-                        "description": "Filter to specific channel ID(s). Single string/number or array.",
-                        "oneOf": [
-                            { "type": "string" },
-                            { "type": "array", "items": { "type": "string" } }
-                        ]
-                    },
-                    "pinned": { "type": "boolean", "description": "Filter to pinned (true) or unpinned (false) messages" },
-                    "sort_by": { "type": "string", "enum": ["timestamp", "relevance"], "description": "Sort field (default: timestamp)" },
-                    "sort_order": { "type": "string", "enum": ["asc", "desc"], "description": "Sort direction (default: desc)" },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": 25, "default": 25, "description": "Results per page (1-25)" },
-                    "offset": { "type": "integer", "minimum": 0, "maximum": 9975, "default": 0, "description": "Pagination offset (0-9975)" }
-                }
-            })),
             tool("send_file", "Upload a file as an attachment to a Discord channel", json!({
                 "type": "object",
                 "required": ["channel_id", "file_path"],
@@ -228,86 +116,6 @@ pub(crate) fn tools_list_with_teams(
                     "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass; every bypass is audited." },
                     "claim_handles": sentex_handles_schema("Claims asserted by this message"),
                     "citation_handles": sentex_handles_schema("Claims cited as support or context")
-                }
-            })),
-            tool("list_guilds", "List guilds the bot is in", json!({
-                "type": "object",
-                "properties": {}
-            })),
-            tool("list_channels", "List channels in a guild", json!({
-                "type": "object",
-                "required": ["guild_id"],
-                "properties": {
-                    "guild_id": { "type": "string" }
-                }
-            })),
-            tool("get_channel", "Get channel details: id, name, kind, and for guild channels the permission overwrites (allow/deny as decimal strings) and a thread's parent_id. A thread's permission_overwrites is empty because a thread inherits its parent channel's overwrites.", json!({
-                "type": "object",
-                "required": ["channel_id"],
-                "properties": {
-                    "channel_id": { "type": "string" }
-                }
-            })),
-            tool("get_user", "Get user information", json!({
-                "type": "object",
-                "required": ["user_id"],
-                "properties": {
-                    "user_id": { "type": "string" }
-                }
-            })),
-            tool("get_member", "Get guild member information", json!({
-                "type": "object",
-                "required": ["guild_id", "user_id"],
-                "properties": {
-                    "guild_id": { "type": "string" },
-                    "user_id": { "type": "string" }
-                }
-            })),
-            tool("list_roles", "List roles in a guild, each with its permissions bitfield as a decimal string", json!({
-                "type": "object",
-                "required": ["guild_id"],
-                "properties": {
-                    "guild_id": { "type": "string" }
-                }
-            })),
-            tool("list_emojis", "List custom emoji available in a guild (name, id, animated flag, and the string to use in reactions/messages)", json!({
-                "type": "object",
-                "required": ["guild_id"],
-                "properties": {
-                    "guild_id": { "type": "string" }
-                }
-            })),
-            tool("pin_message", "Pin a message in a channel", json!({
-                "type": "object",
-                "required": ["channel_id", "message_id"],
-                "properties": {
-                    "channel_id": { "type": "string" },
-                    "message_id": { "type": "string" }
-                }
-            })),
-            tool("unpin_message", "Unpin a message", json!({
-                "type": "object",
-                "required": ["channel_id", "message_id"],
-                "properties": {
-                    "channel_id": { "type": "string" },
-                    "message_id": { "type": "string" }
-                }
-            })),
-            tool("create_thread", "Create a thread", json!({
-                "type": "object",
-                "required": ["channel_id", "name"],
-                "properties": {
-                    "channel_id": { "type": "string" },
-                    "message_id": { "type": "string", "description": "If set, creates a thread from this message" },
-                    "name": { "type": "string" }
-                }
-            })),
-            tool("delete_message", "Delete a message", json!({
-                "type": "object",
-                "required": ["channel_id", "message_id"],
-                "properties": {
-                    "channel_id": { "type": "string" },
-                    "message_id": { "type": "string" }
                 }
             })),
             tool("list_access_requests", "List pending access requests from unknown users", json!({
@@ -337,12 +145,12 @@ pub(crate) fn tools_list_with_teams(
                 "properties": {
                     "online_status": {
                         "type": "string",
-                        "enum": OnlineStatus::json_enum(),
+                        "enum": OnlineStatus::ALL.iter().map(ToString::to_string).collect::<Vec<_>>(),
                         "description": "Online status (default: online)"
                     },
                     "activity_type": {
                         "type": "string",
-                        "enum": ActivityType::json_enum(),
+                        "enum": ActivityType::ALL.iter().map(ToString::to_string).collect::<Vec<_>>(),
                         "description": "Activity type. If set, activity_name is required."
                     },
                     "activity_name": {
@@ -473,95 +281,18 @@ pub(crate) fn tools_list_with_teams(
             })),
         ]
     });
-    // The literal tool array above is at `json!`'s macro recursion limit, so
-    // later tools are appended here instead.
     if let Some(tools) = response["tools"].as_array_mut() {
-        tools.push(can_view_channel_tool());
+        tools.extend(harness.protocol().tools());
     }
-    if mode == TransportMode::Codex
-        && let Some(tools) = response["tools"].as_array_mut()
-    {
-        tools.extend([
-            tool("bind_codex_thread", "Bind live inbound Discord delivery to this exact Codex thread. Call once at startup and after resuming, forking, or switching conversations. Future events move to the new binding; old backlog is not replayed.", json!({
-                "type": "object",
-                "required": ["thread_id"],
-                "properties": {
-                    "thread_id": { "type": "string", "minLength": 1, "maxLength": 128, "description": "Exact current CODEX_THREAD_ID; Dione never guesses among loaded threads" }
-                }
-            })),
-            tool("register_event_consumer", "Register this Codex conversation as an event consumer. A consumer may become primary only when no live primary exists; use handoff_event_consumer to switch deliberately.", json!({
-                "type": "object",
-                "required": ["label"],
-                "properties": {
-                    "label": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Human-readable conversation label; this is not an authorization token" },
-                    "ttl_seconds": { "type": "integer", "minimum": 60, "maximum": 86400, "default": 900 },
-                    "make_primary": { "type": "boolean", "default": false, "description": "Become the primary consumer only if no live primary exists" },
-                    "claim_unassigned": { "type": "boolean", "default": false, "description": "When becoming primary, route currently unassigned events here" }
-                }
-            })),
-            tool("handoff_event_consumer", "Explicitly transfer future inbound delivery from the active primary Codex conversation to another registered consumer.", json!({
-                "type": "object",
-                "required": ["from_consumer_id", "to_consumer_id"],
-                "properties": {
-                    "from_consumer_id": { "type": "string", "description": "Current primary consumer id" },
-                    "to_consumer_id": { "type": "string", "description": "Registered destination consumer id" },
-                    "move_pending": { "type": "boolean", "default": false, "description": "Also move pending events and invalidate their active leases; false routes only future events" }
-                }
-            })),
-            tool("claim_event_consumer", "Make a registered consumer primary after the previous primary has expired or released ownership. Fails while a live primary exists.", json!({
-                "type": "object",
-                "required": ["consumer_id"],
-                "properties": {
-                    "consumer_id": { "type": "string", "description": "Registered consumer becoming primary" },
-                    "claim_orphaned": { "type": "boolean", "default": false, "description": "Route unassigned events and events owned by expired consumers here, invalidating their leases" }
-                }
-            })),
-            tool("next_event", "Wait for and lease the next structured Discord event routed to this registered consumer. Call ack_event after handling it, then call next_event again.", json!({
-                "type": "object",
-                "required": ["consumer_id"],
-                "properties": {
-                    "consumer_id": { "type": "string", "description": "Opaque id returned by register_event_consumer" },
-                    "wait_seconds": { "type": "integer", "minimum": 0, "maximum": 55, "default": 45 },
-                    "lease_seconds": { "type": "integer", "minimum": 1, "maximum": 3600, "default": 120 }
-                }
-            })),
-            tool("ack_event", "Acknowledge a leased Discord event after it has been handled successfully.", json!({
-                "type": "object",
-                "required": ["consumer_id", "delivery_token"],
-                "properties": {
-                    "consumer_id": { "type": "string", "description": "Consumer that owns the lease" },
-                    "delivery_token": { "type": "string", "description": "Opaque token returned by next_event" }
-                }
-            })),
-            tool("event_queue_status", "Inspect the durable Codex event queue without leasing an event.", json!({
-                "type": "object",
-                "properties": {}
-            })),
-        ]);
-    }
-    if !evidence_markers_enabled {
-        for tool in response["tools"].as_array_mut().expect("tools is an array") {
-            if matches!(tool["name"].as_str(), Some("reply" | "send_dm")) {
-                tool["inputSchema"]["properties"]
-                    .as_object_mut()
-                    .expect("tool properties is an object")
-                    .remove("claim_handles");
-                tool["inputSchema"]["properties"]
-                    .as_object_mut()
-                    .expect("tool properties is an object")
-                    .remove("citation_handles");
+    if !evidence_markers_enabled && let Some(tools) = response["tools"].as_array_mut() {
+        for tool in tools {
+            if matches!(tool["name"].as_str(), Some("send_dm"))
+                && let Some(properties) = tool["inputSchema"]["properties"].as_object_mut()
+            {
+                properties.remove("claim_handles");
+                properties.remove("citation_handles");
             }
         }
-    }
-    if teams_enabled && let Some(tools) = response["tools"].as_array_mut() {
-        tools.push(tool("teams_reply", "Reply once to an authenticated Microsoft Teams Activity using the opaque single-use authority handle delivered with that event.", json!({
-                "type": "object",
-                "required": ["reply_handle", "content"],
-                "properties": {
-                    "reply_handle": { "type": "string", "description": "Opaque single-use reply authority from a Teams inbound event" },
-                    "content": { "type": "string", "description": "Reply text" }
-                }
-        })));
     }
     response
 }
@@ -574,106 +305,21 @@ pub(crate) fn tool(name: &str, description: &str, input_schema: Value) -> Value 
     })
 }
 
-fn can_view_channel_tool() -> Value {
-    tool(
-        "can_view_channel",
-        "Report whether each user can view a guild channel or thread, using Discord's permission overwrite rules; a thread is checked against its parent channel's overwrites, since a thread's own permission_overwrites is empty. Returns can_view true, false, or \"unknown\" with the deciding reason for each user, plus an error field describing the lookup failure when can_view is \"unknown\" because a member or thread-membership lookup failed.",
-        json!({
-            "type": "object",
-            "required": ["channel_id", "user_ids"],
-            "properties": {
-                "channel_id": { "type": "string" },
-                "user_ids": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "minItems": 1,
-                    "maxItems": MAX_CAN_VIEW_USER_IDS
-                }
-            }
-        }),
-    )
-}
-
-fn sentex_handles_schema(role_description: &str) -> Value {
-    json!({
-        "type": "array",
-        "maxItems": crate::evidence::MAX_SENTEX_REFS,
-        "items": {
-            "type": "string",
-            "pattern": "^[1-9][0-9]*$",
-            "maxLength": 20
-        },
-        "description": format!(
-            "{role_description}. Canonical positive decimal u64 strings naming opaque Vaelii sentex handles; JSON numbers are rejected to avoid precision loss. Dione transports the role and handle in terminal [🔍=v2:<role>:<token>] locators after pre-send hooks. At most {} claim and citation handles combined and {} aggregate marker bytes. A locator is author-offered metadata, not verification or truth.",
-            crate::evidence::MAX_SENTEX_REFS,
-            crate::evidence::MAX_SENTEX_MARKER_BYTES,
-        )
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn fetch_messages_schema() -> Value {
-        let list = tools_list(TransportMode::ClaudeCode, false);
-        list["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|t| t["name"] == "fetch_messages")
-            .expect("fetch_messages must be in tools list")
-            .clone()
-    }
-
-    #[test]
-    fn teams_reply_is_discoverable_only_with_a_live_authority() {
-        for enabled in [false, true] {
-            let list = tools_list_with_teams(TransportMode::Codex, false, enabled);
-            let advertised = list["tools"]
-                .as_array()
-                .expect("tools list")
-                .iter()
-                .any(|tool| tool["name"] == "teams_reply");
-            assert_eq!(advertised, enabled);
-        }
-        assert!(
-            !tools_list(TransportMode::ClaudeCode, false)["tools"]
-                .as_array()
-                .expect("tools list")
-                .iter()
-                .any(|tool| tool["name"] == "teams_reply")
-        );
-    }
-
-    /// Boundary pin for `can_view_channel`, which is appended outside the
-    /// literal tool array: dropping it from either transport must fail here.
-    #[test]
-    fn can_view_channel_is_listed_in_every_transport_with_its_schema() {
-        for mode in [TransportMode::ClaudeCode, TransportMode::Codex] {
-            let list = tools_list(mode, false);
-            let tool = list["tools"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|t| t["name"] == "can_view_channel")
-                .expect("can_view_channel must be in tools list");
-            assert_eq!(
-                tool["inputSchema"]["required"],
-                json!(["channel_id", "user_ids"])
-            );
-            assert_eq!(
-                tool["inputSchema"]["properties"]["user_ids"]["type"],
-                "array"
-            );
-        }
+        crate::discord::query_tools::definitions()
+            .find(|tool| tool["name"] == "fetch_messages")
+            .expect("fetch_messages must be in owner definitions")
     }
 
     /// Boundary pin for the presence tools: deleting either from the
     /// advertised list must fail here, not in a reviewer's client.
     #[test]
     fn presence_tools_are_listed_with_their_schemas() {
-        let list = tools_list(TransportMode::ClaudeCode, false);
+        let list = tools_list(&HarnessConnection::claude(), false);
         let tools = list["tools"].as_array().unwrap();
         let set = tools
             .iter()
@@ -694,8 +340,9 @@ mod tests {
     #[test]
     fn claim_and_citation_handle_schemas_are_exposed_only_when_enabled() {
         for enabled in [false, true] {
-            let list = tools_list(TransportMode::Codex, enabled);
-            for name in ["reply", "send_dm"] {
+            let (_queue_dir, harness) = crate::mcp::server::test_codex_connection();
+            let list = tools_list(&harness, enabled);
+            for name in ["send_dm"] {
                 let tool = list["tools"]
                     .as_array()
                     .unwrap()

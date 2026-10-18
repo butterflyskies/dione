@@ -84,6 +84,7 @@ pub struct PronounProvider {
 impl PronounProvider {
     pub fn new(deadline_ms: u64, cache_ttl: Duration) -> Self {
         let client = reqwest::Client::builder()
+            .use_rustls_tls()
             .user_agent("dione/0.24.0 (https://github.com/butterflyskies/dione)")
             .timeout(Duration::from_millis(deadline_ms))
             .build()
@@ -177,10 +178,8 @@ impl PronounService {
             return display_name.to_string();
         }
 
-        match self.provider.lookup(user_id).await {
-            Some(pronouns) => format!("{display_name} ({pronouns})"),
-            None => display_name.to_string(),
-        }
+        let pronouns = self.provider.lookup(user_id).await;
+        crate::core::identity_display::display_name_with_pronouns(display_name, pronouns.as_deref())
     }
 
     pub fn is_excluded(&self, user_id: u64) -> bool {
@@ -281,5 +280,26 @@ mod tests {
         );
         let result = service.resolve_display_name(12345, "TestUser").await;
         assert_eq!(result, "TestUser");
+    }
+    #[tokio::test]
+    async fn cached_pronouns_do_not_override_explicit_display_suffix() {
+        let service = PronounService::new(
+            std::collections::HashSet::new(),
+            100,
+            Duration::from_secs(300),
+        );
+        service
+            .provider
+            .cache
+            .insert(42, Some("she/her".to_owned()))
+            .await;
+        assert_eq!(
+            service.resolve_display_name(42, "Iris (xe/it)").await,
+            "Iris (xe/it)"
+        );
+        assert_eq!(
+            service.resolve_display_name(42, "Alex (admin)").await,
+            "Alex (admin) (she/her)"
+        );
     }
 }

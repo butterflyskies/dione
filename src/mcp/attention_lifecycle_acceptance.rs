@@ -187,6 +187,10 @@ async fn runtime_for(path: Utf8PathBuf, network: &Network) -> Arc<AttentionRunti
                 ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
             },
             true,
+            crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            ),
         )
         .await
         .with_test_provider(network.provider()),
@@ -266,7 +270,7 @@ fn unavailable_final_guard_retries_committed_fifo_without_replay_or_source_leaka
             &fixture.attention,
             &mut fixture.buffer,
             &fixture.bells,
-            &NotificationSink::Codex(fixture.queue.clone()),
+            &test_connection_for_queue(fixture.queue.clone()),
         )
         .await
         .unwrap();
@@ -295,7 +299,7 @@ fn unavailable_final_guard_retries_committed_fifo_without_replay_or_source_leaka
             &fixture.attention,
             &mut fixture.buffer,
             &fixture.bells,
-            &NotificationSink::Codex(fixture.queue.clone()),
+            &test_connection_for_queue(fixture.queue.clone()),
         )
         .await
         .unwrap();
@@ -308,10 +312,15 @@ fn unavailable_final_guard_retries_committed_fifo_without_replay_or_source_leaka
             ["43001", "43002", "43003"]
         );
         for event in &delivered {
-            crate::codex::AttentionDeliveryGuard::receipt(
+            crate::attention::delivery::AttentionDeliveryGuard::receipt(
                 fixture.attention.clone(),
-                event,
-                crate::codex::AttentionDeliveryReceipt::Accepted,
+                &crate::attention::types::RecordId::new(
+                    event["params"]["meta"]["attention_record"]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap(),
+                crate::attention::delivery::AttentionDeliveryReceipt::Accepted,
             )
             .await
             .unwrap();
@@ -348,7 +357,7 @@ fn unavailable_final_guard_retries_committed_fifo_without_replay_or_source_leaka
             &fixture.attention,
             &mut fixture.buffer,
             &fixture.bells,
-            &NotificationSink::Codex(fixture.queue.clone()),
+            &test_connection_for_queue(fixture.queue.clone()),
         )
         .await
         .unwrap();
@@ -453,7 +462,17 @@ fn duplicate_overlap_edit_delete_and_reconnect_never_reintroduce_an_old_excerpt(
         fixture.attention.invalidate(source).await.unwrap();
         fixture
             .queue
-            .invalidate_attention(Some(source.message_id), None)
+            .invalidate_attention(crate::codex::AttentionInvalidation::Source(
+                &crate::core::MessageRef::new(
+                    crate::core::ConversationRef::new(
+                        fixture.attention.authority_module().clone(),
+                        crate::core::ConversationId::numeric(
+                            source.channel_id.get().try_into().unwrap(),
+                        ),
+                    ),
+                    crate::core::MessageId::numeric(source.message_id.get().try_into().unwrap()),
+                ),
+            ))
             .await
             .unwrap();
         let config = crate::config::load_config(&fixture.path);
@@ -471,7 +490,7 @@ fn duplicate_overlap_edit_delete_and_reconnect_never_reintroduce_an_old_excerpt(
             &config,
             &mut fixture.buffer,
             &fixture.bells,
-            &NotificationSink::Codex(fixture.queue.clone()),
+            &test_connection_for_queue(fixture.queue.clone()),
         )
         .await
         .unwrap();
@@ -494,7 +513,17 @@ fn duplicate_overlap_edit_delete_and_reconnect_never_reintroduce_an_old_excerpt(
         fixture.attention.invalidate(source).await.unwrap();
         fixture
             .queue
-            .invalidate_attention(Some(source.message_id), None)
+            .invalidate_attention(crate::codex::AttentionInvalidation::Source(
+                &crate::core::MessageRef::new(
+                    crate::core::ConversationRef::new(
+                        fixture.attention.authority_module().clone(),
+                        crate::core::ConversationId::numeric(
+                            source.channel_id.get().try_into().unwrap(),
+                        ),
+                    ),
+                    crate::core::MessageId::numeric(source.message_id.get().try_into().unwrap()),
+                ),
+            ))
             .await
             .unwrap();
         forward_ordinary(
@@ -506,7 +535,7 @@ fn duplicate_overlap_edit_delete_and_reconnect_never_reintroduce_an_old_excerpt(
             &crate::config::load_config(&fixture.path),
             &mut fixture.buffer,
             &fixture.bells,
-            &NotificationSink::Codex(fixture.queue.clone()),
+            &test_connection_for_queue(fixture.queue.clone()),
         )
         .await
         .unwrap();
@@ -521,7 +550,14 @@ fn duplicate_overlap_edit_delete_and_reconnect_never_reintroduce_an_old_excerpt(
         );
 
         drop(fixture.queue);
-        fixture.queue = CodexEventQueue::load(&fixture.path).unwrap();
+        fixture.queue = CodexEventQueue::load(
+            &fixture.path,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
         let output = fixture.drain().await;
         let message_id = id.to_string();
         let lineage: Vec<_> = output
@@ -601,7 +637,7 @@ fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipt
             &fixture.attention,
             &mut fixture.buffer,
             &fixture.bells,
-            &NotificationSink::Codex(fixture.queue.clone()),
+            &test_connection_for_queue(fixture.queue.clone()),
         )
         .await
         .unwrap();
@@ -645,15 +681,155 @@ fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipt
             confirmed_event.event["params"]["meta"]["attention_record"].as_str(),
             Some(confirmed.id.as_str())
         );
-        crate::codex::AttentionDeliveryGuard::check(
+        crate::attention::delivery::AttentionDeliveryGuard::check(
             fixture.attention.as_ref(),
-            &confirmed_event.event,
+            &crate::codex::decode_legacy_attention_for_test(
+                &confirmed_event.event,
+                fixture.queue.legacy_scope(),
+            )
+            .unwrap()
+            .unwrap()
+            .descriptor(),
         )
         .unwrap();
-        crate::codex::AttentionDeliveryGuard::receipt(
-            fixture.attention.clone(),
+        let observed = crate::codex::decode_legacy_attention_for_test(
             &confirmed_event.event,
-            crate::codex::AttentionDeliveryReceipt::Accepted,
+            fixture.queue.legacy_scope(),
+        )
+        .unwrap()
+        .unwrap();
+        let valid = observed.descriptor();
+        let wrong_record = crate::attention::types::RecordId::new("unrelated-decision").unwrap();
+        let wrong_module = crate::core::ModuleInstanceId::new(
+            crate::core::ProviderId::new("discord").unwrap(),
+            crate::core::ModuleSlotId::new("other").unwrap(),
+        );
+        let foreign_source = crate::core::MessageRef::new(
+            crate::core::ConversationRef::new(
+                wrong_module.clone(),
+                valid.source().conversation().local().clone(),
+            ),
+            valid.source().local().clone(),
+        );
+        let wrong_conversation = crate::core::MessageRef::new(
+            crate::core::ConversationRef::new(
+                valid.source().conversation().module().clone(),
+                crate::core::ConversationId::numeric(999.try_into().unwrap()),
+            ),
+            valid.source().local().clone(),
+        );
+        let wrong_message = crate::core::MessageRef::new(
+            valid.source().conversation().clone(),
+            crate::core::MessageId::numeric(999.try_into().unwrap()),
+        );
+        let wrong_actor = crate::core::ActorRef::new(
+            valid.author().module().clone(),
+            crate::core::ActorId::numeric(999.try_into().unwrap()),
+        );
+        let foreign_actor =
+            crate::core::ActorRef::new(wrong_module, valid.author().local().clone());
+        let opaque_message = crate::core::MessageRef::new(
+            valid.source().conversation().clone(),
+            crate::core::MessageId::opaque(
+                valid.source().local().as_numeric().unwrap().to_string(),
+            )
+            .unwrap(),
+        );
+        let wrong_directive = match valid.directive() {
+            crate::attention::delivery::AttentionDirective::Prompt => {
+                crate::attention::delivery::AttentionDirective::NextTurn
+            }
+            crate::attention::delivery::AttentionDirective::NextTurn => {
+                crate::attention::delivery::AttentionDirective::Prompt
+            }
+        };
+        for (record, directive, source, author, text) in [
+            (
+                &wrong_record,
+                valid.directive(),
+                valid.source(),
+                valid.author(),
+                valid.original_text(),
+            ),
+            (
+                valid.record(),
+                wrong_directive,
+                valid.source(),
+                valid.author(),
+                valid.original_text(),
+            ),
+            (
+                valid.record(),
+                valid.directive(),
+                &foreign_source,
+                valid.author(),
+                valid.original_text(),
+            ),
+            (
+                valid.record(),
+                valid.directive(),
+                &wrong_conversation,
+                valid.author(),
+                valid.original_text(),
+            ),
+            (
+                valid.record(),
+                valid.directive(),
+                &wrong_message,
+                valid.author(),
+                valid.original_text(),
+            ),
+            (
+                valid.record(),
+                valid.directive(),
+                valid.source(),
+                &wrong_actor,
+                valid.original_text(),
+            ),
+            (
+                valid.record(),
+                valid.directive(),
+                valid.source(),
+                &foreign_actor,
+                valid.original_text(),
+            ),
+            (
+                valid.record(),
+                valid.directive(),
+                &opaque_message,
+                valid.author(),
+                valid.original_text(),
+            ),
+            (
+                valid.record(),
+                valid.directive(),
+                valid.source(),
+                valid.author(),
+                "substituted content",
+            ),
+        ] {
+            let descriptor = crate::attention::delivery::AttentionDescriptor::new(
+                record, directive, source, author, text,
+            );
+            assert_eq!(
+                crate::attention::delivery::AttentionDeliveryGuard::check(
+                    fixture.attention.as_ref(),
+                    &descriptor
+                ),
+                Err(crate::attention::delivery::AttentionGuardFailure::Invalidated)
+            );
+            assert_eq!(
+                crate::attention::delivery::AttentionDeliveryGuard::check(
+                    fixture.attention.as_ref(),
+                    &valid
+                ),
+                Ok(())
+            );
+        }
+        crate::attention::delivery::AttentionDeliveryGuard::receipt(
+            fixture.attention.clone(),
+            &confirmed.id,
+            crate::attention::delivery::AttentionDeliveryReceipt::Accepted,
         )
         .await
         .unwrap();
@@ -673,15 +849,21 @@ fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipt
             uncertain_event.event["params"]["meta"]["attention_record"].as_str(),
             Some(uncertain.id.as_str())
         );
-        crate::codex::AttentionDeliveryGuard::check(
+        crate::attention::delivery::AttentionDeliveryGuard::check(
             fixture.attention.as_ref(),
-            &uncertain_event.event,
+            &crate::codex::decode_legacy_attention_for_test(
+                &uncertain_event.event,
+                fixture.queue.legacy_scope(),
+            )
+            .unwrap()
+            .unwrap()
+            .descriptor(),
         )
         .unwrap();
-        crate::codex::AttentionDeliveryGuard::receipt(
+        crate::attention::delivery::AttentionDeliveryGuard::receipt(
             fixture.attention.clone(),
-            &uncertain_event.event,
-            crate::codex::AttentionDeliveryReceipt::Uncertain,
+            &uncertain.id,
+            crate::attention::delivery::AttentionDeliveryReceipt::Uncertain,
         )
         .await
         .unwrap();
@@ -706,7 +888,14 @@ fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipt
         );
 
         drop(fixture.queue);
-        fixture.queue = CodexEventQueue::load(&fixture.path).unwrap();
+        fixture.queue = CodexEventQueue::load(
+            &fixture.path,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
         drop(fixture.attention);
         fixture.attention = runtime_for(fixture.path.clone(), &fixture.network).await;
         fixture.admissions = AdmissionController::default();
@@ -734,7 +923,7 @@ fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipt
             &fixture.attention,
             &mut fixture.buffer,
             &fixture.bells,
-            &NotificationSink::Codex(fixture.queue.clone()),
+            &test_connection_for_queue(fixture.queue.clone()),
         )
         .await
         .unwrap();
@@ -1009,7 +1198,7 @@ async fn assert_identity_change_race(axis: IdentityAxis, base: u64) {
         &fixture.attention,
         &mut fixture.buffer,
         &fixture.bells,
-        &NotificationSink::Codex(fixture.queue.clone()),
+        &test_connection_for_queue(fixture.queue.clone()),
     )
     .await
     .unwrap();
@@ -1723,7 +1912,17 @@ fn deleted_deferred_source_is_absent_from_serialized_denial_and_sink_transcript(
         fixture.attention.invalidate(source).await.unwrap();
         fixture
             .queue
-            .invalidate_attention(Some(source.message_id), None)
+            .invalidate_attention(crate::codex::AttentionInvalidation::Source(
+                &crate::core::MessageRef::new(
+                    crate::core::ConversationRef::new(
+                        fixture.attention.authority_module().clone(),
+                        crate::core::ConversationId::numeric(
+                            source.channel_id.get().try_into().unwrap(),
+                        ),
+                    ),
+                    crate::core::MessageId::numeric(source.message_id.get().try_into().unwrap()),
+                ),
+            ))
             .await
             .unwrap();
         forward_ordinary(
@@ -1735,7 +1934,7 @@ fn deleted_deferred_source_is_absent_from_serialized_denial_and_sink_transcript(
             &crate::config::load_config(&fixture.path),
             &mut fixture.buffer,
             &fixture.bells,
-            &NotificationSink::Codex(fixture.queue.clone()),
+            &test_connection_for_queue(fixture.queue.clone()),
         )
         .await
         .unwrap();
@@ -1850,5 +2049,193 @@ fn revoked_bot_is_fenced_before_final_delivery_and_offline_pending_recovery() {
             DeliveryState::Invalidated,
             "known denial must withdraw persisted evidence during recovery"
         );
+    });
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ObservedReceipt {
+    outcome: crate::attention::delivery::AttentionDeliveryReceipt,
+    failure: Option<std::io::ErrorKind>,
+}
+
+#[derive(Debug)]
+struct ReceiptObserver {
+    runtime: Arc<AttentionRuntime>,
+    outcomes: Arc<std::sync::Mutex<Vec<ObservedReceipt>>>,
+}
+
+impl crate::attention::delivery::AttentionDeliveryGuard for ReceiptObserver {
+    fn check(
+        &self,
+        descriptor: &crate::attention::delivery::AttentionDescriptor<'_>,
+    ) -> Result<(), crate::attention::delivery::AttentionGuardFailure> {
+        crate::attention::delivery::AttentionDeliveryGuard::check(self.runtime.as_ref(), descriptor)
+    }
+
+    fn receipt<'a>(
+        self: Arc<Self>,
+        record: &'a crate::attention::types::RecordId,
+        outcome: crate::attention::delivery::AttentionDeliveryReceipt,
+    ) -> futures_util::future::BoxFuture<
+        'a,
+        Result<(), crate::attention::delivery::AttentionReceiptError>,
+    > {
+        Box::pin(async move {
+            let result = crate::attention::delivery::AttentionDeliveryGuard::receipt(
+                self.runtime.clone(),
+                record,
+                outcome,
+            )
+            .await;
+            let cause = result.as_ref().err().map(|error| {
+                let crate::attention::store_access::AttentionReceiptErrorKind::Store(crate::attention::store_access::AttentionStoreAccessError {
+                    kind: crate::attention::store_access::AttentionStoreAccessErrorKind::Operation(crate::attention::store::StoreError::Io { source, .. }),
+                }) = error.kind() else { panic!("receipt lost the concrete I/O cause: {error:?}"); };
+                source.kind()
+            });
+            self.outcomes.lock().unwrap().push(ObservedReceipt {
+                outcome,
+                failure: cause,
+            });
+            result
+        })
+    }
+}
+
+#[test]
+fn accepted_live_turn_is_not_replayed_after_real_receipt_write_failure() {
+    scenario(|| async {
+        let mut fixture = Fixture::new(AttentionMode::On).await;
+        prepare_policy(&mut fixture, 73_000, true).await;
+        fixture.drain().await;
+        let scope =
+            crate::codex::LegacyDiscordScope::new(fixture.attention.authority_module().clone());
+        fixture.queue =
+            CodexEventQueue::load(&fixture.path.join("live-queue"), scope.clone()).unwrap();
+        let resident = fixture.queue.register_live_consumer().await.unwrap();
+        let thread = crate::codex::CodexThreadId::parse("receipt-failure-thread").unwrap();
+        resident
+            .bind_live_thread(Some(thread.clone()))
+            .await
+            .unwrap();
+        let socket_path = fixture.path.join("receipt.sock");
+        let listener = tokio::net::UnixListener::bind(socket_path.as_std_path()).unwrap();
+        let started = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let observed = started.clone();
+        let state_dir = fixture.path.clone();
+        let host = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(message) = futures_util::StreamExt::next(&mut socket).await {
+                let Ok(tokio_tungstenite::tungstenite::Message::Text(text)) = message else {
+                    break;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                if request["method"] == "turn/start" {
+                    let mut turns = observed.lock().unwrap();
+                    turns.push(
+                        request["params"]["clientUserMessageId"]
+                            .as_str()
+                            .unwrap()
+                            .to_owned(),
+                    );
+                    if turns.len() == 1 {
+                        std::fs::rename(
+                            state_dir.join("attention"),
+                            state_dir.join("attention-retained"),
+                        )
+                        .unwrap();
+                        std::fs::write(
+                            state_dir.join("attention"),
+                            b"receipt path is not a directory",
+                        )
+                        .unwrap();
+                    }
+                }
+                let result = if request["method"] == "thread/read" {
+                    json!({"thread":{"status":{"type":"idle"}}})
+                } else {
+                    json!({})
+                };
+                futures_util::SinkExt::send(
+                    &mut socket,
+                    tokio_tungstenite::tungstenite::Message::Text(
+                        json!({"id":id,"result":result}).to_string(),
+                    ),
+                )
+                .await
+                .unwrap();
+            }
+        });
+        let outcomes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut config =
+            crate::codex::CodexDeliveryConfig::resolve(Some(socket_path), scope).unwrap();
+        config.attention_guard = Some(Arc::new(ReceiptObserver {
+            runtime: fixture.attention.clone(),
+            outcomes: outcomes.clone(),
+        }));
+        let (_binding, binding_rx) = tokio::sync::watch::channel(Some(
+            crate::durable::EndpointId::new(thread.as_str()).unwrap(),
+        ));
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let worker = tokio::spawn(crate::codex::run_delivery_worker(
+            fixture.queue.clone(),
+            config,
+            binding_rx,
+            cancel.clone(),
+        ));
+        fixture
+            .network
+            .insert(100, 74_001, "prompt accepted transport", None);
+        let record = fixture
+            .dispatch(fixture.event(100, 74_001).await)
+            .await
+            .unwrap();
+        assert_eq!(record.actual, Admission::Prompt);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while fixture.queue.status().await.queued != 0 {
+                assert!(!worker.is_finished());
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let receipts = outcomes.lock().unwrap().clone();
+        assert_eq!(
+            receipts,
+            [ObservedReceipt {
+                outcome: crate::attention::delivery::AttentionDeliveryReceipt::Accepted,
+                failure: Some(std::io::ErrorKind::NotADirectory),
+            }]
+        );
+        assert_eq!(
+            *started.lock().unwrap(),
+            [format!("dione-attention-{}", record.id)]
+        );
+        fixture.queue.enqueue(json!({"params":{"content":"ordinary follow-up","meta":{"message_id":"74002","chat_id":"100"}}})).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while fixture.queue.status().await.queued != 0 {
+                assert!(!worker.is_finished());
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        cancel.cancel();
+        worker.await.unwrap().unwrap();
+        host.abort();
+        let turns = started.lock().unwrap();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(
+            turns
+                .iter()
+                .filter(|id| id.starts_with("dione-attention-"))
+                .count(),
+            1
+        );
+        assert_eq!(outcomes.lock().unwrap().len(), 1);
     });
 }

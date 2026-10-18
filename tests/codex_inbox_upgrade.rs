@@ -20,7 +20,43 @@ fn historical_v048_inbox_loads_and_preserves_entries() {
             .build()
             .unwrap();
         runtime.block_on(async {
-            let queue = CodexEventQueue::load(&state_dir).expect("old inbox must open");
+            #[cfg(unix)]
+            let before = {
+                use std::os::unix::fs::MetadataExt as _;
+                let snapshot = state_dir.join("codex-inbox.json");
+                let metadata = fs::symlink_metadata(&snapshot).unwrap();
+                assert!(metadata.is_file() && !metadata.file_type().is_symlink());
+                assert_eq!(metadata.nlink(), 1);
+                assert_eq!(metadata.mode() & 0o7777, 0o644);
+                (
+                    metadata.dev(),
+                    metadata.ino(),
+                    metadata.uid(),
+                    fs::read(snapshot).unwrap(),
+                )
+            };
+            let queue = CodexEventQueue::load(
+                &state_dir,
+                dione::codex::LegacyDiscordScope::new(dione::core::ModuleInstanceId::new(
+                    dione::core::ProviderId::new("discord").unwrap(),
+                    dione::core::ModuleSlotId::new("primary").unwrap(),
+                )),
+            )
+            .expect("old inbox must open");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt as _;
+                let snapshot = state_dir.join("codex-inbox.json");
+                let metadata = fs::symlink_metadata(&snapshot).unwrap();
+                assert!(metadata.is_file() && !metadata.file_type().is_symlink());
+                assert_eq!(
+                    (metadata.dev(), metadata.ino(), metadata.uid()),
+                    (before.0, before.1, before.2)
+                );
+                assert_eq!(metadata.nlink(), 1);
+                assert_eq!(metadata.mode() & 0o7777, 0o600);
+                assert_eq!(fs::read(snapshot).unwrap(), before.3);
+            }
             assert_eq!(queue.status().await.queued, 2);
             let consumer = queue
                 .register_consumer(
@@ -48,13 +84,37 @@ fn historical_v048_inbox_loads_and_preserves_entries() {
             assert_eq!(queue.status().await.queued, 0);
             drop(queue);
 
-            let reopened = CodexEventQueue::load(&state_dir).expect("upgraded inbox must reopen");
+            let reopened = CodexEventQueue::load(
+                &state_dir,
+                dione::codex::LegacyDiscordScope::new(dione::core::ModuleInstanceId::new(
+                    dione::core::ProviderId::new("discord").unwrap(),
+                    dione::core::ModuleSlotId::new("primary").unwrap(),
+                )),
+            )
+            .expect("upgraded inbox must reopen");
             assert_eq!(reopened.status().await.queued, 0);
         });
         return;
     }
 
-    let state = tempfile::tempdir().expect("isolated state directory");
+    let builder = tempfile::Builder::new();
+    #[cfg(unix)]
+    let builder = {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut builder = builder;
+        builder.permissions(fs::Permissions::from_mode(0o700));
+        builder
+    };
+    let state = builder.tempdir().expect("isolated state directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let metadata = fs::symlink_metadata(state.path()).unwrap();
+        assert!(metadata.is_dir() && !metadata.file_type().is_symlink());
+        // SAFETY: geteuid has no memory-safety preconditions.
+        assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+        assert_eq!(metadata.permissions().mode() & 0o7777, 0o700);
+    }
     let fixture = fs::read("tests/fixtures/codex-inbox/v0.48.0-two-pending.json")
         .expect("historical inbox fixture must be readable");
     assert_eq!(
@@ -62,8 +122,31 @@ fn historical_v048_inbox_loads_and_preserves_entries() {
         "946127bd98a829fccf0bc3f3e651ee04007f376af45d30cd9397c9a57249fcfe",
         "prior-release fixture bytes changed"
     );
-    fs::write(state.path().join("codex-inbox.json"), fixture)
-        .expect("historical inbox fixture must be copied");
+    let snapshot = state.path().join("codex-inbox.json");
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&snapshot)
+            .expect("new synthetic historical snapshot");
+        file.write_all(&fixture).unwrap();
+        file.set_permissions(fs::Permissions::from_mode(0o644))
+            .unwrap();
+        file.sync_all().unwrap();
+        let metadata = file.metadata().unwrap();
+        assert!(metadata.is_file());
+        // SAFETY: geteuid has no memory-safety preconditions.
+        assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+        assert_eq!(metadata.nlink(), 1);
+        assert_eq!(metadata.mode() & 0o7777, 0o644);
+    }
+    #[cfg(not(unix))]
+    fs::write(&snapshot, fixture).expect("historical inbox fixture must be copied");
     let mut child = Command::new(env::current_exe().expect("test binary path"))
         .args(["--exact", TEST_NAME, "--nocapture"])
         .env(CHILD_STATE_DIR, state.path())

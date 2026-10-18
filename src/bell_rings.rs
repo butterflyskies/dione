@@ -725,7 +725,7 @@ mod tests {
         config::{BellProviderConfig, BellProviderUrl, BellScope, Config},
         discord::events::MessageTargeting,
         gate::MentionKind,
-        mcp::notifications::IntoNotification,
+        harness::test_support::FixtureNotification,
         timestamp::Timestamp,
     };
     use serenity::model::id::{ChannelId, MessageId, UserId};
@@ -971,10 +971,10 @@ mod tests {
                 response,
             };
             let original = NotificationEvent::Message(message(MessageTargeting::DirectMessage));
-            let before = original.clone().into_notification();
+            let before = original.clone().fixture_notification();
             let (observed, bells, _status) =
                 evaluate_with_provider(original, &config(), &provider).await;
-            assert_eq!(observed.into_notification(), before);
+            assert_eq!(observed.fixture_notification(), before);
             assert!(bells.is_empty());
             assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
         }
@@ -987,9 +987,9 @@ mod tests {
         let mut short = config();
         short.deadline_ms = 1;
         let original = NotificationEvent::Message(message(MessageTargeting::DirectMessage));
-        let before = original.clone().into_notification();
+        let before = original.clone().fixture_notification();
         let (observed, bells, _status) = evaluate_with_provider(original, &short, &provider).await;
-        assert_eq!(observed.into_notification(), before);
+        assert_eq!(observed.fixture_notification(), before);
         assert!(bells.is_empty());
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
     }
@@ -999,10 +999,10 @@ mod tests {
         let provider =
             MockProvider::value(envelope(vec![hit("a", "memory-name", 0.1, "semantic")]));
         let original = NotificationEvent::Message(message(MessageTargeting::DirectMessage));
-        let before = original.clone().into_notification();
+        let before = original.clone().fixture_notification();
         let (observed, bells, _status) =
             evaluate_with_provider(original, &config(), &provider).await;
-        assert_eq!(observed.into_notification(), before);
+        assert_eq!(observed.fixture_notification(), before);
         assert_eq!(bells.len(), 1);
         assert_eq!(bells[0].memory_name, "memory-name");
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);

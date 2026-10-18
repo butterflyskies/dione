@@ -1,7 +1,7 @@
 # Dione
 
-A Rust MCP channel server that bridges Discord to Claude Code or
-[Codex](https://developers.openai.com/codex/).
+A Rust MCP channel server that bridges Discord to Claude Code,
+[Codex](https://developers.openai.com/codex/), or Oh My Pi.
 
 Dione connects to the Discord gateway, gates access, and exposes tools for
 an agent to interact with Discord — replying, reacting, fetching history,
@@ -20,6 +20,15 @@ the direct lane, and requires explicit evaluation/promotion for learned admissio
 Harness session telemetry and context-window metrics remain harness-side concerns.
 
 ## Quick start
+
+Linux builds require a C toolchain, Make, and Perl for the vendored OpenSSL used
+by Discord's native TLS transport. Install your distribution's `ca-certificates`
+package in the runtime environment. Discord HTTPS and gateway connections use
+the system certificate trust store. Dione's direct HTTP clients use Rustls with
+bundled roots; RMCP's HTTP transport uses Rustls with the platform verifier.
+Certificate and hostname verification remain enabled for all transports.
+The vendored build does not require OpenSSL development packages or a shared
+OpenSSL library in the runtime image. macOS uses its native TLS implementation.
 
 ```bash
 # Install
@@ -94,9 +103,24 @@ directory. When live delivery starts, it becomes primary for future events but
 does not claim an arbitrary old backlog. Use the explicit consumer handoff and
 claim tools when replay is intentional.
 
+### Oh My Pi mode
+
+Run Dione with `--mode oh-my-pi` as an OMP MCP server named `dione`, then load
+the original [Dione extension](extensions/oh-my-pi/README.md). The integration
+targets an interactive OMP 18.10.0 main session. It exposes the ordinary Dione
+tools and submits external events with their metadata as follow-up messages.
+
+Generic Discord notifications have no durable inbox, acknowledgment, or replay.
+Optional Teams ingress uses a durable inbox and binds delivery to an exact saved
+OMP main session. It requires explicit conversation admission, a private Unix
+control socket, and a file-backed transcript. See the extension guide for
+[Teams setup and delivery limits](extensions/oh-my-pi/README.md#saved-session-teams-delivery).
+Keep one active main session per Dione MCP connection. Claude permission relay
+is unsupported. Live construct validation remains required.
+
 ## What it does
 
-Dione is an MCP server (stdio transport) spawned by Claude Code or Codex. It:
+Dione is an MCP server (stdio transport) spawned by the selected harness. It:
 
 - Connects to Discord and listens for messages, reactions, and interactions
 - Gates access: only configured users/channels reach Claude
@@ -157,6 +181,34 @@ expiry_seconds = 86400
 max_pending = 50
 notify_cooldown_seconds = 60
 ```
+
+### Versioned message context
+
+`get_message` and `fetch_messages` accept optional `response_version: 2`.
+Omitting it or using 1 preserves the legacy response. Other query tools keep
+their existing responses. For example:
+
+```json
+{"channel_id":"123","message_id":"456","response_version":2}
+```
+
+Version 2 returns source-qualified native message and sender identities,
+creation/edit times in UTC, reply-reference metadata, attachment metadata,
+and explicit field availability. `native` preserves Discord-specific details.
+It does not resolve represented webhook identities, fetch referenced bodies,
+or download attachments. Local content is untruncated; provider completeness
+remains unknown.
+
+History supports the existing exclusive `before` or `after` cursor and `limit`.
+The page reports the requested anchor separately from observed message bounds.
+`has_more_hint` indicates a full page, not proof of another page. Access and
+provider failures return finite error codes instead of raw provider diagnostics.
+Current access policy is checked on every invocation; the read does not grant
+later send permission.
+
+Exact reads retain the optional Vaelii receipt below. Version 2 reports receipt
+recording separately from read success. A v2 metadata validation error can
+follow an attempted receipt; it does not imply that no receipt was written.
 
 ### Explicit-read Vaelii receipts
 

@@ -5,6 +5,7 @@ use crate::{
     coordination::{CoordinationConfig, Coordinator},
     discord::verified_action::PLURALKIT_APPLICATION_ID,
     pre_send::ConstructId,
+    teams::ConversationId,
     timestamp::Timestamp,
 };
 use arc_swap::ArcSwap;
@@ -13,7 +14,7 @@ use regex::RegexSet;
 use serde::{Deserialize, Deserializer, de::Error as _};
 use serenity::model::id::{ChannelId, UserId};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     fs::{File, OpenOptions},
     io::{Read as _, Write as _},
     sync::{
@@ -96,6 +97,14 @@ pub(crate) static NEXT_CONFIG_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 // ── Config types ─────────────────────────────────────────────────────────────
 
+/// Explicit native Teams conversation scope; credentials remain in the environment.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct TeamsConfig {
+    /// Conversations allowed to authenticate messages and use restored reply authority.
+    pub allowed_conversations: BTreeSet<ConversationId>,
+}
+
 /// Top-level configuration loaded from `config.toml`.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
@@ -105,6 +114,8 @@ pub struct Config {
     /// IANA timezone name for timestamps in channel events (e.g. "America/Los_Angeles").
     /// Defaults to UTC.
     pub timezone: Option<String>,
+    /// Teams conversation admission, applied at startup.
+    pub teams: TeamsConfig,
     pub access: AccessConfig,
     pub channels: Vec<ChannelConfig>,
     pub mentions: MentionConfig,
@@ -662,8 +673,8 @@ where
                 UserIdValue::String(value) => value.parse::<u64>().map_err(D::Error::custom)?,
                 UserIdValue::Integer(value) => value,
             };
-            crate::mcp::ids::Snowflake::new(raw)
-                .map(crate::mcp::ids::Snowflake::user)
+            crate::discord::ids::Snowflake::new(raw)
+                .map(crate::discord::ids::Snowflake::user)
                 .ok_or_else(|| D::Error::custom("Discord user ID must be nonzero"))
         })
         .transpose()
@@ -1973,11 +1984,11 @@ fn persist_canonical(config_path: &Utf8Path, bytes: &[u8]) -> std::io::Result<Pe
 ///   (`src/mcp/dispatch.rs`). NOT read-only: recovery quarantines the
 ///   canonical and rewrites it from the LKG, and every reload publishes.
 ///   The whole read → compose → (recover) → publish sequence runs under
-///   [`CONFIG_WRITER`], acquired before any disk read and held across the
+///   `CONFIG_WRITER`, acquired before any disk read and held across the
 ///   publish.
 /// - **Tool mutations** ([`ConfigRuntime::mutate`]) — every config-mutating
 ///   MCP tool. The whole load → edit → validate (with sidecar merge) →
-///   persist → publish sequence runs under the same [`CONFIG_WRITER`].
+///   persist → publish sequence runs under the same `CONFIG_WRITER`.
 ///   Callers hand the runtime an edit; no caller persists or publishes on
 ///   its own.
 ///
@@ -2083,7 +2094,7 @@ impl ConfigRuntime {
     /// file is left in place for the operator (pre-LKG behavior).
     ///
     /// The whole read → compose → (recover) → publish sequence runs under
-    /// [`CONFIG_WRITER`] — the same lock `mutate` takes — acquired before any
+    /// `CONFIG_WRITER` — the same lock `mutate` takes — acquired before any
     /// disk read and held across the publish. File I/O runs on the blocking
     /// pool so fsync stalls never park the async runtime.
     pub async fn reload(&self) -> (LoadedConfig, Option<String>) {
@@ -2163,7 +2174,7 @@ impl ConfigRuntime {
     ///   (PROVISIONAL default: [`NoLkgPolicy::FailStartup`]; open decision
     ///   #1, owner 🦋, unresolved).
     ///
-    /// Startup is single-threaded, so taking [`CONFIG_WRITER`] here is
+    /// Startup is single-threaded, so taking `CONFIG_WRITER` here is
     /// trivially uncontended — held anyway for uniformity: every canonical
     /// writer and publisher runs under the one writer, no special cases.
     pub async fn startup_load(
@@ -2375,7 +2386,7 @@ impl ConfigRuntime {
     /// `Err` occurs before the canonical rename and changes neither disk nor
     /// the published snapshot.
     ///
-    /// Mutations are serialized by [`CONFIG_WRITER`]: each one re-reads the
+    /// Mutations are serialized by `CONFIG_WRITER`: each one re-reads the
     /// document a prior mutation persisted, so concurrent tool mutations
     /// compose later-wins per field instead of losing updates. A concurrent
     /// human file edit inside the window loses to the serialized mutation
@@ -2446,7 +2457,7 @@ impl ConfigRuntime {
 /// Reads config from disk, updates the in-memory cache, and returns the result.
 ///
 /// Thin delegate to [`ConfigRuntime::reload`] (and therefore serialized under
-/// [`CONFIG_WRITER`] like every other producer), kept for callers outside the
+/// `CONFIG_WRITER` like every other producer), kept for callers outside the
 /// three routed producers (e.g. `src/bin/gaie_archive.rs`) and for tests.
 pub async fn reload_config(state_dir: &Utf8Path) -> (LoadedConfig, Option<String>) {
     ConfigRuntime::new(state_dir.to_owned()).reload().await

@@ -1,7 +1,13 @@
+use super::observation::PreparedAdmission;
 use crate::{
     attention::types::{DirectAuthorKind, SourceAuthorKind},
     bell_rings::BellStatus,
     discord::{
+        messaging::create_dm_channel,
+        presence::{
+            ActivityType as PresenceActivityType, OnlineStatus as PresenceStatus, PresenceRequest,
+            PresenceSink, SharedPresence, run_presence_commands,
+        },
         verified_action::{
             LifecycleContext, LifecycleProvenance, VerifiedActionGate, VerifiedGateVerdict,
         },
@@ -13,7 +19,6 @@ use crate::{
         GateDecision, InboundGate, MentionDetector, MentionKind, ReplyParentAction,
         ReplyParentResolution, classify_reply_parent_ignore_default,
     },
-    mcp::tools::{bot_state::DiscordCommand, messaging::create_dm_channel},
     queue::AccessRequest,
     timestamp::Timestamp,
 };
@@ -29,177 +34,30 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-// ── Presence sink trait ──────────────────────────────────────────────────────
+struct GatewayPresenceSink(ShardMessenger);
 
-/// Abstraction over the Discord shard messenger for presence updates.
-///
-/// The real implementation wraps [`ShardMessenger`]; tests substitute a mock
-/// that records calls without needing a live gateway connection.
-pub trait PresenceSink: Send + Sync {
-    /// Set the bot's presence (activity + online status) on the gateway.
-    fn set_presence(&self, activity: Option<ActivityData>, status: OnlineStatus);
-}
-
-impl PresenceSink for ShardMessenger {
-    fn set_presence(&self, activity: Option<ActivityData>, status: OnlineStatus) {
-        ShardMessenger::set_presence(self, activity, status);
+impl PresenceSink for GatewayPresenceSink {
+    fn set_presence(&self, request: &PresenceRequest) {
+        let (activity, status) = gateway_presence(request);
+        self.0.set_presence(activity, status);
     }
 }
 
-/// The last requested presence configuration, stored for replay on reconnect.
-#[derive(Clone, Debug)]
-pub struct DesiredPresence {
-    pub activity: Option<ActivityData>,
-    pub status: OnlineStatus,
-    /// When this presence was requested. Replay on reconnect re-sends the
-    /// same request, so the stamp survives it: it dates the *decision*, not
-    /// the latest gateway delivery.
-    pub set_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// A point-in-time read of the presence state: what was last requested, and
-/// whether a sink from the most recent gateway `ready()` is installed.
-///
-/// `sink_installed` is **not** a live connection probe: the sink is replaced
-/// on each `ready()` but never cleared on disconnect, so it reports "a shard
-/// messenger has been installed since this process last saw `ready()`" and
-/// nothing stronger.
-#[derive(Clone, Debug)]
-pub struct PresenceSnapshot {
-    pub desired: Option<DesiredPresence>,
-    pub sink_installed: bool,
-}
-
-/// The complete presence state behind one lock: the last requested presence
-/// and the live sink slot. Keeping both under a single lock means every
-/// observation is a coherent pair — a snapshot can never combine a desired
-/// state and a sink observation from two different moments.
-struct PresenceState {
-    sink: Option<Arc<dyn PresenceSink>>,
-    desired: Option<DesiredPresence>,
-}
-
-/// A replaceable presence sink that survives gateway reconnects.
-///
-/// Bundles the live sink slot with the desired-state store under one state
-/// lock, so every observation is a coherent pair. Effects (calls into the
-/// dynamic sink) run **outside** the state lock: a slow or reentrant sink
-/// can never stall state reads or deadlock against them. Ordering of
-/// effects is preserved explicitly by the dedicated `effects` mutex, which
-/// every mutating path holds end-to-end — writers are serialized in arrival
-/// order, and the sink observes exactly that order.
-///
-/// Lock order: `effects` → `state`, never the reverse. `snapshot()` takes
-/// only the state lock and is never blocked by an in-flight sink call.
-#[derive(Clone)]
-pub struct SharedPresence {
-    state: Arc<tokio::sync::RwLock<PresenceState>>,
-    effects: Arc<tokio::sync::Mutex<()>>,
-}
-
-impl SharedPresence {
-    /// Creates empty slots — no sink installed, no desired presence.
-    pub fn new() -> Self {
-        Self {
-            state: Arc::new(tokio::sync::RwLock::new(PresenceState {
-                sink: None,
-                desired: None,
-            })),
-            effects: Arc::new(tokio::sync::Mutex::new(())),
-        }
-    }
-
-    /// True when `other` is a handle onto this exact state — the wiring
-    /// invariant `wire_shared_presence` establishes and tests pin.
-    pub fn is_same_authority(&self, other: &SharedPresence) -> bool {
-        Arc::ptr_eq(&self.state, &other.state)
-    }
-
-    /// Install a new sink and replay the stored desired presence.
-    ///
-    /// Called from `ready()` on each gateway reconnect. The whole
-    /// install-and-replay runs under the effects mutex, so no other
-    /// mutating path can interleave between the install and its replay; the
-    /// state lock itself is released before the sink callback runs.
-    pub async fn install(&self, new_sink: Arc<dyn PresenceSink>) {
-        let _effects = self.effects.lock().await;
-        let replay = {
-            let mut state = self.state.write().await;
-            let replay = state.desired.clone();
-            state.sink = Some(Arc::clone(&new_sink));
-            replay
-        };
-        if let Some(desired) = replay {
-            tracing::info!("replaying desired presence on reconnect");
-            new_sink.set_presence(desired.activity, desired.status);
-        }
-    }
-
-    /// Store desired presence and dispatch to the current sink.
-    ///
-    /// The desired state is authoritative the moment this returns: a
-    /// `snapshot()` immediately after always reflects it. If no sink is
-    /// available (reconnecting), the state is still stored and will be
-    /// replayed when the next sink installs. The effects mutex serializes
-    /// concurrent callers, so the sink observes requests in the order their
-    /// desired states were stored.
-    pub async fn set_presence(&self, activity: Option<ActivityData>, status: OnlineStatus) {
-        let _effects = self.effects.lock().await;
-        let sink = {
-            let mut state = self.state.write().await;
-            state.desired = Some(DesiredPresence {
-                activity: activity.clone(),
-                status,
-                set_at: chrono::Utc::now(),
-            });
-            state.sink.clone()
-        };
-        if let Some(sink) = sink {
-            sink.set_presence(activity, status);
-        } else {
-            tracing::warn!(
-                "presence command accepted but shard messenger unavailable \
-                 (reconnecting); will replay on next ready"
-            );
-        }
-    }
-
-    /// Read the stored desired presence (test-only).
-    #[cfg(test)]
-    pub(crate) async fn desired_for_test(&self) -> Option<DesiredPresence> {
-        self.state.read().await.desired.clone()
-    }
-
-    /// A coherent point-in-time read for `get_presence`: the last requested
-    /// presence and whether a sink is installed, observed under one lock.
-    /// `desired` with no sink means the request is stored and will replay on
-    /// the next `ready()`; a sink with no `desired` means nothing was ever
-    /// requested this process — Discord is showing the gateway default.
-    pub async fn snapshot(&self) -> PresenceSnapshot {
-        let state = self.state.read().await;
-        PresenceSnapshot {
-            desired: state.desired.clone(),
-            sink_installed: state.sink.is_some(),
-        }
-    }
-}
-
-impl Default for SharedPresence {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// The production presence assembly: mints ONE authority and hands the
-/// gateway handler and the MCP server handles onto the same state. `main`
-/// must obtain both handles from this function — constructing two separate
-/// `SharedPresence` values would silently split reconnect replay from MCP
-/// read/write, which is exactly the divergence
-/// [`SharedPresence::is_same_authority`] and the assembly tests pin.
-pub fn wire_shared_presence() -> (SharedPresence, Option<SharedPresence>) {
-    let authority = SharedPresence::new();
-    let server_handle = Some(authority.clone());
-    (authority, server_handle)
+fn gateway_presence(request: &PresenceRequest) -> (Option<ActivityData>, OnlineStatus) {
+    let status = match request.status() {
+        PresenceStatus::Online => OnlineStatus::Online,
+        PresenceStatus::Idle => OnlineStatus::Idle,
+        PresenceStatus::Dnd => OnlineStatus::DoNotDisturb,
+        PresenceStatus::Invisible => OnlineStatus::Invisible,
+    };
+    let activity = request.activity().map(|activity| match activity.kind() {
+        PresenceActivityType::Playing => ActivityData::playing(activity.name()),
+        PresenceActivityType::Watching => ActivityData::watching(activity.name()),
+        PresenceActivityType::Listening => ActivityData::listening(activity.name()),
+        PresenceActivityType::Competing => ActivityData::competing(activity.name()),
+        PresenceActivityType::Custom => ActivityData::custom(activity.name()),
+    });
+    (activity, status)
 }
 
 /// A display name with pronouns already resolved and appended (e.g. "paceheart (she/her)").
@@ -247,7 +105,6 @@ pub struct MessageEvent {
 }
 
 /// Whether Discord ingress had explicit evidence that a message targeted this construct.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageTargeting {
     /// An accepted direct message.
@@ -266,7 +123,6 @@ impl MessageTargeting {
 }
 
 /// Events forwarded from the Discord gateway to the MCP notification stream.
-#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum NotificationEvent {
     Message(MessageEvent),
@@ -285,7 +141,7 @@ pub enum NotificationEvent {
         granted: bool,
     },
     Trace {
-        level: String,
+        level: tracing::Level,
         target: String,
         message: String,
         fields: Vec<(String, String)>,
@@ -326,7 +182,12 @@ impl NotificationEvent {
             Self::MessageEdit { new_content, .. } => {
                 !crate::evidence::parse_sentex_locators(new_content).is_empty()
             }
-            _ => false,
+            Self::Reaction { .. }
+            | Self::PermissionResponse { .. }
+            | Self::Trace { .. }
+            | Self::MessageDelete { .. }
+            | Self::ConfigError { .. }
+            | Self::Coordination(_) => false,
         }
     }
 }
@@ -342,7 +203,7 @@ pub struct Handler {
     pub bot_user_id: AtomicU64,
     /// Receiver for gateway-level commands from MCP tools (e.g. presence updates).
     /// Taken once during `ready()` to spawn the command processing task.
-    pub discord_cmd_rx: tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<DiscordCommand>>>,
+    pub discord_cmd_rx: tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<PresenceRequest>>>,
     /// Presence sink + desired-state store — updated on each `ready()` with the
     /// current shard messenger, replayed on reconnect.
     pub presence: SharedPresence,
@@ -354,6 +215,7 @@ pub struct Handler {
     pub ingress_ledger: Arc<crate::ingress_ledger::IngressLedger>,
     /// PluralKit identity resolver for proxy webhook messages.
     pub pk_resolver: Option<Arc<crate::pluralkit::PkResolver>>,
+    pub(crate) observation: super::observation::ObservationIngress,
 }
 
 impl Handler {
@@ -496,18 +358,18 @@ impl EventHandler for Handler {
             "Discord gateway ready"
         );
 
-        // Install the new shard messenger and replay any stored presence.
-        self.presence.install(Arc::new(ctx.shard.clone())).await;
+        self.presence
+            .install(Arc::new(GatewayPresenceSink(ctx.shard.clone())))
+            .await;
 
-        // Take the command receiver (once) and spawn the command processor.
-        // On reconnect, the existing processor continues — it reads the
-        // shared sink, which was just updated above.
         if let Some(rx) = self.discord_cmd_rx.lock().await.take() {
-            tokio::spawn(run_discord_commands(self.presence.clone(), rx));
+            tokio::spawn(run_presence_commands(self.presence.clone(), rx));
         }
     }
 
     async fn message(&self, ctx: Context, msg: Message) {
+        let prepared = self.observation.create(self, &ctx.http, &msg).await;
+        prepared.outcome.record(msg.channel_id, msg.id);
         let config = crate::config::load_config(&self.state_dir);
 
         // Quick bot filter for non-webhook bots — no expensive lookups needed.
@@ -712,11 +574,17 @@ impl EventHandler for Handler {
                     resolve_webhook_action(self.pk_resolver.as_deref(), action).await
                 };
                 let Some(plan) = admit_verified_create_after_wait(
+                    prepared.admission,
                     &delivery_msg,
                     bot_user_id,
                     &self.ingress_ledger,
                     resolution,
-                    resolve_thread_parent(&ctx.http, &self.state, channel_id),
+                    async {
+                        match prepared.parent {
+                            Some(parent) => parent,
+                            None => resolve_thread_parent(&ctx.http, &self.state, channel_id).await,
+                        }
+                    },
                     || crate::config::load_config(&self.state_dir),
                     |guild_id, _gate_channel_id| {
                         crate::mute_store::global()
@@ -762,7 +630,10 @@ impl EventHandler for Handler {
             }
 
             // Resolve immutable topology before taking the policy snapshot.
-            let thread_parent_id = resolve_thread_parent(&ctx.http, &self.state, channel_id).await;
+            let thread_parent_id = match prepared.parent {
+                Some(parent) => parent,
+                None => resolve_thread_parent(&ctx.http, &self.state, channel_id).await,
+            };
             let config = crate::config::load_config(&self.state_dir);
             let resolved = ResolvedChannel {
                 thread_parent_id,
@@ -990,6 +861,17 @@ impl EventHandler for Handler {
         new: Option<Message>,
         event: MessageUpdateEvent,
     ) {
+        let prepared = self
+            .observation
+            .edit(
+                self,
+                &ctx.http,
+                &event,
+                old_if_available.as_ref(),
+                new.as_ref(),
+            )
+            .await;
+        prepared.outcome.record(event.channel_id, event.id);
         let Some(edited_ts) = event.edited_timestamp else {
             return;
         };
@@ -1129,6 +1011,7 @@ impl EventHandler for Handler {
                 resolve_webhook_action(self.pk_resolver.as_deref(), action).await
             };
             let Some(plan) = admit_verified_edit_after_wait(
+                prepared.admission,
                 &event,
                 new.as_ref(),
                 old_if_available.as_ref(),
@@ -1139,7 +1022,12 @@ impl EventHandler for Handler {
                 self.bot_user_id.load(Ordering::Relaxed),
                 &self.ingress_ledger,
                 resolution,
-                resolve_thread_parent(&ctx.http, &self.state, channel_id),
+                async {
+                    match prepared.parent {
+                        Some(parent) => parent,
+                        None => resolve_thread_parent(&ctx.http, &self.state, channel_id).await,
+                    }
+                },
                 || crate::config::load_config(&self.state_dir),
                 |guild_id, _gate_channel_id| {
                     crate::mute_store::global().is_some_and(|store| store.is_guild_muted(guild_id))
@@ -1151,7 +1039,10 @@ impl EventHandler for Handler {
             };
             (plan.config, plan.admission)
         } else {
-            let thread_parent_id = resolve_thread_parent(&ctx.http, &self.state, channel_id).await;
+            let thread_parent_id = match prepared.parent {
+                Some(parent) => parent,
+                None => resolve_thread_parent(&ctx.http, &self.state, channel_id).await,
+            };
             let config = crate::config::load_config(&self.state_dir);
             let gate_channel_id = select_gate_channel(&config, channel_id, thread_parent_id);
             let message_mentions = event
@@ -1356,44 +1247,6 @@ impl EventHandler for Handler {
             tracing::warn!(error = %e, "failed to send permission response event");
         }
     }
-}
-
-// ── Discord command processing ───────────────────────────────────────────────
-
-/// Processes gateway-level commands sent from MCP tools.
-///
-/// Reads from the [`SharedPresence`] on each dispatch so that reconnects
-/// (which install a new shard messenger via `ready()`) take effect immediately
-/// without restarting the processor.
-async fn run_discord_commands(
-    presence: SharedPresence,
-    mut rx: tokio::sync::mpsc::Receiver<DiscordCommand>,
-) {
-    tracing::debug!("discord command processor started");
-    while let Some(cmd) = rx.recv().await {
-        match cmd {
-            DiscordCommand::SetPresence {
-                online_status,
-                activity_type,
-                activity_name,
-            } => {
-                let status = online_status.to_serenity();
-                let activity = match (activity_type, activity_name.as_deref()) {
-                    (Some(kind), Some(name)) => Some(kind.to_activity(name)),
-                    _ => None,
-                };
-                tracing::info!(
-                    ?status,
-                    ?activity_type,
-                    activity_name = activity_name.as_deref(),
-                    "setting presence"
-                );
-
-                presence.set_presence(activity, status).await;
-            }
-        }
-    }
-    tracing::debug!("discord command processor stopped (channel closed)");
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1732,7 +1585,12 @@ struct VerifiedEditPlan {
     config: Arc<crate::config::LoadedConfig>,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "shared prepared verdict is separate from the existing legacy admission inputs"
+)]
 async fn admit_verified_create_after_wait<RF, TF, LF, MF>(
+    prepared: PreparedAdmission,
     msg: &Message,
     bot_user_id: u64,
     ledger: &crate::ingress_ledger::IngressLedger,
@@ -1754,7 +1612,11 @@ where
     MF: FnOnce(u64, u64) -> bool,
 {
     msg.guild_id?;
-    let action = resolved_action.await?;
+    let action = if matches!(prepared, PreparedAdmission::Unobserved) {
+        Some(resolved_action.await?)
+    } else {
+        None
+    };
     let thread_parent_id = topology.await;
     let config = load_fresh_config();
     let channel_id = msg.channel_id.get();
@@ -1778,10 +1640,15 @@ where
     if !fresh_guild_envelope_allows_with_mute(&config, gate_channel_id, mention_kind, muted) {
         return None;
     }
-    let policy = fresh_policy_snapshot(&config, gate_channel_id)?;
-    let facts = match VerifiedActionGate::evaluate(action, policy) {
-        VerifiedGateVerdict::Allow(facts) => facts,
-        VerifiedGateVerdict::Deny => return None,
+    let facts = match prepared.take(config.generation()).ok()? {
+        Some(facts) => facts,
+        None => {
+            let policy = fresh_policy_snapshot(&config, gate_channel_id)?;
+            match VerifiedActionGate::evaluate(action?, policy) {
+                VerifiedGateVerdict::Allow(facts) => facts,
+                VerifiedGateVerdict::Deny => return None,
+            }
+        }
     };
     // #369 (P1 fix): the identity-ignore blocklist applies to the RESOLVED
     // PRINCIPAL behind the proxy (the represented Discord user), never the
@@ -1829,6 +1696,7 @@ where
     reason = "verified edit orchestration keeps immutable gateway evidence explicit"
 )]
 async fn admit_verified_edit_after_wait<RF, TF, LF, MF>(
+    prepared: PreparedAdmission,
     event: &MessageUpdateEvent,
     new: Option<&Message>,
     old: Option<&Message>,
@@ -1856,7 +1724,11 @@ where
     MF: FnOnce(u64, u64) -> bool,
 {
     event.guild_id?;
-    let action = resolved_action.await?;
+    let action = if matches!(prepared, PreparedAdmission::Unobserved) {
+        Some(resolved_action.await?)
+    } else {
+        None
+    };
     let thread_parent_id = topology.await;
     let config = load_fresh_config();
     let gate_channel_id = select_gate_channel(&config, event.channel_id.get(), thread_parent_id);
@@ -1888,10 +1760,15 @@ where
     if !fresh_guild_envelope_allows_with_mute(&config, gate_channel_id, mention_kind, muted) {
         return None;
     }
-    let policy = fresh_policy_snapshot(&config, gate_channel_id)?;
-    let facts = match VerifiedActionGate::evaluate(action, policy) {
-        VerifiedGateVerdict::Allow(facts) => facts,
-        VerifiedGateVerdict::Deny => return None,
+    let facts = match prepared.take(config.generation()).ok()? {
+        Some(facts) => facts,
+        None => {
+            let policy = fresh_policy_snapshot(&config, gate_channel_id)?;
+            match VerifiedActionGate::evaluate(action?, policy) {
+                VerifiedGateVerdict::Allow(facts) => facts,
+                VerifiedGateVerdict::Deny => return None,
+            }
+        }
     };
     // #369 (P1 fix): the identity-ignore blocklist applies to the RESOLVED
     // PRINCIPAL behind the proxy, never the webhook transport id. An ignored
@@ -1926,7 +1803,7 @@ where
     Some(VerifiedEditPlan { admission, config })
 }
 
-fn select_gate_channel(
+pub(super) fn select_gate_channel(
     config: &crate::config::LoadedConfig,
     channel_id: u64,
     thread_parent_id: Option<u64>,
@@ -2294,7 +2171,7 @@ fn build_message_event_with_coordinates(
     // under fail-open), strip ONLY the quoted content preview — the sole
     // content-leak vector a reply carries from the ignored person. The parent
     // user id/name are kept for threading (they are not the leak). Mirrors the
-    // preview-None convention in coalesce.rs.
+    // preview-None convention in host batch presentation.
     if redact_reply_preview {
         reply_to_content_preview = None;
     }
@@ -2330,7 +2207,7 @@ fn build_message_event_with_coordinates(
 /// First checks the in-memory cache (including negative entries for channels
 /// confirmed not to be threads), then falls back to an API call. Caches
 /// the result either way. Returns `None` if the channel is not a thread.
-async fn resolve_thread_parent(
+pub(super) async fn resolve_thread_parent(
     http: &serenity::http::Http,
     state: &crate::state::State,
     channel_id: u64,
@@ -2382,7 +2259,7 @@ async fn notify_admin_dm(
     message_preview: &str,
 ) {
     // Create DM channel with admin.
-    let Some(admin_uid) = crate::mcp::ids::Snowflake::new(admin_id) else {
+    let Some(admin_uid) = crate::discord::ids::Snowflake::new(admin_id) else {
         tracing::warn!(admin_id, "skipping admin DM notification: admin_id is zero");
         return;
     };
@@ -2418,7 +2295,7 @@ async fn notify_admin_dm(
 /// Intentional bot self-reactions (e.g. contradictionary celebrate) never
 /// arrive through this path — they are emitted by the tool layer with
 /// `self_react: true` at the point where they are initiated. See
-/// `crate::mcp::tools::messaging`.
+/// `crate::discord::messaging`.
 fn gateway_reactor(user_id: Option<UserId>, bot_id: u64) -> Option<UserId> {
     user_id.filter(|id| id.get() != bot_id)
 }
@@ -2444,6 +2321,10 @@ fn is_direct_dm_transport(is_dm: bool, is_webhook: bool) -> bool {
 mod tests {
     use super::*;
     use crate::config::{AccessConfig, Config, DmPolicy, LoadedConfig};
+    use crate::discord::observation::{
+        DispatchOutcome, Exclusion, ObservationIngress, ObservationPolicy, RoomScope, SenderFilter,
+    };
+    use std::{collections::HashSet, num::NonZeroUsize};
 
     fn mid(raw: u64) -> MessageId {
         MessageId::new(raw)
@@ -2837,37 +2718,6 @@ mod tests {
         );
     }
 
-    // ── Presence assembly (round-2 seam) ────────────────────────────────────
-
-    /// The production wiring mints one authority: both handles observe the
-    /// same state, and a write through the MCP-side handle is what the
-    /// gateway-side handle replays onto a freshly installed sink.
-    #[tokio::test]
-    async fn wired_presence_handles_share_one_authority() {
-        let (handler_handle, server_handle) = wire_shared_presence();
-        let server_handle = server_handle.expect("gateway transport wires the MCP handle");
-        assert!(handler_handle.is_same_authority(&server_handle));
-        assert!(
-            !handler_handle.is_same_authority(&SharedPresence::new()),
-            "a separately constructed store must not read as the same authority"
-        );
-
-        // Write through the MCP-side handle…
-        server_handle
-            .set_presence(None, OnlineStatus::DoNotDisturb)
-            .await;
-        // …and the gateway-side handle replays it onto a new sink.
-        let sink = Arc::new(MockPresenceSink::new());
-        handler_handle
-            .install(Arc::clone(&sink) as Arc<dyn PresenceSink>)
-            .await;
-        assert_eq!(sink.call_count(), 1, "install replays the MCP-side write");
-        assert_eq!(
-            handler_handle.snapshot().await.desired.map(|d| d.status),
-            Some(OnlineStatus::DoNotDisturb)
-        );
-    }
-
     fn config_with_allow_from(ids: Vec<&str>) -> LoadedConfig {
         let raw = Config {
             access: AccessConfig {
@@ -3039,6 +2889,7 @@ mod tests {
         let order_for_mute = Arc::clone(&order);
         let snapshots_for_load = Arc::clone(&snapshots);
         let plan = admit_verified_create_after_wait(
+            PreparedAdmission::Unobserved,
             &msg,
             999,
             &crate::ingress_ledger::IngressLedger::new(),
@@ -3082,6 +2933,7 @@ mod tests {
                 std::future::ready(facts),
             );
             admit_verified_create_after_wait(
+                PreparedAdmission::Unobserved,
                 &msg,
                 999,
                 &crate::ingress_ledger::IngressLedger::new(),
@@ -3143,6 +2995,7 @@ mod tests {
                 std::future::ready(Ok(represented_test_facts(42))),
             );
             admit_verified_create_after_wait(
+                PreparedAdmission::Unobserved,
                 &msg,
                 999,
                 &crate::ingress_ledger::IngressLedger::new(),
@@ -3239,6 +3092,7 @@ mod tests {
             );
         assert!(
             admit_verified_create_after_wait(
+                PreparedAdmission::Unobserved,
                 &create,
                 999,
                 &ledger,
@@ -3262,6 +3116,7 @@ mod tests {
         );
         assert!(
             admit_verified_edit_after_wait(
+                PreparedAdmission::Unobserved,
                 &event,
                 None,
                 None,
@@ -3300,6 +3155,7 @@ mod tests {
                 );
             assert!(
                 admit_verified_create_after_wait(
+                    PreparedAdmission::Unobserved,
                     &create,
                     999,
                     &ledger,
@@ -3324,6 +3180,7 @@ mod tests {
             );
             let allow_from = if restricted { &[42][..] } else { &[] };
             admit_verified_edit_after_wait(
+                PreparedAdmission::Unobserved,
                 &event,
                 None,
                 None,
@@ -3429,6 +3286,7 @@ mod tests {
         let ledger = crate::ingress_ledger::IngressLedger::new();
         assert!(
             admit_verified_create_after_wait(
+                PreparedAdmission::Unobserved,
                 &msg,
                 999,
                 &ledger,
@@ -3457,6 +3315,7 @@ mod tests {
         );
         assert!(
             admit_verified_edit_after_wait(
+                PreparedAdmission::Unobserved,
                 &event,
                 None,
                 None,
@@ -4091,6 +3950,7 @@ mod tests {
             );
         assert!(
             admit_verified_create_after_wait(
+                PreparedAdmission::Unobserved,
                 &parent_msg,
                 999,
                 &ledger,
@@ -4266,6 +4126,7 @@ mod tests {
             std::future::ready(Ok(represented_test_facts(42))),
         );
         let plan = admit_verified_create_after_wait(
+            PreparedAdmission::Unobserved,
             &msg,
             999,
             &crate::ingress_ledger::IngressLedger::new(),
@@ -4297,6 +4158,7 @@ mod tests {
             );
         assert!(
             admit_verified_create_after_wait(
+                PreparedAdmission::Unobserved,
                 &create,
                 999,
                 &ledger,
@@ -4321,6 +4183,7 @@ mod tests {
         );
         let config = Arc::new(ignore_channel_config(20, &[42], &[42], false));
         let plan = admit_verified_edit_after_wait(
+            PreparedAdmission::Unobserved,
             &event,
             None,
             None,
@@ -4412,7 +4275,7 @@ mod tests {
 
     #[test]
     fn represented_and_direct_messages_share_the_same_construct_envelope_shape() {
-        use crate::mcp::notifications::IntoNotification;
+        use crate::harness::test_support::FixtureNotification;
 
         let config = LoadedConfig::from_raw(Config::default());
         let direct_ledger = crate::ingress_ledger::IngressLedger::new();
@@ -4429,7 +4292,7 @@ mod tests {
             panic!("direct builder must return a message");
         };
         assert_eq!(direct_event.author_kind, SourceAuthorKind::DirectHuman);
-        let direct = NotificationEvent::Message(direct_event).into_notification();
+        let direct = NotificationEvent::Message(direct_event).fixture_notification();
 
         let represented_ledger = crate::ingress_ledger::IngressLedger::new();
         let mut represented_message = wire_message_body(201, wire_author(500, "alice"), "hello");
@@ -4479,7 +4342,7 @@ mod tests {
             SourceAuthorKind::VerifiedWebhook
         );
         assert_eq!(represented_event.user_id, UserId::new(600));
-        let represented = NotificationEvent::Message(represented_event).into_notification();
+        let represented = NotificationEvent::Message(represented_event).fixture_notification();
 
         let direct_meta = direct["params"]["meta"].as_object().expect("direct meta");
         let represented_meta = represented["params"]["meta"]
@@ -4607,143 +4470,480 @@ mod tests {
         assert_eq!(display_name(&msg), "B");
     }
 
-    // ── Presence sink mock & tests ──────────────────────────────────────────
-
-    /// Records every `set_presence` call for assertion in tests.
-    struct MockPresenceSink {
-        calls: std::sync::Mutex<Vec<(Option<String>, OnlineStatus)>>,
-    }
-
-    impl MockPresenceSink {
-        fn new() -> Self {
-            Self {
-                calls: std::sync::Mutex::new(Vec::new()),
+    #[test]
+    fn gateway_presence_converts_every_domain_variant() {
+        for (status, expected) in [
+            (PresenceStatus::Online, OnlineStatus::Online),
+            (PresenceStatus::Idle, OnlineStatus::Idle),
+            (PresenceStatus::Dnd, OnlineStatus::DoNotDisturb),
+            (PresenceStatus::Invisible, OnlineStatus::Invisible),
+        ] {
+            let (activity, actual) = gateway_presence(&PresenceRequest::new(status, None));
+            assert!(activity.is_none());
+            assert_eq!(actual, expected);
+        }
+        for (kind, expected) in [
+            (
+                PresenceActivityType::Playing,
+                serenity::model::gateway::ActivityType::Playing,
+            ),
+            (
+                PresenceActivityType::Watching,
+                serenity::model::gateway::ActivityType::Watching,
+            ),
+            (
+                PresenceActivityType::Listening,
+                serenity::model::gateway::ActivityType::Listening,
+            ),
+            (
+                PresenceActivityType::Competing,
+                serenity::model::gateway::ActivityType::Competing,
+            ),
+            (
+                PresenceActivityType::Custom,
+                serenity::model::gateway::ActivityType::Custom,
+            ),
+        ] {
+            let request = PresenceRequest::new(
+                PresenceStatus::Online,
+                Some(crate::discord::presence::PresenceActivity::new(
+                    kind,
+                    "human text".into(),
+                )),
+            );
+            let (activity, _) = gateway_presence(&request);
+            let activity = activity.unwrap();
+            assert_eq!(activity.kind, expected);
+            if kind == PresenceActivityType::Custom {
+                assert_eq!(activity.name, "~");
+                assert_eq!(activity.state.as_deref(), Some("human text"));
+            } else {
+                assert_eq!(activity.name, "human text");
+                assert_eq!(activity.state, None);
             }
         }
-
-        fn call_count(&self) -> usize {
-            self.calls.lock().unwrap().len()
-        }
+    }
+    struct ObservationFixture {
+        handler: Handler,
+        observations:
+            tokio::sync::mpsc::Receiver<crate::discord::observation::DiscordMessageObservation>,
+        notifications: tokio::sync::mpsc::Receiver<NotificationEvent>,
+        policy: Arc<std::sync::RwLock<crate::discord::observation::ObservationPolicy>>,
+        _directory: tempfile::TempDir,
     }
 
-    impl PresenceSink for MockPresenceSink {
-        fn set_presence(&self, activity: Option<ActivityData>, status: OnlineStatus) {
-            let name = activity.map(|a| a.name.clone());
-            self.calls.lock().unwrap().push((name, status));
-        }
-    }
-
-    /// Queue drain + last-write-wins: multiple commands dispatched in sequence
-    /// all reach the same sink, and the desired presence reflects the final one.
-    #[tokio::test]
-    async fn presence_queue_drain_last_write_wins() {
-        use crate::mcp::tools::bot_state::{ActivityType, DiscordCommand, OnlineStatus};
-
-        let presence = SharedPresence::new();
-        let (tx, rx) = tokio::sync::mpsc::channel::<DiscordCommand>(16);
-
-        let sink = Arc::new(MockPresenceSink::new());
-        // Use install — the same path ready() takes.
-        presence.install(sink.clone()).await;
-
-        let handle = tokio::spawn(run_discord_commands(presence.clone(), rx));
-
-        // Send three commands in quick succession.
-        for (status, name) in [
-            (OnlineStatus::Online, "first"),
-            (OnlineStatus::Idle, "second"),
-            (OnlineStatus::Dnd, "third"),
-        ] {
-            tx.send(DiscordCommand::SetPresence {
-                online_status: status,
-                activity_type: Some(ActivityType::Playing),
-                activity_name: Some(name.to_string()),
-            })
-            .await
-            .unwrap();
-        }
-
-        // Close the channel and await the processor — deterministic drain,
-        // no sleeps.
-        drop(tx);
-        handle.await.unwrap();
-
-        assert_eq!(sink.call_count(), 3, "all three commands must dispatch");
-
-        // Desired presence reflects the last write.
-        let stored = presence
-            .desired_for_test()
-            .await
-            .expect("desired presence stored");
-        assert_eq!(
-            stored.status,
-            serenity::model::user::OnlineStatus::DoNotDisturb
+    fn observation_fixture(capacity: usize) -> ObservationFixture {
+        let directory = tempfile::tempdir().unwrap();
+        let state_dir = camino::Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
+        let policy = Arc::new(std::sync::RwLock::new(ObservationPolicy {
+            rooms: vec![RoomScope {
+                guild: GuildId::new(60),
+                channel: ChannelId::new(20),
+                include_threads: false,
+            }],
+            denied_rooms: HashSet::new(),
+            senders: SenderFilter::EveryoneInRoom,
+            own_actors: HashSet::from([UserId::new(999)]),
+            own_webhooks: HashSet::new(),
+        }));
+        let source = crate::core::ModuleInstanceId::new(
+            crate::core::ProviderId::new("discord").unwrap(),
+            crate::core::ModuleSlotId::new("observation-test").unwrap(),
         );
-        assert_eq!(
-            stored.activity.as_ref().map(|a| a.name.as_str()),
-            Some("third")
-        );
-    }
-
-    /// Reconnect dispatch: Ready(A) -> command -> Ready(B) -> replay.
-    ///
-    /// Uses `SharedPresence::install` — the same code path `ready()` takes —
-    /// so deleting production replay logic would cause this test to fail.
-    /// Asserts that reconnect replay reaches B exactly once, and no
-    /// post-replacement dispatch leaks through A.
-    #[tokio::test]
-    async fn presence_reconnect_replays_to_new_sink_not_old() {
-        use crate::mcp::tools::bot_state::{ActivityType, DiscordCommand, OnlineStatus};
-
-        let presence = SharedPresence::new();
-        let (tx, rx) = tokio::sync::mpsc::channel::<DiscordCommand>(16);
-
-        // Install mock sink A (simulates first ready()).
-        let sink_a = Arc::new(MockPresenceSink::new());
-        presence.install(sink_a.clone()).await;
-
-        // Spawn the command processor (once, like the real ready()).
-        let handle = tokio::spawn(run_discord_commands(presence.clone(), rx));
-
-        // Send a SetPresence command through the channel.
-        tx.send(DiscordCommand::SetPresence {
-            online_status: OnlineStatus::Idle,
-            activity_type: Some(ActivityType::Playing),
-            activity_name: Some("testing".to_string()),
-        })
-        .await
+        let (observation, observations) = ObservationIngress::enabled(
+            source,
+            policy.clone(),
+            NonZeroUsize::new(capacity).unwrap(),
+        )
         .unwrap();
-
-        // Close the channel and drain — deterministic, no sleeps.
-        drop(tx);
-        handle.await.unwrap();
-
-        // Sink A received exactly one set_presence call.
-        assert_eq!(sink_a.call_count(), 1, "sink A must receive one dispatch");
-        {
-            let calls = sink_a.calls.lock().unwrap();
-            assert_eq!(calls[0].0.as_deref(), Some("testing"));
-            assert_eq!(calls[0].1, serenity::model::user::OnlineStatus::Idle);
+        let (tx, notifications) = tokio::sync::mpsc::channel(8);
+        let handler = Handler {
+            state: crate::state::new_state(),
+            queue: Arc::new(tokio::sync::Mutex::new(crate::queue::AccessQueue::load(
+                &state_dir,
+            ))),
+            tx,
+            state_dir,
+            bot_user_id: AtomicU64::new(999),
+            discord_cmd_rx: tokio::sync::Mutex::new(None),
+            presence: SharedPresence::new(),
+            pronoun_service: None,
+            nameplate_service: None,
+            ingress_ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
+            pk_resolver: None,
+            observation,
+        };
+        ObservationFixture {
+            handler,
+            observations,
+            notifications,
+            policy,
+            _directory: directory,
         }
+    }
 
-        // Simulate reconnect: install mock sink B
-        // (the same code path ready() takes — tests the real wiring).
-        let sink_b = Arc::new(MockPresenceSink::new());
-        presence.install(sink_b.clone()).await;
-
-        // Sink B received exactly one set_presence call (replay).
-        assert_eq!(sink_b.call_count(), 1, "sink B must receive replay");
-        {
-            let calls = sink_b.calls.lock().unwrap();
-            assert_eq!(calls[0].0.as_deref(), Some("testing"));
-            assert_eq!(calls[0].1, serenity::model::user::OnlineStatus::Idle);
+    #[tokio::test(start_paused = true)]
+    async fn enabled_observation_and_actual_legacy_continuation_share_only_legacy_authority() {
+        let mut fixture = observation_fixture(1);
+        let config = handler_policy_config(20, &[42], true, &["ping"]);
+        let mut message =
+            message_from_wire(wire_message_body(101, wire_author(42, "human"), "ambient"));
+        message.channel_id = ChannelId::new(20);
+        message.guild_id = Some(GuildId::new(60));
+        let prepared = fixture
+            .handler
+            .observation
+            .create_with(
+                &message,
+                999,
+                || config.clone(),
+                std::future::ready(None),
+                |_| std::future::ready(None),
+            )
+            .await;
+        assert_eq!(prepared.outcome, DispatchOutcome::Offered);
+        let drops = crate::drop_ledger::DropLedger::new();
+        assert!(matches!(
+            admit_direct_guild_message(
+                &drops,
+                &config,
+                message.channel_id,
+                message.id,
+                None,
+                Some(60),
+                false,
+                false,
+                42,
+                None
+            ),
+            DirectGuildAdmission::Preflight(GuildPreflight::MentionRequired)
+        ));
+        assert!(!matches!(
+            fixture
+                .handler
+                .ingress_ledger
+                .verify(message.id, message.channel_id),
+            crate::ingress_ledger::VerifyResult::Admitted { .. }
+        ));
+        assert!(fixture.notifications.try_recv().is_err());
+        for (index, expected) in [
+            (102, DispatchOutcome::Full),
+            (103, DispatchOutcome::SinkUnavailable),
+        ] {
+            if index == 103 {
+                fixture.observations.close();
+            }
+            message.id = MessageId::new(index);
+            message.content = "ping".into();
+            let prepared = fixture
+                .handler
+                .observation
+                .create_with(
+                    &message,
+                    999,
+                    || config.clone(),
+                    async { panic!("full/closed observation must skip topology") },
+                    |_| std::future::ready(None),
+                )
+                .await;
+            assert_eq!(prepared.outcome, expected);
+            let mention = MentionDetector::classify(
+                999,
+                &[],
+                &message.content,
+                None,
+                config.mention_patterns.as_ref(),
+            );
+            let DirectGuildAdmission::Deliver { targeting } = admit_direct_guild_message(
+                &drops,
+                &config,
+                message.channel_id,
+                message.id,
+                None,
+                Some(60),
+                false,
+                false,
+                42,
+                mention,
+            ) else {
+                panic!("legacy mention must remain admitted")
+            };
+            let event = build_message_event(
+                &message,
+                &config,
+                &fixture.handler.ingress_ledger,
+                None,
+                targeting,
+                None,
+                false,
+            );
+            send_gateway_admitted_message(
+                &fixture.handler.ingress_ledger,
+                &fixture.handler.tx,
+                &message,
+                None,
+                event,
+                "test-guild",
+            )
+            .await;
+            let NotificationEvent::Message(delivered) = fixture.notifications.try_recv().unwrap()
+            else {
+                panic!("ordinary message expected")
+            };
+            assert_eq!(delivered.content, "ping");
+            assert_eq!(delivered.message_id, message.id);
+            assert!(matches!(
+                fixture
+                    .handler
+                    .ingress_ledger
+                    .verify(message.id, message.channel_id),
+                crate::ingress_ledger::VerifyResult::Admitted { .. }
+            ));
         }
-
-        // Sink A has no additional calls after replacement.
+        let mut timed = observation_fixture(1);
+        message.id = MessageId::new(104);
+        let prepared = timed
+            .handler
+            .observation
+            .create_with(
+                &message,
+                999,
+                || config.clone(),
+                std::future::pending(),
+                |_| std::future::ready(None),
+            )
+            .await;
         assert_eq!(
-            sink_a.call_count(),
-            1,
-            "sink A must not receive post-replacement dispatch"
+            prepared.outcome,
+            DispatchOutcome::Incomplete(crate::discord::observation::ObservationFailure::Timeout)
+        );
+        assert!(matches!(prepared.admission, PreparedAdmission::Unobserved));
+        let mention = MentionDetector::classify(
+            999,
+            &[],
+            &message.content,
+            None,
+            config.mention_patterns.as_ref(),
+        );
+        let DirectGuildAdmission::Deliver { targeting } = admit_direct_guild_message(
+            &drops,
+            &config,
+            message.channel_id,
+            message.id,
+            None,
+            Some(60),
+            false,
+            false,
+            42,
+            mention,
+        ) else {
+            panic!("timeout must preserve eligible legacy admission")
+        };
+        let event = build_message_event(
+            &message,
+            &config,
+            &timed.handler.ingress_ledger,
+            None,
+            targeting,
+            None,
+            false,
+        );
+        send_gateway_admitted_message(
+            &timed.handler.ingress_ledger,
+            &timed.handler.tx,
+            &message,
+            None,
+            event,
+            "test-guild",
+        )
+        .await;
+        assert!(matches!(
+            timed.notifications.try_recv(),
+            Ok(NotificationEvent::Message(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn one_verified_verdict_feeds_observation_and_legacy_and_stale_verdict_cannot_admit() {
+        let mut fixture = observation_fixture(4);
+        let config = handler_policy_config(20, &[42], false, &[]);
+        let message = verified_message(201, "verified body", Some(60));
+        let resolutions = std::sync::atomic::AtomicUsize::new(0);
+        let prepared = fixture
+            .handler
+            .observation
+            .create_with(
+                &message,
+                999,
+                || config.clone(),
+                std::future::ready(None),
+                |message| async {
+                    resolutions.fetch_add(1, Ordering::Relaxed);
+                    crate::discord::verified_action_runtime::resolve_test_create_with_sources(
+                        message,
+                        std::future::ready(Some(TEST_PK_CREATOR)),
+                        std::future::ready(Ok(represented_test_facts(42))),
+                    )
+                    .await
+                },
+            )
+            .await;
+        assert_eq!(prepared.outcome, DispatchOutcome::Offered);
+        assert!(fixture.observations.try_recv().is_ok());
+        assert!(!matches!(
+            fixture
+                .handler
+                .ingress_ledger
+                .verify(message.id, message.channel_id),
+            crate::ingress_ledger::VerifyResult::Admitted { .. }
+        ));
+        let fallback = std::sync::atomic::AtomicUsize::new(0);
+        let plan = admit_verified_create_after_wait(
+            prepared.admission,
+            &message,
+            999,
+            &fixture.handler.ingress_ledger,
+            async {
+                fallback.fetch_add(1, Ordering::Relaxed);
+                None
+            },
+            std::future::ready(None),
+            || config.clone(),
+            |_, _| false,
+        )
+        .await;
+        assert!(plan.is_some());
+        assert_eq!(resolutions.load(Ordering::Relaxed), 1);
+        assert_eq!(fallback.load(Ordering::Relaxed), 0);
+        assert!(matches!(
+            fixture
+                .handler
+                .ingress_ledger
+                .verify(message.id, message.channel_id),
+            crate::ingress_ledger::VerifyResult::Admitted { .. }
+        ));
+
+        let event = verified_update_event(201, 500, Some(60), Some(40));
+        let mut current = message.clone();
+        current.content = "edited".into();
+        current.edited_timestamp = event.edited_timestamp;
+        let prepared_edit = fixture
+            .handler
+            .observation
+            .edit_with(
+                &event,
+                Some(&message),
+                Some(&current),
+                999,
+                || config.clone(),
+                std::future::ready(None),
+                std::future::ready(Ok(current.clone())),
+                |message| async {
+                    resolutions.fetch_add(1, Ordering::Relaxed);
+                    crate::discord::verified_action_runtime::resolve_test_create_with_sources(
+                        message,
+                        std::future::ready(Some(TEST_PK_CREATOR)),
+                        std::future::ready(Ok(represented_test_facts(42))),
+                    )
+                    .await
+                },
+            )
+            .await;
+        assert_eq!(prepared_edit.outcome, DispatchOutcome::Offered);
+        assert_eq!(
+            fixture
+                .observations
+                .try_recv()
+                .unwrap()
+                .common
+                .context()
+                .content(),
+            "edited"
+        );
+        let edited = admit_verified_edit_after_wait(
+            prepared_edit.admission,
+            &event,
+            Some(&current),
+            Some(&message),
+            &current.author,
+            &current.content,
+            event.edited_timestamp.unwrap(),
+            WebhookId::new(40),
+            999,
+            &fixture.handler.ingress_ledger,
+            async {
+                fallback.fetch_add(1, Ordering::Relaxed);
+                None
+            },
+            std::future::ready(None),
+            || config.clone(),
+            |_, _| false,
+        )
+        .await;
+        assert!(edited.is_some());
+        assert_eq!(resolutions.load(Ordering::Relaxed), 2);
+        assert_eq!(fallback.load(Ordering::Relaxed), 0);
+
+        fixture
+            .policy
+            .write()
+            .unwrap()
+            .own_actors
+            .insert(UserId::new(42));
+        let own = fixture
+            .handler
+            .observation
+            .create_with(
+                &message,
+                999,
+                || config.clone(),
+                std::future::ready(None),
+                |message| async {
+                    crate::discord::verified_action_runtime::resolve_test_create_with_sources(
+                        message,
+                        std::future::ready(Some(TEST_PK_CREATOR)),
+                        std::future::ready(Ok(represented_test_facts(42))),
+                    )
+                    .await
+                },
+            )
+            .await;
+        assert_eq!(
+            own.outcome,
+            DispatchOutcome::Filtered(Exclusion::SelfMessage)
+        );
+        assert!(fixture.observations.try_recv().is_err());
+        let newer = handler_policy_config(20, &[42], false, &[]);
+        let empty_legacy = crate::ingress_ledger::IngressLedger::new();
+        let stale = admit_verified_create_after_wait(
+            own.admission,
+            &message,
+            999,
+            &empty_legacy,
+            async { panic!("stale prepared facts must not repeat verification") },
+            std::future::ready(None),
+            || newer.clone(),
+            |_, _| false,
+        )
+        .await;
+        assert!(stale.is_none());
+        assert!(!matches!(
+            empty_legacy.verify(message.id, message.channel_id),
+            crate::ingress_ledger::VerifyResult::Admitted { .. }
+        ));
+        assert!(
+            admit_verified_create_after_wait(
+                PreparedAdmission::Rejected,
+                &message,
+                999,
+                &empty_legacy,
+                async { panic!("rejected prepared verdict must not repeat verification") },
+                std::future::ready(None),
+                || config.clone(),
+                |_, _| false
+            )
+            .await
+            .is_none()
         );
     }
 }

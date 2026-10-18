@@ -1,7 +1,7 @@
 use camino::Utf8PathBuf;
 use dione::{
-    codex::TransportMode,
     config::{Config, DmPolicy, LoadedConfig},
+    harness::HarnessConnection,
     mcp::server::{DioneServer, test_helpers},
     no_rly::consent::ConsentGate,
     queue::AccessQueue,
@@ -47,11 +47,17 @@ async fn make_server(state_dir: &Utf8PathBuf) -> DioneServer {
         state_dir.clone(),
         notification_tx,
         TraceLevelController::noop(),
-        TransportMode::ClaudeCode,
+        HarnessConnection::claude(),
         Arc::new(ConsentGate::new(state_dir)),
         Arc::new(dione::ingress_ledger::IngressLedger::new()),
+        dione::core::ModuleInstanceId::new(
+            dione::core::ProviderId::new("discord").unwrap(),
+            dione::core::ModuleSlotId::new("primary").unwrap(),
+        ),
+        None,
     )
     .await
+    .expect("Discord reply registration")
 }
 
 fn config_projection(config: &LoadedConfig) -> Value {

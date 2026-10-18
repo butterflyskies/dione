@@ -9,7 +9,18 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - refactor/vertical-slices
+      - refactor/teams-identities-publication
+      - fix/reply-secure-publication
+      - publication/secure-management-tools
+      - publication/secure-query-tools
+      - publication/secure-reply-teams-base
+      - refactor/owned-durable-admission
+      - refactor/discord-query-observation-errors
+      - refactor/generic-durable-store
+      - feat/rook-event-ingress
 
 # Checkout credentials are discarded before repository code runs. Every
 # repository-mutating step remains outside the pull-request path.
@@ -73,6 +84,12 @@ jobs:
     name: Tests
     runs-on: docker
     timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: "2"
+      # CI does not need incremental recompilation state or full debugger data.
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+      CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
     steps:
       - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -88,9 +105,23 @@ jobs:
             -o /tmp/cargo-nextest.tar.gz
           echo "a098eed56f2dd88c7fdca1e554a6b99fa1ffbd2a7a1c41b865700112981f6f52  /tmp/cargo-nextest.tar.gz" | sha256sum -c -
           tar xzf /tmp/cargo-nextest.tar.gz -C /usr/local/bin
-      - run: cargo nextest run --workspace --locked --no-fail-fast --features oneshot-test-seam
+      - name: Record storage before tests
+        run: df -h .
+      - name: Run full suite including compile-time contracts
+        run: cargo nextest run --workspace --locked --no-fail-fast --features oneshot-test-seam
+      - name: Record storage after feature suite
+        if: ${{ always() }}
+        run: |
+          df -h .
+          if [ -d target ]; then du -h -d 2 target; fi
       # Production feature set: proves the endpoint-override seam is absent.
-      - run: cargo nextest run --workspace --locked --no-fail-fast --test oneshot_send
+      - name: Verify production oneshot behavior
+        run: cargo nextest run --workspace --locked --no-fail-fast --test oneshot_send
+      - name: Record storage after production tests
+        if: ${{ always() }}
+        run: |
+          df -h .
+          if [ -d target ]; then du -h -d 2 target; fi
       - name: Test trusted review receipt checker
         run: python3 -B -m unittest discover -s .forgejo/scripts -p 'test_*.py'
 

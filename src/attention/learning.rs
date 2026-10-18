@@ -1523,7 +1523,7 @@ mod tests {
 
     fn record(id: u64, conversation: &str, at: u64, wanted: f64) -> DecisionRecord {
         DecisionRecord {
-            id: format!("r{id}").into(),
+            id: RecordId::new(format!("r{id}")).unwrap(),
             recipient: "recipient".into(),
             sources: vec![SourceVersion {
                 key: SourceKey {
@@ -1561,13 +1561,15 @@ mod tests {
     }
 
     fn label(store: &mut AttentionStore, id: u64, label: FeedbackLabel) {
-        let record = store.record(&format!("r{id}").into()).unwrap();
+        let record = store
+            .record(&RecordId::new(format!("r{id}")).unwrap())
+            .unwrap();
         let sources = record.sources.clone();
         store
             .label(
                 &"recipient".into(),
                 Feedback {
-                    record_id: format!("r{id}").into(),
+                    record_id: RecordId::new(format!("r{id}")).unwrap(),
                     annotator: "recipient".into(),
                     label,
                     assessed_at_ms: 500 + id,
@@ -1641,7 +1643,7 @@ mod tests {
         sampled_ids.sort();
         assert_eq!(
             sampled_ids,
-            vec![RecordId::from("r5"), RecordId::from("r6")]
+            vec![RecordId::new("r5").unwrap(), RecordId::new("r6").unwrap()]
         );
         for (id, _, _, _, feedback) in fixtures.into_iter().skip(4) {
             label(store, id, feedback);
@@ -1667,9 +1669,9 @@ mod tests {
         assert!(partitions.training.is_empty());
         assert_eq!(
             partitions.validation,
-            vec![RecordId::from("r1"), RecordId::from("r2")]
+            vec![RecordId::new("r1").unwrap(), RecordId::new("r2").unwrap()]
         );
-        assert_eq!(partitions.evaluation, vec![RecordId::from("r3")]);
+        assert_eq!(partitions.evaluation, vec![RecordId::new("r3").unwrap()]);
     }
 
     #[test]
@@ -1682,12 +1684,16 @@ mod tests {
         populate(&mut first);
         populate(&mut second);
         // A disagreeing non-recipient annotation is retained but cannot change the target.
-        let sources = first.record(&"r1".into()).unwrap().sources.clone();
+        let sources = first
+            .record(&RecordId::new("r1").unwrap())
+            .unwrap()
+            .sources
+            .clone();
         first
             .label(
                 &"reviewer".into(),
                 Feedback {
-                    record_id: "r1".into(),
+                    record_id: RecordId::new("r1").unwrap(),
                     annotator: "reviewer".into(),
                     label: FeedbackLabel::NotNeeded,
                     assessed_at_ms: 999,
@@ -1695,7 +1701,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let ids = ["r1", "r2", "r3", "r4"].map(RecordId::from);
+        let ids = ["r1", "r2", "r3", "r4"].map(|id| RecordId::new(id).unwrap());
         let a = first
             .fit(
                 &"recipient".into(),
@@ -1726,11 +1732,15 @@ mod tests {
             change: 0.0,
         };
         assert_eq!(
-            first.replay_fixed(&"r6".into(), always_prompt).unwrap(),
+            first
+                .replay_fixed(&RecordId::new("r6").unwrap(), always_prompt)
+                .unwrap(),
             Admission::Ordinary
         );
         assert_eq!(
-            first.replay_artifact(&a.digest, &"r6".into()).unwrap(),
+            first
+                .replay_artifact(&a.digest, &RecordId::new("r6").unwrap())
+                .unwrap(),
             Admission::Ordinary
         );
     }
@@ -1746,7 +1756,12 @@ mod tests {
         let result = store.fit(
             &"recipient".into(),
             &"recipient".into(),
-            &["r1".into(), "r2".into(), "r3".into(), "r4".into()],
+            &[
+                RecordId::new("r1").unwrap(),
+                RecordId::new("r2").unwrap(),
+                RecordId::new("r3").unwrap(),
+                RecordId::new("r4").unwrap(),
+            ],
             compatibility(),
             fit_options(),
             500,
@@ -1772,7 +1787,7 @@ mod tests {
             .label(
                 &"other".into(),
                 Feedback {
-                    record_id: "r7".into(),
+                    record_id: RecordId::new("r7").unwrap(),
                     annotator: "other".into(),
                     label: FeedbackLabel::WantedPromptly,
                     assessed_at_ms: 507,
@@ -1785,7 +1800,12 @@ mod tests {
         let result = store.fit(
             &"recipient".into(),
             &"recipient".into(),
-            &["r1".into(), "r2".into(), "r3".into(), "r7".into()],
+            &[
+                RecordId::new("r1").unwrap(),
+                RecordId::new("r2").unwrap(),
+                RecordId::new("r3").unwrap(),
+                RecordId::new("r7").unwrap(),
+            ],
             compatibility(),
             fit_options(),
             500,
@@ -1807,7 +1827,12 @@ mod tests {
             .fit(
                 &"recipient".into(),
                 &"recipient".into(),
-                &["r1".into(), "r2".into(), "r3".into(), "r4".into()],
+                &[
+                    RecordId::new("r1").unwrap(),
+                    RecordId::new("r2").unwrap(),
+                    RecordId::new("r3").unwrap(),
+                    RecordId::new("r4").unwrap(),
+                ],
                 compatibility(),
                 fit_options(),
                 500,
@@ -1819,7 +1844,7 @@ mod tests {
                 &"recipient".into(),
                 EvaluationPlan {
                     id: "heldout".into(),
-                    record_ids: vec!["r5".into(), "r6".into()],
+                    record_ids: vec![RecordId::new("r5").unwrap(), RecordId::new("r6").unwrap()],
                     fixed_baseline: FixedThresholdPolicy {
                         wanted: 0.5,
                         prompt: 0.5,
@@ -1837,7 +1862,7 @@ mod tests {
                 &"recipient".into(),
                 EvaluationPlan {
                     id: "same-heldout-again".into(),
-                    record_ids: vec!["r5".into(), "r6".into()],
+                    record_ids: vec![RecordId::new("r5").unwrap(), RecordId::new("r6").unwrap()],
                     fixed_baseline: FixedThresholdPolicy {
                         wanted: 0.5,
                         prompt: 0.5,
@@ -1881,7 +1906,12 @@ mod tests {
         let result = store.fit(
             &"recipient".into(),
             &"recipient".into(),
-            &["r1".into(), "r2".into(), "r3".into(), "r5".into()],
+            &[
+                RecordId::new("r1").unwrap(),
+                RecordId::new("r2").unwrap(),
+                RecordId::new("r3").unwrap(),
+                RecordId::new("r5").unwrap(),
+            ],
             compatibility(),
             fit_options(),
             702,
@@ -1914,7 +1944,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut store = AttentionStore::open_with_limits(store_path(&directory), limits()).unwrap();
         populate(&mut store);
-        let ids = ["r1", "r2", "r3", "r4"].map(RecordId::from);
+        let ids = ["r1", "r2", "r3", "r4"].map(|id| RecordId::new(id).unwrap());
         let artifact = store
             .fit(
                 &"recipient".into(),
@@ -1931,7 +1961,7 @@ mod tests {
                 &"recipient".into(),
                 EvaluationPlan {
                     id: "heldout".into(),
-                    record_ids: vec!["r5".into(), "r6".into()],
+                    record_ids: vec![RecordId::new("r5").unwrap(), RecordId::new("r6").unwrap()],
                     fixed_baseline: FixedThresholdPolicy {
                         wanted: 0.5,
                         prompt: 0.5,
@@ -1989,7 +2019,12 @@ mod tests {
             .fit(
                 &"recipient".into(),
                 &"recipient".into(),
-                &["r1".into(), "r2".into(), "r3".into(), "r4".into()],
+                &[
+                    RecordId::new("r1").unwrap(),
+                    RecordId::new("r2").unwrap(),
+                    RecordId::new("r3").unwrap(),
+                    RecordId::new("r4").unwrap(),
+                ],
                 compatibility(),
                 fit_options(),
                 500,
@@ -2177,7 +2212,12 @@ mod tests {
             .fit(
                 &"recipient".into(),
                 &"recipient".into(),
-                &["r1".into(), "r2".into(), "r3".into(), "r4".into()],
+                &[
+                    RecordId::new("r1").unwrap(),
+                    RecordId::new("r2").unwrap(),
+                    RecordId::new("r3").unwrap(),
+                    RecordId::new("r4").unwrap(),
+                ],
                 compatibility(),
                 fit_options(),
                 500,
@@ -2189,7 +2229,7 @@ mod tests {
                 &"recipient".into(),
                 EvaluationPlan {
                     id: "heldout".into(),
-                    record_ids: vec!["r5".into(), "r6".into()],
+                    record_ids: vec![RecordId::new("r5").unwrap(), RecordId::new("r6").unwrap()],
                     fixed_baseline: FixedThresholdPolicy {
                         wanted: 0.5,
                         prompt: 0.5,
@@ -2237,7 +2277,7 @@ mod tests {
             artifact.digest
         );
         let scores = store
-            .record(&"r5".into())
+            .record(&RecordId::new("r5").unwrap())
             .unwrap()
             .judgment
             .as_ref()
@@ -2274,7 +2314,12 @@ mod tests {
             .fit(
                 &"recipient".into(),
                 &"recipient".into(),
-                &["r1".into(), "r2".into(), "r3".into(), "r4".into()],
+                &[
+                    RecordId::new("r1").unwrap(),
+                    RecordId::new("r2").unwrap(),
+                    RecordId::new("r3").unwrap(),
+                    RecordId::new("r4").unwrap(),
+                ],
                 compatibility(),
                 fit_options(),
                 500,
@@ -2289,7 +2334,7 @@ mod tests {
                 &"recipient".into(),
                 EvaluationPlan {
                     id: "strict-heldout".into(),
-                    record_ids: vec!["r5".into(), "r6".into()],
+                    record_ids: vec![RecordId::new("r5").unwrap(), RecordId::new("r6").unwrap()],
                     fixed_baseline: FixedThresholdPolicy {
                         wanted: 0.5,
                         prompt: 0.5,
@@ -2345,7 +2390,12 @@ mod tests {
             .fit(
                 &"recipient".into(),
                 &"recipient".into(),
-                &["r1".into(), "r2".into(), "r3".into(), "r4".into()],
+                &[
+                    RecordId::new("r1").unwrap(),
+                    RecordId::new("r2").unwrap(),
+                    RecordId::new("r3").unwrap(),
+                    RecordId::new("r4").unwrap(),
+                ],
                 compatibility(),
                 fit_options(),
                 500,
@@ -2357,7 +2407,7 @@ mod tests {
                 &"recipient".into(),
                 EvaluationPlan {
                     id: "heldout".into(),
-                    record_ids: vec!["r5".into(), "r6".into()],
+                    record_ids: vec![RecordId::new("r5").unwrap(), RecordId::new("r6").unwrap()],
                     fixed_baseline: FixedThresholdPolicy {
                         wanted: 0.5,
                         prompt: 0.5,
@@ -2456,7 +2506,12 @@ mod tests {
             .fit(
                 &"recipient".into(),
                 &"recipient".into(),
-                &["r1".into(), "r2".into(), "r3".into(), "r4".into()],
+                &[
+                    RecordId::new("r1").unwrap(),
+                    RecordId::new("r2").unwrap(),
+                    RecordId::new("r3").unwrap(),
+                    RecordId::new("r4").unwrap(),
+                ],
                 compatibility(),
                 fit_options(),
                 500,
@@ -2468,7 +2523,7 @@ mod tests {
                 &"recipient".into(),
                 EvaluationPlan {
                     id: "heldout".into(),
-                    record_ids: vec!["r5".into(), "r6".into()],
+                    record_ids: vec![RecordId::new("r5").unwrap(), RecordId::new("r6").unwrap()],
                     fixed_baseline: FixedThresholdPolicy {
                         wanted: 0.5,
                         prompt: 0.5,
@@ -2527,7 +2582,12 @@ mod tests {
             .fit(
                 &"recipient".into(),
                 &"recipient".into(),
-                &["r1".into(), "r2".into(), "r3".into(), "r4".into()],
+                &[
+                    RecordId::new("r1").unwrap(),
+                    RecordId::new("r2").unwrap(),
+                    RecordId::new("r3").unwrap(),
+                    RecordId::new("r4").unwrap(),
+                ],
                 compatibility(),
                 fit_options(),
                 500,
@@ -2539,7 +2599,7 @@ mod tests {
                 &"recipient".into(),
                 EvaluationPlan {
                     id: "heldout".into(),
-                    record_ids: vec!["r5".into(), "r6".into()],
+                    record_ids: vec![RecordId::new("r5").unwrap(), RecordId::new("r6").unwrap()],
                     fixed_baseline: FixedThresholdPolicy {
                         wanted: 0.5,
                         prompt: 0.5,
@@ -2591,7 +2651,12 @@ mod tests {
             .fit(
                 &"recipient".into(),
                 &"recipient".into(),
-                &["r7".into(), "r8".into(), "r9".into(), "r10".into()],
+                &[
+                    RecordId::new("r7").unwrap(),
+                    RecordId::new("r8").unwrap(),
+                    RecordId::new("r9").unwrap(),
+                    RecordId::new("r10").unwrap(),
+                ],
                 compatibility(),
                 second_options,
                 702,
@@ -2625,7 +2690,7 @@ mod tests {
                 &"recipient".into(),
                 EvaluationPlan {
                     id: "heldout-second".into(),
-                    record_ids: vec!["r11".into(), "r12".into()],
+                    record_ids: vec![RecordId::new("r11").unwrap(), RecordId::new("r12").unwrap()],
                     fixed_baseline: FixedThresholdPolicy {
                         wanted: 0.5,
                         prompt: 0.5,

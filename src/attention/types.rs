@@ -52,10 +52,7 @@ macro_rules! identity {
     };
 }
 
-identity!(
-    RecordId,
-    "Identity of one source-bound attention decision, not proof of eligibility."
-);
+pub use super::record_id::{RecordId, RecordIdError, RecordIdErrorKind};
 identity!(
     RecipientId,
     "Recipient or attributed actor identity; current authorization is checked separately."

@@ -13,7 +13,7 @@ expression: notif
       "reply_to_message_id": "5555",
       "thread_parent_id": "700",
       "ts": "2026-01-01T00:00:00+00:00",
-      "user": "threaduser",
+      "user": "3000=threaduser",
       "user_id": "3000"
     }
   }

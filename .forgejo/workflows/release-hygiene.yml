@@ -7,7 +7,18 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - refactor/vertical-slices
+      - refactor/teams-identities-publication
+      - fix/reply-secure-publication
+      - publication/secure-management-tools
+      - publication/secure-query-tools
+      - publication/secure-reply-teams-base
+      - refactor/owned-durable-admission
+      - refactor/discord-query-observation-errors
+      - refactor/generic-durable-store
+      - feat/rook-event-ingress
 
 concurrency:
   group: release-hygiene-${{ forgejo.ref }}

@@ -7,12 +7,20 @@ use super::{
     provider::{JudgmentInput, ProviderFailure, TypeSafeProvider},
     source::{SourceFailure, SourceResolver, now_ms},
     store::{AttentionStore, StoreLimits, ValidationFact, ValidationStatus},
+    store_access::{
+        AttentionInitializationError, AttentionInitializationErrorKind, AttentionReceiptError,
+        AttentionStoreAccessError, AttentionStoreAccessErrorKind, LegacyOperationError,
+    },
     types::*,
 };
 use crate::{
+    attention::delivery::AttentionGuardFailure as Failure,
     config::{attention_effect_guard, load_config, subscribe_generation},
-    discord::events::{MessageTargeting, NotificationEvent},
-    mcp::tools::messaging::{self, MessagingCtx},
+    discord::{
+        events::{MessageTargeting, NotificationEvent},
+        messaging::{self, MessagingCtx},
+    },
+    ingress_ledger::SourceDeliveryFailure,
     no_rly::consent::ConsentGate,
 };
 use serde::{Deserialize, Serialize};
@@ -53,7 +61,8 @@ pub struct AttentionHealth {
 /// Coordinates source validation, durable decisions, provider work and guarded delivery.
 pub struct AttentionRuntime {
     pub resolver: SourceResolver,
-    store: Mutex<Result<AttentionStore, String>>,
+    authority_module: crate::core::ModuleInstanceId,
+    store: Mutex<Result<AttentionStore, Arc<AttentionInitializationError>>>,
     health: Mutex<AttentionHealth>,
     health_dirty: AtomicBool,
     health_epoch_ms: u64,
@@ -96,8 +105,17 @@ enum EvaluationFailure {
 }
 
 impl AttentionRuntime {
+    /// Borrows the configured authority instance.
+    pub fn authority_module(&self) -> &crate::core::ModuleInstanceId {
+        &self.authority_module
+    }
+
     /// Initializes persistent attention state without blocking the async runtime.
-    pub async fn new(resolver: SourceResolver, enforcement_supported: bool) -> Self {
+    pub async fn new(
+        resolver: SourceResolver,
+        enforcement_supported: bool,
+        authority_module: crate::core::ModuleInstanceId,
+    ) -> Self {
         let config = load_config(&resolver.state_dir);
         let attention = &config.raw.attention;
         let limits = StoreLimits {
@@ -111,8 +129,11 @@ impl AttentionRuntime {
         let health_path = resolver.state_dir.join("attention-status.json");
         let initialized =
             tokio::task::spawn_blocking(move || {
-                let store = AttentionStore::open_with_limits(store_path, limits)
-                    .map_err(|error| error.to_string());
+                let store = AttentionStore::open_with_limits(store_path, limits).map_err(|error| {
+                    Arc::new(AttentionInitializationError {
+                        kind: AttentionInitializationErrorKind::Store(error),
+                    })
+                });
                 let health =
                     match std::fs::read(health_path) {
                         Ok(bytes) => serde_json::from_slice::<AttentionHealth>(&bytes)
@@ -134,7 +155,9 @@ impl AttentionRuntime {
         let (store, mut health) = match initialized {
             Ok(initialized) => initialized,
             Err(error) => (
-                Err(format!("attention initialization worker failed: {error}")),
+                Err(Arc::new(AttentionInitializationError {
+                    kind: AttentionInitializationErrorKind::Worker(error),
+                })),
                 AttentionHealth {
                     degraded: Some("attention metadata is unavailable".to_owned()),
                     ..AttentionHealth::default()
@@ -149,6 +172,7 @@ impl AttentionRuntime {
             health.degraded = Some("attention metadata is unavailable".to_owned());
         }
         Self {
+            authority_module,
             resolver,
             store: Mutex::new(store),
             health: Mutex::new(health),
@@ -171,17 +195,39 @@ impl AttentionRuntime {
         R: Send + 'static,
         F: FnOnce(&mut AttentionStore) -> Result<R, String> + Send + 'static,
     {
+        self.access_store(move |store| operation(store).map_err(LegacyOperationError))
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn access_store<R, E, F>(
+        self: &Arc<Self>,
+        operation: F,
+    ) -> Result<R, AttentionStoreAccessError<E>>
+    where
+        R: Send + 'static,
+        E: std::error::Error + Send + Sync + 'static,
+        F: FnOnce(&mut AttentionStore) -> Result<R, E> + Send + 'static,
+    {
         let runtime = self.clone();
         tokio::task::spawn_blocking(move || {
             let mut guard = runtime
                 .store
                 .lock()
-                .map_err(|_| "attention store lock failed".to_owned())?;
-            let store = guard.as_mut().map_err(|error| error.clone())?;
-            operation(store)
+                .map_err(|_| AttentionStoreAccessError {
+                    kind: AttentionStoreAccessErrorKind::LockPoisoned,
+                })?;
+            let store = guard.as_mut().map_err(|error| AttentionStoreAccessError {
+                kind: AttentionStoreAccessErrorKind::Initialization(Arc::clone(error)),
+            })?;
+            operation(store).map_err(|error| AttentionStoreAccessError {
+                kind: AttentionStoreAccessErrorKind::Operation(error),
+            })
         })
         .await
-        .map_err(|_| "attention store worker failed".to_owned())?
+        .map_err(|error| AttentionStoreAccessError {
+            kind: AttentionStoreAccessErrorKind::Worker(error),
+        })?
     }
 
     /// Persists dirty health state off the async worker and reports persistence failure.
@@ -265,12 +311,28 @@ impl AttentionRuntime {
                     ctx.event_tx = event_tx;
                     match tokio::time::timeout(
                         Duration::from_millis(config.raw.attention.request_timeout_ms.min(5_000)),
-                        messaging::reply(&ctx, channel, &text, None, true),
+                        messaging::reply(
+                            &ctx,
+                            channel,
+                            &text,
+                            None,
+                            crate::discord::messaging::ReplyPing::from_suppressed(true),
+                        ),
                     )
                     .await
                     {
-                        Ok(result) if result["ok"].as_bool() == Some(true) => Ok(()),
-                        _ => Err("attention notice delivery failed"),
+                        Ok(Ok(messaging::Report {
+                            outcome: messaging::ReplyOutcome::Delivered(_),
+                            ..
+                        })) => Ok(()),
+                        Ok(Ok(messaging::Report {
+                            outcome:
+                                messaging::ReplyOutcome::Held(_)
+                                | messaging::ReplyOutcome::PartiallyDelivered(_),
+                            ..
+                        }))
+                        | Ok(Err(_))
+                        | Err(_) => Err("attention notice delivery failed"),
                     }
                 }
                 Ok(None) => Err("attention notice route is not configured"),
@@ -946,34 +1008,45 @@ impl AttentionRuntime {
         self: &Arc<Self>,
         id: RecordId,
         state: DeliveryState,
-    ) -> Result<(), String> {
-        self.with_store(move |store| {
-            store
-                .update_delivery(&id, state)
-                .map_err(|error| error.to_string())
-        })
-        .await
+    ) -> Result<(), AttentionReceiptError> {
+        let record = id.clone();
+        self.access_store(move |store| store.update_delivery(&id, state))
+            .await
+            .map_err(|source| AttentionReceiptError::store(record, source))
     }
 }
 
-impl crate::codex::AttentionDeliveryGuard for AttentionRuntime {
+impl crate::attention::delivery::AttentionDeliveryGuard for AttentionRuntime {
     fn check(
         &self,
-        notification: &serde_json::Value,
-    ) -> Result<(), crate::codex::AttentionGuardFailure> {
-        use crate::{
-            codex::AttentionGuardFailure as Failure, ingress_ledger::SourceDeliveryFailure,
-        };
-        let id = notification
-            .pointer("/params/meta/attention_record")
-            .and_then(serde_json::Value::as_str)
+        descriptor: &crate::attention::delivery::AttentionDescriptor<'_>,
+    ) -> Result<(), crate::attention::delivery::AttentionGuardFailure> {
+        let source = descriptor.source();
+        let author = descriptor.author();
+        if source.conversation().module() != &self.authority_module
+            || author.module() != &self.authority_module
+        {
+            return Err(Failure::Invalidated);
+        }
+        let channel = source
+            .conversation()
+            .local()
+            .as_numeric()
             .ok_or(Failure::Invalidated)?;
+        let message = source.local().as_numeric().ok_or(Failure::Invalidated)?;
+        let actor = author.local().as_numeric().ok_or(Failure::Invalidated)?;
+        let id = descriptor.record();
         // A concurrent durable write must defer this synchronous guard, not block Tokio on fsync.
         let guard = self.store.try_lock().map_err(|_| Failure::Unavailable)?;
         let store = guard.as_ref().map_err(|_| Failure::Unavailable)?;
         let record = store.state.records.get(id).ok_or(Failure::Invalidated)?;
         let config = load_config(&self.resolver.state_dir);
-        if record.recipient != config.raw.attention.recipient
+        let expected = match descriptor.directive() {
+            crate::attention::delivery::AttentionDirective::Prompt => Admission::Prompt,
+            crate::attention::delivery::AttentionDirective::NextTurn => Admission::NextTurn,
+        };
+        if record.actual != expected
+            || record.recipient != config.raw.attention.recipient
             || record.expires_at_ms <= now_ms()
             || !matches!(
                 record.delivery,
@@ -1005,29 +1078,10 @@ impl crate::codex::AttentionDeliveryGuard for AttentionRuntime {
             return Err(Failure::Unavailable);
         }
         let trigger = record.sources.first().ok_or(Failure::Invalidated)?;
-        let content = notification
-            .pointer("/params/content")
-            .and_then(serde_json::Value::as_str)
-            .ok_or(Failure::Invalidated)?;
-        let meta = notification
-            .pointer("/params/meta")
-            .ok_or(Failure::Invalidated)?;
-        if !trigger.matches_text(content)
-            || meta
-                .get("chat_id")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|id| id.parse::<u64>().ok())
-                != Some(trigger.key.channel_id.get())
-            || meta
-                .get("message_id")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|id| id.parse::<u64>().ok())
-                != Some(trigger.key.message_id.get())
-            || meta
-                .get("user_id")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|id| id.parse::<u64>().ok())
-                != Some(trigger.author_id.get())
+        if !trigger.matches_text(descriptor.original_text())
+            || channel.get() != trigger.key.channel_id.get()
+            || message.get() != trigger.key.message_id.get()
+            || actor.get() != trigger.author_id.get()
         {
             return Err(Failure::Invalidated);
         }
@@ -1037,18 +1091,16 @@ impl crate::codex::AttentionDeliveryGuard for AttentionRuntime {
 
     fn receipt<'a>(
         self: Arc<Self>,
-        notification: &'a serde_json::Value,
-        outcome: crate::codex::AttentionDeliveryReceipt,
-    ) -> futures_util::future::BoxFuture<'a, Result<(), String>> {
+        record: &'a RecordId,
+        outcome: crate::attention::delivery::AttentionDeliveryReceipt,
+    ) -> futures_util::future::BoxFuture<'a, Result<(), AttentionReceiptError>> {
         Box::pin(async move {
-            let id = notification
-                .pointer("/params/meta/attention_record")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| "managed delivery lacks a decision record".to_owned())?
-                .into();
+            let id = record.clone();
             let state = match outcome {
-                crate::codex::AttentionDeliveryReceipt::Accepted => DeliveryState::Dispatched,
-                crate::codex::AttentionDeliveryReceipt::Uncertain => {
+                crate::attention::delivery::AttentionDeliveryReceipt::Accepted => {
+                    DeliveryState::Dispatched
+                }
+                crate::attention::delivery::AttentionDeliveryReceipt::Uncertain => {
                     DeliveryState::ReceiptUncertain
                 }
             };
@@ -1111,7 +1163,10 @@ mod tests {
     use parking_lot::Mutex as SyncMutex;
     use serde_json::{Value, json};
     use serenity::model::id::{ChannelId, MessageId, UserId};
-    use std::{collections::BTreeMap, future::Future};
+    use std::{
+        collections::{BTreeMap, VecDeque},
+        future::Future,
+    };
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
@@ -1132,6 +1187,7 @@ mod tests {
         delivered_notices: Vec<String>,
         provider_malformed: bool,
         notice_status: u16,
+        notice_statuses: VecDeque<u16>,
     }
 
     struct NoticeNetwork {
@@ -1156,6 +1212,7 @@ mod tests {
                 delivered_notices: Vec::new(),
                 provider_malformed: false,
                 notice_status,
+                notice_statuses: VecDeque::new(),
             }));
             let shared = state.clone();
             let listener = tokio::spawn(async move {
@@ -1334,7 +1391,10 @@ mod tests {
                         }
                     }
                     ("POST", ["channels", _, "messages"]) => {
-                        let status = state.notice_status;
+                        let status = state
+                            .notice_statuses
+                            .pop_front()
+                            .unwrap_or(state.notice_status);
                         if (200..300).contains(&status) {
                             state
                                 .delivered_notices
@@ -1410,6 +1470,10 @@ mod tests {
                         ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
                     },
                     true,
+                    crate::core::ModuleInstanceId::new(
+                        crate::core::ProviderId::new("discord").unwrap(),
+                        crate::core::ModuleSlotId::new("primary").unwrap(),
+                    ),
                 )
                 .await
                 .with_test_provider(network.provider()),
@@ -1553,18 +1617,87 @@ mod tests {
     }
 
     #[test]
+    fn receipt_errors_preserve_store_and_initialization_causes() {
+        scenario(|| async {
+            let fixture = NoticeFixture::new(AttentionMode::Log, NoticeMode::Off, 200).await;
+            let id = RecordId::new("missing-receipt-record").unwrap();
+            let error = fixture
+                .runtime
+                .mark_delivery(id.clone(), DeliveryState::Dispatched)
+                .await
+                .unwrap_err();
+            assert_eq!(error.record(), &id);
+            assert!(
+                matches!(error.kind(), super::super::store_access::AttentionReceiptErrorKind::Store(AttentionStoreAccessError {
+                kind: AttentionStoreAccessErrorKind::Operation(super::super::store::StoreError::RecordNotFound(missing)),
+            }) if missing == &id)
+            );
+            let resolver = &fixture.runtime.resolver;
+            let unavailable = Arc::new(
+                AttentionRuntime::new(
+                    SourceResolver {
+                        http: resolver.http.clone(),
+                        state: resolver.state.clone(),
+                        state_dir: resolver.state_dir.clone(),
+                        ledger: resolver.ledger.clone(),
+                    },
+                    true,
+                    fixture.runtime.authority_module().clone(),
+                )
+                .await,
+            );
+            let error = unavailable
+                .mark_delivery(id, DeliveryState::Dispatched)
+                .await
+                .unwrap_err();
+            let super::super::store_access::AttentionReceiptErrorKind::Store(
+                AttentionStoreAccessError {
+                    kind: AttentionStoreAccessErrorKind::Initialization(source),
+                },
+            ) = error.kind()
+            else {
+                panic!("missing initialization cause: {error:?}");
+            };
+            assert!(matches!(
+                &source.kind,
+                AttentionInitializationErrorKind::Store(
+                    super::super::store::StoreError::Locked { .. }
+                )
+            ));
+        });
+    }
+
+    #[test]
     fn delivery_guard_defers_while_a_durable_store_transaction_owns_the_mutex() {
         scenario(|| async {
-            use crate::codex::{AttentionDeliveryGuard, AttentionGuardFailure};
+            use crate::attention::delivery::{AttentionDeliveryGuard, AttentionGuardFailure};
 
             let fixture = NoticeFixture::new(AttentionMode::Log, NoticeMode::Off, 200).await;
             let held = fixture.runtime.store.lock().unwrap();
             let runtime = fixture.runtime.clone();
             let (sender, receiver) = std::sync::mpsc::sync_channel(1);
             let checker = std::thread::spawn(move || {
-                let result = runtime.check(&json!({
-                    "params": {"meta": {"attention_record": "held-store-record"}}
-                }));
+                let module = runtime.authority_module().clone();
+                let source = crate::core::MessageRef::new(
+                    crate::core::ConversationRef::new(
+                        module.clone(),
+                        crate::core::ConversationId::numeric(100.try_into().unwrap()),
+                    ),
+                    crate::core::MessageId::numeric(1.try_into().unwrap()),
+                );
+                let author = crate::core::ActorRef::new(
+                    module,
+                    crate::core::ActorId::numeric(7.try_into().unwrap()),
+                );
+                let record = RecordId::new("held-store-record").unwrap();
+                let descriptor = crate::attention::delivery::AttentionDescriptor::new(
+                    &record,
+                    crate::attention::delivery::AttentionDirective::Prompt,
+                    &source,
+                    &author,
+                    "original",
+                );
+                let result = runtime.check(&descriptor);
                 sender.send(result).unwrap();
             });
             let observed = receiver.recv_timeout(Duration::from_secs(5));
@@ -1679,6 +1812,50 @@ mod tests {
             );
             assert!(health.degraded.is_none());
             assert!(health.last_notice_error.is_some());
+        });
+    }
+
+    #[test]
+    fn held_and_partial_notices_count_as_failures_but_delivered_notices_do_not() {
+        scenario(|| async {
+            for (extra_config, statuses, delivered, pending, failures) in [
+                ("", vec![], 1, 0, 0),
+                (
+                    "\n[contradictionary]\nenabled = true\n[[contradictionary.entries]]\npattern = \"degraded\"\naction = \"block\"\n",
+                    vec![],
+                    0,
+                    1,
+                    1,
+                ),
+                (
+                    "\n[delivery]\ntext_chunk_limit = 40\n",
+                    vec![200, 403],
+                    1,
+                    0,
+                    1,
+                ),
+            ] {
+                let fixture =
+                    NoticeFixture::new(AttentionMode::Log, NoticeMode::Failures, 200).await;
+                let config_path = fixture.path.join("config.toml");
+                let mut config = std::fs::read_to_string(&config_path).unwrap();
+                config.push_str(extra_config);
+                std::fs::write(&config_path, config).unwrap();
+                let (_, warning) = ConfigRuntime::new(fixture.path.clone()).reload().await;
+                assert!(warning.is_none(), "{warning:?}");
+                fixture.network.state.lock().notice_statuses = statuses.into();
+                fixture.runtime.failed("fixture provider outage".into());
+                fixture.publish_notice().await;
+                assert_eq!(fixture.network.delivered_notices().len(), delivered);
+                assert_eq!(fixture.no_rly.pending().await, pending);
+                let health = fixture.runtime.health();
+                assert_eq!(health.notice_failures, failures);
+                assert_eq!(
+                    health.last_notice_error.as_deref(),
+                    (failures != 0).then_some("attention notice delivery failed")
+                );
+                assert_eq!(fixture.network.provider_calls(), 0);
+            }
         });
     }
 

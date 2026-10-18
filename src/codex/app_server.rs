@@ -1,8 +1,19 @@
-use super::{CodexEventQueue, CodexQueueError, CodexThreadId, LeasedEvent};
+//! Codex app-server delivery with scoped resident ownership and retained failure causes.
+
+use super::{
+    CodexEventQueue, CodexQueueError, CodexQueueErrorKind, CodexResidentHandle, CodexThreadId,
+    LeasedEvent,
+};
+use crate::{
+    attention::delivery::{
+        AttentionDeliveryGuard, AttentionDeliveryReceipt, AttentionGuardFailure,
+    },
+    durable::{EndpointId, QueueError, QueueErrorKind},
+};
 use camino::Utf8PathBuf;
-use futures_util::{SinkExt, StreamExt, future::BoxFuture};
+use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
-use std::{env, fmt::Debug, io, sync::Arc, time::Duration};
+use std::{env, io, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::net::UnixStream;
 use tokio_tungstenite::{
@@ -21,49 +32,32 @@ const EVENT_WAIT: Duration = Duration::from_secs(45);
 const EVENT_LEASE: Duration = Duration::from_secs(5 * 60);
 const MAX_WEBSOCKET_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
 
-/// Result known at the app-server request/response boundary. Accepted means
-/// Codex acknowledged the turn/start request, not that the recipient saw it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AttentionDeliveryReceipt {
-    Accepted,
-    Uncertain,
-}
-
-/// Final dispatch denial: temporary evidence loss defers work; invalid evidence rejects it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum AttentionGuardFailure {
-    #[error("attention evidence is temporarily unavailable")]
-    Unavailable,
-    #[error("attention evidence was invalidated")]
-    Invalidated,
-}
-
-/// Final lifecycle fence and durable outcome observer for managed work.
-pub trait AttentionDeliveryGuard: Send + Sync + Debug {
-    /// Checks current authority immediately before dispatch; must not wait for blocking I/O.
-    fn check(&self, notification: &Value) -> Result<(), AttentionGuardFailure>;
-    /// Durably records a transport-boundary outcome before queue acknowledgement continues.
-    ///
-    /// The owned guard lets implementations move blocking persistence into an
-    /// awaited worker without borrowing the delivery task.
-    fn receipt<'a>(
-        self: Arc<Self>,
-        notification: &'a Value,
-        outcome: AttentionDeliveryReceipt,
-    ) -> BoxFuture<'a, Result<(), String>>;
-}
-
+/// Connection, timeout, preamble, and attention settings for one delivery worker.
 #[derive(Debug, Clone)]
 pub struct CodexDeliveryConfig {
+    /// Explicit owner of legacy attention payloads.
+    legacy_scope: super::LegacyDiscordScope,
+    /// Local app-server Unix socket to connect.
     pub socket_path: Utf8PathBuf,
+    /// Deadline for each handshake or request exchange.
     pub request_timeout: Duration,
+    /// Policy controlling when a delivery preamble is included.
     pub preamble_mode: crate::config::PreambleMode,
+    /// Template rendered for the configured preamble policy.
     pub preamble_template: crate::config::PreambleTemplate,
+    /// Optional authority guard for managed attention deliveries.
     pub attention_guard: Option<Arc<dyn AttentionDeliveryGuard>>,
 }
 
 impl CodexDeliveryConfig {
-    pub fn resolve(socket_path: Option<Utf8PathBuf>) -> Result<Self, CodexDeliveryError> {
+    /// Resolves an explicit socket path, environment override, or home-directory default.
+    ///
+    /// # Errors
+    /// Returns a missing-home failure when none of those locations is available.
+    pub fn resolve(
+        socket_path: Option<Utf8PathBuf>,
+        legacy_scope: super::LegacyDiscordScope,
+    ) -> Result<Self, CodexDeliveryError> {
         let socket_path = socket_path
             .or_else(|| {
                 env::var("CODEX_APP_SERVER_SOCKET")
@@ -71,9 +65,10 @@ impl CodexDeliveryConfig {
                     .map(Utf8PathBuf::from)
             })
             .or_else(default_socket_path)
-            .ok_or(CodexDeliveryError::MissingHome)?;
+            .ok_or(CodexDeliveryErrorKind::MissingHome)?;
         let defaults = crate::config::DeliveryConfig::default();
         Ok(Self {
+            legacy_scope,
             socket_path,
             request_timeout: REQUEST_TIMEOUT,
             preamble_mode: defaults.preamble_mode,
@@ -95,50 +90,118 @@ fn default_socket_path() -> Option<Utf8PathBuf> {
         .map(|home| home.join("app-server-control/app-server-control.sock"))
 }
 
+/// A delivery failure with its original operation-specific cause.
 #[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum CodexDeliveryError {
+#[error("{kind}")]
+pub struct CodexDeliveryError {
+    /// Exhaustive failure category and concrete source.
+    #[source]
+    pub kind: CodexDeliveryErrorKind,
+}
+
+impl From<CodexDeliveryErrorKind> for CodexDeliveryError {
+    fn from(kind: CodexDeliveryErrorKind) -> Self {
+        Self { kind }
+    }
+}
+
+impl From<CodexQueueError> for CodexDeliveryError {
+    fn from(source: CodexQueueError) -> Self {
+        CodexDeliveryErrorKind::Queue(source).into()
+    }
+}
+
+/// Failure categories for Codex app-server delivery.
+#[derive(Debug, Error)]
+pub enum CodexDeliveryErrorKind {
+    /// No explicit or default app-server socket location is available.
     #[error("Codex live delivery requires an app-server socket path or HOME")]
     MissingHome,
+    /// Opening the local app-server socket failed.
     #[error("failed to connect to Codex app-server socket `{path}`")]
     Connect {
+        /// Exact local socket path.
         path: Utf8PathBuf,
+        /// Original I/O or WebSocket failure.
         #[source]
         source: io::Error,
     },
+    /// WebSocket negotiation failed.
     #[error("failed to establish Codex app-server WebSocket on `{path}`")]
     Handshake {
+        /// Exact local socket path.
         path: Utf8PathBuf,
+        /// Original I/O or WebSocket failure.
         #[source]
         source: Box<WebSocketError>,
     },
+    /// WebSocket negotiation exceeded its deadline.
     #[error("Codex app-server WebSocket handshake on `{path}` timed out")]
-    HandshakeTimeout { path: Utf8PathBuf },
+    HandshakeTimeout {
+        /// Exact local socket path.
+        path: Utf8PathBuf,
+    },
+    /// The request or write exceeded its deadline.
     #[error("Codex app-server request `{method}` timed out")]
-    Timeout { method: &'static str },
+    Timeout {
+        /// Protocol method being exchanged.
+        method: &'static str,
+    },
+    /// The peer disconnected before completing the request.
     #[error("Codex app-server closed the connection during `{method}`")]
-    Disconnected { method: &'static str },
+    Disconnected {
+        /// Protocol method being exchanged.
+        method: &'static str,
+    },
+    /// The app server returned a definite protocol rejection.
     #[error("Codex app-server rejected `{method}`: {message}")]
     Rejected {
+        /// Protocol method being exchanged.
         method: &'static str,
+        /// Original rendered rejection.
         message: String,
     },
+    /// The peer returned malformed JSON, retaining the decoding cause.
+    #[error("Codex app-server rejected `{method}`: invalid JSON response: {source}")]
+    Decode {
+        /// Protocol method awaiting a response.
+        method: &'static str,
+        /// Original JSON decoding error.
+        #[source]
+        source: serde_json::Error,
+    },
+    /// WebSocket communication failed, retaining its concrete cause.
     #[error("failed to exchange `{method}` with Codex app-server")]
     Protocol {
+        /// Protocol method being exchanged.
         method: &'static str,
+        /// Original I/O or WebSocket failure.
         #[source]
         source: Box<WebSocketError>,
     },
+    /// The active thread did not identify a unique current turn.
     #[error("codex thread is active but its current turn id is unavailable")]
     ActiveTurnUnknown,
+    /// The current thread state cannot accept delivery.
     #[error("codex thread status `{status}` does not support live delivery")]
-    UnsupportedThreadStatus { status: String },
+    UnsupportedThreadStatus {
+        /// Reported status, or the missing-status marker.
+        status: String,
+    },
+    /// The durable queue operation failed.
     #[error(transparent)]
     Queue(#[from] CodexQueueError),
 }
 
 #[derive(Debug, Error)]
-enum AppServerRequestError {
+#[error("{kind}")]
+struct AppServerRequestError {
+    #[source]
+    kind: AppServerRequestErrorKind,
+}
+
+#[derive(Debug, Error)]
+enum AppServerRequestErrorKind {
     #[error(transparent)]
     Delivery(#[from] CodexDeliveryError),
     #[error("Codex app-server rejected `{method}`: {rendered}")]
@@ -152,28 +215,45 @@ enum AppServerRequestError {
 
 impl AppServerRequestError {
     fn rejected(method: &'static str, error: &Value) -> Self {
-        Self::Rejected {
-            method,
-            rendered: error.to_string(),
-            code: error.get("code").and_then(Value::as_i64),
-            rpc_message: error
-                .get("message")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
+        Self {
+            kind: AppServerRequestErrorKind::Rejected {
+                method,
+                rendered: error.to_string(),
+                code: error.get("code").and_then(Value::as_i64),
+                rpc_message: error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            },
         }
+    }
+}
+
+impl From<CodexDeliveryError> for AppServerRequestError {
+    fn from(error: CodexDeliveryError) -> Self {
+        Self {
+            kind: AppServerRequestErrorKind::Delivery(error),
+        }
+    }
+}
+
+impl From<CodexDeliveryErrorKind> for AppServerRequestError {
+    fn from(kind: CodexDeliveryErrorKind) -> Self {
+        Self::from(CodexDeliveryError::from(kind))
     }
 }
 
 impl From<AppServerRequestError> for CodexDeliveryError {
     fn from(error: AppServerRequestError) -> Self {
-        match error {
-            AppServerRequestError::Delivery(error) => error,
-            AppServerRequestError::Rejected {
+        match error.kind {
+            AppServerRequestErrorKind::Delivery(error) => error,
+            AppServerRequestErrorKind::Rejected {
                 method, rendered, ..
-            } => CodexDeliveryError::Rejected {
+            } => CodexDeliveryErrorKind::Rejected {
                 method,
                 message: rendered,
-            },
+            }
+            .into(),
         }
     }
 }
@@ -188,6 +268,7 @@ enum DeliveryOutcome {
 struct PendingAttentionReceipt {
     guard: Arc<dyn AttentionDeliveryGuard>,
     outcome: AttentionDeliveryReceipt,
+    record: crate::attention::types::RecordId,
 }
 
 struct AppServerClient {
@@ -204,7 +285,7 @@ impl AppServerClient {
     ) -> Result<Self, CodexDeliveryError> {
         let unix_stream = UnixStream::connect(config.socket_path.as_std_path())
             .await
-            .map_err(|source| CodexDeliveryError::Connect {
+            .map_err(|source| CodexDeliveryErrorKind::Connect {
                 path: config.socket_path.clone(),
                 source,
             })?;
@@ -212,10 +293,10 @@ impl AppServerClient {
             client_async_with_config("ws://localhost/", unix_stream, Some(websocket_config()));
         let (stream, _) = tokio::time::timeout(config.request_timeout, handshake)
             .await
-            .map_err(|_| CodexDeliveryError::HandshakeTimeout {
+            .map_err(|_| CodexDeliveryErrorKind::HandshakeTimeout {
                 path: config.socket_path.clone(),
             })?
-            .map_err(|source| CodexDeliveryError::Handshake {
+            .map_err(|source| CodexDeliveryErrorKind::Handshake {
                 path: config.socket_path.clone(),
                 source: Box::new(source),
             })?;
@@ -282,6 +363,16 @@ impl AppServerClient {
         preamble: Option<&str>,
         pending_receipt: &mut Option<PendingAttentionReceipt>,
     ) -> Result<DeliveryOutcome, CodexDeliveryError> {
+        let descriptor =
+            match super::legacy_delivery::decode_attention(&event.event, &self.config.legacy_scope)
+            {
+                Ok(descriptor) => descriptor,
+                Err(error) => {
+                    return Ok(DeliveryOutcome::RejectedAttention {
+                        reason: error.to_string(),
+                    });
+                }
+            };
         let result = self
             .request(
                 "thread/read",
@@ -306,14 +397,14 @@ impl AppServerClient {
         );
         match status {
             Some("idle") => {
-                let guard = if event.attention.is_some() {
+                let guard = if let Some(descriptor) = descriptor.as_ref() {
                     let Some(guard) = self.config.attention_guard.as_ref() else {
                         return Ok(DeliveryOutcome::DeferredAttention);
                     };
                     // This is deliberately after thread/read and immediately
                     // before the dispatch request: asynchronous work cannot
                     // turn a stale admission into an effect.
-                    match guard.check(&event.event) {
+                    match guard.check(&descriptor.descriptor()) {
                         Ok(()) => {}
                         Err(AttentionGuardFailure::Unavailable) => {
                             return Ok(DeliveryOutcome::DeferredAttention);
@@ -324,7 +415,7 @@ impl AppServerClient {
                             });
                         }
                     }
-                    Some(Arc::clone(guard))
+                    Some((Arc::clone(guard), descriptor.descriptor().record().clone()))
                 } else {
                     None
                 };
@@ -338,18 +429,24 @@ impl AppServerClient {
                         }),
                     )
                     .await;
-                if let Some(guard) = guard {
+                if let Some((guard, record)) = guard {
                     let outcome = match &dispatch {
                         Ok(_) => Some(AttentionDeliveryReceipt::Accepted),
-                        Err(AppServerRequestError::Delivery(_)) => {
-                            Some(AttentionDeliveryReceipt::Uncertain)
-                        }
+                        Err(AppServerRequestError {
+                            kind: AppServerRequestErrorKind::Delivery(_),
+                        }) => Some(AttentionDeliveryReceipt::Uncertain),
                         // A JSON-RPC error response is a definitive negative
                         // acknowledgement, not an ambiguous transport loss.
-                        Err(AppServerRequestError::Rejected { .. }) => None,
+                        Err(AppServerRequestError {
+                            kind: AppServerRequestErrorKind::Rejected { .. },
+                        }) => None,
                     };
                     if let Some(outcome) = outcome {
-                        *pending_receipt = Some(PendingAttentionReceipt { guard, outcome });
+                        *pending_receipt = Some(PendingAttentionReceipt {
+                            guard,
+                            outcome,
+                            record,
+                        });
                     }
                 }
                 dispatch?;
@@ -382,9 +479,10 @@ impl AppServerClient {
                 }
             }
             status => {
-                return Err(CodexDeliveryError::UnsupportedThreadStatus {
+                return Err(CodexDeliveryErrorKind::UnsupportedThreadStatus {
                     status: status.unwrap_or("missing").to_owned(),
-                });
+                }
+                .into());
             }
         }
         Ok(DeliveryOutcome::Dispatched)
@@ -407,33 +505,30 @@ impl AppServerClient {
             loop {
                 let Some(message) = self.stream.next().await else {
                     return Err(AppServerRequestError::from(
-                        CodexDeliveryError::Disconnected { method },
+                        CodexDeliveryErrorKind::Disconnected { method },
                     ));
                 };
                 match message.map_err(|source| {
-                    AppServerRequestError::from(CodexDeliveryError::Protocol {
+                    AppServerRequestError::from(CodexDeliveryErrorKind::Protocol {
                         method,
                         source: Box::new(source),
                     })
                 })? {
                     Message::Text(text) => {
                         let message: Value = serde_json::from_str(&text).map_err(|source| {
-                            AppServerRequestError::from(CodexDeliveryError::Rejected {
-                                method,
-                                message: format!("invalid JSON response: {source}"),
-                            })
+                            AppServerRequestError::from(CodexDeliveryErrorKind::Decode { method, source })
                         })?;
                         if message.get("id").and_then(Value::as_u64) != Some(request_id) {
                             continue;
                         }
                         if let Some(error) = message.get("error") {
                             let rejection = AppServerRequestError::rejected(method, error);
-                            if let AppServerRequestError::Rejected {
+                            if let AppServerRequestErrorKind::Rejected {
                                 method: "turn/steer",
                                 code: Some(-32600),
                                 rpc_message,
                                 ..
-                            } = &rejection
+                            } = &rejection.kind
                                 && rpc_message.as_deref() != Some("no active turn to steer")
                                 && params
                                     .get("expectedTurnId")
@@ -456,14 +551,14 @@ impl AppServerClient {
                         .send(Message::Pong(payload))
                         .await
                         .map_err(|source| {
-                            AppServerRequestError::from(CodexDeliveryError::Protocol {
+                            AppServerRequestError::from(CodexDeliveryErrorKind::Protocol {
                                 method,
                                 source: Box::new(source),
                             })
                         })?,
                     Message::Close(_) => {
                         return Err(AppServerRequestError::from(
-                            CodexDeliveryError::Disconnected { method },
+                            CodexDeliveryErrorKind::Disconnected { method },
                         ));
                     }
                     Message::Binary(_) | Message::Pong(_) | Message::Frame(_) => {}
@@ -471,7 +566,7 @@ impl AppServerClient {
             }
         })
         .await
-        .map_err(|_| AppServerRequestError::from(CodexDeliveryError::Timeout { method }))?
+        .map_err(|_| AppServerRequestError::from(CodexDeliveryErrorKind::Timeout { method }))?
     }
 
     async fn send(
@@ -484,26 +579,34 @@ impl AppServerClient {
             self.stream.send(Message::Text(message.to_string())),
         )
         .await
-        .map_err(|_| CodexDeliveryError::Timeout { method })?
-        .map_err(|source| CodexDeliveryError::Protocol {
-            method,
-            source: Box::new(source),
+        .map_err(|_| CodexDeliveryErrorKind::Timeout { method })?
+        .map_err(|source| {
+            CodexDeliveryErrorKind::Protocol {
+                method,
+                source: Box::new(source),
+            }
+            .into()
         })
     }
 }
 
 async fn persist_attention_receipt(receipt: Option<PendingAttentionReceipt>, event: &LeasedEvent) {
-    let Some(PendingAttentionReceipt { guard, outcome }) = receipt else {
+    let Some(PendingAttentionReceipt {
+        guard,
+        outcome,
+        record,
+    }) = receipt
+    else {
         return;
     };
-    if let Err(error) = guard.receipt(&event.event, outcome).await {
+    if let Err(error) = guard.receipt(&record, outcome).await {
         // The receipt sink is metadata, not the transport. In particular, a
         // confirmed accepted turn must not be retried solely because this
         // durable update failed.
         tracing::error!(
             event_id = %event.event_id,
             ?outcome,
-            error,
+            %error,
             "failed to persist attention delivery receipt"
         );
     }
@@ -529,16 +632,16 @@ fn active_turn_id(turns: &Value) -> Result<String, CodexDeliveryError> {
         .and_then(|turn| turn.get("id"))
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .ok_or(CodexDeliveryError::ActiveTurnUnknown)
+        .ok_or_else(|| CodexDeliveryErrorKind::ActiveTurnUnknown.into())
 }
 
 fn stale_turn_mismatch(error: &AppServerRequestError, expected_turn_id: &str) -> Option<String> {
-    let AppServerRequestError::Rejected {
+    let AppServerRequestErrorKind::Rejected {
         method: "turn/steer",
         code,
         rpc_message,
         ..
-    } = error
+    } = &error.kind
     else {
         return None;
     };
@@ -562,10 +665,14 @@ fn event_input(event: &LeasedEvent, preamble: Option<&str>) -> Value {
     json!([{ "type": "text", "text": prompt, "text_elements": [] }])
 }
 
+/// Creates or resumes resident ownership and delivers events for the watched endpoint.
+///
+/// # Errors
+/// Returns registration, queue, or host failures that cannot be retried by the worker.
 pub async fn run_delivery_worker(
     queue: CodexEventQueue,
     config: CodexDeliveryConfig,
-    thread_binding: tokio::sync::watch::Receiver<Option<CodexThreadId>>,
+    thread_binding: tokio::sync::watch::Receiver<Option<EndpointId>>,
     cancel: CancellationToken,
 ) -> Result<(), CodexDeliveryError> {
     run_delivery_worker_with_lease(queue, config, thread_binding, cancel, EVENT_LEASE).await
@@ -574,7 +681,7 @@ pub async fn run_delivery_worker(
 async fn run_delivery_worker_with_lease(
     queue: CodexEventQueue,
     config: CodexDeliveryConfig,
-    mut thread_binding: tokio::sync::watch::Receiver<Option<CodexThreadId>>,
+    mut thread_binding: tokio::sync::watch::Receiver<Option<EndpointId>>,
     cancel: CancellationToken,
     event_lease: Duration,
 ) -> Result<(), CodexDeliveryError> {
@@ -582,7 +689,16 @@ async fn run_delivery_worker_with_lease(
     let consumer_id = loop {
         match queue.register_live_consumer().await {
             Ok(consumer_id) => break consumer_id,
-            Err(error @ CodexQueueError::InboxDurabilityUncertain { .. }) => {
+            Err(
+                error @ CodexQueueError {
+                    kind:
+                        CodexQueueErrorKind::Durable(QueueError {
+                            kind:
+                                QueueErrorKind::DurabilityUncertain(_) | QueueErrorKind::PriorSync(_),
+                            ..
+                        }),
+                },
+            ) => {
                 tracing::warn!(%error, "Codex live consumer registration awaits inbox directory sync");
                 match wait_to_retry_or_rebind(&cancel, &mut thread_binding, registration_delay)
                     .await
@@ -597,6 +713,25 @@ async fn run_delivery_worker_with_lease(
             Err(error) => return Err(error.into()),
         }
     };
+    run_resident_delivery_worker_with_lease(
+        queue,
+        consumer_id,
+        config,
+        thread_binding,
+        cancel,
+        event_lease,
+    )
+    .await
+}
+
+async fn run_resident_delivery_worker_with_lease(
+    queue: CodexEventQueue,
+    resident: CodexResidentHandle,
+    config: CodexDeliveryConfig,
+    mut thread_binding: tokio::sync::watch::Receiver<Option<EndpointId>>,
+    cancel: CancellationToken,
+    event_lease: Duration,
+) -> Result<(), CodexDeliveryError> {
     let mut client = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
     let mut attention_retry_delay = INITIAL_RETRY_DELAY;
@@ -606,7 +741,16 @@ async fn run_delivery_worker_with_lease(
     let mut preamble_sent = false;
 
     loop {
-        let Some(thread_id) = thread_binding.borrow_and_update().clone() else {
+        let binding = {
+            let binding = thread_binding.borrow_and_update();
+            if binding.has_changed() {
+                client = None;
+                preamble_sent = false;
+                attention_retry_delay = INITIAL_RETRY_DELAY;
+            }
+            binding.clone()
+        };
+        let Some(endpoint) = binding else {
             tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Ok(()),
@@ -618,6 +762,7 @@ async fn run_delivery_worker_with_lease(
                 }
             }
         };
+        let thread_id = CodexThreadId::parse(endpoint.as_str())?;
         let event = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Ok(()),
@@ -630,11 +775,20 @@ async fn run_delivery_worker_with_lease(
                 attention_retry_delay = INITIAL_RETRY_DELAY;
                 continue;
             },
-            event = queue.next_live_event(&consumer_id, &thread_id, EVENT_WAIT, event_lease) => event,
+            event = resident.next_event(&thread_id, EVENT_WAIT, event_lease) => event,
         };
         let event = match event {
             Ok(event) => event,
-            Err(error @ CodexQueueError::InboxDurabilityUncertain { .. }) => {
+            Err(
+                error @ CodexQueueError {
+                    kind:
+                        CodexQueueErrorKind::Durable(QueueError {
+                            kind:
+                                QueueErrorKind::DurabilityUncertain(_) | QueueErrorKind::PriorSync(_),
+                            ..
+                        }),
+                },
+            ) => {
                 tracing::error!(error = %error, "Codex inbox durability is unconfirmed; retrying before delivery");
                 match wait_to_retry_or_rebind(&cancel, &mut thread_binding, retry_delay).await {
                     RetryWait::Stopped => return Ok(()),
@@ -656,12 +810,20 @@ async fn run_delivery_worker_with_lease(
 
         loop {
             if event.lease_expires_at <= chrono::Utc::now() {
-                let replacement = match queue
-                    .next_live_event(&consumer_id, &thread_id, Duration::ZERO, event_lease)
+                let replacement = match resident
+                    .next_event(&thread_id, Duration::ZERO, event_lease)
                     .await
                 {
                     Ok(event) => event,
-                    Err(CodexQueueError::InboxDurabilityUncertain { .. }) => break,
+                    Err(CodexQueueError {
+                        kind:
+                            CodexQueueErrorKind::Durable(QueueError {
+                                kind:
+                                    QueueErrorKind::DurabilityUncertain(_)
+                                    | QueueErrorKind::PriorSync(_),
+                                ..
+                            }),
+                    }) => break,
                     Err(error) => return Err(error.into()),
                 };
                 let Some(replacement) = replacement else {
@@ -753,7 +915,7 @@ async fn run_delivery_worker_with_lease(
                     if preamble.is_some() {
                         preamble_sent = true;
                     }
-                    acknowledge_with_retry(&queue, &consumer_id, &event, &cancel).await?;
+                    acknowledge_with_retry(&resident, &event, &cancel).await?;
                     retry_delay = INITIAL_RETRY_DELAY;
                     if event.attention.is_some() {
                         attention_retry_delay = INITIAL_RETRY_DELAY;
@@ -762,21 +924,27 @@ async fn run_delivery_worker_with_lease(
                 }
                 Ok(DeliveryOutcome::DeferredAttention) => {
                     let Some(attention) = event.attention.as_ref() else {
-                        return Err(CodexQueueError::NotAttentionManaged.into());
+                        return Err(CodexQueueError::from(QueueError::new(
+                            "attention delivery",
+                            QueueErrorKind::NotDeferrable,
+                        ))
+                        .into());
                     };
                     let mut settlement_delay = INITIAL_RETRY_DELAY;
                     let mut uncertain_deferral = false;
                     let deferred = loop {
-                        match queue
-                            .defer_attention(
-                                &consumer_id,
-                                &event.delivery_token,
-                                attention_retry_delay,
-                            )
+                        match resident
+                            .defer_attention(&event.delivery_token, attention_retry_delay)
                             .await
                         {
                             Ok(()) => break true,
-                            Err(CodexQueueError::UnknownDeliveryToken) => {
+                            Err(CodexQueueError {
+                                kind:
+                                    CodexQueueErrorKind::Durable(QueueError {
+                                        kind: QueueErrorKind::UnknownDeliveryToken,
+                                        ..
+                                    }),
+                            }) => {
                                 if uncertain_deferral {
                                     tracing::debug!(
                                         event_id = %event.event_id,
@@ -791,12 +959,32 @@ async fn run_delivery_worker_with_lease(
                                 break false;
                             }
                             Err(
-                                error @ (CodexQueueError::InboxIo { .. }
-                                | CodexQueueError::InboxDurabilityUncertain { .. }),
+                                error @ (CodexQueueError {
+                                    kind:
+                                        CodexQueueErrorKind::Durable(QueueError {
+                                            kind: QueueErrorKind::Io(_),
+                                            ..
+                                        }),
+                                }
+                                | CodexQueueError {
+                                    kind:
+                                        CodexQueueErrorKind::Durable(QueueError {
+                                            kind:
+                                                QueueErrorKind::DurabilityUncertain(_)
+                                                | QueueErrorKind::PriorSync(_),
+                                            ..
+                                        }),
+                                }),
                             ) => {
                                 uncertain_deferral |= matches!(
                                     &error,
-                                    CodexQueueError::InboxDurabilityUncertain { .. }
+                                    CodexQueueError {
+                                        kind: CodexQueueErrorKind::Durable(QueueError {
+                                            kind: QueueErrorKind::DurabilityUncertain(_)
+                                                | QueueErrorKind::PriorSync(_),
+                                            ..
+                                        })
+                                    }
                                 );
                                 tracing::warn!(event_id = %event.event_id, %error, "retrying attention deferral after inbox persistence failure");
                                 wait_to_retry(&cancel, settlement_delay).await;
@@ -825,23 +1013,49 @@ async fn run_delivery_worker_with_lease(
                 }
                 Ok(DeliveryOutcome::RejectedAttention { reason }) => {
                     let Some(attention) = event.attention.as_ref() else {
-                        return Err(CodexQueueError::NotAttentionManaged.into());
+                        return Err(CodexQueueError::from(QueueError::new(
+                            "attention delivery",
+                            QueueErrorKind::NotDeferrable,
+                        ))
+                        .into());
                     };
                     let mut settlement_delay = INITIAL_RETRY_DELAY;
                     let mut uncertain_invalidation = false;
                     let invalidated = loop {
                         match queue
-                            .invalidate_attention(None, Some(&attention.record_id))
+                            .invalidate_attention(super::AttentionInvalidation::Record(
+                                &attention.record_id,
+                            ))
                             .await
                         {
                             Ok(invalidated) => break invalidated,
                             Err(
-                                error @ (CodexQueueError::InboxIo { .. }
-                                | CodexQueueError::InboxDurabilityUncertain { .. }),
+                                error @ (CodexQueueError {
+                                    kind:
+                                        CodexQueueErrorKind::Durable(QueueError {
+                                            kind: QueueErrorKind::Io(_),
+                                            ..
+                                        }),
+                                }
+                                | CodexQueueError {
+                                    kind:
+                                        CodexQueueErrorKind::Durable(QueueError {
+                                            kind:
+                                                QueueErrorKind::DurabilityUncertain(_)
+                                                | QueueErrorKind::PriorSync(_),
+                                            ..
+                                        }),
+                                }),
                             ) => {
                                 uncertain_invalidation |= matches!(
                                     &error,
-                                    CodexQueueError::InboxDurabilityUncertain { .. }
+                                    CodexQueueError {
+                                        kind: CodexQueueErrorKind::Durable(QueueError {
+                                            kind: QueueErrorKind::DurabilityUncertain(_)
+                                                | QueueErrorKind::PriorSync(_),
+                                            ..
+                                        })
+                                    }
                                 );
                                 tracing::warn!(event_id = %event.event_id, %error, "retrying attention invalidation after inbox persistence failure");
                                 wait_to_retry(&cancel, settlement_delay).await;
@@ -896,19 +1110,21 @@ async fn run_delivery_worker_with_lease(
 }
 
 async fn acknowledge_with_retry(
-    queue: &CodexEventQueue,
-    consumer_id: &super::ConsumerId,
+    resident: &CodexResidentHandle,
     event: &LeasedEvent,
     cancel: &CancellationToken,
 ) -> Result<(), CodexDeliveryError> {
     let mut delay = INITIAL_RETRY_DELAY;
     loop {
-        match queue
-            .acknowledge_live(consumer_id, &event.delivery_token)
-            .await
-        {
+        match resident.acknowledge(&event.delivery_token).await {
             Ok(()) => return Ok(()),
-            Err(CodexQueueError::UnknownDeliveryToken) => {
+            Err(CodexQueueError {
+                kind:
+                    CodexQueueErrorKind::Durable(QueueError {
+                        kind: QueueErrorKind::UnknownDeliveryToken,
+                        ..
+                    }),
+            }) => {
                 // The durable event may already have been acknowledged, or a
                 // newer lease may own it. In either case this token can never
                 // succeed. Return to the queue; a still-pending event will be
@@ -922,8 +1138,18 @@ async fn acknowledge_with_retry(
             Err(error)
                 if !matches!(
                     error,
-                    CodexQueueError::InboxIo { .. }
-                        | CodexQueueError::InboxDurabilityUncertain { .. }
+                    CodexQueueError {
+                        kind: CodexQueueErrorKind::Durable(QueueError {
+                            kind: QueueErrorKind::Io(_),
+                            ..
+                        })
+                    } | CodexQueueError {
+                        kind: CodexQueueErrorKind::Durable(QueueError {
+                            kind: QueueErrorKind::DurabilityUncertain(_)
+                                | QueueErrorKind::PriorSync(_),
+                            ..
+                        })
+                    }
                 ) =>
             {
                 return Err(error.into());
@@ -956,7 +1182,7 @@ enum RetryWait {
 
 async fn wait_to_retry_or_rebind(
     cancel: &CancellationToken,
-    thread_binding: &mut tokio::sync::watch::Receiver<Option<CodexThreadId>>,
+    thread_binding: &mut tokio::sync::watch::Receiver<Option<EndpointId>>,
     delay: Duration,
 ) -> RetryWait {
     tokio::select! {
@@ -976,10 +1202,13 @@ async fn wait_to_retry_or_rebind(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codex::{
-        AttentionDelivery, AttentionScheduling, ConsumerId, DeliveryToken, PersistFailure,
-        ProviderEventKey,
+    use crate::{
+        codex::{
+            AttentionDelivery, AttentionScheduling, ConsumerId, DeliveryToken, PersistFailure,
+        },
+        delivery::ProviderEventKey,
     };
+    use futures_util::future::BoxFuture;
     use std::sync::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -988,16 +1217,63 @@ mod tests {
     use tokio::{net::UnixListener, sync::mpsc};
     use tokio_tungstenite::accept_async;
 
+    fn thread_channel(
+        thread: Option<CodexThreadId>,
+    ) -> (
+        tokio::sync::watch::Sender<Option<EndpointId>>,
+        tokio::sync::watch::Receiver<Option<EndpointId>>,
+    ) {
+        tokio::sync::watch::channel(thread.map(|thread| EndpointId::new(thread.as_str()).unwrap()))
+    }
+
     #[tokio::test]
     async fn historical_inbox_does_not_block_new_live_delivery() {
+        use std::{
+            io::Write as _,
+            os::unix::fs::{
+                DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
+            },
+        };
+
         let dir = TempDir::new().unwrap();
         let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
-        std::fs::create_dir(&state_path).unwrap();
-        std::fs::write(
-            state_path.join("codex-inbox.json"),
-            include_bytes!("../../tests/fixtures/codex-inbox/v0.48.0-two-pending.json"),
-        )
-        .unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&state_path)
+            .unwrap();
+        // SAFETY: geteuid has no arguments or memory-safety preconditions.
+        let owner = unsafe { libc::geteuid() };
+        let state_metadata = std::fs::symlink_metadata(&state_path).unwrap();
+        assert!(state_metadata.is_dir());
+        assert!(!state_metadata.file_type().is_symlink());
+        assert_eq!(state_metadata.uid(), owner);
+        assert_eq!(state_metadata.mode() & 0o7777, 0o700);
+
+        let snapshot_path = state_path.join("codex-inbox.json");
+        let historical_bytes =
+            include_bytes!("../../tests/fixtures/codex-inbox/v0.48.0-two-pending.json");
+        let mut snapshot = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .mode(0o644)
+            .open(&snapshot_path)
+            .unwrap();
+        // This descriptor owns only the new synthetic file inside our private fixture.
+        snapshot
+            .set_permissions(std::fs::Permissions::from_mode(0o644))
+            .unwrap();
+        snapshot.write_all(historical_bytes).unwrap();
+        snapshot.flush().unwrap();
+        let legacy_metadata = snapshot.metadata().unwrap();
+        assert!(legacy_metadata.is_file());
+        assert_eq!(legacy_metadata.uid(), owner);
+        assert_eq!(legacy_metadata.nlink(), 1);
+        assert_eq!(legacy_metadata.mode() & 0o7777, 0o644);
+        let legacy_identity = (legacy_metadata.dev(), legacy_metadata.ino());
+        drop(snapshot);
+        assert_eq!(std::fs::read(&snapshot_path).unwrap(), historical_bytes);
         let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
         let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
         let (started_tx, mut started_rx) = mpsc::unbounded_channel();
@@ -1029,12 +1305,34 @@ mod tests {
             }
         });
 
-        let queue = CodexEventQueue::load(&state_path).unwrap();
+        let queue = CodexEventQueue::load(
+            &state_path,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
+        let upgraded_metadata = std::fs::symlink_metadata(&snapshot_path).unwrap();
+        assert!(upgraded_metadata.is_file());
+        assert!(!upgraded_metadata.file_type().is_symlink());
+        assert_eq!(upgraded_metadata.uid(), owner);
+        assert_eq!(upgraded_metadata.nlink(), 1);
+        assert_eq!(upgraded_metadata.mode() & 0o7777, 0o600);
+        assert_eq!(
+            (upgraded_metadata.dev(), upgraded_metadata.ino()),
+            legacy_identity
+        );
+        assert_eq!(std::fs::read(&snapshot_path).unwrap(), historical_bytes);
         assert_eq!(queue.status().await.queued, 2);
         let thread = CodexThreadId::parse("thread-after-upgrade").unwrap();
-        queue.bind_live_thread(Some(thread.clone())).await.unwrap();
+        let queue_resident = queue.binding_controller();
+        queue_resident
+            .bind_live_thread(Some(thread.clone()))
+            .await
+            .unwrap();
         let cancel = CancellationToken::new();
-        let (_binding_tx, binding_rx) = tokio::sync::watch::channel(Some(thread));
+        let (_binding_tx, binding_rx) = thread_channel(Some(thread));
         let worker = tokio::spawn(run_delivery_worker(
             queue.clone(),
             test_delivery_config(socket_path, Duration::from_secs(1)),
@@ -1056,14 +1354,13 @@ mod tests {
         let receipt = queue
             .enqueue_live(
                 json!({ "params": { "content": "new live event", "meta": { "message_id": "4103" } } }),
-                ProviderEventKey::teams("tenant", "bot", "conversation", "activity-4103")
-                    .unwrap(),
+                ProviderEventKey::teams("tenant".parse().unwrap(), "bot".parse().unwrap(), "conversation".parse().unwrap(), "activity-4103".parse().unwrap()),
             )
             .await
             .unwrap();
         assert!(matches!(
             receipt,
-            crate::codex::LiveEnqueueReceipt::Committed
+            crate::codex::LiveAdmissionOutcome::Committed
         ));
         let request = tokio::time::timeout(Duration::from_secs(5), started_rx.recv())
             .await
@@ -1094,8 +1391,16 @@ mod tests {
             .unwrap();
         server.abort();
 
+        drop(queue_resident);
         drop(queue);
-        let reopened = CodexEventQueue::load(&state_path).unwrap();
+        let reopened = CodexEventQueue::load(
+            &state_path,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
         assert_eq!(reopened.status().await.queued, 2);
         let persisted: Value =
             serde_json::from_slice(&std::fs::read(state_path.join("codex-inbox.json")).unwrap())
@@ -1120,22 +1425,37 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
         let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
-        let queue = CodexEventQueue::load(&state_path).unwrap();
+        let queue = CodexEventQueue::load(
+            &state_path,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
         let thread_id = CodexThreadId::parse("thread-startup-recovery").unwrap();
-        queue
+        let queue_resident = queue.binding_controller();
+        queue_resident
             .bind_live_thread(Some(thread_id.clone()))
             .await
             .unwrap();
-        queue.inbox.lock().await.persist_failure = Some(PersistFailure::AfterRename);
+        queue
+            .test_set_persist_failure(Some(PersistFailure::AfterRename))
+            .await;
         assert!(matches!(
             queue
                 .enqueue(managed_notification("201", "pending-sync"))
                 .await,
-            Err(CodexQueueError::InboxDurabilityUncertain { .. })
+            Err(CodexQueueError {
+                kind: CodexQueueErrorKind::Durable(QueueError {
+                    kind: QueueErrorKind::DurabilityUncertain(_) | QueueErrorKind::PriorSync(_),
+                    ..
+                })
+            })
         ));
 
         let cancel = CancellationToken::new();
-        let (_binding_tx, binding_rx) = tokio::sync::watch::channel(Some(thread_id));
+        let (_binding_tx, binding_rx) = thread_channel(Some(thread_id));
         let mut worker = tokio::spawn(run_delivery_worker_with_lease(
             queue.clone(),
             test_delivery_config(socket_path, Duration::from_secs(1)),
@@ -1149,7 +1469,7 @@ mod tests {
                 .is_err(),
             "pending directory sync must keep the live worker retrying"
         );
-        queue.inbox.lock().await.persist_failure = None;
+        queue.test_set_persist_failure(None).await;
         tokio::time::timeout(Duration::from_secs(3), async {
             while queue.status().await.primary_consumer.is_none() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1167,9 +1487,17 @@ mod tests {
         let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
         let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
         let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
-        let queue = CodexEventQueue::load(&state_path).unwrap();
+        let queue = CodexEventQueue::load(
+            &state_path,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
         let thread_id = CodexThreadId::parse("thread-defer-recovery").unwrap();
-        queue
+        let queue_resident = queue.binding_controller();
+        queue_resident
             .bind_live_thread(Some(thread_id.clone()))
             .await
             .unwrap();
@@ -1191,8 +1519,9 @@ mod tests {
                 let result = match request["method"].as_str().unwrap() {
                     "thread/read" if first_read => {
                         first_read = false;
-                        server_queue.inbox.lock().await.persist_failure =
-                            Some(PersistFailure::AfterRename);
+                        server_queue
+                            .test_set_persist_failure(Some(PersistFailure::AfterRename))
+                            .await;
                         assert!(matches!(
                             server_queue
                                 .enqueue(json!({
@@ -1200,7 +1529,7 @@ mod tests {
                                     "params": { "content": "second", "meta": { "message_id": "202" } }
                                 }))
                                 .await,
-                            Err(CodexQueueError::InboxDurabilityUncertain { .. })
+                            Err(CodexQueueError { kind: CodexQueueErrorKind::Durable(QueueError { kind: QueueErrorKind::DurabilityUncertain(_) | QueueErrorKind::PriorSync(_), .. }) })
                         ));
                         injected_tx.send(()).await.unwrap();
                         json!({ "thread": { "status": { "type": "active" } } })
@@ -1208,10 +1537,8 @@ mod tests {
                     "thread/read" => json!({ "thread": { "status": { "type": "idle" } } }),
                     "turn/start" => {
                         let first_deferred = server_queue
-                            .inbox
-                            .lock()
+                            .test_snapshot()
                             .await
-                            .state
                             .entries
                             .front()
                             .is_some_and(|event| event.deferred_until.is_some());
@@ -1233,7 +1560,7 @@ mod tests {
         });
 
         let cancel = CancellationToken::new();
-        let (_binding_tx, binding_rx) = tokio::sync::watch::channel(Some(thread_id));
+        let (_binding_tx, binding_rx) = thread_channel(Some(thread_id));
         let mut worker = tokio::spawn(run_delivery_worker_with_lease(
             queue.clone(),
             test_delivery_config(socket_path, Duration::from_secs(1)),
@@ -1262,7 +1589,7 @@ mod tests {
                 .is_err(),
             "defer on a pending sync must not terminate live delivery"
         );
-        queue.inbox.lock().await.persist_failure = None;
+        queue.test_set_persist_failure(None).await;
         assert!(
             tokio::time::timeout(Duration::from_secs(5), dispatched_rx.recv())
                 .await
@@ -1281,9 +1608,17 @@ mod tests {
         let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
         let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
         let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
-        let queue = CodexEventQueue::load(&state_path).unwrap();
+        let queue = CodexEventQueue::load(
+            &state_path,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
         let thread_id = CodexThreadId::parse("thread-uncertain-defer-backoff").unwrap();
-        queue
+        let queue_resident = queue.binding_controller();
+        queue_resident
             .bind_live_thread(Some(thread_id.clone()))
             .await
             .unwrap();
@@ -1302,8 +1637,9 @@ mod tests {
                 };
                 if request["method"] == "thread/read" && first_read {
                     first_read = false;
-                    server_queue.inbox.lock().await.persist_failure =
-                        Some(PersistFailure::AfterRename);
+                    server_queue
+                        .test_set_persist_failure(Some(PersistFailure::AfterRename))
+                        .await;
                 }
                 let result = if request["method"] == "thread/read" {
                     json!({ "thread": { "status": { "type": "active" } } })
@@ -1322,7 +1658,7 @@ mod tests {
             }
         });
         let cancel = CancellationToken::new();
-        let (_binding_tx, binding_rx) = tokio::sync::watch::channel(Some(thread_id));
+        let (_binding_tx, binding_rx) = thread_channel(Some(thread_id));
         let worker = tokio::spawn(run_delivery_worker_with_lease(
             queue.clone(),
             test_delivery_config(socket_path, Duration::from_secs(1)),
@@ -1337,19 +1673,17 @@ mod tests {
         })
         .await
         .unwrap();
+        let first_now = chrono::Utc::now();
+        queue.test_set_now(first_now);
         queue
             .enqueue(managed_notification("301", "record-backoff"))
             .await
             .unwrap();
         let first_deadline = tokio::time::timeout(Duration::from_secs(3), async {
             loop {
-                let inbox = queue.inbox.lock().await;
-                let deadline = inbox
-                    .state
-                    .entries
-                    .front()
-                    .and_then(|event| event.deferred_until);
-                let pending = inbox.directory_sync_pending;
+                let (inbox, directory_sync_pending, _) = queue.test_state().await;
+                let deadline = inbox.entries.front().and_then(|event| event.deferred_until);
+                let pending = directory_sync_pending;
                 drop(inbox);
                 if let (Some(deadline), true) = (deadline, pending) {
                     break deadline;
@@ -1360,18 +1694,16 @@ mod tests {
         })
         .await
         .expect("first deferral is visibly committed but not confirmed durable");
-        queue.inbox.lock().await.persist_failure = None;
+        assert_eq!(first_deadline - first_now, chrono::Duration::seconds(1));
+        queue.test_set_now(first_deadline);
+        queue.test_set_persist_failure(None).await;
         let second_remaining = tokio::time::timeout(Duration::from_secs(6), async {
             loop {
-                let inbox = queue.inbox.lock().await;
-                let deadline = inbox
-                    .state
-                    .entries
-                    .front()
-                    .and_then(|event| event.deferred_until);
+                let (inbox, _, _) = queue.test_state().await;
+                let deadline = inbox.entries.front().and_then(|event| event.deferred_until);
                 drop(inbox);
                 if let Some(deadline) = deadline.filter(|deadline| *deadline > first_deadline) {
-                    break deadline - chrono::Utc::now();
+                    break deadline - first_deadline;
                 }
                 assert!(
                     !worker.is_finished(),
@@ -1382,9 +1714,10 @@ mod tests {
         })
         .await
         .expect("same event is deferred again after uncertainty recovery");
-        assert!(
-            second_remaining > chrono::Duration::milliseconds(1500),
-            "second deferral should retain exponential backoff, got {second_remaining}"
+        assert_eq!(
+            second_remaining,
+            chrono::Duration::seconds(2),
+            "second committed deferral should retain exponential backoff"
         );
         cancel.cancel();
         worker.await.unwrap().unwrap();
@@ -1397,9 +1730,17 @@ mod tests {
         let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
         let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
         let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
-        let queue = CodexEventQueue::load(&state_path).unwrap();
+        let queue = CodexEventQueue::load(
+            &state_path,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
         let thread_id = CodexThreadId::parse("thread-invalidate-recovery").unwrap();
-        queue
+        let queue_resident = queue.binding_controller();
+        queue_resident
             .bind_live_thread(Some(thread_id.clone()))
             .await
             .unwrap();
@@ -1421,8 +1762,9 @@ mod tests {
                 let result = match request["method"].as_str().unwrap() {
                     "thread/read" if first_read => {
                         first_read = false;
-                        server_queue.inbox.lock().await.persist_failure =
-                            Some(PersistFailure::AfterRename);
+                        server_queue
+                            .test_set_persist_failure(Some(PersistFailure::AfterRename))
+                            .await;
                         assert!(matches!(
                             server_queue
                                 .enqueue(json!({
@@ -1430,7 +1772,7 @@ mod tests {
                                     "params": { "content": "second", "meta": { "message_id": "202" } }
                                 }))
                                 .await,
-                            Err(CodexQueueError::InboxDurabilityUncertain { .. })
+                            Err(CodexQueueError { kind: CodexQueueErrorKind::Durable(QueueError { kind: QueueErrorKind::DurabilityUncertain(_) | QueueErrorKind::PriorSync(_), .. }) })
                         ));
                         injected_tx.send(()).await.unwrap();
                         json!({ "thread": { "status": { "type": "idle" } } })
@@ -1438,16 +1780,18 @@ mod tests {
                     "thread/read" => json!({ "thread": { "status": { "type": "idle" } } }),
                     "turn/start" => {
                         let first_invalidated = !server_queue
-                            .inbox
-                            .lock()
+                            .test_snapshot()
                             .await
-                            .state
                             .entries
                             .iter()
                             .any(|event| {
-                                event.attention.as_ref().is_some_and(|attention| {
-                                    attention.record_id.as_str() == "record-held"
-                                })
+                                event
+                                    .payload
+                                    .scheduling()
+                                    .as_ref()
+                                    .is_some_and(|attention| {
+                                        attention.record_id.as_str() == "record-held"
+                                    })
                             });
                         dispatched_tx.send(first_invalidated).await.unwrap();
                         json!({})
@@ -1474,7 +1818,7 @@ mod tests {
             receipt_rejection: None,
         }));
         let cancel = CancellationToken::new();
-        let (_binding_tx, binding_rx) = tokio::sync::watch::channel(Some(thread_id));
+        let (_binding_tx, binding_rx) = thread_channel(Some(thread_id));
         let mut worker = tokio::spawn(run_delivery_worker_with_lease(
             queue.clone(),
             config,
@@ -1503,7 +1847,7 @@ mod tests {
                 .is_err(),
             "invalidation on a pending sync must not terminate live delivery"
         );
-        queue.inbox.lock().await.persist_failure = None;
+        queue.test_set_persist_failure(None).await;
         assert!(
             tokio::time::timeout(Duration::from_secs(5), dispatched_rx.recv())
                 .await
@@ -1531,9 +1875,17 @@ mod tests {
         let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
         let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
         let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
-        let queue = CodexEventQueue::load(&state_path).unwrap();
+        let queue = CodexEventQueue::load(
+            &state_path,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
         let thread_id = CodexThreadId::parse("thread-renewal-recovery").unwrap();
-        queue
+        let queue_resident = queue.binding_controller();
+        queue_resident
             .bind_live_thread(Some(thread_id.clone()))
             .await
             .unwrap();
@@ -1541,10 +1893,12 @@ mod tests {
         let server_release = Arc::clone(&release_initialize);
         let (initialize_tx, mut initialize_rx) = mpsc::channel(1);
         let (dispatch_tx, mut dispatch_rx) = mpsc::channel(2);
+        let (release_first_response, first_response_release) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut websocket = accept_async(stream).await.unwrap();
             let mut first_initialize = true;
+            let mut first_response_release = Some(first_response_release);
             while let Some(message) = websocket.next().await {
                 let Ok(Message::Text(text)) = message else {
                     continue;
@@ -1571,6 +1925,11 @@ mod tests {
                             )
                             .await
                             .unwrap();
+                        if let Some(release) = first_response_release.take()
+                            && release.await.is_err()
+                        {
+                            return;
+                        }
                         json!({})
                     }
                     _ => json!({}),
@@ -1588,7 +1947,7 @@ mod tests {
         });
 
         let cancel = CancellationToken::new();
-        let (_binding_tx, binding_rx) = tokio::sync::watch::channel(Some(thread_id.clone()));
+        let (_binding_tx, binding_rx) = thread_channel(Some(thread_id.clone()));
         let mut worker = tokio::spawn(run_delivery_worker_with_lease(
             queue.clone(),
             test_delivery_config(socket_path, Duration::from_secs(15)),
@@ -1625,10 +1984,8 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let expired = queue
-                    .inbox
-                    .lock()
+                    .test_snapshot()
                     .await
-                    .state
                     .entries
                     .front()
                     .unwrap()
@@ -1643,20 +2000,38 @@ mod tests {
         })
         .await
         .expect("first lease must expire while initialization is held");
-        queue.inbox.lock().await.persist_failure = Some(PersistFailure::AfterRename);
+        let original_token = queue
+            .test_snapshot()
+            .await
+            .entries
+            .front()
+            .unwrap()
+            .lease
+            .as_ref()
+            .unwrap()
+            .token
+            .clone();
+        queue
+            .test_set_persist_failure(Some(PersistFailure::AfterRename))
+            .await;
         let attempts_before = if prior_sync_failure {
             assert!(matches!(
-                queue.bind_live_thread(Some(thread_id)).await,
-                Err(CodexQueueError::InboxDurabilityUncertain { .. })
+                queue_resident.bind_live_thread(Some(thread_id)).await,
+                Err(CodexQueueError {
+                    kind: CodexQueueErrorKind::Durable(QueueError {
+                        kind: QueueErrorKind::DurabilityUncertain(_) | QueueErrorKind::PriorSync(_),
+                        ..
+                    })
+                })
             ));
-            Some(queue.inbox.lock().await.directory_sync_attempts)
+            Some(queue.test_directory_sync_attempts().await)
         } else {
             None
         };
         release_initialize.notify_one();
         if let Some(attempts_before) = attempts_before {
             tokio::time::timeout(Duration::from_secs(3), async {
-                while queue.inbox.lock().await.directory_sync_attempts <= attempts_before {
+                while queue.test_directory_sync_attempts().await <= attempts_before {
                     assert!(!worker.is_finished(), "renewal must retry a pending sync");
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
@@ -1669,20 +2044,21 @@ mod tests {
                     .is_err(),
                 "pending sync must not stop live delivery"
             );
-            queue.inbox.lock().await.persist_failure = None;
+            queue.test_set_persist_failure(None).await;
         }
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                let inbox = queue.inbox.lock().await;
-                let first = inbox.state.entries.front().unwrap();
+                let (inbox, directory_sync_pending, _) = queue.test_state().await;
+                let first = inbox.entries.front().unwrap();
+                assert_eq!(first.id.get(), 0, "renewal must retain the first event");
                 let renewed = (if prior_sync_failure {
-                    !inbox.directory_sync_pending
+                    !directory_sync_pending
                 } else {
-                    inbox.directory_sync_pending
+                    directory_sync_pending
                 }) && first
                     .lease
                     .as_ref()
-                    .is_some_and(|lease| lease.expires_at > chrono::Utc::now());
+                    .is_some_and(|lease| lease.token != original_token);
                 drop(inbox);
                 if renewed {
                     break;
@@ -1692,7 +2068,8 @@ mod tests {
         })
         .await
         .expect("first lease should renew without letting the second event pass");
-        queue.inbox.lock().await.persist_failure = None;
+        queue.test_set_persist_failure(None).await;
+        release_first_response.send(()).unwrap();
         let first_dispatch = tokio::time::timeout(Duration::from_secs(5), dispatch_rx.recv())
             .await
             .unwrap()
@@ -1714,12 +2091,160 @@ mod tests {
     fn test_delivery_config(socket_path: Utf8PathBuf, timeout: Duration) -> CodexDeliveryConfig {
         let defaults = crate::config::DeliveryConfig::default();
         CodexDeliveryConfig {
+            legacy_scope: crate::codex::LegacyDiscordScope::new(
+                crate::core::ModuleInstanceId::new(
+                    crate::core::ProviderId::new("discord").unwrap(),
+                    crate::core::ModuleSlotId::new("primary").unwrap(),
+                ),
+            ),
             socket_path,
             request_timeout: timeout,
             preamble_mode: defaults.preamble_mode,
             preamble_template: defaults.preamble_template,
             attention_guard: None,
         }
+    }
+
+    #[derive(Debug, Default)]
+    struct SettlementGate {
+        reached: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+
+    impl AttentionDeliveryGuard for SettlementGate {
+        fn check(
+            &self,
+            _: &crate::attention::delivery::AttentionDescriptor<'_>,
+        ) -> Result<(), AttentionGuardFailure> {
+            Ok(())
+        }
+
+        fn receipt<'a>(
+            self: Arc<Self>,
+            _: &'a crate::attention::types::RecordId,
+            _: AttentionDeliveryReceipt,
+        ) -> BoxFuture<'a, Result<(), crate::attention::delivery::AttentionReceiptError>> {
+            Box::pin(async move {
+                self.reached.notify_one();
+                self.release.notified().await;
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn binding_changed_during_receipt_settlement_reconnects_before_next_delivery() {
+        let directory = TempDir::new().unwrap();
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
+        let socket_path = root.join("app.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let (requests, mut received) = mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = accept_async(stream).await.unwrap();
+                while let Some(Ok(Message::Text(text))) = socket.next().await {
+                    let request: Value = serde_json::from_str(&text).unwrap();
+                    let Some(id) = request.get("id") else {
+                        continue;
+                    };
+                    let result = if request["method"] == "thread/read" {
+                        json!({"thread":{"status":{"type":"idle"},"turns":[]}})
+                    } else {
+                        json!({})
+                    };
+                    if request["method"] == "initialize" || request["method"] == "turn/start" {
+                        requests.send(request.clone()).unwrap();
+                    }
+                    if socket
+                        .send(Message::Text(json!({"id":id,"result":result}).to_string()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        });
+        let mut config = test_delivery_config(socket_path, Duration::from_secs(5));
+        config.preamble_mode = crate::config::PreambleMode::First;
+        config.preamble_template = crate::config::PreambleTemplate::new("binding preamble");
+        let gate = Arc::new(SettlementGate::default());
+        config.attention_guard = Some(gate.clone());
+        let queue = CodexEventQueue::open(&root, config.legacy_scope.clone())
+            .await
+            .unwrap();
+        let first = CodexThreadId::parse("first-thread").unwrap();
+        let (binding, watched) = thread_channel(None);
+        let queue_resident = queue.binding_controller();
+        queue_resident
+            .bind_live_thread_and_publish(Some(first), &binding)
+            .await
+            .unwrap();
+        let cancel = CancellationToken::new();
+        let worker = tokio::spawn(run_delivery_worker(
+            queue.clone(),
+            config,
+            watched,
+            cancel.clone(),
+        ));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while queue.status().await.primary_consumer.is_none() {
+                assert!(!worker.is_finished());
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        queue
+            .enqueue(managed_notification("201", "settlement-gate"))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), gate.reached.notified())
+            .await
+            .unwrap();
+        assert_eq!(received.recv().await.unwrap()["method"], "initialize");
+        let first_request = received.recv().await.unwrap();
+        assert_eq!(first_request["params"]["threadId"], "first-thread");
+        assert!(first_request.to_string().contains("binding preamble"));
+        queue_resident
+            .bind_live_thread_and_publish(
+                Some(CodexThreadId::parse("second-thread").unwrap()),
+                &binding,
+            )
+            .await
+            .unwrap();
+        queue
+            .enqueue(json!({"params":{"content":"after settlement rebind"}}))
+            .await
+            .unwrap();
+        gate.release.notify_one();
+        let next = tokio::time::timeout(Duration::from_secs(5), received.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            next["method"], "initialize",
+            "rebind during settlement must discard the old client"
+        );
+        let delivered = tokio::time::timeout(Duration::from_secs(5), received.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(delivered["method"], "turn/start");
+        assert_eq!(delivered["params"]["threadId"], "second-thread");
+        assert!(delivered.to_string().contains("after settlement rebind"));
+        assert!(delivered.to_string().contains("binding preamble"));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while queue.status().await.queued != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        cancel.cancel();
+        worker.await.unwrap().unwrap();
+        server.abort();
     }
 
     #[derive(Debug)]
@@ -1731,7 +2256,10 @@ mod tests {
     }
 
     impl AttentionDeliveryGuard for TestGuard {
-        fn check(&self, _notification: &Value) -> Result<(), AttentionGuardFailure> {
+        fn check(
+            &self,
+            _descriptor: &crate::attention::delivery::AttentionDescriptor<'_>,
+        ) -> Result<(), AttentionGuardFailure> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             match self.rejection {
                 Some(reason) => Err(reason),
@@ -1741,13 +2269,15 @@ mod tests {
 
         fn receipt<'a>(
             self: Arc<Self>,
-            _notification: &'a Value,
+            record: &'a crate::attention::types::RecordId,
             outcome: AttentionDeliveryReceipt,
-        ) -> BoxFuture<'a, Result<(), String>> {
+        ) -> BoxFuture<'a, Result<(), crate::attention::delivery::AttentionReceiptError>> {
             Box::pin(async move {
                 self.receipts.lock().unwrap().push(outcome);
                 match self.receipt_rejection {
-                    Some(reason) => Err(reason.to_owned()),
+                    Some(reason) => Err(crate::attention::delivery::AttentionReceiptError::store(record.clone(), crate::attention::store_access::AttentionStoreAccessError {
+                        kind: crate::attention::store_access::AttentionStoreAccessErrorKind::Operation(crate::attention::store::StoreError::Invalid(reason)),
+                    })),
                     None => Ok(()),
                 }
             })
@@ -1761,12 +2291,13 @@ mod tests {
             AttentionDelivery::NextTurn => "next_turn",
         };
         event.event["params"]["meta"] = json!({
+            "chat_id": "123", "message_id": "101", "user_id": "456",
             "attention_delivery": delivery_marker,
             "attention_record": record_id,
         });
         event.attention = Some(AttentionScheduling {
             delivery,
-            record_id: record_id.into(),
+            record_id: crate::attention::types::RecordId::new(record_id).unwrap(),
         });
         event
     }
@@ -1777,7 +2308,7 @@ mod tests {
             "params": {
                 "content": format!("managed {record_id}"),
                 "meta": {
-                    "message_id": message_id,
+                    "message_id": message_id, "chat_id": "123", "user_id": "456",
                     "attention_delivery": "next_turn",
                     "attention_record": record_id,
                 }
@@ -1806,7 +2337,9 @@ mod tests {
         let turns = json!({ "data": [{ "id": "done", "status": "completed" }] });
         assert!(matches!(
             active_turn_id(&turns),
-            Err(CodexDeliveryError::ActiveTurnUnknown)
+            Err(CodexDeliveryError {
+                kind: CodexDeliveryErrorKind::ActiveTurnUnknown
+            })
         ));
     }
 
@@ -1820,7 +2353,9 @@ mod tests {
         });
         assert!(matches!(
             active_turn_id(&turns),
-            Err(CodexDeliveryError::ActiveTurnUnknown)
+            Err(CodexDeliveryError {
+                kind: CodexDeliveryErrorKind::ActiveTurnUnknown
+            })
         ));
     }
 
@@ -1869,7 +2404,7 @@ mod tests {
                 "expected active turn id `turn-stale` but found `turn-stale`",
             ),
             rejected_error("turn/steer", -32600, "unrelated rejection"),
-            AppServerRequestError::from(CodexDeliveryError::Rejected {
+            AppServerRequestError::from(CodexDeliveryErrorKind::Rejected {
                 method: "turn/steer",
                 message: "not JSON".to_owned(),
             }),
@@ -1912,8 +2447,8 @@ mod tests {
             Err(error) => error,
         };
         assert!(matches!(
-            error,
-            CodexDeliveryError::HandshakeTimeout { path } if path == socket_path
+            error.kind,
+            CodexDeliveryErrorKind::HandshakeTimeout { path } if path == socket_path
         ));
         server.abort();
     }
@@ -1962,8 +2497,8 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(
-            error,
-            CodexDeliveryError::Timeout {
+            error.kind,
+            CodexDeliveryErrorKind::Timeout {
                 method: "stalled/write"
             }
         ));
@@ -2488,7 +3023,10 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(error, CodexDeliveryError::Rejected { .. }));
+        assert!(matches!(
+            error.kind,
+            CodexDeliveryErrorKind::Rejected { .. }
+        ));
         server.await.unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert!(receipts.lock().unwrap().is_empty());
@@ -2707,8 +3245,8 @@ mod tests {
         let error = client.deliver(&test_event(), None).await.unwrap_err();
 
         assert!(matches!(
-            error,
-            CodexDeliveryError::Rejected {
+            error.kind,
+            CodexDeliveryErrorKind::Rejected {
                 method: "turn/steer",
                 ..
             }
@@ -2812,14 +3350,14 @@ mod tests {
             match expected_error {
                 ExpectedError::ActiveTurnUnknown => {
                     assert!(
-                        matches!(error, CodexDeliveryError::ActiveTurnUnknown),
+                        matches!(error.kind, CodexDeliveryErrorKind::ActiveTurnUnknown),
                         "{name}"
                     );
                 }
                 ExpectedError::UnsupportedThreadStatus(expected) => assert!(
                     matches!(
-                        error,
-                        CodexDeliveryError::UnsupportedThreadStatus { status }
+                        error.kind,
+                        CodexDeliveryErrorKind::UnsupportedThreadStatus { status }
                             if status == expected
                     ),
                     "{name}"
@@ -2959,9 +3497,17 @@ mod tests {
             }
         });
 
-        let queue = CodexEventQueue::load(&state_path).unwrap();
+        let queue = CodexEventQueue::load(
+            &state_path,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
         let thread_id = CodexThreadId::parse("thread-direct-bypass").unwrap();
-        queue
+        let queue_resident = queue.binding_controller();
+        queue_resident
             .bind_live_thread(Some(thread_id.clone()))
             .await
             .unwrap();
@@ -2975,7 +3521,7 @@ mod tests {
             receipt_rejection: None,
         }));
         let cancel = CancellationToken::new();
-        let (_binding_tx, binding_rx) = tokio::sync::watch::channel(Some(thread_id));
+        let (_binding_tx, binding_rx) = thread_channel(Some(thread_id));
         let worker = tokio::spawn(run_delivery_worker_with_lease(
             queue.clone(),
             config,
@@ -3083,14 +3629,22 @@ mod tests {
             }
         });
 
-        let queue = CodexEventQueue::load(&state_path).unwrap();
-        queue
+        let queue = CodexEventQueue::load(
+            &state_path,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
+        let queue_resident = queue.binding_controller();
+        queue_resident
             .bind_live_thread(Some(CodexThreadId::parse("thread-order").unwrap()))
             .await
             .unwrap();
         let cancel = CancellationToken::new();
         let (_binding_tx, binding_rx) =
-            tokio::sync::watch::channel(Some(CodexThreadId::parse("thread-order").unwrap()));
+            thread_channel(Some(CodexThreadId::parse("thread-order").unwrap()));
         let worker = tokio::spawn(run_delivery_worker_with_lease(
             queue.clone(),
             test_delivery_config(socket_path, Duration::from_secs(1)),
@@ -3185,14 +3739,22 @@ mod tests {
             }
         });
 
-        let queue = CodexEventQueue::load(&state_path).unwrap();
-        queue
+        let queue = CodexEventQueue::load(
+            &state_path,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
+        let queue_resident = queue.binding_controller();
+        queue_resident
             .bind_live_thread(Some(CodexThreadId::parse("thread-reject").unwrap()))
             .await
             .unwrap();
         let cancel = CancellationToken::new();
         let (_binding_tx, binding_rx) =
-            tokio::sync::watch::channel(Some(CodexThreadId::parse("thread-reject").unwrap()));
+            thread_channel(Some(CodexThreadId::parse("thread-reject").unwrap()));
         let worker = tokio::spawn(run_delivery_worker(
             queue.clone(),
             test_delivery_config(socket_path, Duration::from_secs(1)),
@@ -3239,46 +3801,64 @@ mod tests {
         let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
         let (started_tx, mut started_rx) = mpsc::unbounded_channel();
         let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut websocket = accept_async(stream).await.unwrap();
-            while let Some(message) = websocket.next().await {
-                let Ok(Message::Text(text)) = message else {
-                    break;
-                };
-                let request: Value = serde_json::from_str(&text).unwrap();
-                let Some(id) = request.get("id").and_then(Value::as_u64) else {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let Ok(mut websocket) = accept_async(stream).await else {
                     continue;
                 };
-                let result = match request["method"].as_str().unwrap() {
-                    "thread/read" => {
-                        json!({ "thread": { "status": { "type": "idle" }, "turns": [] } })
+                while let Some(message) = websocket.next().await {
+                    let Ok(Message::Text(text)) = message else {
+                        break;
+                    };
+                    let request: Value = serde_json::from_str(&text).unwrap();
+                    let Some(id) = request.get("id").and_then(Value::as_u64) else {
+                        continue;
+                    };
+                    let result = match request["method"].as_str().unwrap() {
+                        "thread/read" => {
+                            json!({ "thread": { "status": { "type": "idle" }, "turns": [] } })
+                        }
+                        "turn/start" => {
+                            started_tx
+                                .send(
+                                    request["params"]["clientUserMessageId"]
+                                        .as_str()
+                                        .unwrap()
+                                        .to_owned(),
+                                )
+                                .unwrap();
+                            json!({})
+                        }
+                        _ => json!({}),
+                    };
+                    if websocket
+                        .send(Message::Text(
+                            json!({ "id": id, "result": result }).to_string(),
+                        ))
+                        .await
+                        .is_err()
+                    {
+                        break;
                     }
-                    "turn/start" => {
-                        started_tx
-                            .send(
-                                request["params"]["clientUserMessageId"]
-                                    .as_str()
-                                    .unwrap()
-                                    .to_owned(),
-                            )
-                            .unwrap();
-                        json!({})
-                    }
-                    _ => json!({}),
-                };
-                websocket
-                    .send(Message::Text(
-                        json!({ "id": id, "result": result }).to_string(),
-                    ))
-                    .await
-                    .unwrap();
+                }
             }
         });
-        let queue = CodexEventQueue::load(&state_path).unwrap();
+        let queue = CodexEventQueue::load(
+            &state_path,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
         let thread = CodexThreadId::parse("thread-sync-recovery").unwrap();
-        queue.bind_live_thread(Some(thread.clone())).await.unwrap();
+        let queue_resident = queue.binding_controller();
+        queue_resident
+            .bind_live_thread(Some(thread.clone()))
+            .await
+            .unwrap();
         let cancel = CancellationToken::new();
-        let (_binding_tx, binding_rx) = tokio::sync::watch::channel(Some(thread));
+        let (_binding_tx, binding_rx) = thread_channel(Some(thread));
         let worker = tokio::spawn(run_delivery_worker(
             queue.clone(),
             test_delivery_config(socket_path, Duration::from_secs(2)),
@@ -3293,19 +3873,23 @@ mod tests {
         .await
         .unwrap();
         tokio::task::yield_now().await;
-        let attempts_before = {
-            let mut inbox = queue.inbox.lock().await;
-            inbox.persist_failure = Some(PersistFailure::AfterRename);
-            inbox.directory_sync_attempts
-        };
+        queue
+            .test_set_persist_failure(Some(PersistFailure::AfterRename))
+            .await;
+        let attempts_before = queue.test_directory_sync_attempts().await;
         assert!(matches!(
             queue
                 .enqueue(json!({ "params": { "meta": { "message_id": "123" } } }))
                 .await,
-            Err(CodexQueueError::InboxDurabilityUncertain { .. })
+            Err(CodexQueueError {
+                kind: CodexQueueErrorKind::Durable(QueueError {
+                    kind: QueueErrorKind::DurabilityUncertain(_) | QueueErrorKind::PriorSync(_),
+                    ..
+                })
+            })
         ));
         tokio::time::timeout(Duration::from_secs(5), async {
-            while queue.inbox.lock().await.directory_sync_attempts < attempts_before + 3 {
+            while queue.test_directory_sync_attempts().await < attempts_before + 3 {
                 assert!(
                     !worker.is_finished(),
                     "worker exited during directory sync recovery"
@@ -3317,7 +3901,7 @@ mod tests {
         .unwrap();
         assert!(!worker.is_finished());
         assert!(started_rx.try_recv().is_err());
-        queue.inbox.lock().await.persist_failure = None;
+        queue.test_set_persist_failure(None).await;
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(10), started_rx.recv())
                 .await
@@ -3341,27 +3925,40 @@ mod tests {
     async fn acknowledgement_retry_waits_for_committed_directory_sync() {
         let dir = TempDir::new().unwrap();
         let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-        let queue = CodexEventQueue::load(&path).unwrap();
+        let queue = CodexEventQueue::load(
+            &path,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
         let consumer = queue.register_live_consumer().await.unwrap();
         let thread = CodexThreadId::parse("thread-ack-retry").unwrap();
-        queue.bind_live_thread(Some(thread.clone())).await.unwrap();
+        let queue_resident = queue.binding_controller();
+        queue_resident
+            .bind_live_thread(Some(thread.clone()))
+            .await
+            .unwrap();
         let payload = json!({ "params": { "meta": { "message_id": "123" } } });
         queue.enqueue(payload.clone()).await.unwrap();
-        let event = queue
-            .next_live_event(&consumer, &thread, Duration::ZERO, Duration::from_secs(60))
+        let event = consumer
+            .next_event(&thread, Duration::ZERO, Duration::from_secs(60))
             .await
             .unwrap()
             .unwrap();
-        queue.inbox.lock().await.persist_failure = Some(PersistFailure::AfterRename);
+        queue
+            .test_set_persist_failure(Some(PersistFailure::AfterRename))
+            .await;
         let cancel = CancellationToken::new();
-        let retry = acknowledge_with_retry(&queue, &consumer, &event, &cancel);
+        let retry = acknowledge_with_retry(&consumer, &event, &cancel);
         tokio::pin!(retry);
         tokio::select! {
             result = &mut retry => panic!("acknowledgement finished before directory sync recovered: {result:?}"),
             () = tokio::time::sleep(Duration::from_secs(3)) => {},
         }
         assert_eq!(queue.status().await.queued, 0);
-        queue.inbox.lock().await.persist_failure = None;
+        queue.test_set_persist_failure(None).await;
         tokio::time::timeout(Duration::from_secs(10), &mut retry)
             .await
             .unwrap()
@@ -3373,9 +3970,17 @@ mod tests {
     async fn stale_acknowledgement_token_does_not_retry_forever() {
         let dir = TempDir::new().unwrap();
         let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
-        let queue = CodexEventQueue::load(&state_path).unwrap();
+        let queue = CodexEventQueue::load(
+            &state_path,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
         let thread_id = CodexThreadId::parse("thread-stale-ack").unwrap();
-        queue
+        let queue_resident = queue.binding_controller();
+        queue_resident
             .bind_live_thread(Some(thread_id.clone()))
             .await
             .unwrap();
@@ -3384,18 +3989,13 @@ mod tests {
             .enqueue(json!({ "params": { "meta": { "message_id": "stale" } } }))
             .await
             .unwrap();
-        let stale = queue
-            .next_live_event(&consumer_id, &thread_id, Duration::ZERO, Duration::ZERO)
+        let stale = consumer_id
+            .next_event(&thread_id, Duration::ZERO, Duration::ZERO)
             .await
             .unwrap()
             .unwrap();
-        let current = queue
-            .next_live_event(
-                &consumer_id,
-                &thread_id,
-                Duration::ZERO,
-                Duration::from_secs(1),
-            )
+        let current = consumer_id
+            .next_event(&thread_id, Duration::ZERO, Duration::from_secs(1))
             .await
             .unwrap()
             .unwrap();
@@ -3403,13 +4003,13 @@ mod tests {
 
         tokio::time::timeout(
             Duration::from_millis(100),
-            acknowledge_with_retry(&queue, &consumer_id, &stale, &CancellationToken::new()),
+            acknowledge_with_retry(&consumer_id, &stale, &CancellationToken::new()),
         )
         .await
         .unwrap()
         .unwrap();
-        queue
-            .acknowledge_live(&consumer_id, &current.delivery_token)
+        consumer_id
+            .acknowledge(&current.delivery_token)
             .await
             .unwrap();
     }
@@ -3417,14 +4017,13 @@ mod tests {
     #[tokio::test]
     async fn thread_rebind_interrupts_retry_backoff() {
         let cancel = CancellationToken::new();
-        let (binding_tx, mut binding_rx) = tokio::sync::watch::channel(Some(
-            CodexThreadId::parse("thread-before-rebind").unwrap(),
-        ));
+        let (binding_tx, mut binding_rx) =
+            thread_channel(Some(CodexThreadId::parse("thread-before-rebind").unwrap()));
         let wait = wait_to_retry_or_rebind(&cancel, &mut binding_rx, Duration::from_secs(30));
         tokio::pin!(wait);
 
         binding_tx
-            .send(Some(CodexThreadId::parse("thread-after-rebind").unwrap()))
+            .send(Some(EndpointId::new("thread-after-rebind").unwrap()))
             .unwrap();
         let outcome = tokio::time::timeout(Duration::from_millis(100), wait)
             .await
@@ -3437,7 +4036,14 @@ mod tests {
         let Ok(thread_id) = env::var("DIONE_LIVE_TEST_THREAD_ID") else {
             return;
         };
-        let config = CodexDeliveryConfig::resolve(None).unwrap();
+        let config = CodexDeliveryConfig::resolve(
+            None,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
         let mut client =
             AppServerClient::connect(config, CodexThreadId::parse(&thread_id).unwrap())
                 .await
@@ -3679,14 +4285,22 @@ mod tests {
             }
         });
 
-        let queue = CodexEventQueue::load(&state_path).unwrap();
+        let queue = CodexEventQueue::load(
+            &state_path,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
         let thread_id = CodexThreadId::parse("thread-reconnect-preamble").unwrap();
-        queue
+        let queue_resident = queue.binding_controller();
+        queue_resident
             .bind_live_thread(Some(thread_id.clone()))
             .await
             .unwrap();
         let cancel = CancellationToken::new();
-        let (_binding_tx, binding_rx) = tokio::sync::watch::channel(Some(thread_id));
+        let (_binding_tx, binding_rx) = thread_channel(Some(thread_id));
 
         let mut config = test_delivery_config(socket_path, Duration::from_secs(1));
         config.preamble_mode = crate::config::PreambleMode::First;

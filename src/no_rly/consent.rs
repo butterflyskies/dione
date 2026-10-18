@@ -111,36 +111,7 @@ impl ReplyRequest {
     }
 }
 
-/// A failed delivery, carrying enough to make a retry an informed, idempotent
-/// choice. A multi-chunk send that gets some chunks out before failing reports
-/// what already landed (`sent_ids`, at-least-once on the wire) and the
-/// `undelivered` remainder, so the gate can resume from the remainder instead
-/// of re-posting the delivered chunks.
-#[derive(Debug, Clone)]
-pub struct DeliverError {
-    /// Human-readable failure the construct sees verbatim.
-    pub message: String,
-    /// Chunk message IDs already posted to Discord before the failure.
-    pub sent_ids: Vec<u64>,
-    /// The content not yet delivered — what a retry should send. `None` when
-    /// nothing went out (retry re-sends the whole payload).
-    pub undelivered: Option<String>,
-    /// Send-side diary records for a partial delivery. Retained with the
-    /// remainder and emitted once the logical message finishes.
-    pub diary_records: Vec<DiaryRecord>,
-}
-
-impl DeliverError {
-    /// A total failure — nothing reached the wire.
-    pub fn total(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            sent_ids: Vec::new(),
-            undelivered: None,
-            diary_records: Vec::new(),
-        }
-    }
-}
+pub use super::delivery::{DeliverError, DeliveryCause, DeliveryProgress, PostedMessages};
 
 /// The delivery seam: sends a [`ReplyRequest`] to Discord and returns the
 /// sent message IDs. Implemented by the real messaging context and by test
@@ -151,7 +122,7 @@ pub trait DeliverReply: Send + Sync {
     fn deliver(
         &self,
         request: &ReplyRequest,
-    ) -> impl Future<Output = Result<Vec<u64>, DeliverError>> + Send;
+    ) -> impl Future<Output = Result<Vec<MessageId>, DeliverError>> + Send;
 }
 
 /// What a bounce hands back to the construct: the single-use handle, the
@@ -172,7 +143,7 @@ pub struct BounceTicket {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Released {
     /// Discord message IDs of the sent chunks.
-    pub message_ids: Vec<u64>,
+    pub message_ids: Vec<MessageId>,
     /// Bounce-to-release latency in milliseconds.
     pub latency_ms: u64,
 }
@@ -184,7 +155,7 @@ pub enum Rephrased {
     /// The replacement passed judgment and was sent.
     Sent {
         /// Discord message IDs of the sent chunks.
-        message_ids: Vec<u64>,
+        message_ids: Vec<MessageId>,
     },
     /// The replacement bounced too. The old handle is dead; the new ticket
     /// chains to it.
@@ -237,7 +208,10 @@ pub enum RejectedHandle {
         /// The still-live handle.
         handle: HoldHandle,
         /// The delivery error.
-        error: String,
+        #[source]
+        error: DeliveryCause,
+        /// Progress made by this attempt.
+        progress: DeliveryProgress,
         /// Time remaining before the handle expires.
         expires_in: Duration,
     },
@@ -347,37 +321,38 @@ impl ConsentGate {
                     latency_ms,
                 })
             }
-            Err(DeliverError {
-                message,
-                sent_ids,
-                undelivered,
-                diary_records,
-            }) => {
+            Err(failure) => {
+                let progress = failure.progress();
                 let mut queue = self.queue.lock().await;
-                match undelivered {
-                    // Partial send: resume from the undelivered remainder so a
-                    // retry never re-posts an already-sent chunk. The full text
-                    // is preserved for the eventual journal record.
-                    Some(remainder) if !sent_ids.is_empty() => {
+                let cause = match failure {
+                    DeliverError::Partial(failure) => {
                         let full = entry
                             .original_message
                             .clone()
                             .unwrap_or_else(|| entry.payload.content.clone());
                         let remainder_req = ReplyRequest {
-                            content: remainder,
-                            pending_diary_records: diary_records,
+                            content: failure.remainder,
+                            pending_diary_records: failure.diary,
                             ..entry.payload.clone()
                         };
-                        queue.record_partial(handle, remainder_req, sent_ids, full);
+                        queue.record_partial(
+                            handle,
+                            remainder_req,
+                            failure.sent.iter().collect(),
+                            full,
+                        );
+                        failure.cause
                     }
-                    // Nothing landed: clear the reservation, leave the handle
-                    // live for a clean retry.
-                    _ => queue.release_reservation(handle),
-                }
+                    DeliverError::Total(failure) => {
+                        queue.release_reservation(handle);
+                        failure.cause
+                    }
+                };
                 drop(queue);
                 Err(RejectedHandle::SendFailed {
                     handle: handle.clone(),
-                    error: message,
+                    error: cause,
+                    progress,
                     expires_in: entry.expires_in(now),
                 })
             }
@@ -445,44 +420,41 @@ impl ConsentGate {
                     self.journal_rephrase(handle, &entry, replacement.send, latency_ms);
                     Ok(Rephrased::Sent { message_ids })
                 }
-                Err(DeliverError {
-                    message,
-                    sent_ids,
-                    undelivered,
-                    diary_records,
-                }) => {
-                    // The construct consented to the replacement, so the held
-                    // entry carries it from here on — a retry never reverts to
-                    // the original — while the original text is retained for
-                    // the journal so the (original, reason, replacement) triple
-                    // survives. A judged-clear send that only failed to deliver
-                    // also earns a fresh decision window, symmetric with the
-                    // fresh TTL a re-bounce mints.
+                Err(failure) => {
+                    let progress = failure.progress();
                     let original = entry
                         .withdrawn_original
                         .clone()
                         .unwrap_or_else(|| entry.payload.content.clone());
                     let mut queue = self.queue.lock().await;
                     queue.set_withdrawn_original(handle, original);
-                    match undelivered {
-                        Some(remainder) if !sent_ids.is_empty() => {
+                    let cause = match failure {
+                        DeliverError::Partial(failure) => {
                             let remainder_req = ReplyRequest {
-                                content: remainder,
-                                pending_diary_records: diary_records,
+                                content: failure.remainder,
+                                pending_diary_records: failure.diary,
                                 ..request.clone()
                             };
-                            queue.record_partial(handle, remainder_req, sent_ids, request.content);
+                            queue.record_partial(
+                                handle,
+                                remainder_req,
+                                failure.sent.iter().collect(),
+                                request.content,
+                            );
+                            failure.cause
                         }
-                        _ => {
+                        DeliverError::Total(failure) => {
                             queue.update_payload(handle, as_written);
                             queue.release_reservation(handle);
+                            failure.cause
                         }
-                    }
+                    };
                     queue.refresh_deadline(handle, now.checked_add(ttl).unwrap_or(now));
                     drop(queue);
                     Err(RejectedHandle::SendFailed {
                         handle: handle.clone(),
-                        error: message,
+                        error: cause,
+                        progress,
                         expires_in: ttl,
                     })
                 }
@@ -669,12 +641,12 @@ mod tests {
 
     /// Scripted deliverer: pops one result per call, records every request.
     struct MockDeliver {
-        results: StdMutex<VecDeque<Result<Vec<u64>, String>>>,
+        results: StdMutex<VecDeque<Result<Vec<MessageId>, serenity::Error>>>,
         requests: StdMutex<Vec<ReplyRequest>>,
     }
 
     impl MockDeliver {
-        fn scripted(results: Vec<Result<Vec<u64>, String>>) -> Self {
+        fn scripted(results: Vec<Result<Vec<MessageId>, serenity::Error>>) -> Self {
             Self {
                 results: StdMutex::new(results.into()),
                 requests: StdMutex::new(Vec::new()),
@@ -682,7 +654,7 @@ mod tests {
         }
 
         fn ok() -> Self {
-            Self::scripted(vec![Ok(vec![1001])])
+            Self::scripted(vec![Ok(vec![MessageId::new(1001)])])
         }
 
         fn requests(&self) -> Vec<ReplyRequest> {
@@ -691,14 +663,19 @@ mod tests {
     }
 
     impl DeliverReply for MockDeliver {
-        async fn deliver(&self, request: &ReplyRequest) -> Result<Vec<u64>, DeliverError> {
+        async fn deliver(&self, request: &ReplyRequest) -> Result<Vec<MessageId>, DeliverError> {
             self.requests.lock().unwrap().push(request.clone());
             self.results
                 .lock()
                 .unwrap()
                 .pop_front()
-                .unwrap_or(Ok(vec![9999]))
-                .map_err(DeliverError::total)
+                .unwrap_or(Ok(vec![MessageId::new(9999)]))
+                .map_err(|source| {
+                    DeliverError::total(DeliveryCause::ChunkSend {
+                        index: 0,
+                        source: source.into(),
+                    })
+                })
         }
     }
 
@@ -773,7 +750,7 @@ mod tests {
             .release(&deliver, &ticket.handle, now + Duration::from_secs(2))
             .await
             .expect("release must succeed");
-        assert_eq!(released.message_ids, vec![1001]);
+        assert_eq!(released.message_ids, vec![MessageId::new(1001)]);
         assert_eq!(released.latency_ms, 2000);
         assert_eq!(
             deliver.requests(),
@@ -793,7 +770,10 @@ mod tests {
     #[tokio::test]
     async fn released_handle_is_dead() {
         let (_dir, gate) = gate();
-        let deliver = MockDeliver::scripted(vec![Ok(vec![1]), Ok(vec![2])]);
+        let deliver = MockDeliver::scripted(vec![
+            Ok(vec![MessageId::new(1)]),
+            Ok(vec![MessageId::new(2)]),
+        ]);
         let now = Instant::now();
         let ticket = gate
             .bounce(request("msg"), reason(), TTL, MAX_PENDING, now)
@@ -836,7 +816,10 @@ mod tests {
     #[tokio::test]
     async fn failed_send_leaves_handle_live_for_retry() {
         let (_dir, gate) = gate();
-        let deliver = MockDeliver::scripted(vec![Err("discord hiccup".into()), Ok(vec![1002])]);
+        let deliver = MockDeliver::scripted(vec![
+            Err(serenity::Error::Other("discord hiccup")),
+            Ok(vec![MessageId::new(1002)]),
+        ]);
         let now = Instant::now();
         let ticket = gate
             .bounce(request("msg"), reason(), TTL, MAX_PENDING, now)
@@ -844,7 +827,7 @@ mod tests {
 
         match gate.release(&deliver, &ticket.handle, now).await {
             Err(RejectedHandle::SendFailed { error, .. }) => {
-                assert_eq!(error, "discord hiccup");
+                assert!(matches!(error, DeliveryCause::ChunkSend { index: 0, .. }));
             }
             other => panic!("expected SendFailed, got {other:?}"),
         }
@@ -857,7 +840,7 @@ mod tests {
             .release(&deliver, &ticket.handle, now + Duration::from_secs(5))
             .await
             .expect("retry within the TTL must work");
-        assert_eq!(released.message_ids, vec![1002]);
+        assert_eq!(released.message_ids, vec![MessageId::new(1002)]);
 
         let bounces = journal_bounces(&gate).await;
         assert_eq!(bounces.len(), 1, "exactly one outcome per bounce");
@@ -867,7 +850,10 @@ mod tests {
     #[tokio::test]
     async fn failed_rephrase_delivery_retry_sends_replacement_not_original() {
         let (_dir, gate) = gate();
-        let deliver = MockDeliver::scripted(vec![Err("discord hiccup".into()), Ok(vec![1003])]);
+        let deliver = MockDeliver::scripted(vec![
+            Err(serenity::Error::Other("discord hiccup")),
+            Ok(vec![MessageId::new(1003)]),
+        ]);
         let now = Instant::now();
         let ticket = gate
             .bounce(
@@ -891,7 +877,7 @@ mod tests {
             .release(&deliver, &ticket.handle, now + Duration::from_secs(5))
             .await
             .expect("retry within the TTL must work");
-        assert_eq!(released.message_ids, vec![1003]);
+        assert_eq!(released.message_ids, vec![MessageId::new(1003)]);
 
         let sent = deliver.requests();
         assert_eq!(sent.len(), 2, "the failed attempt and the retry");
@@ -921,7 +907,10 @@ mod tests {
     #[tokio::test]
     async fn failed_rephrase_delivery_second_rephrase_operates_on_replacement() {
         let (_dir, gate) = gate();
-        let deliver = MockDeliver::scripted(vec![Err("discord hiccup".into()), Ok(vec![1004])]);
+        let deliver = MockDeliver::scripted(vec![
+            Err(serenity::Error::Other("discord hiccup")),
+            Ok(vec![MessageId::new(1004)]),
+        ]);
         let now = Instant::now();
         let ticket = gate
             .bounce(
@@ -1047,7 +1036,7 @@ mod tests {
             .release(&deliver, &new_ticket.handle, now + Duration::from_secs(1))
             .await
             .expect("chained handle releases the replacement text");
-        assert_eq!(released.message_ids, vec![1001]);
+        assert_eq!(released.message_ids, vec![MessageId::new(1001)]);
         assert_eq!(
             deliver.requests().last().unwrap().content,
             "still a straightforward plan"
@@ -1101,7 +1090,10 @@ mod tests {
     #[tokio::test]
     async fn bounce_at_capacity_evicts_entry_closest_to_expiry() {
         let (_dir, gate) = gate();
-        let deliver = MockDeliver::scripted(vec![Ok(vec![1]), Ok(vec![2])]);
+        let deliver = MockDeliver::scripted(vec![
+            Ok(vec![MessageId::new(1)]),
+            Ok(vec![MessageId::new(2)]),
+        ]);
         let now = Instant::now();
 
         let soonest = gate
@@ -1186,11 +1178,11 @@ mod tests {
     }
 
     impl DeliverReply for YieldingDeliver {
-        async fn deliver(&self, _request: &ReplyRequest) -> Result<Vec<u64>, DeliverError> {
+        async fn deliver(&self, _request: &ReplyRequest) -> Result<Vec<MessageId>, DeliverError> {
             tokio::task::yield_now().await;
             let mut sends = self.sends.lock().unwrap();
             *sends += 1;
-            Ok(vec![u64::from(*sends)])
+            Ok(vec![MessageId::new(u64::from(*sends))])
         }
     }
 
@@ -1263,7 +1255,7 @@ mod tests {
     }
 
     impl DeliverReply for FencedPartialThenOk {
-        async fn deliver(&self, request: &ReplyRequest) -> Result<Vec<u64>, DeliverError> {
+        async fn deliver(&self, request: &ReplyRequest) -> Result<Vec<MessageId>, DeliverError> {
             self.requests.lock().unwrap().push(request.clone());
             let mut calls = self.calls.lock().unwrap();
             *calls += 1;
@@ -1277,37 +1269,42 @@ mod tests {
             if *calls == 1 {
                 let failed = &chunks[1];
                 request.set_fence_context(failed.incoming.clone());
-                Err(DeliverError {
-                    message: "chunk 1 failed".into(),
-                    sent_ids: vec![100],
-                    undelivered: Some(request.content[failed.source.start..].to_string()),
-                    diary_records: Vec::new(),
-                })
+                Err(DeliverError::partial(
+                    DeliveryCause::ChunkSend {
+                        index: 1,
+                        source: serenity::Error::Other("chunk 1 failed").into(),
+                    },
+                    PostedMessages::new(MessageId::new(100), Vec::new()),
+                    request.content[failed.source.start..].to_string(),
+                    Vec::new(),
+                ))
             } else {
                 *self.retry_rendered.lock().unwrap() =
                     chunks.iter().map(|chunk| chunk.rendered.clone()).collect();
-                Ok(vec![101])
+                Ok(vec![MessageId::new(101)])
             }
         }
     }
 
     impl DeliverReply for PartialThenOk {
-        async fn deliver(&self, request: &ReplyRequest) -> Result<Vec<u64>, DeliverError> {
+        async fn deliver(&self, request: &ReplyRequest) -> Result<Vec<MessageId>, DeliverError> {
             self.requests.lock().unwrap().push(request.clone());
             let mut n = self.calls.lock().unwrap();
             *n += 1;
             if *n == 1 {
-                Err(DeliverError {
-                    message: "chunk 1 of 2 failed".into(),
-                    sent_ids: vec![100],
-                    undelivered: Some("the second half".into()),
-                    diary_records: self
-                        .diary_records
+                Err(DeliverError::partial(
+                    DeliveryCause::ChunkSend {
+                        index: 1,
+                        source: serenity::Error::Other("chunk 1 of 2 failed").into(),
+                    },
+                    PostedMessages::new(MessageId::new(100), Vec::new()),
+                    "the second half".into(),
+                    self.diary_records
                         .clone()
                         .unwrap_or_else(|| request.pending_diary_records.clone()),
-                })
+                ))
             } else {
-                Ok(vec![101])
+                Ok(vec![MessageId::new(101)])
             }
         }
     }
@@ -1395,7 +1392,7 @@ mod tests {
         assert_eq!(sent[1].pending_diary_records, expected_diary);
         assert_eq!(
             released.message_ids,
-            vec![100, 101],
+            vec![MessageId::new(100), MessageId::new(101)],
             "the released IDs fold the earlier partial chunk with the resumed one"
         );
 
@@ -1512,7 +1509,7 @@ mod tests {
     #[tokio::test]
     async fn failed_rephrase_then_expire_journals_the_replacement_as_expired() {
         let (_dir, gate) = gate();
-        let deliver = MockDeliver::scripted(vec![Err("discord hiccup".into())]);
+        let deliver = MockDeliver::scripted(vec![Err(serenity::Error::Other("discord hiccup"))]);
         let now = Instant::now();
         let ttl = Duration::from_secs(100);
         let ticket = gate
@@ -1547,7 +1544,10 @@ mod tests {
     #[tokio::test]
     async fn failed_rephrase_earns_a_fresh_decision_window() {
         let (_dir, gate) = gate();
-        let deliver = MockDeliver::scripted(vec![Err("discord hiccup".into()), Ok(vec![1])]);
+        let deliver = MockDeliver::scripted(vec![
+            Err(serenity::Error::Other("discord hiccup")),
+            Ok(vec![MessageId::new(1)]),
+        ]);
         let now = Instant::now();
         let ttl = Duration::from_secs(100);
         let ticket = gate
@@ -1595,13 +1595,13 @@ mod tests {
     }
 
     impl DeliverReply for BlockingDeliver {
-        async fn deliver(&self, _request: &ReplyRequest) -> Result<Vec<u64>, DeliverError> {
+        async fn deliver(&self, _request: &ReplyRequest) -> Result<Vec<MessageId>, DeliverError> {
             self.entered.notify_one();
             let rx = self.proceed.lock().unwrap().take();
             if let Some(rx) = rx {
                 let _ = rx.await;
             }
-            Ok(vec![777])
+            Ok(vec![MessageId::new(777)])
         }
     }
 
@@ -1678,7 +1678,7 @@ mod tests {
     }
 
     impl DeliverReply for ConcurrencyWitness {
-        async fn deliver(&self, _request: &ReplyRequest) -> Result<Vec<u64>, DeliverError> {
+        async fn deliver(&self, _request: &ReplyRequest) -> Result<Vec<MessageId>, DeliverError> {
             {
                 let mut n = self.in_flight.lock().unwrap();
                 *n += 1;
@@ -1687,7 +1687,7 @@ mod tests {
             }
             tokio::task::yield_now().await;
             *self.in_flight.lock().unwrap() -= 1;
-            Ok(vec![1])
+            Ok(vec![MessageId::new(1)])
         }
     }
 
@@ -1725,5 +1725,100 @@ mod tests {
             1,
             "no two deliveries for a single handle ever overlapped"
         );
+    }
+    struct InterruptedDelivery {
+        attempts: StdMutex<usize>,
+        requests: StdMutex<Vec<ReplyRequest>>,
+    }
+    impl DeliverReply for InterruptedDelivery {
+        async fn deliver(&self, request: &ReplyRequest) -> Result<Vec<MessageId>, DeliverError> {
+            self.requests.lock().unwrap().push(request.clone());
+            let mut attempts = self.attempts.lock().unwrap();
+            *attempts += 1;
+            let cause = DeliveryCause::ChunkSend {
+                index: 1,
+                source: serenity::Error::Other("interrupted").into(),
+            };
+            match *attempts {
+                1 => Err(DeliverError::partial(
+                    cause,
+                    PostedMessages::new(MessageId::new(100), vec![]),
+                    "second third".into(),
+                    request.pending_diary_records.clone(),
+                )),
+                2 => Err(DeliverError::total(cause)),
+                3 => Err(DeliverError::partial(
+                    cause,
+                    PostedMessages::new(MessageId::new(101), vec![]),
+                    "third".into(),
+                    request.pending_diary_records.clone(),
+                )),
+                4 => Ok(vec![MessageId::new(102)]),
+                _ => panic!("unexpected retry"),
+            }
+        }
+    }
+    #[tokio::test]
+    async fn repeated_partial_and_total_retries_preserve_progress_and_diary() {
+        let (_dir, gate) = gate();
+        let deliver = InterruptedDelivery {
+            attempts: StdMutex::new(0),
+            requests: StdMutex::new(Vec::new()),
+        };
+        let now = Instant::now();
+        let mut payload = request("first second third");
+        payload.pending_diary_records = vec![DiaryRecord::log_now("log", &payload.content)];
+        let diary = payload.pending_diary_records.clone();
+        let ticket = gate.bounce(payload, reason(), TTL, MAX_PENDING, now).await;
+        for expected in [
+            DeliveryProgress::Partial(PostedMessages::new(MessageId::new(100), vec![])),
+            DeliveryProgress::None,
+            DeliveryProgress::Partial(PostedMessages::new(MessageId::new(101), vec![])),
+        ] {
+            let failure = gate
+                .release(&deliver, &ticket.handle, now)
+                .await
+                .unwrap_err();
+            let RejectedHandle::SendFailed {
+                progress, handle, ..
+            } = failure
+            else {
+                panic!("retry must remain live")
+            };
+            assert_eq!(progress, expected);
+            assert_eq!(handle, ticket.handle);
+        }
+        let released = gate.release(&deliver, &ticket.handle, now).await.unwrap();
+        assert_eq!(
+            released.message_ids,
+            [
+                MessageId::new(100),
+                MessageId::new(101),
+                MessageId::new(102)
+            ]
+        );
+        let requests = deliver.requests.lock().unwrap().clone();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.content.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "first second third",
+                "second third",
+                "second third",
+                "third"
+            ]
+        );
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.pending_diary_records == diary)
+        );
+        let journal = journal_bounces(&gate).await;
+        assert_eq!(journal.len(), 1);
+        assert_eq!(journal[0].message, "first second third");
+        assert_eq!(journal[0].outcome, Outcome::Released);
+        assert_eq!(gate.pending().await, 0);
     }
 }

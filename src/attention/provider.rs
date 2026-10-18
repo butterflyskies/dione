@@ -148,6 +148,7 @@ impl TypeSafeProvider {
         default_headers.insert(AUTHORIZATION, authorization);
 
         let client = reqwest::Client::builder()
+            .use_rustls_tls()
             .default_headers(default_headers)
             .redirect(reqwest::redirect::Policy::none())
             .referer(false)

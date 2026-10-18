@@ -4,6 +4,11 @@
 # IANA timezone for timestamps (e.g. "America/Los_Angeles"). Defaults to UTC.
 # timezone = "America/Los_Angeles"
 
+[teams]
+# Required when TEAMS_APP_ID enables Teams. Native IDs are preserved exactly.
+# Admission changes require restarting Dione; an empty list denies startup.
+allowed_conversations = []
+
 # GAIE archive jobs are explicit one-shot commands and never run in the daemon.
 [archive]
 enabled = false

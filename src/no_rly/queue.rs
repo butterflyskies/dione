@@ -20,6 +20,7 @@
 
 use crate::{no_rly::judge::RejectReason, timestamp::Timestamp};
 use serde::{Deserialize, Serialize};
+use serenity::model::id::MessageId;
 use std::{
     collections::HashMap,
     fmt,
@@ -103,7 +104,7 @@ pub struct Held<T> {
     /// Chunks already posted to Discord in a prior partial delivery. A retry
     /// resumes from `payload` (the undelivered remainder) so no chunk is sent
     /// twice; these IDs are folded into the final released set.
-    pub sent_ids: Vec<u64>,
+    pub sent_ids: Vec<MessageId>,
     /// The full held text before a partial delivery shrank `payload` to the
     /// undelivered remainder — recorded as the journal `message` so the audit
     /// row is the whole message, not just the trailing chunk.
@@ -276,7 +277,7 @@ impl<T> HoldQueue<T> {
         &mut self,
         handle: &HoldHandle,
         remainder: T,
-        newly_sent: Vec<u64>,
+        newly_sent: Vec<MessageId>,
         full_message: String,
     ) {
         if let Some(entry) = self.entries.get_mut(handle) {

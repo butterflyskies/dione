@@ -1,165 +1,12 @@
-//! Visible, role-preserving Vaelii sentex locators carried in Discord messages.
+//! Discord author binding and tool-wire projection for sentex locators.
 
-use crate::markdown::BlockScanner;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+mod error;
+use error::{HandleError, HandleErrorKind, SentexField};
+pub(crate) use error::{SentexError, SentexErrorKind};
+pub(crate) mod locators;
+pub(crate) use locators::*;
 use serde_json::{Value, json};
 use serenity::model::id::UserId;
-use std::{
-    fmt::{self, Write},
-    num::NonZeroU64,
-};
-
-const LEGACY_CITATION_MARKER_PREFIX: &str = "[🔍=v1:";
-const CLAIM_MARKER_PREFIX: &str = "[🔍=v2:claim:";
-const CITATION_MARKER_PREFIX: &str = "[🔍=v2:citation:";
-const MARKER_SUFFIX: &str = "]";
-const LOCATOR_TOKEN_LEN: usize = 11;
-
-/// Maximum total number of claim and citation handles accepted on one message.
-pub(crate) const MAX_SENTEX_REFS: usize = 4;
-/// Maximum UTF-8 bytes occupied by the complete appended v2 marker suffix.
-pub(crate) const MAX_SENTEX_MARKER_BYTES: usize = 124;
-
-/// An opaque, nonzero handle naming one Vaelii sentex.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct VaeliiSentexHandle(NonZeroU64);
-
-impl VaeliiSentexHandle {
-    fn parse_decimal(value: &str) -> Option<Self> {
-        if !matches!(value.as_bytes().first(), Some(b'1'..=b'9'))
-            || !value.bytes().all(|byte| byte.is_ascii_digit())
-        {
-            return None;
-        }
-        value
-            .parse::<u64>()
-            .ok()
-            .and_then(NonZeroU64::new)
-            .map(Self)
-    }
-
-    fn from_locator_token(token: &str) -> Option<Self> {
-        if token.len() != LOCATOR_TOKEN_LEN {
-            return None;
-        }
-        let decoded = URL_SAFE_NO_PAD.decode(token).ok()?;
-        let bytes: [u8; 8] = decoded.try_into().ok()?;
-        let handle = NonZeroU64::new(u64::from_be_bytes(bytes))?;
-        if URL_SAFE_NO_PAD.encode(bytes) != token {
-            return None;
-        }
-        Some(Self(handle))
-    }
-
-    fn locator_token(self) -> String {
-        URL_SAFE_NO_PAD.encode(self.0.get().to_be_bytes())
-    }
-}
-
-/// The role a sentex plays in the containing Discord message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SentexRole {
-    Claim,
-    Citation,
-}
-
-impl SentexRole {
-    const fn marker_prefix(self) -> &'static str {
-        match self {
-            Self::Claim => CLAIM_MARKER_PREFIX,
-            Self::Citation => CITATION_MARKER_PREFIX,
-        }
-    }
-}
-
-/// Validated, bounded Vaelii handles partitioned by message role.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct SentexHandles {
-    claims: Vec<VaeliiSentexHandle>,
-    citations: Vec<VaeliiSentexHandle>,
-}
-
-impl SentexHandles {
-    pub(crate) const fn empty() -> Self {
-        Self {
-            claims: Vec::new(),
-            citations: Vec::new(),
-        }
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.claims.is_empty() && self.citations.is_empty()
-    }
-
-    pub(crate) fn claims(&self) -> &[VaeliiSentexHandle] {
-        &self.claims
-    }
-
-    pub(crate) fn citations(&self) -> &[VaeliiSentexHandle] {
-        &self.citations
-    }
-
-    fn len(&self) -> usize {
-        self.claims.len() + self.citations.len()
-    }
-}
-
-/// The visible sentex transport emitted by current Dione versions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SentexTransport {
-    TerminalVisibleRoleSuffixV2AfterHooks,
-}
-
-impl SentexTransport {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::TerminalVisibleRoleSuffixV2AfterHooks => {
-                "terminal-visible-role-suffix-v2-after-hooks"
-            }
-        }
-    }
-}
-
-/// A canonical, versioned, role-bearing locator projected to Dione consumers.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SentexLocator {
-    role: SentexRole,
-    encoded: String,
-}
-
-impl SentexLocator {
-    fn current(role: SentexRole, handle: VaeliiSentexHandle) -> Self {
-        let role_name = match role {
-            SentexRole::Claim => "claim",
-            SentexRole::Citation => "citation",
-        };
-        Self {
-            role,
-            encoded: format!("v2:{role_name}:{}", handle.locator_token()),
-        }
-    }
-
-    fn legacy_citation(handle: VaeliiSentexHandle) -> Self {
-        Self {
-            role: SentexRole::Citation,
-            encoded: format!("v1:{}", handle.locator_token()),
-        }
-    }
-
-    pub(crate) fn as_str(&self) -> &str {
-        &self.encoded
-    }
-
-    pub(crate) const fn role(&self) -> SentexRole {
-        self.role
-    }
-}
-
-impl fmt::Display for SentexLocator {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.encoded.fmt(formatter)
-    }
-}
 
 /// A role-bearing sentex reference offered by the Discord message author.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,177 +17,56 @@ pub(crate) struct OfferedSentex {
 
 /// Parses the role-separated `claim_handles` and `citation_handles` arguments.
 /// The removed `evidence_keys` name is rejected rather than silently ignored.
-pub(crate) fn parse_tool_sentex_handles(args: &Value) -> Result<SentexHandles, String> {
+pub(crate) fn parse_tool_sentex_handles(args: &Value) -> Result<SentexHandles, SentexError> {
     if args.get("evidence_keys").is_some() {
-        return Err(
-            "evidence_keys was removed; use claim_handles and/or citation_handles".to_string(),
-        );
+        return Err(SentexError {
+            kind: SentexErrorKind::RemovedLegacyField,
+        });
     }
-    let claim_values = handle_array(args, "claim_handles")?;
-    let citation_values = handle_array(args, "citation_handles")?;
-    let total = claim_values
+    let claims = handle_array(args, SentexField::Claims)?;
+    let citations = handle_array(args, SentexField::Citations)?;
+    let total = claims
         .len()
-        .checked_add(citation_values.len())
-        .ok_or_else(|| "sentex handle count overflowed".to_string())?;
+        .checked_add(citations.len())
+        .ok_or(SentexError {
+            kind: SentexErrorKind::CountOverflow,
+        })?;
     if total > MAX_SENTEX_REFS {
-        return Err(format!(
-            "claim_handles and citation_handles support at most {MAX_SENTEX_REFS} total references"
-        ));
+        return Err(SentexError {
+            kind: SentexErrorKind::TooManyReferences,
+        });
     }
-    let claims = parse_handle_array(claim_values, "claim_handles")?;
-    let citations = parse_handle_array(citation_values, "citation_handles")?;
-    let handles = SentexHandles { claims, citations };
+    let handles = SentexHandles {
+        claims: parse_handle_array(claims, SentexField::Claims)?,
+        citations: parse_handle_array(citations, SentexField::Citations)?,
+    };
     validate_marker_bytes(&handles)?;
     Ok(handles)
 }
-
-fn handle_array<'a>(args: &'a Value, field: &str) -> Result<&'a [Value], String> {
-    let Some(value) = args.get(field) else {
+fn handle_array(args: &Value, field: SentexField) -> Result<&[Value], SentexError> {
+    let Some(value) = args.get(field.as_str()) else {
         return Ok(&[]);
     };
-    value
-        .as_array()
-        .map(Vec::as_slice)
-        .ok_or_else(|| format!("{field} must be an array"))
-}
-
-fn parse_handle_array(values: &[Value], field: &str) -> Result<Vec<VaeliiSentexHandle>, String> {
-    let mut handles = Vec::with_capacity(values.len());
-    for value in values {
-        let handle = value.as_str().and_then(VaeliiSentexHandle::parse_decimal);
-        let handle = handle.ok_or_else(|| {
-            format!("{field} must contain canonical positive decimal u64 strings")
-        })?;
-        handles.push(handle);
-    }
-    Ok(handles)
-}
-
-/// Whether content ends in unquoted sentex marker syntax, including malformed
-/// or over-limit sequences that the read-side parser intentionally ignores.
-pub(crate) fn has_terminal_sentex_syntax(content: &str) -> bool {
-    if !content.ends_with(MARKER_SUFFIX) {
-        return false;
-    }
-    let Some((start, _, _, _)) = marker_start(content) else {
-        return false;
-    };
-    if start > 0 && content.as_bytes()[start - 1] != b' ' {
-        return false;
-    }
-    let before_final_suffix = &content[start..content.len() - MARKER_SUFFIX.len()];
-    if before_final_suffix.contains(MARKER_SUFFIX) {
-        return false;
-    }
-    !marker_is_in_quote_or_code(content, start)
-}
-
-/// Canonical comma-separated role-bearing locators for hook/audit metadata.
-pub(crate) fn locator_metadata(handles: &[VaeliiSentexHandle], role: SentexRole) -> String {
-    let mut metadata = String::new();
-    for (index, handle) in handles.iter().enumerate() {
-        if index > 0 {
-            metadata.push(',');
-        }
-        write!(metadata, "{}", SentexLocator::current(role, handle.clone()))
-            .expect("writing to a String cannot fail");
-    }
-    metadata
-}
-
-/// Appends exact terminal markers after all rewrite hooks have run.
-pub(crate) fn append_markers(content: &str, handles: &SentexHandles) -> String {
-    if handles.is_empty() {
-        return content.to_owned();
-    }
-    let mut output = String::with_capacity(content.len() + marker_bytes(handles));
-    output.push_str(content);
-    for (index, (role, handle)) in handles
-        .claims()
-        .iter()
-        .map(|handle| (SentexRole::Claim, handle))
-        .chain(
-            handles
-                .citations()
-                .iter()
-                .map(|handle| (SentexRole::Citation, handle)),
-        )
-        .enumerate()
-    {
-        if index > 0 || !content.is_empty() {
-            output.push(' ');
-        }
-        write!(
-            output,
-            "{}{}{MARKER_SUFFIX}",
-            role.marker_prefix(),
-            handle.clone().locator_token()
-        )
-        .expect("writing to a String cannot fail");
-    }
-    output
-}
-
-/// Parses only a complete, bounded sequence of exact terminal sentex locators.
-/// Legacy v1 evidence markers remain readable and project as citations.
-pub(crate) fn parse_sentex_locators(content: &str) -> Vec<SentexLocator> {
-    let mut end = content.len();
-    let mut reversed = Vec::new();
-    let mut suffix_start = end;
-
-    loop {
-        let candidate = &content[..end];
-        if !candidate.ends_with(MARKER_SUFFIX) {
-            break;
-        }
-        let Some((start, prefix, role, legacy)) = marker_start(candidate) else {
-            return Vec::new();
-        };
-        if start > 0 && candidate.as_bytes()[start - 1] != b' ' {
-            return Vec::new();
-        }
-        let token_start = start + prefix.len();
-        let token_end = end - MARKER_SUFFIX.len();
-        let Some(handle) = VaeliiSentexHandle::from_locator_token(&content[token_start..token_end])
-        else {
-            return Vec::new();
-        };
-        let locator = if legacy {
-            SentexLocator::legacy_citation(handle)
-        } else {
-            SentexLocator::current(role, handle)
-        };
-        reversed.push(locator);
-        if reversed.len() > MAX_SENTEX_REFS {
-            return Vec::new();
-        }
-        suffix_start = start;
-        if start == 0 {
-            break;
-        }
-        end = start - 1;
-    }
-
-    if reversed.is_empty() || marker_is_in_quote_or_code(content, suffix_start) {
-        return Vec::new();
-    }
-
-    reversed.into_iter().rev().collect()
-}
-
-fn marker_start(candidate: &str) -> Option<(usize, &'static str, SentexRole, bool)> {
-    [
-        (CLAIM_MARKER_PREFIX, SentexRole::Claim, false),
-        (CITATION_MARKER_PREFIX, SentexRole::Citation, false),
-        (LEGACY_CITATION_MARKER_PREFIX, SentexRole::Citation, true),
-    ]
-    .into_iter()
-    .filter_map(|(prefix, role, legacy)| {
-        candidate
-            .rfind(prefix)
-            .map(|start| (start, prefix, role, legacy))
+    value.as_array().map(Vec::as_slice).ok_or(SentexError {
+        kind: SentexErrorKind::ExpectedArray(field),
     })
-    .max_by_key(|(start, _, _, _)| *start)
+}
+fn parse_handle_array(
+    values: &[Value],
+    field: SentexField,
+) -> Result<Vec<VaeliiSentexHandle>, SentexError> {
+    values
+        .iter()
+        .map(|value| {
+            let text = value.as_str().ok_or(HandleError {
+                kind: HandleErrorKind::Noncanonical,
+            });
+            text.and_then(VaeliiSentexHandle::parse_decimal)
+                .map_err(|cause| SentexError {
+                    kind: SentexErrorKind::InvalidHandle { field, cause },
+                })
+        })
+        .collect()
 }
 
 /// Binds author-free parsed locators to Discord's system-derived author.
@@ -351,9 +77,9 @@ pub(crate) fn parse_offered_sentexes(content: &str, author_id: UserId) -> Vec<Of
         .collect()
 }
 
-fn offered_sentex_json(content: &str, author_id: UserId, role: SentexRole) -> Vec<Value> {
-    parse_offered_sentexes(content, author_id)
-        .into_iter()
+fn offered_sentex_json(offerings: &[OfferedSentex], role: SentexRole) -> Vec<Value> {
+    offerings
+        .iter()
         .filter(|sentex| sentex.locator.role() == role)
         .map(|sentex| {
             json!({
@@ -364,10 +90,10 @@ fn offered_sentex_json(content: &str, author_id: UserId, role: SentexRole) -> Ve
         .collect()
 }
 
-/// Adds role-separated projections without changing legacy empty shapes.
-pub(crate) fn project_sentexes(target: &mut Value, content: &str, author_id: UserId) {
-    let claims = offered_sentex_json(content, author_id, SentexRole::Claim);
-    let citations = offered_sentex_json(content, author_id, SentexRole::Citation);
+/// Projects already parsed offerings without changing empty response shapes.
+pub(crate) fn project_offered_sentexes(target: &mut Value, offerings: &[OfferedSentex]) {
+    let claims = offered_sentex_json(offerings, SentexRole::Claim);
+    let citations = offered_sentex_json(offerings, SentexRole::Citation);
     if !claims.is_empty() {
         target["claim_locators"] = json!(claims);
     }
@@ -376,42 +102,11 @@ pub(crate) fn project_sentexes(target: &mut Value, content: &str, author_id: Use
     }
 }
 
-/// True when the evidence marker at `suffix_start` sits inside a blockquote,
-/// a fenced block, an inline code span, or an indented code block — in which
-/// case it is an example rather than an offered locator.
-///
-/// The block-structure walk is [`crate::markdown::BlockScanner`], shared with
-/// the status lint so the two cannot disagree about what counts as code.
-fn marker_is_in_quote_or_code(content: &str, suffix_start: usize) -> bool {
-    let mut scanner = BlockScanner::new();
-    for line in content[..suffix_start].split('\n') {
-        scanner.push(line);
-    }
-    scanner.inside_quote_or_code()
-}
-
-fn validate_marker_bytes(handles: &SentexHandles) -> Result<(), String> {
-    let bytes = marker_bytes(handles);
-    if bytes > MAX_SENTEX_MARKER_BYTES {
-        return Err(format!(
-            "sentex marker suffix exceeds {MAX_SENTEX_MARKER_BYTES} bytes"
-        ));
-    }
-    Ok(())
-}
-
-fn marker_bytes(handles: &SentexHandles) -> usize {
-    let marker_content = handles.claims().len()
-        * (CLAIM_MARKER_PREFIX.len() + LOCATOR_TOKEN_LEN + MARKER_SUFFIX.len())
-        + handles.citations().len()
-            * (CITATION_MARKER_PREFIX.len() + LOCATOR_TOKEN_LEN + MARKER_SUFFIX.len());
-    marker_content + handles.len().saturating_sub(1) + usize::from(!handles.is_empty())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::num::NonZeroU64;
 
     #[test]
     fn legacy_terminal_markers_parse_as_citations_with_discord_author() {
@@ -671,7 +366,9 @@ mod tests {
         );
         let oversized_invalid = vec![Value::Null; MAX_SENTEX_REFS + 1];
         assert_eq!(
-            parse_tool_sentex_handles(&json!({ "claim_handles": oversized_invalid })).unwrap_err(),
+            parse_tool_sentex_handles(&json!({ "claim_handles": oversized_invalid }))
+                .unwrap_err()
+                .to_string(),
             "claim_handles and citation_handles support at most 4 total references"
         );
     }
@@ -759,5 +456,38 @@ mod tests {
                 .collect(),
         };
         assert!(validate_marker_bytes(&over_limit).is_err());
+    }
+}
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+    use std::error::Error;
+    #[test]
+    fn overflowing_tool_handle_retains_numeric_cause_and_literal_message() {
+        let error = parse_tool_sentex_handles(&json!({"claim_handles":["18446744073709551616"]}))
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "claim_handles must contain canonical positive decimal u64 strings"
+        );
+        let SentexErrorKind::InvalidHandle { field, cause } = &error.kind else {
+            panic!("invalid handle category");
+        };
+        assert_eq!(*field, SentexField::Claims);
+        assert!(matches!(cause.kind, HandleErrorKind::Number(_)));
+        assert!(
+            cause
+                .source()
+                .unwrap()
+                .source()
+                .unwrap()
+                .is::<std::num::ParseIntError>()
+        );
+        assert!(
+            !parse_tool_sentex_handles(&json!({"claim_handles":["18446744073709551615"]}))
+                .unwrap()
+                .is_empty()
+        );
     }
 }

@@ -13,7 +13,7 @@ expression: notif
       "message_id": "2001",
       "self_react": true,
       "type": "reaction",
-      "user": "construct",
+      "user": "3001=construct",
       "user_id": "3001"
     }
   }

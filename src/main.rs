@@ -1,616 +1,223 @@
-use camino::Utf8PathBuf;
-use clap::Parser;
-use color_eyre::eyre::{Result, WrapErr};
-use dione::{
-    codex::{CodexDeliveryConfig, CodexEventQueue, TransportMode},
-    discord::events::{Handler, NotificationEvent},
-    mcp::server::{DioneServer, StdioExitPolicy},
-    state::SharedState,
-    teams::{AdmissionPolicy, ChannelPolicy},
-    teams_edge::{ClientSecretTokenProvider, TeamsEdge},
-    teams_runtime::{TeamsReplyAuthority, TeamsResidentBridge},
-    tracing_channel::{TraceLevelController, TracingChannelLayer},
-};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    env,
-    net::SocketAddr,
-    sync::{Arc, atomic::AtomicU64},
-    time::Duration,
-};
-use tokio::{
-    sync::{RwLock, mpsc, watch},
-    time::interval,
-};
-use tokio_util::sync::CancellationToken;
-use tracing_subscriber::{EnvFilter, prelude::*, reload};
+use color_eyre::eyre::Result;
+use std::future::Future;
+use tokio::runtime::Builder;
 
-/// Discord MCP channel server for Claude Code and Codex.
-#[derive(Parser)]
-#[command(version, about)]
-struct Cli {
-    /// Tracing filter level (e.g. "info", "debug", "dione=debug,serenity=warn")
-    #[arg(long, default_value = "dione=info")]
-    log_level: String,
-
-    /// Path to config file (overrides default <state_dir>/config.toml)
-    #[arg(long)]
-    config: Option<Utf8PathBuf>,
-
-    /// Path to a log file for persistent structured logs
-    #[arg(long, env = "DIONE_LOG_FILE")]
-    log_file: Option<Utf8PathBuf>,
-
-    /// Agent harness transport for inbound Discord events
-    #[arg(long, value_enum, default_value_t = TransportMode::ClaudeCode)]
-    mode: TransportMode,
-
-    /// Codex app-server Unix socket (defaults to the managed daemon socket)
-    #[arg(long)]
-    codex_app_server_socket: Option<Utf8PathBuf>,
-
-    /// Exact Codex thread to receive Discord events (defaults to CODEX_THREAD_ID)
-    #[arg(long)]
-    codex_thread_id: Option<dione::codex::CodexThreadId>,
-
-    /// Operator-owned Unix socket for the minimum resident queue/publication API
-    #[arg(long)]
-    resident_control_socket: Option<Utf8PathBuf>,
-
-    /// Execute an attention JSON command file (or - for stdin) without starting the gateway.
-    /// Metadata commands require exclusive store ownership; use MCP while the daemon runs.
-    #[arg(long)]
-    attention_command: Option<Utf8PathBuf>,
-}
-
-struct TeamsStartup {
-    reply: Option<Arc<dyn TeamsReplyAuthority>>,
-    bridge: Option<Arc<TeamsResidentBridge<ClientSecretTokenProvider>>>,
-    listen: Option<SocketAddr>,
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     color_eyre::install()?;
+    run_runtime(async {
+        dione::startup::run().await?;
+        Ok(())
+    })
+}
 
-    let cli = Cli::parse();
+fn run_runtime(operation: impl Future<Output = Result<()>>) -> Result<()> {
+    let runtime = Builder::new_multi_thread().enable_all().build()?;
+    let result = runtime.block_on(operation);
+    // Blocking stdin reads cannot be cancelled even after startup drains owned work.
+    runtime.shutdown_background();
+    result
+}
 
-    if let Some(config_path) = cli.config {
-        dione::config::set_config_path(config_path);
-    }
-
-    // Build a reloadable EnvFilter so trace level can be changed at runtime via MCP tool.
-    // Respect RUST_LOG if set, otherwise use the CLI flag.
-    let stderr_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::try_new(&cli.log_level).expect("--log-level validated by clap")
-    });
-    let (stderr_filter_layer, stderr_reload_handle) = reload::Layer::new(stderr_filter);
-
-    // Stderr logging layer — stdout is reserved for MCP transport.
-    let stderr_layer = tracing_subscriber::fmt::layer()
-        .with_writer(std::io::stderr)
-        .with_filter(stderr_filter_layer);
-
-    // File logging layer — persistent structured logs alongside MCP transport.
-    let file_layer = if let Some(ref log_file_path) = cli.log_file {
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_file_path.as_std_path())
-            .wrap_err_with(|| format!("failed to open log file: {log_file_path}"))?;
-        let file_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::try_new(&cli.log_level).expect("--log-level validated by clap")
-        });
-        Some(
-            tracing_subscriber::fmt::layer()
-                .with_writer(std::sync::Mutex::new(file))
-                .with_ansi(false)
-                .with_filter(file_filter),
-        )
-    } else {
-        None
+#[cfg(all(test, unix))]
+mod runtime_shutdown_tests {
+    use super::run_runtime;
+    use std::{
+        env,
+        path::{Path, PathBuf},
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+    use tempfile::TempDir;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{UnixListener, UnixStream},
+        process::{Child, Command},
+        signal::unix::{SignalKind, signal},
+        time::{sleep, timeout},
     };
 
-    // Channel-forwarding layer — starts disabled (off). When set_trace_level is called,
-    // events above the threshold are forwarded as channel notifications with type="trace".
-    let (channel_layer, channel_event_rx) = TracingChannelLayer::new();
-    let channel_filter =
-        EnvFilter::try_new("off").wrap_err("failed to build initial channel filter")?;
-    let (channel_filter_layer, channel_reload_handle) = reload::Layer::new(channel_filter);
+    const CHILD_DIRECTORY: &str = "DIONE_MAIN_RUNTIME_FIXTURE_DIRECTORY";
+    const CHILD_DRAIN: &str = "DIONE_MAIN_RUNTIME_FIXTURE_DRAIN";
+    const CHILD_TEST: &str = "runtime_shutdown_tests::signal_with_open_stdin_child";
+    const EXIT_BOUND: Duration = Duration::from_secs(5);
 
-    tracing_subscriber::registry()
-        .with(stderr_layer)
-        .with(file_layer)
-        .with(channel_layer.with_filter(channel_filter_layer))
-        .init();
-
-    let state_dir = dione::config::state_dir();
-    // Boot-brick-proof startup: an invalid config with an on-disk LKG is
-    // quarantined and restored; invalid with NO LKG follows the PROVISIONAL
-    // `NoLkgPolicy::FailStartup` default (open decision #1, owner 🦋 — the
-    // owner's answer flips this one variant).
-    let (config, config_warning) = dione::config::ConfigRuntime::new(state_dir.clone())
-        .startup_load(dione::config::NoLkgPolicy::default())
-        .await
-        .wrap_err("failed to load config at startup")?;
-    if let Some(warning) = config_warning {
-        tracing::warn!(warning = %warning, "config loaded with a startup warning");
-    }
-    // Keep the Observe pipeline installed for the process lifetime. Each
-    // message's freshly loaded config decides whether it participates, so
-    // `pre_send.enabled` hot reloads in both directions without a restart.
-    let pre_send_pipeline = dione::pre_send::production_pipeline()
-        .wrap_err("failed to configure Observe pre-send pipeline")?;
-    dione::pre_send::install_pipeline(Some(pre_send_pipeline));
-
-    // Initialize the guild mute store (persistent, lock-free reads).
-    let mute_store = dione::mute_store::MuteStore::load(&state_dir)
-        .await
-        .map_err(|e| color_eyre::eyre::eyre!("failed to load guild mute store: {e}"))?;
-    dione::mute_store::init_global(mute_store);
-
-    if let Some(path) = &cli.attention_command {
-        return run_attention_command(path, &state_dir, &config, cli.mode).await;
-    }
-
-    // Spawn the background expiry reconciliation task.
-    let expiry_handle = dione::mute_store::global()
-        .expect("mute store just initialized")
-        .spawn_expiry_task();
-
-    tracing::info!(
-        ?state_dir,
-        dm_policy = ?config.access.dm_policy,
-        "dione starting"
-    );
-
-    let token = dione::config::resolve_token(&config).ok_or_else(|| {
-        color_eyre::eyre::eyre!(
-            "no Discord bot token found; set DISCORD_BOT_TOKEN or token in config.toml"
-        )
-    })?;
-
-    let cancel = CancellationToken::new();
-    let state = Arc::new(RwLock::new(SharedState::new()));
-    let queue = Arc::new(tokio::sync::Mutex::new(dione::queue::AccessQueue::load(
-        &state_dir,
-    )));
-
-    // Discord → MCP event channel.
-    let (event_tx, event_rx) = mpsc::channel::<NotificationEvent>(256);
-
-    // Config file watcher — reloads ArcSwap cache on config.toml changes.
-    dione::config_watcher::spawn(state_dir.clone(), event_tx.clone(), cancel.clone());
-
-    // MCP notification channel (for server-initiated writes, currently unused beyond event_rx).
-    let (notif_tx, _notif_rx) = mpsc::channel::<serde_json::Value>(64);
-
-    // One durable queue; its worker starts after the shared attention authority exists.
-    let codex_queue = if cli.mode == TransportMode::Codex {
-        Some(CodexEventQueue::load(&state_dir).wrap_err("failed to open Codex event queue")?)
-    } else {
-        None
-    };
-
-    // Restore Teams reply authority before starting any ingress listener. The
-    // listener starts only after the Codex delivery worker is installed.
-    let TeamsStartup {
-        reply: teams_reply,
-        bridge: teams_bridge,
-        listen: teams_listen,
-    } = if let Ok(app_id) = env::var("TEAMS_APP_ID") {
-        let live_queue = codex_queue.clone().ok_or_else(|| {
-            color_eyre::eyre::eyre!("Teams resident ingress requires --mode codex")
-        })?;
-        let tenant_id = env::var("TEAMS_TENANT_ID")
-            .wrap_err("TEAMS_TENANT_ID is required when TEAMS_APP_ID is set")?;
-        let client_secret = secrecy::SecretString::from(
-            env::var("TEAMS_CLIENT_SECRET")
-                .wrap_err("TEAMS_CLIENT_SECRET is required when TEAMS_APP_ID is set")?,
-        );
-        let allowed_host = env::var("TEAMS_ALLOWED_SERVICE_HOST")
-            .wrap_err("TEAMS_ALLOWED_SERVICE_HOST is required when TEAMS_APP_ID is set")?;
-        let listen: SocketAddr = env::var("TEAMS_LISTEN_ADDR")
-            .unwrap_or_else(|_| "127.0.0.1:3978".to_owned())
-            .parse()
-            .wrap_err("TEAMS_LISTEN_ADDR is invalid")?;
-        let client = reqwest::Client::builder()
-            .https_only(true)
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(15))
-            .build()
-            .wrap_err("failed to build Teams HTTP client")?;
-        let provider = ClientSecretTokenProvider::new(
-            client.clone(),
-            &tenant_id,
-            app_id.clone(),
-            client_secret,
-        )?;
-        let edge = TeamsEdge::new(
-            client,
-            provider,
-            AdmissionPolicy {
-                app_id,
-                tenant_id,
-                allowed_service_hosts: BTreeSet::from([allowed_host]),
-                channels: BTreeMap::from([(
-                    "msteams".to_owned(),
-                    ChannelPolicy {
-                        requires_key_endorsement: true,
-                    },
-                )]),
-            },
-        )?;
-        let bridge = Arc::new(
-            TeamsResidentBridge::new_durable(edge, live_queue, &state_dir)
-                .await
-                .wrap_err("failed to restore Teams reply authority")?,
-        );
-        let authority: Arc<dyn TeamsReplyAuthority> = bridge.clone();
-        TeamsStartup {
-            reply: Some(authority),
-            bridge: Some(bridge),
-            listen: Some(listen),
-        }
-    } else {
-        TeamsStartup {
-            reply: None,
-            bridge: None,
-            listen: None,
-        }
-    };
-
-    // MCP → Discord gateway command channel (for presence updates, etc.).
-    let (discord_cmd_tx, discord_cmd_rx) =
-        mpsc::channel::<dione::mcp::tools::bot_state::DiscordCommand>(16);
-
-    // Build pronoun service if enabled in this construct's config.
-    let pronoun_service = if config.raw.pronouns.enabled {
-        Some(std::sync::Arc::new(dione::pronouns::PronounService::new(
-            config.pronoun_excluded.clone(),
-            config.raw.pronouns.deadline_ms,
-            std::time::Duration::from_secs(config.raw.pronouns.cache_ttl_seconds),
-        )))
-    } else {
-        None
-    };
-
-    let nameplate_service = if config.raw.nameplates.enabled {
-        Some(std::sync::Arc::new(
-            dione::nameplates::NameplateService::new(
-                &config.raw.nameplates.url,
-                config.raw.nameplates.deadline_ms,
-                std::time::Duration::from_secs(config.raw.nameplates.cache_ttl_seconds),
-                &config.raw.nameplates.exclude_for,
-            ),
-        ))
-    } else {
-        None
-    };
-
-    // Build ingress ledger (shared between gateway and MCP egress).
-    let ingress_ledger = std::sync::Arc::new(dione::ingress_ledger::IngressLedger::new());
-
-    // Build PluralKit identity resolver.
-    let pk_resolver = Some(std::sync::Arc::new(
-        dione::pluralkit::PkResolver::with_defaults(),
-    ));
-
-    // Build Discord event handler.
-    // One presence authority: the gateway handler and the MCP server must
-    // share the exact same state, so both handles come from the production
-    // assembly seam (tested in events::tests + dispatch::tests).
-    let (shared_presence, server_presence) = dione::discord::events::wire_shared_presence();
-    let handler = Handler {
-        state: state.clone(),
-        queue: queue.clone(),
-        tx: event_tx.clone(),
-        state_dir: state_dir.clone(),
-        bot_user_id: AtomicU64::new(0),
-        discord_cmd_rx: tokio::sync::Mutex::new(Some(discord_cmd_rx)),
-        presence: shared_presence.clone(),
-        pronoun_service,
-        nameplate_service,
-        ingress_ledger: ingress_ledger.clone(),
-        pk_resolver,
-    };
-
-    let mut discord_client = dione::discord::client::build_client(&token, handler)
-        .await
-        .wrap_err("failed to build Discord client")?;
-
-    let http = discord_client.http.clone();
-
-    // Build MCP server.
-    let trace_controller = TraceLevelController::new(stderr_reload_handle, channel_reload_handle);
-    let server = DioneServer::new(
-        state.clone(),
-        queue.clone(),
-        http,
-        state_dir.clone(),
-        notif_tx,
-        trace_controller,
-        cli.mode,
-        Arc::new(dione::no_rly::consent::ConsentGate::new(&state_dir)),
-        ingress_ledger,
-    )
-    .await
-    .with_discord_cmd_tx(Some(discord_cmd_tx))
-    .with_presence(server_presence)
-    .with_codex_queue(codex_queue.clone())
-    .with_event_tx(Some(event_tx.clone()));
-
-    // The delivery worker shares the server's source/access and durable receipt authority.
-    let delivery_cancel = CancellationToken::new();
-    let (codex_handle, codex_thread_binding) = if let Some(codex_queue) = &codex_queue {
-        let mut delivery_config = CodexDeliveryConfig::resolve(cli.codex_app_server_socket)
-            .wrap_err("failed to configure Codex live delivery")?;
-        delivery_config.preamble_mode = config.delivery.preamble_mode;
-        delivery_config.preamble_template = config.delivery.preamble_template.clone();
-        delivery_config.attention_guard = Some(server.attention.clone());
-        let initial_thread = match cli.codex_thread_id {
-            Some(thread_id) => Some(thread_id),
-            None => env::var("CODEX_THREAD_ID")
-                .ok()
-                .map(|value| value.parse())
-                .transpose()
-                .wrap_err("invalid CODEX_THREAD_ID")?,
+    #[test]
+    fn signal_with_open_stdin_child() {
+        let Some(directory) = env::var_os(CHILD_DIRECTORY) else {
+            return;
         };
-        codex_queue
-            .bind_live_thread(initial_thread.clone())
-            .await
-            .wrap_err("failed to persist initial Codex thread binding")?;
-        let (binding_tx, binding_rx) = watch::channel(initial_thread);
-        let delivery_queue = codex_queue.clone();
-        let worker_cancel = delivery_cancel.clone();
-        let shutdown_on_worker_failure = cancel.clone();
-        let handle = tokio::spawn(async move {
-            if let Err(error) = dione::codex::run_delivery_worker(
-                delivery_queue,
-                delivery_config,
-                binding_rx,
-                worker_cancel,
-            )
-            .await
-            {
-                tracing::error!(error = %error, "Codex live delivery worker exited");
-                shutdown_on_worker_failure.cancel();
-            }
-        });
-        (Some(handle), Some(binding_tx))
-    } else {
-        (None, None)
-    };
-    let server = Arc::new(
-        server
-            .with_codex_thread_binding(codex_thread_binding)
-            .with_teams_reply(teams_reply),
-    );
-
-    let teams_handle = if let (Some(bridge), Some(listen)) = (teams_bridge.clone(), teams_listen) {
-        let ingress_cancel = cancel.clone();
-        let shutdown_on_failure = cancel.clone();
-        Some(tokio::spawn(async move {
-            if let Err(error) =
-                dione::teams_runtime::run_listener(bridge, listen, ingress_cancel).await
-            {
-                tracing::error!(%error, "Teams resident listener failed");
-                shutdown_on_failure.cancel();
-            }
-        }))
-    } else {
-        None
-    };
-
-    let resident_control_handle = if let Some(socket_path) = cli.resident_control_socket {
-        let control_server = server.clone();
-        let control_cancel = cancel.clone();
-        Some(tokio::spawn(async move {
-            if let Err(error) = dione::mcp::server::run_resident_control(
-                control_server,
-                socket_path,
-                control_cancel.clone(),
-            )
-            .await
-            {
-                tracing::error!(%error, "resident control server failed");
-                control_cancel.cancel();
-            }
-        }))
-    } else {
-        None
-    };
-    let stdio_exit_policy = if resident_control_handle.is_some() {
-        StdioExitPolicy::DetachUntilCancellation
-    } else {
-        StdioExitPolicy::ShutdownProcess
-    };
-
-    // Spawn the tracing-channel forwarder: converts tracing events into NotificationEvents.
-    let trace_event_tx = event_tx.clone();
-    tokio::spawn(async move {
-        let mut rx = channel_event_rx;
-        while let Some(trace_event) = rx.recv().await {
-            if trace_event_tx.send(trace_event).await.is_err() {
-                break;
-            }
-        }
-    });
-
-    // The reply-coordination forwarder subscribes to the process-wide bus,
-    // not to the startup config's coordinators, so it keeps working after a
-    // config reload builds new ones (and when coordination is first
-    // configured by a reload).
-    let mut coordination_rx = dione::coordination::subscribe_shared();
-    let coordination_tx = event_tx.clone();
-    tokio::spawn(async move {
-        loop {
-            let event = match coordination_rx.recv().await {
-                Ok(event) => event,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                    tracing::warn!(skipped, "claim-once: coordination events dropped (lagged)");
-                    continue;
+        let directory = PathBuf::from(directory);
+        let drain = env::var_os(CHILD_DRAIN).is_some();
+        run_runtime(async move {
+            let mut terminate = signal(SignalKind::terminate())?;
+            let listener = UnixListener::bind(directory.join("control.sock"))?;
+            let (stream, _) = listener.accept().await?;
+            let (mut input, mut output) = stream.into_split();
+            let completed = directory.join("completed");
+            let accepted = tokio::spawn(async move {
+                if drain {
+                    let mut release = [0_u8; 1];
+                    input.read_exact(&mut release).await.unwrap();
+                    assert_eq!(release, [b'C']);
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            };
-            if coordination_tx
-                .send(NotificationEvent::Coordination(event))
+                tokio::fs::write(completed, b"accepted work completed").await.unwrap();
+            });
+            {
+                let mut stdin = tokio::io::stdin();
+                let mut byte = [0_u8; 1];
+                tokio::select! {
+                    biased;
+                    result = stdin.read(&mut byte) => panic!("stdin must remain pending: {result:?}"),
+                    _ = sleep(Duration::from_millis(50)) => {},
+                }
+            }
+            output.write_all(b"R").await?;
+            terminate.recv().await.expect("SIGTERM received");
+            output.write_all(b"S").await?;
+            accepted.await?;
+            output.write_all(b"D").await?;
+            Ok(())
+        }).unwrap();
+    }
+
+    async fn marker(stream: &mut UnixStream, expected: u8) {
+        let mut byte = [0_u8; 1];
+        timeout(Duration::from_secs(5), stream.read_exact(&mut byte))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(byte, [expected]);
+    }
+
+    async fn launch(directory: &Path, drain: bool) -> (Child, UnixStream) {
+        let stderr = tokio::fs::File::create(directory.join("stderr"))
+            .await
+            .unwrap()
+            .into_std()
+            .await;
+        let mut command = Command::new(env::current_exe().unwrap());
+        command
+            .args(["--exact", CHILD_TEST, "--nocapture", "--quiet"])
+            .env(CHILD_DIRECTORY, directory)
+            .env_remove(CHILD_DRAIN)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(stderr))
+            .kill_on_drop(true);
+        if drain {
+            command.env(CHILD_DRAIN, "1");
+        }
+        let mut child = command.spawn().unwrap();
+        let connected = timeout(Duration::from_secs(5), async {
+            loop {
+                match UnixStream::connect(directory.join("control.sock")).await {
+                    Ok(stream) => break stream,
+                    Err(_) => sleep(Duration::from_millis(10)).await,
+                }
+            }
+        })
+        .await;
+        let stream = match connected {
+            Ok(stream) => stream,
+            Err(_) => {
+                child.kill().await.unwrap();
+                child.wait().await.unwrap();
+                panic!(
+                    "child did not open control socket: {}",
+                    tokio::fs::read_to_string(directory.join("stderr"))
+                        .await
+                        .unwrap()
+                );
+            }
+        };
+        (child, stream)
+    }
+
+    fn terminate(child: &Child) {
+        let pid = i32::try_from(child.id().expect("running child")).unwrap();
+        // The owned child remains alive while its parent retains the stdin pipe.
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
+    }
+
+    async fn exited(child: &mut Child, directory: &Path) {
+        let status = match timeout(EXIT_BOUND, child.wait()).await {
+            Ok(status) => status.unwrap(),
+            Err(_) => {
+                child.kill().await.unwrap();
+                child.wait().await.unwrap();
+                panic!(
+                    "runtime waited for held-open stdin: {}",
+                    tokio::fs::read_to_string(directory.join("stderr"))
+                        .await
+                        .unwrap()
+                );
+            }
+        };
+        assert!(
+            status.success(),
+            "{}",
+            tokio::fs::read_to_string(directory.join("stderr"))
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn sigterm_exits_while_parent_keeps_stdin_open() {
+        let directory = TempDir::new().unwrap();
+        let (mut child, mut control) = launch(directory.path(), false).await;
+        let stdin = child.stdin.take().unwrap();
+        marker(&mut control, b'R').await;
+        let started = Instant::now();
+        terminate(&child);
+        marker(&mut control, b'S').await;
+        marker(&mut control, b'D').await;
+        exited(&mut child, directory.path()).await;
+        eprintln!(
+            "SIGTERM fixture exit after {:.3} ms",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+        assert_eq!(
+            tokio::fs::read(directory.path().join("completed"))
+                .await
+                .unwrap(),
+            b"accepted work completed"
+        );
+        drop(stdin);
+    }
+
+    #[tokio::test]
+    async fn sigterm_waits_for_accepted_work_before_releasing_runtime() {
+        let directory = TempDir::new().unwrap();
+        let (mut child, mut control) = launch(directory.path(), true).await;
+        let stdin = child.stdin.take().unwrap();
+        marker(&mut control, b'R').await;
+        terminate(&child);
+        marker(&mut control, b'S').await;
+        assert!(
+            timeout(Duration::from_millis(150), child.wait())
                 .await
                 .is_err()
-            {
-                break;
-            }
-        }
-    });
-
-    // Spawn background pruning task.
-    let prune_queue = queue.clone();
-    let prune_expiry = Duration::from_secs(config.access_requests.expiry_seconds);
-    let cancel_prune = cancel.clone();
-    tokio::spawn(async move {
-        let mut ticker = interval(Duration::from_secs(60));
-        loop {
-            tokio::select! {
-                biased;
-                _ = cancel_prune.cancelled() => break,
-                _ = ticker.tick() => {
-                    prune_queue.lock().await.prune_expired(prune_expiry);
-                }
-            }
-        }
-    });
-
-    // Spawn Discord client.
-    let cancel_discord = cancel.clone();
-    let discord_handle = tokio::spawn(async move {
-        if let Err(e) = discord_client.start().await {
-            tracing::error!(error = ?e, "discord client exited with error");
-            cancel_discord.cancel();
-        }
-    });
-
-    // Spawn MCP server (owns stdin/stdout).
-    let cancel_mcp = cancel.clone();
-    let mcp_handle = tokio::spawn(async move {
-        if let Err(e) =
-            dione::mcp::server::run(server, event_rx, cancel_mcp, stdio_exit_policy).await
-        {
-            tracing::error!(error = ?e, "MCP server exited with error");
-        }
-    });
-
-    // Wait for a shutdown signal. SIGTERM (service managers, container stop)
-    // must trigger the same graceful path as SIGINT so the no_rly sweeper
-    // drains pending handles into the journal before exit.
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .expect("install SIGTERM handler");
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!("SIGINT received, shutting down");
-        }
-        _ = sigterm.recv() => {
-            tracing::info!("SIGTERM received, shutting down");
-        }
-        _ = cancel.cancelled() => {
-            tracing::info!("shutdown requested by internal cancellation");
-        }
+        );
+        assert!(
+            !tokio::fs::try_exists(directory.path().join("completed"))
+                .await
+                .unwrap()
+        );
+        let started = Instant::now();
+        control.write_all(b"C").await.unwrap();
+        marker(&mut control, b'D').await;
+        exited(&mut child, directory.path()).await;
+        eprintln!(
+            "accepted drain release to exit after {:.3} ms",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+        assert_eq!(
+            tokio::fs::read(directory.path().join("completed"))
+                .await
+                .unwrap(),
+            b"accepted work completed"
+        );
+        drop(stdin);
     }
-
-    cancel.cancel();
-
-    // Stop new ingress first. Accepted resident requests and signed Teams
-    // Activities retain their own task ownership until their queue settlement
-    // completes. A stalled drain keeps the process and inbox lock alive; it
-    // must never be reported as a clean shutdown.
-    expiry_handle.abort();
-    discord_handle.abort();
-    if let Some(handle) = teams_handle {
-        handle
-            .await
-            .wrap_err("Teams ingress task panicked during drain")?;
-    }
-    if let Some(handle) = resident_control_handle {
-        handle
-            .await
-            .wrap_err("resident control task panicked during drain")?;
-    }
-    mcp_handle
-        .await
-        .wrap_err("MCP server task panicked during drain")?;
-    if let Some(bridge) = teams_bridge {
-        bridge.drain_replies().await;
-    }
-    delivery_cancel.cancel();
-    if let Some(handle) = codex_handle {
-        handle
-            .await
-            .wrap_err("Codex delivery worker panicked during drain")?;
-    }
-
-    tracing::info!("dione stopped");
-    Ok(())
-}
-
-async fn run_attention_command(
-    path: &Utf8PathBuf,
-    state_dir: &Utf8PathBuf,
-    config: &dione::config::LoadedConfig,
-    mode: TransportMode,
-) -> Result<()> {
-    use dione::attention::control::AttentionCommand;
-    use tokio::io::AsyncReadExt;
-    let mut bytes = Vec::new();
-    if path.as_str() == "-" {
-        tokio::io::stdin()
-            .take(1_048_577)
-            .read_to_end(&mut bytes)
-            .await
-            .wrap_err("failed to read attention command")?;
-    } else {
-        tokio::fs::File::open(path)
-            .await
-            .wrap_err("failed to open attention command")?
-            .take(1_048_577)
-            .read_to_end(&mut bytes)
-            .await
-            .wrap_err("failed to read attention command")?;
-    }
-    if bytes.len() > 1_048_576 {
-        return Err(color_eyre::eyre::eyre!("attention command exceeds one MiB"));
-    }
-    let command: AttentionCommand =
-        serde_json::from_slice(&bytes).wrap_err("invalid attention command")?;
-    let token = if matches!(
-        &command,
-        AttentionCommand::Status | AttentionCommand::Configure { .. }
-    ) {
-        String::new()
-    } else {
-        dione::config::resolve_token(config).ok_or_else(|| {
-            color_eyre::eyre::eyre!("source validation requires a Discord bot token")
-        })?
-    };
-    let runtime = Arc::new(
-        dione::attention::runtime::AttentionRuntime::new(
-            dione::attention::source::SourceResolver {
-                http: Arc::new(serenity::http::Http::new(&token)),
-                state: Arc::new(RwLock::new(SharedState::new())),
-                state_dir: state_dir.clone(),
-                ledger: Arc::new(dione::ingress_ledger::IngressLedger::new()),
-            },
-            mode == TransportMode::Codex,
-        )
-        .await,
-    );
-    // A standalone process must never overwrite the live daemon's metadata snapshot.
-    runtime
-        .with_store(|_| Ok(()))
-        .await
-        .map_err(color_eyre::eyre::Error::msg)?;
-    let result =
-        dione::attention::control::execute(runtime, command, !config.access.admin_only_mutations)
-            .await
-            .map_err(color_eyre::eyre::Error::msg)?;
-    println!("{}", serde_json::to_string_pretty(&result)?);
-    Ok(())
 }

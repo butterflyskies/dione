@@ -10,8 +10,16 @@ use camino::Utf8PathBuf;
 use dione::{
     config::{ChannelConfig, Config, LoadedConfig, reload_config},
     contradictionary::{Action, Contradictionary, DIARY_FILE_NAME, Entry, MatchMode},
-    mcp::tools::messaging::{self, MessagingCtx},
-    no_rly::{consent::ConsentGate, journal::JOURNAL_FILE_NAME},
+    discord::messaging::{
+        self, MessagingCtx, MessagingError, MessagingErrorKind, ReplyOutcome, Report,
+    },
+    no_rly::{
+        consent::{
+            BounceTicket, ConsentGate, DeliveryCause, DeliveryProgress, RejectedHandle, Rephrased,
+        },
+        journal::JOURNAL_FILE_NAME,
+        queue::HoldHandle,
+    },
     state::new_state,
 };
 use serenity::model::id::ChannelId;
@@ -130,11 +138,14 @@ fn test_ctx(config: LoadedConfig) -> (TempDir, MessagingCtx) {
     (dir, ctx)
 }
 
-/// Pull the hold handle out of a bounced reply's JSON.
-fn held_handle(result: &serde_json::Value) -> &str {
-    result["held"]["handle"]
-        .as_str()
-        .expect("bounced reply must carry held.handle")
+fn held_ticket(result: &Result<Report<ReplyOutcome>, MessagingError>) -> &BounceTicket {
+    match &result.as_ref().expect("reply outcome").outcome {
+        ReplyOutcome::Held(ticket) => ticket,
+        other => panic!("expected held reply, got {other:?}"),
+    }
+}
+fn held_handle(result: &Result<Report<ReplyOutcome>, MessagingError>) -> &HoldHandle {
+    &held_ticket(result).handle
 }
 
 // ── Integration: messaging::reply() bounce path ──────────────────────────────
@@ -154,35 +165,21 @@ async fn reply_block_holds_message_with_handle() {
         ChannelId::new(42),
         "this is a straightforward implementation",
         None,
-        false,
+        dione::discord::messaging::ReplyPing::from_suppressed(false),
     )
     .await;
 
-    let error_msg = result["error"].as_str().expect("bounce must be an error");
+    let ticket = held_ticket(&result);
+    assert!(ticket.handle.to_string().starts_with("nr-"));
+    assert_eq!(ticket.reason.matches[0].pattern, "straightforward");
     assert!(
-        error_msg.contains("held by contradictionary"),
-        "bounce error must say the message is held: {error_msg}"
-    );
-    assert!(
-        error_msg.contains("straightforward"),
-        "error should name the matched pattern: {error_msg}"
-    );
-
-    // The held block carries everything the construct needs to act.
-    let handle = held_handle(&result);
-    assert!(handle.starts_with("nr-"), "handle format: {handle}");
-    assert_eq!(
-        result["held"]["reason"]["matches"][0]["pattern"], "straightforward",
-        "structured reason must name the pattern"
-    );
-    assert!(
-        result["held"]["reason"]["matches"][0]["reason"]
-            .as_str()
+        ticket.reason.matches[0]
+            .reason
+            .as_deref()
             .unwrap()
-            .contains("nothing is ever straightforward"),
-        "structured reason must carry the configured explanation"
+            .contains("nothing is ever straightforward")
     );
-    assert_eq!(result["held"]["expires_in_secs"], 180, "default TTL is 3m");
+    assert_eq!(ticket.expires_in.as_secs(), 180);
 
     // And the message really is queued, not lost.
     assert_eq!(ctx.no_rly.pending().await, 1);
@@ -198,15 +195,20 @@ async fn reply_block_reports_all_blocked_patterns() {
         ChannelId::new(42),
         "this is a straightforward and trivial change",
         None,
-        false,
+        dione::discord::messaging::ReplyPing::from_suppressed(false),
     )
     .await;
 
-    let error_msg = result["error"].as_str().unwrap();
-    assert!(error_msg.contains("straightforward"));
-    assert!(error_msg.contains("trivial"));
-    let reasons = result["held"]["reason"]["matches"].as_array().unwrap();
-    assert_eq!(reasons.len(), 2);
+    let ticket = held_ticket(&result);
+    assert_eq!(
+        ticket
+            .reason
+            .matches
+            .iter()
+            .map(|reason| reason.pattern.as_str())
+            .collect::<Vec<_>>(),
+        ["straightforward", "trivial"]
+    );
 }
 
 /// Log and celebrate hits don't bounce. The message would send (fails here because fake
@@ -220,19 +222,14 @@ async fn reply_log_and_celebrate_do_not_block() {
         ChannelId::new(42),
         "I find myself honestly appreciating the load-bearing work here",
         None,
-        false,
+        dione::discord::messaging::ReplyPing::from_suppressed(false),
     )
     .await;
 
-    // With a fake HTTP client, the send will fail — but it should fail at the
-    // Discord layer, not at the judge. The error should NOT mention a hold.
-    if let Some(error) = result.get("error") {
-        let msg = error.as_str().unwrap_or("");
-        assert!(
-            !msg.contains("contradictionary"),
-            "log/celebrate hits must not trigger the bounce path, got: {msg}"
-        );
-    }
+    assert!(matches!(
+        result.unwrap_err().kind,
+        MessagingErrorKind::Delivery(DeliveryCause::ChunkSend { .. })
+    ));
     assert_eq!(
         ctx.no_rly.pending().await,
         0,
@@ -251,18 +248,12 @@ async fn reply_gate_rejects_unknown_channel_without_holding() {
         ChannelId::new(999), // not in config
         "straightforward message to wrong channel",
         None,
-        false,
+        dione::discord::messaging::ReplyPing::from_suppressed(false),
     )
     .await;
 
-    let error_msg = result["error"].as_str().unwrap();
     assert!(
-        error_msg.contains("not a permitted"),
-        "gate should reject unknown channel: {error_msg}"
-    );
-    assert!(
-        !error_msg.contains("contradictionary"),
-        "gate error should not mention contradictionary: {error_msg}"
+        matches!(result.unwrap_err().kind, MessagingErrorKind::OutboundDenied(id) if id == ChannelId::new(999))
     );
     assert_eq!(ctx.no_rly.pending().await, 0);
 }
@@ -273,13 +264,8 @@ async fn reply_gate_rejects_unknown_channel_without_holding() {
 #[tokio::test]
 async fn release_unknown_handle_errors() {
     let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
-    let result = messaging::release_held(&ctx, "nr-0000-99").await;
-    assert!(
-        result["error"]
-            .as_str()
-            .unwrap()
-            .contains("unknown or already-used handle")
-    );
+    let result = messaging::release_held(&ctx, &HoldHandle::new("nr-0000-99")).await;
+    assert!(matches!(result, Err(RejectedHandle::Unknown(_))));
 }
 
 /// Release with a fake HTTP layer: the claim succeeds, the Discord send
@@ -294,19 +280,14 @@ async fn release_send_failure_keeps_handle_alive() {
         ChannelId::new(42),
         "a straightforward take",
         None,
-        false,
+        dione::discord::messaging::ReplyPing::from_suppressed(false),
     )
     .await;
-    let handle = held_handle(&bounce).to_string();
+    let handle = held_handle(&bounce).clone();
 
     let result = messaging::release_held(&ctx, &handle).await;
     assert!(
-        result["error"].as_str().unwrap().contains("send failed"),
-        "fake HTTP must fail at the Discord layer: {result}"
-    );
-    assert_eq!(
-        result["handle_still_live"], handle,
-        "failed send must leave the handle claimable"
+        matches!(result, Err(RejectedHandle::SendFailed { handle: failed, error: DeliveryCause::ChunkSend { .. }, progress: DeliveryProgress::None, .. }) if failed == handle)
     );
     assert_eq!(ctx.no_rly.pending().await, 1);
 }
@@ -316,14 +297,11 @@ async fn release_send_failure_keeps_handle_alive() {
 #[tokio::test]
 async fn rephrase_empty_content_is_rejected_early() {
     let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
-    let result = messaging::rephrase_held(&ctx, "nr-0000-1", "   ").await;
-    assert!(
-        result["error"]
-            .as_str()
-            .unwrap()
-            .contains("must not be empty"),
-        "empty rephrase must be rejected with a clear message: {result}"
-    );
+    let result = messaging::rephrase_held(&ctx, &HoldHandle::new("nr-0000-1"), "   ").await;
+    assert!(matches!(
+        result.unwrap_err().kind,
+        MessagingErrorKind::EmptyRephrase
+    ));
 }
 
 /// Rephrase whose replacement bounces again: the old handle dies, a new
@@ -343,32 +321,23 @@ async fn rephrase_rebounce_chains_and_journals() {
         ChannelId::new(42),
         "this is a straightforward implementation",
         None,
-        false,
+        dione::discord::messaging::ReplyPing::from_suppressed(false),
     )
     .await;
-    let old_handle = held_handle(&bounce).to_string();
+    let old_handle = held_handle(&bounce).clone();
 
     let result =
         messaging::rephrase_held(&ctx, &old_handle, "fine, it is a trivial implementation").await;
-    let new_handle = held_handle(&result).to_string();
-    assert_ne!(new_handle, old_handle, "re-bounce must mint a NEW handle");
-    assert_eq!(
-        result["held"]["chained_from"], old_handle,
-        "the new ticket must chain to the dead handle"
-    );
-    assert_eq!(
-        result["held"]["reason"]["matches"][0]["pattern"], "trivial",
-        "the new reason reflects the replacement's own match"
-    );
+    let Rephrased::ReBounced(ticket) = result.unwrap().outcome else {
+        panic!("replacement must bounce")
+    };
+    assert_ne!(ticket.handle, old_handle);
+    assert_eq!(ticket.parent.as_ref(), Some(&old_handle));
+    assert_eq!(ticket.reason.matches[0].pattern, "trivial");
 
     // Old handle is dead — no replay, no second rephrase.
     let dead = messaging::release_held(&ctx, &old_handle).await;
-    assert!(
-        dead["error"]
-            .as_str()
-            .unwrap()
-            .contains("unknown or already-used handle")
-    );
+    assert!(matches!(dead, Err(RejectedHandle::Unknown(_))));
 
     // The journal writer is asynchronous; flush before reading the file back.
     ctx.no_rly.journal().flush().await;
@@ -379,7 +348,7 @@ async fn rephrase_rebounce_chains_and_journals() {
     assert_eq!(lines.len(), 1, "one resolved bounce so far");
     let record: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(record["kind"], "bounce");
-    assert_eq!(record["handle"], old_handle);
+    assert_eq!(record["handle"], old_handle.to_string());
     assert_eq!(record["outcome"], "rephrased");
     assert_eq!(
         record["message"],
@@ -433,10 +402,10 @@ async fn release_into_a_revoked_channel_is_refused_and_keeps_the_handle() {
         ChannelId::new(42),
         "a straightforward take",
         None,
-        false,
+        dione::discord::messaging::ReplyPing::from_suppressed(false),
     )
     .await;
-    let handle = held_handle(&bounce).to_string();
+    let handle = held_handle(&bounce).clone();
     assert_eq!(gate.pending().await, 1);
 
     // Second context: same gate, but a config where 42 is no longer a
@@ -453,15 +422,7 @@ async fn release_into_a_revoked_channel_is_refused_and_keeps_the_handle() {
     );
     let result = messaging::release_held(&ctx_revoked, &handle).await;
     assert!(
-        result["error"]
-            .as_str()
-            .unwrap()
-            .contains("not a permitted outbound target"),
-        "release into a revoked channel must be refused: {result}"
-    );
-    assert_eq!(
-        result["handle_still_live"], handle,
-        "a refused release must not burn the handle"
+        matches!(result, Err(RejectedHandle::SendFailed { handle: failed, error: DeliveryCause::OutboundDenied(_), progress: DeliveryProgress::None, .. }) if failed == handle)
     );
     assert_eq!(gate.pending().await, 1, "the held message stays claimable");
 
@@ -772,16 +733,14 @@ async fn reply_log_hit_appends_diary_without_blocking() {
         ChannelId::new(42),
         "I find myself with nothing else to say",
         None,
-        false,
+        dione::discord::messaging::ReplyPing::from_suppressed(false),
     )
     .await;
 
-    if let Some(err) = result.get("error").and_then(|e| e.as_str()) {
-        assert!(
-            !err.contains("contradictionary"),
-            "a log hit must never reject the send, got: {err}"
-        );
-    }
+    assert!(matches!(
+        result.unwrap_err().kind,
+        MessagingErrorKind::Delivery(DeliveryCause::ChunkSend { .. })
+    ));
 
     assert!(
         !state_dir.join(DIARY_FILE_NAME).exists(),
@@ -804,7 +763,7 @@ async fn reply_celebrate_hit_appends_diary() {
         ChannelId::new(42),
         "prejection is the word for it",
         None,
-        false,
+        dione::discord::messaging::ReplyPing::from_suppressed(false),
     )
     .await;
 
@@ -829,12 +788,12 @@ async fn reply_held_block_appends_diary() {
         ChannelId::new(42),
         "this is straightforward",
         None,
-        false,
+        dione::discord::messaging::ReplyPing::from_suppressed(false),
     )
     .await;
 
     // The message was held, not sent.
-    assert!(result["error"].as_str().is_some());
+    assert!(matches!(result.unwrap().outcome, ReplyOutcome::Held(_)));
 
     let records = read_diary(&state_dir);
     assert_eq!(records.len(), 1, "exactly one block line recorded");

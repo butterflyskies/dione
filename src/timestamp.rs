@@ -6,7 +6,7 @@ use chrono_tz::Tz;
 /// Format a [`Timestamp`] as compact `HH:MM` (or `HH:MM:SS` when seconds
 /// are non-zero), converted to `tz` (or UTC when `None`).
 ///
-/// Used by both `batch.rs` and `coalesce.rs` for wire-format timestamps.
+/// Used by host presentation for compact wire timestamps.
 pub(crate) fn format_compact(ts: &Timestamp, tz: Option<Tz>) -> String {
     let (h, m, s) = match tz {
         Some(tz) => {

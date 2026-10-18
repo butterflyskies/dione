@@ -1,0 +1,1 @@
+{"schema_version":1,"pending":{"teams-ABCDEF0123456789ABCDEF0123456789":{"event_key":{"tenant_id":"tenant","bot_id":"bot","conversation_id":"conversation","activity_id":"activity"},"service_url":"https://connector.test/","channel_id":"msteams","sender_id":"sender","app_id":"app","expires_at":"2099-01-01T00:00:00Z"}}}

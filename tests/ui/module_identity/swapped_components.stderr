@@ -1,0 +1,18 @@
+error[E0308]: arguments to this function are incorrect
+ --> tests/ui/module_identity/swapped_components.rs:6:19
+  |
+6 |     let _module = ModuleInstanceId::new(slot, provider);
+  |                   ^^^^^^^^^^^^^^^^^^^^^ ----  -------- expected `ModuleSlotId`, found `ProviderId`
+  |                                         |
+  |                                         expected `ProviderId`, found `ModuleSlotId`
+  |
+note: associated function defined here
+ --> src/core/identity.rs
+  |
+  |     pub fn new(provider: ProviderId, instance: ModuleSlotId) -> Self {
+  |            ^^^
+help: swap these arguments
+  |
+6 -     let _module = ModuleInstanceId::new(slot, provider);
+6 +     let _module = ModuleInstanceId::new(provider, slot);
+  |

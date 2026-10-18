@@ -141,6 +141,13 @@ pub struct RecipientTarget {
 /// Persistence, integrity, ownership or bounded-state failure; never an empty successful store.
 #[derive(Debug, Error)]
 pub enum StoreError {
+    /// Durable input failed validation at the reported field path.
+    #[error("attention store `{path}` is invalid")]
+    Decode {
+        path: Utf8PathBuf,
+        #[source]
+        source: serde_path_to_error::Error<serde_json::Error>,
+    },
     #[error("failed to access attention store `{path}`")]
     Io {
         path: Utf8PathBuf,
@@ -1332,10 +1339,18 @@ fn read_state(path: &Utf8Path) -> Result<StoreState, StoreError> {
             path: path.to_path_buf(),
             source,
         })?;
-    serde_json::from_slice(&bytes).map_err(|source| StoreError::Corrupt {
+    let mut deserializer = serde_json::Deserializer::from_slice(&bytes);
+    let state = serde_path_to_error::deserialize(&mut deserializer).map_err(|source| {
+        StoreError::Decode {
+            path: path.to_path_buf(),
+            source,
+        }
+    })?;
+    deserializer.end().map_err(|source| StoreError::Corrupt {
         path: path.to_path_buf(),
         source,
-    })
+    })?;
+    Ok(state)
 }
 
 fn lock_store(path: &Utf8Path) -> Result<fs::File, StoreError> {
@@ -1643,7 +1658,7 @@ mod tests {
 
     fn record(id: u64, wanted: f64) -> DecisionRecord {
         DecisionRecord {
-            id: format!("r{id}").into(),
+            id: RecordId::new(format!("r{id}")).unwrap(),
             recipient: "recipient".into(),
             sources: vec![source(id, &format!("c{id}"))],
             compatibility: Compatibility {
@@ -1759,7 +1774,7 @@ mod tests {
             store.insert_record(record(1, 0.5)),
             Err(StoreError::Io { .. })
         ));
-        assert!(store.record(&"r1".into()).is_none());
+        assert!(store.record(&RecordId::new("r1").unwrap()).is_none());
         assert_eq!(fs::read(&victim).unwrap(), b"unchanged");
     }
 
@@ -1800,8 +1815,68 @@ mod tests {
         store.insert_record(record(2, 0.7)).unwrap();
         drop(store);
         let reopened = AttentionStore::open(path).unwrap();
-        assert!(reopened.record(&"r1".into()).is_some());
-        assert!(reopened.record(&"r2".into()).is_some());
+        assert!(reopened.record(&RecordId::new("r1").unwrap()).is_some());
+        assert!(reopened.record(&RecordId::new("r2").unwrap()).is_some());
+    }
+
+    #[test]
+    fn malformed_record_values_and_keys_fail_without_rewriting_durable_bytes() {
+        for invalid in ["".to_owned(), " \n".to_owned(), "x".repeat(513)] {
+            for malformed_key in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let path = store_path(&directory);
+                let mut store = AttentionStore::open(path.clone()).unwrap();
+                store.insert_record(record(1, 0.5)).unwrap();
+                drop(store);
+                let mut value: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                if malformed_key {
+                    let records = value["records"].as_object_mut().unwrap();
+                    let entry = records.remove("r1").unwrap();
+                    records.insert(invalid.clone(), entry);
+                } else {
+                    value["records"]["r1"]["id"] = serde_json::json!(invalid);
+                }
+                let bytes = serde_json::to_vec(&value).unwrap();
+                fs::write(&path, &bytes).unwrap();
+                assert!(matches!(
+                    AttentionStore::open(path.clone()),
+                    Err(StoreError::Decode { .. })
+                ));
+                assert_eq!(fs::read(&path).unwrap(), bytes);
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let path = store_path(&directory);
+        let mut store = AttentionStore::open(path.clone()).unwrap();
+        let mut accepted = record(1, 0.5);
+        accepted.id = RecordId::new(" record with whitespace ").unwrap();
+        store.insert_record(accepted.clone()).unwrap();
+        drop(store);
+        let reopened = AttentionStore::open(path).unwrap();
+        assert_eq!(reopened.record(&accepted.id), Some(&accepted));
+    }
+
+    #[test]
+    fn durable_store_rejects_trailing_input_without_rewriting_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = store_path(&directory);
+        let mut store = AttentionStore::open(path.clone()).unwrap();
+        let original = record(1, 0.5);
+        store.insert_record(original.clone()).unwrap();
+        drop(store);
+        let valid = fs::read(&path).unwrap();
+        let mut invalid = valid.clone();
+        invalid.extend_from_slice(b" {} ");
+        fs::write(&path, &invalid).unwrap();
+        assert!(matches!(
+            AttentionStore::open(path.clone()),
+            Err(StoreError::Corrupt { .. })
+        ));
+        assert_eq!(fs::read(&path).unwrap(), invalid);
+        fs::write(&path, valid).unwrap();
+        let reopened = AttentionStore::open(path).unwrap();
+        assert_eq!(reopened.record(&original.id), Some(&original));
     }
 
     #[test]
@@ -1811,7 +1886,7 @@ mod tests {
         fs::write(&path, b"{broken").unwrap();
         assert!(matches!(
             AttentionStore::open(path),
-            Err(StoreError::Corrupt { .. })
+            Err(StoreError::Decode { .. })
         ));
     }
     #[test]
@@ -1826,7 +1901,7 @@ mod tests {
             .label(
                 &"recipient".into(),
                 Feedback {
-                    record_id: "r1".into(),
+                    record_id: RecordId::new("r1").unwrap(),
                     annotator: "recipient".into(),
                     label: FeedbackLabel::WantedLater,
                     assessed_at_ms: 101,
@@ -1837,7 +1912,7 @@ mod tests {
         drop(store);
 
         let mut state: StoreState = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        state.feedback[0].record_id = "missing".into();
+        state.feedback[0].record_id = RecordId::new("missing").unwrap();
         fs::write(&path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
         assert!(matches!(
             AttentionStore::open(path),
@@ -1877,7 +1952,7 @@ mod tests {
             store.insert_record(record(1, 0.5)),
             Err(StoreError::Io { .. })
         ));
-        assert!(store.record(&"r1".into()).is_none());
+        assert!(store.record(&RecordId::new("r1").unwrap()).is_none());
     }
 
     #[test]
@@ -1887,12 +1962,16 @@ mod tests {
         for id in 1..=3 {
             store.insert_record(record(id, 0.5)).unwrap();
         }
-        let x_sources = store.record(&"r1".into()).unwrap().sources.clone();
+        let x_sources = store
+            .record(&RecordId::new("r1").unwrap())
+            .unwrap()
+            .sources
+            .clone();
         store
             .label(
                 &"other".into(),
                 Feedback {
-                    record_id: "r1".into(),
+                    record_id: RecordId::new("r1").unwrap(),
                     annotator: "other".into(),
                     label: FeedbackLabel::NotNeeded,
                     assessed_at_ms: 101,
@@ -1904,7 +1983,7 @@ mod tests {
             .label(
                 &"recipient".into(),
                 Feedback {
-                    record_id: "r1".into(),
+                    record_id: RecordId::new("r1").unwrap(),
                     annotator: "recipient".into(),
                     label: FeedbackLabel::WantedLater,
                     assessed_at_ms: 102,
@@ -1913,29 +1992,33 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            store.recipient_target(&"r1".into()),
+            store.recipient_target(&RecordId::new("r1").unwrap()),
             Some(RecipientTarget {
                 wanted: true,
                 timely: false,
             })
         );
-        let x_feedback = store.feedback(&"r1".into());
+        let x_feedback = store.feedback(&RecordId::new("r1").unwrap());
         assert_eq!(x_feedback.len(), 2);
         assert_eq!(x_feedback[0].annotator.as_str(), "other");
         assert_eq!(x_feedback[0].source_versions, x_sources);
         assert_eq!(x_feedback[1].annotator.as_str(), "recipient");
 
         // y is unreviewed: silence is not a negative target.
-        assert!(store.feedback(&"r2".into()).is_empty());
-        assert_eq!(store.recipient_target(&"r2".into()), None);
+        assert!(store.feedback(&RecordId::new("r2").unwrap()).is_empty());
+        assert_eq!(store.recipient_target(&RecordId::new("r2").unwrap()), None);
 
         // z has an explicit recipient assessment, but unsure is still not a fitting target.
-        let z_sources = store.record(&"r3".into()).unwrap().sources.clone();
+        let z_sources = store
+            .record(&RecordId::new("r3").unwrap())
+            .unwrap()
+            .sources
+            .clone();
         store
             .label(
                 &"recipient".into(),
                 Feedback {
-                    record_id: "r3".into(),
+                    record_id: RecordId::new("r3").unwrap(),
                     annotator: "recipient".into(),
                     label: FeedbackLabel::Unsure,
                     assessed_at_ms: 103,
@@ -1943,8 +2026,8 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(store.feedback(&"r3".into()).len(), 1);
-        assert_eq!(store.recipient_target(&"r3".into()), None);
+        assert_eq!(store.feedback(&RecordId::new("r3").unwrap()).len(), 1);
+        assert_eq!(store.recipient_target(&RecordId::new("r3").unwrap()), None);
     }
 
     #[test]
@@ -1987,7 +2070,7 @@ mod tests {
             .label(
                 &"recipient".into(),
                 Feedback {
-                    record_id: "r1".into(),
+                    record_id: RecordId::new("r1").unwrap(),
                     annotator: "recipient".into(),
                     label: FeedbackLabel::WantedPromptly,
                     assessed_at_ms: 101,
@@ -2000,10 +2083,10 @@ mod tests {
             .invalidate_source(source.key, Some(&source.content_hash))
             .unwrap();
         assert_eq!(report.affected_records, 1);
-        let invalidated = store.record(&"r1".into()).unwrap();
+        let invalidated = store.record(&RecordId::new("r1").unwrap()).unwrap();
         assert_eq!(invalidated.delivery, DeliveryState::Invalidated);
         assert!(invalidated.judgment.is_none());
-        assert!(store.feedback(&"r1".into()).is_empty());
+        assert!(store.feedback(&RecordId::new("r1").unwrap()).is_empty());
     }
     #[test]
     fn revalidation_batch_is_atomic_when_any_fact_is_invalid() {
@@ -2075,13 +2158,23 @@ mod tests {
         finalized.actual = Admission::Prompt;
         finalized.delivery = DeliveryState::Admitted;
         store.finalize_record(finalized.clone()).unwrap();
-        assert_eq!(store.record(&"r1".into()).unwrap(), &finalized);
+        assert_eq!(
+            store.record(&RecordId::new("r1").unwrap()).unwrap(),
+            &finalized
+        );
 
         assert!(matches!(
             store.finalize_record(finalized),
             Err(StoreError::RecordAlreadyFinalized(id)) if id.as_str() == "r1"
         ));
-        assert_eq!(store.record(&"r1".into()).unwrap().sources.len(), 2);
+        assert_eq!(
+            store
+                .record(&RecordId::new("r1").unwrap())
+                .unwrap()
+                .sources
+                .len(),
+            2
+        );
     }
     #[test]
     fn ordinary_finalization_without_policy_digest_survives_restart() {
@@ -2110,11 +2203,17 @@ mod tests {
         shadow.actual = Admission::Ordinary;
         shadow.delivery = DeliveryState::Observed;
         store.finalize_record(shadow.clone()).unwrap();
-        assert_eq!(store.record(&"r1".into()).unwrap(), &shadow);
+        assert_eq!(
+            store.record(&RecordId::new("r1").unwrap()).unwrap(),
+            &shadow
+        );
         drop(store);
 
         let reopened = AttentionStore::open(path).unwrap();
-        assert_eq!(reopened.record(&"r1".into()).unwrap(), &shadow);
+        assert_eq!(
+            reopened.record(&RecordId::new("r1").unwrap()).unwrap(),
+            &shadow
+        );
     }
 
     #[test]
@@ -2144,6 +2243,9 @@ mod tests {
             store.finalize_record(learned),
             Err(StoreError::FinalizationMismatch(id)) if id.as_str() == "r1"
         ));
-        assert_eq!(store.record(&"r1".into()).unwrap(), &initial);
+        assert_eq!(
+            store.record(&RecordId::new("r1").unwrap()).unwrap(),
+            &initial
+        );
     }
 }

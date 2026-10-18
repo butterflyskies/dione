@@ -57,6 +57,7 @@ fn sanitize_nameplate_string(s: &str, max_len: usize) -> String {
 impl NameplateProvider {
     pub fn new(url: &str, deadline_ms: u64, cache_ttl: Duration) -> Self {
         let client = reqwest::Client::builder()
+            .use_rustls_tls()
             .user_agent("dione/0.25.1 (https://github.com/butterflyskies/dione)")
             .timeout(Duration::from_millis(deadline_ms))
             .build()
@@ -206,7 +207,10 @@ impl NameplateService {
                     if pronouns.is_empty() {
                         display_name.to_string()
                     } else {
-                        format!("{display_name} ({})", pronouns.join(" or "))
+                        crate::core::identity_display::display_name_with_pronouns(
+                            display_name,
+                            Some(&pronouns.join(" or ")),
+                        )
                     }
                 }
             }
@@ -389,5 +393,30 @@ nameplates:
         assert!(service.is_excluded(123));
         assert!(service.is_excluded(456));
         assert!(!service.is_excluded(789));
+    }
+    #[tokio::test]
+    async fn cached_nameplate_pronouns_preserve_explicit_suffix() {
+        let service =
+            NameplateService::new(DEFAULT_NAMEPLATES_URL, 100, Duration::from_secs(3600), &[]);
+        let entries = HashMap::from([(
+            42,
+            Nameplate {
+                name: "Iris".into(),
+                pronouns: vec!["she/her".into()],
+                bio: None,
+            },
+        )]);
+        *service.provider.cache.write().await = Some(CachedNameplates {
+            entries,
+            fetched_at: Instant::now(),
+        });
+        assert_eq!(
+            service.resolve_display_name(42, "Iris (xe/it)").await,
+            "Iris (xe/it)"
+        );
+        assert_eq!(
+            service.resolve_display_name(42, "Alex (admin)").await,
+            "Alex (admin) (she/her)"
+        );
     }
 }

@@ -13,7 +13,7 @@ expression: notif
       "emoji": "🎉",
       "message_id": "2001",
       "type": "reaction",
-      "user": "reactor",
+      "user": "3001=reactor",
       "user_id": "3001"
     }
   }

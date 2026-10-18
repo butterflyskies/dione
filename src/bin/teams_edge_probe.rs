@@ -6,9 +6,9 @@ use axum::{
     response::IntoResponse,
     routing::post,
 };
-use dione::{
-    teams::{AdmissionPolicy, ChannelPolicy},
-    teams_edge::{ClientSecretTokenProvider, TeamsEdge, TeamsEdgeError},
+use dione::teams::{
+    AdmissionPolicy, ChannelPolicy,
+    edge::{ClientSecretTokenProvider, TeamsEdge, TeamsEdgeError},
 };
 use reqwest::Client;
 use secrecy::SecretString;
@@ -35,10 +35,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .try_init()
         .map_err(|error| format!("failed to initialize tracing: {error}"))?;
 
-    let app_id = required("TEAMS_APP_ID")?;
-    let tenant_id = required("TEAMS_TENANT_ID")?;
+    let app_id = dione::teams::ApplicationId::parse(required("TEAMS_APP_ID")?)?;
+    let tenant_id = dione::teams::TenantId::parse(required("TEAMS_TENANT_ID")?)?;
     let client_secret = SecretString::from(required("TEAMS_CLIENT_SECRET")?);
     let allowed_host = required("TEAMS_ALLOWED_SERVICE_HOST")?;
+    let allowed_conversation =
+        dione::teams::ConversationId::parse(required("TEAMS_ALLOWED_CONVERSATION")?)?;
     let listen: SocketAddr = env::var("TEAMS_LISTEN_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:3978".to_owned())
         .parse()?;
@@ -46,6 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "Dione Teams edge canary received this message.".to_owned());
 
     let client = Client::builder()
+        .use_rustls_tls()
         .https_only(true)
         .timeout(Duration::from_secs(15))
         .build()?;
@@ -54,6 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let policy = AdmissionPolicy {
         app_id,
         tenant_id,
+        allowed_conversations: BTreeSet::from([allowed_conversation]),
         allowed_service_hosts: BTreeSet::from([allowed_host]),
         channels: BTreeMap::from([(
             "msteams".to_owned(),
@@ -105,7 +109,9 @@ async fn messages(
             );
             StatusCode::ACCEPTED
         }
-        Err(TeamsEdgeError::Probe(_)) => StatusCode::UNAUTHORIZED,
+        Err(TeamsEdgeError {
+            kind: dione::teams::TeamsEdgeErrorKind::Probe(_),
+        }) => StatusCode::UNAUTHORIZED,
         Err(error) => {
             tracing::error!(%error, "Teams edge canary failed");
             StatusCode::BAD_GATEWAY

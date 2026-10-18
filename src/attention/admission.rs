@@ -153,8 +153,17 @@ impl AdmissionController {
             };
         }
         self.sequence = self.sequence.saturating_add(1);
+        let id = match RecordId::new(format!("{}-{:016x}", self.incarnation, self.sequence)) {
+            Ok(id) => id,
+            Err(_) => {
+                return Submission::Unknown {
+                    event: NotificationEvent::Message(message),
+                    reason: "generated attention record identity is blank or exceeds 512 UTF-8 bytes",
+                };
+            }
+        };
         let record = DecisionRecord {
-            id: format!("{}-{:016x}", self.incarnation, self.sequence).into(),
+            id,
             recipient: attention.recipient.clone(),
             sources: vec![SourceVersion {
                 key,

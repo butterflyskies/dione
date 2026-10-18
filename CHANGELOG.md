@@ -7,6 +7,429 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.84.0]
+
+### Fixed
+
+- Share cached user identity display across claim refusals, batch rosters and human event metadata; keep machine user IDs unchanged and avoid duplicate explicit pronouns.
+- Recover Teams session transitions from verified saved receipts when an acknowledgement response is lost.
+- Retain a single owner for Teams reply authorities and keep durable queue snapshots owner-only on Unix.
+- Upgrade legacy durable file permissions only inside verified private state directories, preserving the existing lock inode; refuse exposed layouts.
+- Preserve typed retained-state decode failures and validate deserialized Rook publication requests.
+
+## [0.83.0]
+
+### Added
+
+- Preserve the main branch channel visibility tool and channel, thread, and role permission metadata in the typed Discord refactor.
+
+## [0.82.0]
+
+### Added
+
+- Add durable Rook publication claims and idempotent text replies, preserving uncertain outcomes and exact Discord reply references.
+
+## [0.81.0]
+
+### Added
+
+- Add recipient-authorized original-message and context reads with revision checks, bounded lookups and typed access outcomes.
+
+## [0.80.0]
+
+### Added
+
+- Add a durable Rook recipient owner with shared handling claims, bounded retries and replay. Share atomic snapshot persistence with Codex.
+
+
+## [0.79.0]
+
+### Added
+
+- Add a bounded internal Discord observation path for authorized creates and
+  edits, independent of ordinary mention handling and reply authority.
+- Preserve source-qualified occurrence identities and require exact-revision
+  reads for partial or reference-ambiguous edits.
+- Apply recipient room exclusions, sender and self-loop checks, and a shared
+  preprocessing deadline. Production observation delivery remains disabled
+  until the durable Rook owner and authenticated tools are connected.
+
+- Deliver authenticated Teams events to saved Oh My Pi sessions and reply through
+  the existing native Teams reply authority. Require an exact conversation
+  allowlist, a private Unix control socket, and a saved file-backed OMP transcript.
+- Retain Teams events across child restarts, deduplicate retries, and acknowledge
+  delivery only after synchronizing the matching saved-session receipt. Keep stale
+  bindings and leases from settling another session's work.
+
+### Changed
+
+- Breaking Rust API: require explicit allowed conversations in Teams admission
+  policy and add exhaustive error variants for OMP lifecycle, conversation denial,
+  and lost admission responses. Existing Teams setups must configure
+  `[teams].allowed_conversations` before enabling the listener.
+
+### Fixed
+
+- Keep accepted work owned through shutdown, complete remaining drains after a
+  join failure, and prevent a blocked stdin worker from holding process exit
+  after those drains finish.
+- Report uncertain notification writes without treating them as confirmed failure,
+  and present external Discord and Teams event content as user-role context in OMP.
+
+### Durable queue ownership
+
+### Changed
+
+- Extract common durable queue ownership and storage behind the existing Codex
+  inbox codec, preserving legacy inbox records, replay identity, lease settlement,
+  and cancellation behavior.
+- Move Teams admission into explicit composition and keep resident consumption
+  authority separate from public consumer identifiers.
+- Breaking Rust API: expose exhaustive shared queue and host delivery error kinds,
+  use typed endpoint bindings, and require explicit Teams adapter construction
+  from prepared Codex admission queues.
+
+## [0.78.0]
+
+### Added
+
+- Add opt-in `response_version: 2` to `get_message` and `fetch_messages`, with
+  module-scoped identities, original timestamps, sender and reply metadata,
+  attachments, and explicit observation limits.
+- Report history direction, effective limits, observed message boundaries, and
+  a pagination hint without claiming that more history is available.
+- Return fixed, safe context error messages and separate receipt outcomes.
+  Omitted versions and version 1 retain the existing response format.
+
+### Observation validation
+
+### Changed
+
+- Reject Discord observations with mismatched message or channel identities
+  before returning data, writing read receipts, or downloading attachments.
+- Return typed observation errors when provider timestamps cannot be represented,
+  instead of substituting the current time; preserve timestamp precision and
+  the original offset unless a display timezone is configured.
+- Breaking Rust API: add `MessagingErrorKind::Observation(ObservationError)`
+  to the public exhaustive error enum. Downstream exhaustive matches must
+  handle this variant.
+
+### Fixed
+
+- Correct six Rustdoc links and a TOML example exposed by strict documentation
+  checks.
+
+## [0.77.0]
+
+### Changed
+
+- Keep durable Codex inbox writes owned through caller cancellation, offload
+  filesystem work, and drain admitted operations before delivery shutdown.
+- Publish queue wakeups and live bindings from the operation that owns the
+  durable write, preserving duplicate admission and provider replay policies.
+- Breaking Rust API: expose typed queue operation completion uncertainty,
+  retain concrete persistence causes, and migrate Codex, Teams, and harness
+  callers to asynchronous queue preparation and owned operations.
+
+### Fixed
+
+- Reconcile a changed Codex thread binding after receipt settlement before
+  leasing another event, discarding the old client and resetting its preamble.
+- Preserve uncertain mutation outcomes without claiming rejection or blindly
+  retrying an operation whose completion is unknown.
+
+## [0.76.3]
+
+### Changed
+
+- Apply the project formatter to existing Discord modules without changing behavior.
+
+## [0.76.0]
+
+### Changed
+
+- Register Discord history, pins, message retrieval, attachment downloads, and
+  search with their owner, preserving argument and response compatibility,
+  current configuration checks, and resident access policy.
+- Retain concrete cursor, search parsing, and attachment download error causes
+  through typed owner boundaries.
+
+## [0.75.0]
+
+### Changed
+
+- Register pin, unpin, delete, and thread creation tools with the Discord owner,
+  retaining their schemas, optional arguments, authorization, and wire responses.
+- Keep management tools in the checked default registry when optional modules
+  attach, with explicit resident access and current configuration on each call.
+
+## [0.74.0]
+
+### Changed
+
+- Register Discord metadata tools with their owner while preserving discovery,
+  request parsing, current configuration, and resident access behavior.
+- Validate all default Discord registrations for duplicate and reserved names,
+  including when optional module tools are attached.
+- Breaking Rust API: `DioneServer::new` returns `ServerConstructionError`, retaining
+  concrete definition and registration failures through startup.
+
+## [0.73.0]
+
+### Changed
+
+- Preserve concrete causes in Teams authentication, reply authority, admission,
+  and runtime errors while keeping public error responses free of private data.
+- Breaking Rust API: expose exhaustive error kinds and distinguish authority
+  mutations with uncertain durability from failures before the current mutation.
+- Retain both admission and authority-cleanup failures without treating a prior
+  storage synchronization failure as a committed current activity.
+
+## [0.72.0]
+
+### Changed
+
+- Register the reply tool from Discord, which now owns its schema, typed
+  arguments, execution, and wire response projection.
+- Preserve current evidence settings during tool discovery and reload current
+  configuration for each reply through shared owner services.
+- Breaking Rust API: construct MCP servers with explicit reply event services
+  and handle tool-registration errors; access owner services through borrowed
+  accessors instead of replacing public service fields independently.
+
+## [0.71.0]
+
+### Changed
+
+- Carry distinct Teams tenant, application, bot, actor, conversation, and activity
+  identities through authentication, reply authority, durable deduplication, and
+  resident delivery while preserving opaque spelling and serialized values.
+- Breaking Rust API: admission policies and OAuth configuration require typed
+  application and tenant IDs; reply receipts expose typed activity and conversation
+  IDs. Reject malformed coordinates before exposing stored reply authority.
+- Treat a malformed successful Connector receipt as an uncertain send with consumed
+  reply authority, preventing a second send through the same handle.
+
+## [0.70.0]
+
+### Changed
+
+- Carry typed, scoped message observations through live delivery and every
+  harness adapter, with distinct nonempty ordinary batches, managed deliveries,
+  and operational controls.
+- Move host text presentation out of common event contracts and preserve
+  historical durable payloads through a private Codex compatibility encoder.
+- Preserve ordered evidence locators and concrete parser causes independently
+  of Discord SDK author binding.
+- Validate coordinator message, channel, and user identifiers before publication
+  so malformed pushes cannot terminate subsequent live notification delivery.
+- Breaking Rust API: migrate delivery interfaces, coordinator event identities,
+  and evidence parser errors to typed contracts; remove the old batch and
+  coalescing interfaces with their callers.
+
+## [0.67.2]
+
+### Fixed
+
+- Preserve acknowledged message IDs in partial reply, DM, held-message release,
+  and rephrase results. Partial responses retain their existing error fields and
+  add `partially_delivered: true` with the ordered numeric `message_ids` from the
+  current attempt. Sending and retry behavior are unchanged.
+
+## [0.67.1]
+
+### Security
+
+- Remove the unsupported Rustls 0.22 Discord transport and update the remaining
+  Rustls dependency to 0.23.46 for RUSTSEC-2026-0346 through RUSTSEC-2026-0349.
+  Discord uses native TLS with vendored OpenSSL on Linux and system trust roots.
+  Dione's direct HTTP clients retain Rustls and bundled trust roots, while RMCP
+  retains Rustls with the platform verifier.
+- Remove four obsolete Rustls WebPKI advisory exceptions after eliminating the
+  vulnerable dependency. Preserve certificate and hostname verification.
+
+## [0.67.0]
+
+### Changed
+
+- Check attention delivery against typed, module-scoped source evidence and the
+  recorded scheduling directive. Invalidation now matches the complete module,
+  conversation, and message identity.
+- Validate attention record identities at construction and durable loading while
+  preserving valid strings exactly. Retain concrete initialization, worker, and
+  persistence causes when recording delivery receipts.
+- Reject malformed managed Codex notifications before enqueue or reload, including
+  missing source fields and explicit control methods. Valid historical payloads,
+  unknown metadata, and citation migration retain their representation.
+- Breaking Rust API: attention guards take typed descriptors and record identities;
+  queue, runtime, server, and session constructors require an explicit authority
+  scope. Replace optional invalidation selectors with `AttentionInvalidation` and
+  update the exhaustive queue error variants.
+
+### Fixed
+
+- Preserve managed work when an invalidation references the same local message ID
+  in another conversation or configured module instance.
+
+## [0.66.0]
+
+### Changed
+
+- Carry validated Teams reply handles through MCP, resident delivery, reply
+  authority, and durable storage while preserving historical serialized spelling.
+- Breaking Rust API: reply authority and bridge calls require `ReplyHandle` instead
+  of raw strings. Reject malformed handles before authority lookup.
+
+## [0.65.0]
+
+### Changed
+
+- Register Teams MCP tools through an immutable module-owned registry with validated
+  names, startup collision checks, and explicit resident access.
+- Breaking Rust API: replace `DioneServer::with_teams_reply` with fallible
+  `with_module_tools(teams::mcp_tools(...))` composition and concrete startup errors.
+- Reject non-object Teams reply arguments before consuming reply authority.
+
+## [0.64.0]
+
+### Changed
+
+- Scope scheduling queues and immediate-delivery budgets by provider, configured
+  module instance, and conversation. Discord owns notification classification.
+- Breaking Rust API: the generic delivery buffer accepts adapter-owned events and
+  typed durations; Discord callers use its scoped scheduling adapter. Notification
+  event variants are exhaustive.
+- Return an unrepresentable deadline with its retained payload instead of panicking.
+
+## [0.63.1]
+
+### Fixed
+
+- Encode Claude channel metadata as strings while preserving original message
+  content and permission notifications. Structured values use compact JSON text.
+  Codex inbox records and Oh My Pi notifications retain their existing types.
+
+## [0.63.0]
+
+### Added
+
+- Add explicit `--mode oh-my-pi` with a dedicated connection and session.
+  Versioned Dione event notifications share MCP output with ordinary tools.
+  Direct delivery has no durable inbox, permission relay, or Teams ingress.
+
+## [0.62.0]
+
+### Changed
+
+- Move process composition and offline commands into `startup::run`, with typed
+  startup errors. Invalid log filters, signal registration, tracing initialization,
+  and missing initialized mute state now report errors rather than panic.
+- Redact non-Unicode Teams client secrets from startup error chains while retaining
+  distinct missing-variable and non-Unicode error kinds.
+- Represent configured Teams startup as one complete bridge and listen address.
+  Harness adapters own the policy used by runtime and offline commands.
+- Breaking Rust imports: replace `teams_delivery`, `teams_edge`, and `teams_runtime`
+  with `teams::{delivery, edge, runtime}`. Replace `mcp::ids` and
+  `mcp::tools::messaging` with `discord::{ids, messaging}`. The internal
+  `teams_reply_store` alias is also removed in favor of `teams::reply_store`.
+
+## [0.61.0]
+
+### Changed
+
+- Own Codex queue preparation, binding, delivery startup, and shutdown in a concrete
+  harness session. Retain the inbox lock until delivery shutdown completes.
+- Keep live delivery running while accepted ingress and replies drain after process
+  cancellation. Claude and Codex retain their existing protocol behavior.
+
+## [0.60.0]
+
+### Changed
+
+- Route MCP notifications and harness tools through a complete harness connection.
+  Claude notifications share the response writer; Codex retains its durable queue.
+- Breaking Rust API change. `DioneServer::new` takes `HarnessConnection` instead
+  of `TransportMode`. The optional Codex builders and `TransportMode` are removed.
+  Attention delivery contracts now live in `attention::delivery`.
+
+## [0.59.0]
+
+### Changed
+- Move access-request listing, approval, and denial into the crate-private Discord access owner. MCP projects typed observations, receipts, and errors.
+- Remove the public Rust `mcp::tools::access` module, `AccessCtx`, and its three operations. The replacements are crate-private; external Rust consumer compatibility is not claimed.
+- Preserve MCP fields, permission-switch ordering, legacy stored IDs, uncertain config durability retries, and best-effort queue persistence.
+
+## [0.58.0]
+
+### Changed
+- Move LaTeX compilation and retained PNG files into crate-private `rendering`, and authorized attachment delivery into `discord::rendering`. MCP projects typed outcomes and concrete error causes.
+- Remove the public Rust `mcp::tools::render` module and its `render_latex_to_png`, `render_latex`, `render_latex_to_channel`, and `render_latex_to_channel_with_hook_overrides` functions. The replacements are crate-private; external Rust consumer compatibility is not claimed.
+- Preserve MCP responses, rendering constants, authorization and caption hook ordering, temporary file retention, and synchronous execution.
+
+## [0.57.0]
+
+### Changed
+- Move seven Discord metadata reads into the crate-private `discord::introspection` owner with operation-specific observations, typed failure targets, and a distinct role hierarchy position type.
+- Remove the public Rust `mcp::tools::introspection` module, `IntrospectionCtx`, and its seven operation functions. The replacement is crate-private; external Rust consumer compatibility is not claimed.
+- Preserve MCP argument parsing, response fields, SDK order and error text, private-channel names, and member timestamp localization. MCP formats the typed observations; these reads retain their existing absence of local authorization checks.
+
+## [0.56.0]
+
+### Changed
+- Move authorized Discord pin, unpin, delete, and thread creation into the crate-private `discord::management` owner. Message mutations use a complete typed command, and thread creation returns its own typed result.
+- Remove the public Rust `mcp::tools::management` module, `ManagementCtx`, and its four operation functions. The replacement is crate-private; external Rust consumer compatibility is not claimed.
+- Preserve MCP argument parsing, response fields, error placement, current authorization, and successful thread-parent registration. MCP formats typed management outcomes and errors.
+
+## [0.55.0]
+
+### Changed
+- Move guild message search into the internal `discord::messaging::search` owner with validated requests, typed result pages, and typed execution failures. MCP owns search argument parsing and response formatting.
+- Remove the public Rust `mcp::tools::search` module and its types and functions. The replacement is crate-private; this release does not provide a public Rust search API.
+- Preserve MCP search inputs, query ordering, response fields, error placement, live channel permissions, transport result ordering, and pagination based on raw Discord result groups.
+
+## [0.54.0]
+
+### Changed
+- Move Discord message reads and attachment downloads into `discord::messaging::queries`. Rust callers receive message observations, operation-specific page results, typed receipt failures, and successful attachment paths.
+- Replace the five public query success JSON contracts and their original import paths. Callers migrate to `queries::{fetch_messages, fetch_new_since, fetch_pins, get_message, download_attachment}` and read-only result accessors.
+- Keep MCP response fields, sorting, permission checks, receipt behavior, and best-effort downloads unchanged. The MCP query adapter owns JSON formatting, and search shares the typed message observation.
+
+## [0.53.0]
+
+### Changed
+- Give Discord presence one typed request and shared authority for immediate updates, queued acceptance, and reconnect replay. MCP retains its existing response shapes and argument defaults.
+- Return typed typing failures while preserving live channel authorization and original transport causes.
+- Replace the public Rust `discord::bot_state` module and `mcp::tools::bot_state` alias with `discord::presence` and `discord::typing`. Callers use `PresenceCapability`, complete `PresenceRequest` values, and `TypingCtx`. The single-variant `DiscordCommand` and paired optional context builders are removed.
+- Move `SharedPresence`, snapshots, the sink trait, and assembly into `discord::presence`. Stored requests no longer accept SDK-only offline or unknown states. Gateway sinks translate the domain request into SDK values.
+
+## [0.52.0]
+
+### Changed
+- Return typed Discord reply, DM, consent, and shared-helper failures. MCP projects the existing tool response fields. Held and partially delivered messages remain unsuccessful tool calls.
+- Use typed message IDs and nonempty partial progress in consent retries. Keep retry text, diary records, and fence state outside protocol projections.
+- Change the public Rust messaging signatures, delivery trait, consent errors, and queue progress types. Existing module aliases remain available, but callers must migrate to the new result and policy types.
+
+## [0.51.5]
+
+### Changed
+- Move Discord messaging, presence operations, and ID validation under Discord ownership. Preserve existing public MCP module paths as compatibility aliases.
+
+### Fixed
+- Require the isolated global-mute regression to execute one test so an outdated test selector cannot pass without coverage.
+
+## [0.51.4]
+
+### Changed
+- Move the Teams reply tool schema, argument parsing, and execution into the Teams module. MCP retains tool routing, authorization, and response wrapping.
+
+## [0.51.3]
+
+### Changed
+- Group Teams ingress, authentication, reply authority, and delivery under one module. Teams admission now hands a harness-neutral event to the Codex adapter while preserving durable replay and reply semantics.
+
+### Fixed
+- Validate provider event IDs when restoring the Codex inbox, using the same rules as live admission. Reject invalid persisted IDs without rewriting the inbox.
+
 ## [0.51.3]
 
 ### Added
@@ -498,18 +921,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   use the same function (warn-only, does not block). `ManagementCtx` now
   carries `Arc<IngressLedger>`. (Ref: auspex PR #66, S115 phantom incident.)
 
-## [0.32.0] - 2026-08-07
-
-### Added
-- **Root registry with typed verdicts (Slice A).** Canonical root registry in
-  `auspex-core` mints opaque `RootId` on admission, tracks epochs, and returns
-  nine-variant typed verdicts (`Admitted`, `PreEpoch`, `Expired`, `Evicted`,
-  `RestartGap`, `TransportGap`, `ChannelMismatch`, `UnknownComplete`,
-  `Unavailable`) — no booleans, no null-as-unknown. New modules: `root_registry`,
-  `verdict`, `receipt`. New types: `RootId`, `EpochId`, `ActivationRoot`,
-  `DiscordIngressReceipt`, `RootVerdict`. Diagnostics only — does not gate egress
-  (Slice B requires harness custody binding). 12 new tests (23 total in crate).
-
 ## [0.33.0] - 2026-08-07
 
 ### Added
@@ -534,6 +945,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   workspace: dead-code guards in `auspex-core`, `needless_borrows` in
   bell provider tests, `assertions_on_constants` in app server,
   `await_holding_lock` in GAIE tests, and `useless_format` in nameplates.
+
+## [0.32.0] - 2026-08-07
+
+### Added
+- **Root registry with typed verdicts (Slice A).** Canonical root registry in
+  `auspex-core` mints opaque `RootId` on admission, tracks epochs, and returns
+  nine-variant typed verdicts (`Admitted`, `PreEpoch`, `Expired`, `Evicted`,
+  `RestartGap`, `TransportGap`, `ChannelMismatch`, `UnknownComplete`,
+  `Unavailable`) — no booleans, no null-as-unknown. New modules: `root_registry`,
+  `verdict`, `receipt`. New types: `RootId`, `EpochId`, `ActivationRoot`,
+  `DiscordIngressReceipt`, `RootVerdict`. Diagnostics only — does not gate egress
+  (Slice B requires harness custody binding). 12 new tests (23 total in crate).
 
 ## [0.31.3] - 2026-08-07
 

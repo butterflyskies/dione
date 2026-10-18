@@ -32,8 +32,8 @@ if ! cargo deny --version >/dev/null 2>&1; then
   echo "cargo-deny is required. Install it before running this gate." >&2
   exit 1
 fi
-if ! python3 --version >/dev/null 2>&1; then
-  echo "python3 is required for the review receipt checks." >&2
+if ! python3 -c 'import sys; print(sys.version); sys.exit(0 if sys.version_info >= (3, 9) else "Python 3.9 or newer is required for review receipt checks")'; then
+  echo "Python 3.9 or newer is required for the review receipt checks." >&2
   exit 1
 fi
 

@@ -1,36 +1,28 @@
 //! Tool dispatch: routes `tools/call` requests to the correct handler.
-
 use crate::{
-    codex::{
-        CodexThreadId, ConsumerId, DeliveryToken, consumer_ttl, lease_duration, timeout_response,
-        wait_duration,
-    },
     config_store::{ConfigStore, DiscordId},
-    evidence::{SentexHandles, parse_tool_sentex_handles},
+    discord::{
+        messaging::{
+            LinkPreviews, edit_message_with_embed_control, react as discord_react, release_held,
+            rephrase_held, send_dm_with_evidence_and_hook_overrides, send_file_with_hook_overrides,
+        },
+        messaging_wire,
+        rendering::render_to_channel,
+        tool_arguments::{
+            parse_enabled_sentex_handles, parse_hook_overrides, parse_id, parse_optional_bool,
+        },
+        typing::send_typing,
+    },
     mcp::{
-        ids::Snowflake,
+        access_wire, presence_wire, render_wire,
         server::DioneServer,
         tools::{
-            access::{approve_access, deny_access, list_access_requests},
-            bot_state::{get_presence, send_typing, set_presence},
             diagnostics::{get_version, set_stderr_level, set_trace_level},
-            introspection::{
-                MAX_CAN_VIEW_USER_IDS, can_view_channel, get_channel, get_member, get_user,
-                list_channels, list_emojis, list_guilds, list_roles,
-            },
-            management::{create_thread, delete_message, pin_message, unpin_message},
-            messaging::{
-                ReplyToolOptions, download_attachment, edit_message_with_embed_control,
-                fetch_messages, fetch_new_since, fetch_pins, get_message, react as discord_react,
-                release_held, rephrase_held, reply_with_evidence_and_hook_overrides,
-                send_dm_with_evidence_and_hook_overrides, send_file_with_hook_overrides,
-            },
             no_rly::{no_rly_condense, no_rly_stats, no_rly_vacuum},
-            render::{render_latex, render_latex_to_channel_with_hook_overrides},
-            search::{SearchParams, search_messages},
         },
     },
-    pre_send::HookName,
+    no_rly::queue::HoldHandle,
+    rendering,
 };
 use serde_json::{Value, json};
 
@@ -77,419 +69,398 @@ pub(crate) async fn call_tool(
     name: &str,
     args: Value,
 ) -> Result<Value, String> {
-    let config = crate::config::load_config(&server.state_dir);
+    let config = crate::config::load_config(server.state_dir());
 
-    let result = match name {
-        // Durable Codex receive loop
-        "bind_codex_thread" => {
-            let binding = server
-                .codex_thread_binding
-                .as_ref()
-                .ok_or_else(|| "bind_codex_thread is only available in Codex mode".to_string())?;
-            let thread_id = CodexThreadId::parse(parse_str(&args, "thread_id")?)
-                .map_err(|error| error.to_string())?;
-            server
-                .codex_queue
-                .as_ref()
-                .ok_or_else(|| "Codex queue is unavailable".to_string())?
-                .bind_live_thread_and_publish(Some(thread_id.clone()), binding)
-                .await
-                .map_err(|error| error.to_string())?;
-            if binding.receiver_count() == 0 {
-                return Err("Codex live delivery worker is unavailable".to_string());
+    let result = if let Some(tool) = server.module_tools.find(name) {
+        tool.call(&args).await.map_err(|error| error.to_string())?
+    } else if let Some(result) = server.harness().protocol().call(name, &args).await {
+        result.map_err(|error| error.to_string())?
+    } else {
+        match name {
+            // Messaging
+            "no_rly" => {
+                let ctx = server.messaging_ctx(config.clone());
+                let handle = HoldHandle::new(parse_str(&args, "handle")?);
+                messaging_wire::release(&handle, release_held(&ctx, &handle).await)
             }
-            json!({ "bound": true, "thread_id": thread_id })
-        }
-        "next_event" => {
-            let queue = server
-                .codex_queue
-                .as_ref()
-                .ok_or_else(|| "next_event is only available in Codex mode".to_string())?;
-            let consumer_id = ConsumerId::parse(parse_str(&args, "consumer_id")?)
-                .map_err(|error| error.to_string())?;
-            let wait = wait_duration(args.get("wait_seconds").and_then(Value::as_u64));
-            let lease = lease_duration(args.get("lease_seconds").and_then(Value::as_u64));
-            match queue
-                .next_event(&consumer_id, wait, lease)
-                .await
-                .map_err(|error| error.to_string())?
-            {
-                Some(event) => serde_json::to_value(event)
-                    .map_err(|error| format!("failed to serialize leased event: {error}"))?,
-                None => timeout_response(),
+            "rephrase" => {
+                let ctx = server.messaging_ctx(config.clone());
+                let handle = HoldHandle::new(parse_str(&args, "handle")?);
+                let content = args
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing content".to_string())?;
+                messaging_wire::rephrase(&handle, rephrase_held(&ctx, &handle, content).await)
             }
-        }
-        "ack_event" => {
-            let queue = server
-                .codex_queue
-                .as_ref()
-                .ok_or_else(|| "ack_event is only available in Codex mode".to_string())?;
-            let consumer_id = ConsumerId::parse(parse_str(&args, "consumer_id")?)
-                .map_err(|error| error.to_string())?;
-            let raw_token = parse_str(&args, "delivery_token")?;
-            let token = DeliveryToken::parse(raw_token).map_err(|error| error.to_string())?;
-            queue
-                .acknowledge(&consumer_id, &token)
-                .await
-                .map_err(|error| error.to_string())?;
-            json!({ "acknowledged": true })
-        }
-        "event_queue_status" => {
-            let queue = server
-                .codex_queue
-                .as_ref()
-                .ok_or_else(|| "event_queue_status is only available in Codex mode".to_string())?;
-            serde_json::to_value(queue.status().await)
-                .map_err(|error| format!("failed to serialize queue status: {error}"))?
-        }
-        "register_event_consumer" => {
-            let queue = server.codex_queue.as_ref().ok_or_else(|| {
-                "register_event_consumer is only available in Codex mode".to_string()
-            })?;
-            let label = parse_str(&args, "label")?.trim();
-            if label.is_empty() || label.len() > 120 {
-                return Err("label must contain 1 to 120 characters".to_string());
+            "no_rly_stats" => {
+                let ctx = server.no_rly_ctx(config.clone());
+                // A present-but-wrong-type filter arg is a caller error, not a
+                // silent "no filter" — otherwise `since_days: "7"` returns all-time
+                // stats presented as if filtered.
+                let since_days = optional_u64(&args, "since_days")?;
+                let outcome = optional_str(&args, "outcome")?;
+                let pattern = optional_str(&args, "pattern")?;
+                no_rly_stats(&ctx, since_days, outcome, pattern).await
             }
-            let ttl = consumer_ttl(args.get("ttl_seconds").and_then(Value::as_u64));
-            let make_primary = args
-                .get("make_primary")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let claim_unassigned = args
-                .get("claim_unassigned")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let registration = queue
-                .register_consumer(label.to_owned(), ttl, make_primary, claim_unassigned)
-                .await
-                .map_err(|error| error.to_string())?;
-            serde_json::to_value(registration)
-                .map_err(|error| format!("failed to serialize consumer registration: {error}"))?
-        }
-        "handoff_event_consumer" => {
-            let queue = server.codex_queue.as_ref().ok_or_else(|| {
-                "handoff_event_consumer is only available in Codex mode".to_string()
-            })?;
-            let from = ConsumerId::parse(parse_str(&args, "from_consumer_id")?)
-                .map_err(|error| error.to_string())?;
-            let to = ConsumerId::parse(parse_str(&args, "to_consumer_id")?)
-                .map_err(|error| error.to_string())?;
-            let move_pending = args
-                .get("move_pending")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let result = queue
-                .handoff(&from, &to, move_pending)
-                .await
-                .map_err(|error| error.to_string())?;
-            serde_json::to_value(result)
-                .map_err(|error| format!("failed to serialize consumer handoff: {error}"))?
-        }
-        "claim_event_consumer" => {
-            let queue = server.codex_queue.as_ref().ok_or_else(|| {
-                "claim_event_consumer is only available in Codex mode".to_string()
-            })?;
-            let consumer_id = ConsumerId::parse(parse_str(&args, "consumer_id")?)
-                .map_err(|error| error.to_string())?;
-            let claim_orphaned = args
-                .get("claim_orphaned")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let claimed_events = queue
-                .claim_primary(&consumer_id, claim_orphaned)
-                .await
-                .map_err(|error| error.to_string())?;
-            json!({
-                "primary_consumer_id": consumer_id,
-                "claimed_events": claimed_events
-            })
-        }
+            "no_rly_condense" => {
+                let ctx = server.no_rly_ctx(config.clone());
+                let older_than_days = args.get("older_than_days").and_then(Value::as_u64);
+                no_rly_condense(&ctx, older_than_days).await
+            }
+            "no_rly_vacuum" => {
+                let ctx = server.no_rly_ctx(config.clone());
+                let older_than_days = args.get("older_than_days").and_then(Value::as_u64);
+                no_rly_vacuum(&ctx, older_than_days).await
+            }
+            "react" => {
+                let ctx = server.messaging_ctx(config.clone());
+                let channel_id = parse_id(&args, "channel_id")?.channel();
+                let message_id = parse_id(&args, "message_id")?.message();
+                let emoji = args
+                    .get("emoji")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing emoji".to_string())?;
+                messaging_wire::unit(discord_react(&ctx, channel_id, message_id, emoji).await)
+            }
+            "edit_message" => {
+                let ctx = server.messaging_ctx(config.clone());
+                let channel_id = parse_id(&args, "channel_id")?.channel();
+                let message_id = parse_id(&args, "message_id")?.message();
+                let content = args
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing content".to_string())?;
+                let no_rly_hooks = parse_hook_overrides(&args)?;
+                messaging_wire::message(
+                    edit_message_with_embed_control(
+                        &ctx,
+                        channel_id,
+                        message_id,
+                        content,
+                        &no_rly_hooks,
+                        parse_optional_bool(&args, "suppress_embeds")?,
+                    )
+                    .await,
+                )
+            }
+            "send_file" => {
+                let ctx = server.messaging_ctx(config.clone());
+                let channel_id = parse_id(&args, "channel_id")?.channel();
+                let file_path = args
+                    .get("file_path")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing file_path".to_string())?;
+                let caption = args.get("caption").and_then(Value::as_str);
+                let no_rly_hooks = parse_hook_overrides(&args)?;
+                messaging_wire::message(
+                    send_file_with_hook_overrides(
+                        &ctx,
+                        channel_id,
+                        file_path,
+                        caption,
+                        &no_rly_hooks,
+                    )
+                    .await,
+                )
+            }
 
-        // Messaging
-        "reply" => {
-            let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?.channel();
-            let content = args
-                .get("content")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "missing content".to_string())?;
-            let reply_to = parse_optional_id(&args, "reply_to_message_id")?.map(Snowflake::message);
-            let suppress_ping = args
-                .get("suppress_ping")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let no_rly_hooks = parse_hook_overrides(&args)?;
-            let sentex_handles =
-                parse_enabled_sentex_handles(&args, config.delivery.evidence_markers_enabled)?;
-            reply_with_evidence_and_hook_overrides(
-                &ctx,
-                channel_id,
-                content,
-                reply_to,
-                ReplyToolOptions {
-                    suppress_ping,
-                    suppress_embeds: parse_optional_bool(&args, "suppress_embeds")?
-                        .unwrap_or(false),
-                    no_rly_hooks: &no_rly_hooks,
-                    sentex_handles: &sentex_handles,
-                },
-            )
-            .await
-        }
-        "teams_reply" => {
-            let authority = server
-                .teams_reply
-                .as_ref()
-                .ok_or_else(|| "Teams reply authority is unavailable".to_string())?;
-            let handle = parse_str(&args, "reply_handle")?;
-            let content = parse_str(&args, "content")?;
-            let receipt = authority
-                .reply(handle, content)
-                .await
-                .map_err(|error| error.to_string())?;
-            json!({
-                "incoming_activity_id": receipt.incoming_activity_id,
-                "outgoing_activity_id": receipt.outgoing_activity_id,
-                "conversation_id": receipt.conversation_id,
-            })
-        }
-        "no_rly" => {
-            let ctx = server.messaging_ctx(config.clone());
-            let handle = parse_str(&args, "handle")?;
-            release_held(&ctx, handle).await
-        }
-        "rephrase" => {
-            let ctx = server.messaging_ctx(config.clone());
-            let handle = parse_str(&args, "handle")?;
-            let content = args
-                .get("content")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "missing content".to_string())?;
-            rephrase_held(&ctx, handle, content).await
-        }
-        "no_rly_stats" => {
-            let ctx = server.no_rly_ctx(config.clone());
-            // A present-but-wrong-type filter arg is a caller error, not a
-            // silent "no filter" — otherwise `since_days: "7"` returns all-time
-            // stats presented as if filtered.
-            let since_days = optional_u64(&args, "since_days")?;
-            let outcome = optional_str(&args, "outcome")?;
-            let pattern = optional_str(&args, "pattern")?;
-            no_rly_stats(&ctx, since_days, outcome, pattern).await
-        }
-        "no_rly_condense" => {
-            let ctx = server.no_rly_ctx(config.clone());
-            let older_than_days = args.get("older_than_days").and_then(Value::as_u64);
-            no_rly_condense(&ctx, older_than_days).await
-        }
-        "no_rly_vacuum" => {
-            let ctx = server.no_rly_ctx(config.clone());
-            let older_than_days = args.get("older_than_days").and_then(Value::as_u64);
-            no_rly_vacuum(&ctx, older_than_days).await
-        }
-        "react" => {
-            let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?.channel();
-            let message_id = parse_id(&args, "message_id")?.message();
-            let emoji = args
-                .get("emoji")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "missing emoji".to_string())?;
-            discord_react(&ctx, channel_id, message_id, emoji).await
-        }
-        "edit_message" => {
-            let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?.channel();
-            let message_id = parse_id(&args, "message_id")?.message();
-            let content = args
-                .get("content")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "missing content".to_string())?;
-            let no_rly_hooks = parse_hook_overrides(&args)?;
-            edit_message_with_embed_control(
-                &ctx,
-                channel_id,
-                message_id,
-                content,
-                &no_rly_hooks,
-                parse_optional_bool(&args, "suppress_embeds")?,
-            )
-            .await
-        }
-        "fetch_messages" => {
-            let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?.channel();
-            let before = parse_strict_optional_id(&args, "before")?.map(|s| s.message());
-            let after = parse_strict_optional_id(&args, "after")?.map(|s| s.message());
-            let limit = parse_limit(&args, 20);
-            fetch_messages(&ctx, channel_id, before, after, limit).await
-        }
-        "fetch_new_since" => {
-            let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?.channel();
-            let after_message_id = parse_id(&args, "after_message_id")?.message();
-            let limit = parse_limit(&args, 20);
-            fetch_new_since(&ctx, channel_id, after_message_id, limit).await
-        }
-        "fetch_pins" => {
-            let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?.channel();
-            fetch_pins(&ctx, channel_id).await
-        }
-        "download_attachment" => {
-            let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?.channel();
-            let message_id = parse_id(&args, "message_id")?.message();
-            download_attachment(&ctx, channel_id, message_id).await
-        }
-        "get_message" => {
-            let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?.channel();
-            let message_id = parse_id(&args, "message_id")?.message();
-            get_message(&ctx, channel_id, message_id).await
-        }
-        "search_messages" => {
-            let ctx = server.messaging_ctx(config.clone());
-            let guild_id = parse_id(&args, "guild_id")?.guild();
-            let params: SearchParams =
-                serde_json::from_value(args).map_err(|e| format!("invalid search params: {e}"))?;
-            search_messages(&ctx, guild_id, params).await
-        }
+            "send_dm" => {
+                let ctx = server.messaging_ctx(config.clone());
+                let user_id = parse_id(&args, "user_id")?.user();
+                let content = args
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing content".to_string())?;
+                let no_rly_hooks = parse_hook_overrides(&args)?;
+                let sentex_handles =
+                    parse_enabled_sentex_handles(&args, config.delivery.evidence_markers_enabled)?;
+                messaging_wire::dm(
+                    send_dm_with_evidence_and_hook_overrides(
+                        &ctx,
+                        user_id,
+                        content,
+                        &no_rly_hooks,
+                        &sentex_handles,
+                        LinkPreviews::from_suppressed(
+                            parse_optional_bool(&args, "suppress_embeds")?.unwrap_or(false),
+                        ),
+                    )
+                    .await,
+                )
+            }
 
-        "send_file" => {
-            let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?.channel();
-            let file_path = args
-                .get("file_path")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "missing file_path".to_string())?;
-            let caption = args.get("caption").and_then(Value::as_str);
-            let no_rly_hooks = parse_hook_overrides(&args)?;
-            send_file_with_hook_overrides(&ctx, channel_id, file_path, caption, &no_rly_hooks).await
-        }
+            // Access
+            "list_access_requests" => {
+                let ctx = server.access_ctx(config.clone());
+                access_wire::requests(ctx.list().await)
+            }
+            "approve_access" => {
+                check_admin_gate(&config)?;
+                let ctx = server.access_ctx(config.clone());
+                let user_id = parse_id(&args, "user_id")?.user();
+                access_wire::approval(ctx.approve(user_id).await)
+            }
+            "deny_access" => {
+                check_admin_gate(&config)?;
+                let ctx = server.access_ctx(config.clone());
+                let user_id = parse_id(&args, "user_id")?.user();
+                access_wire::denial(ctx.deny(user_id).await)
+            }
 
-        "send_dm" => {
-            let ctx = server.messaging_ctx(config.clone());
-            let user_id = parse_id(&args, "user_id")?.user();
-            let content = args
-                .get("content")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "missing content".to_string())?;
-            let no_rly_hooks = parse_hook_overrides(&args)?;
-            let sentex_handles =
-                parse_enabled_sentex_handles(&args, config.delivery.evidence_markers_enabled)?;
-            send_dm_with_evidence_and_hook_overrides(
-                &ctx,
-                user_id,
-                content,
-                &no_rly_hooks,
-                &sentex_handles,
-                parse_optional_bool(&args, "suppress_embeds")?.unwrap_or(false),
-            )
-            .await
-        }
+            // Config management — read-only (no ConfigStore mutation needed)
+            "list_config_channels" => {
+                let mut result = ConfigStore::list_channels(server.state_dir());
+                // Annotate with active guild mutes so the caller sees muted guilds
+                // alongside the channel list (channels don't carry guild_id, so
+                // per-channel annotation isn't possible).
+                if let Some(store) = crate::mute_store::global() {
+                    let now = store.now();
+                    let mutes: Vec<Value> = store
+                        .list_muted()
+                        .into_iter()
+                        .map(|m| {
+                            json!({
+                                "guild_id": m.guild_id.to_string(),
+                                "muted_until": m.muted_until.to_rfc3339(),
+                                "remaining_seconds": m.remaining_seconds(now),
+                                "cutoff_event_id": m.cutoff_event_id,
+                            })
+                        })
+                        .collect();
+                    if !mutes.is_empty() {
+                        result["guild_mutes"] = json!(mutes);
+                    }
+                }
+                result
+            }
+            "get_access_config" => ConfigStore::get_access(server.state_dir()),
+            "attention" => {
+                let command: crate::attention::control::AttentionCommand =
+                    serde_json::from_value(args.clone())
+                        .map_err(|error| format!("invalid attention command: {error}"))?;
+                crate::attention::control::execute(
+                    server.attention.clone(),
+                    command,
+                    !config.access.admin_only_mutations,
+                )
+                .await?
+            }
 
-        // Introspection
-        "list_guilds" => {
-            let ctx = server.introspection_ctx(config.clone());
-            list_guilds(&ctx).await
-        }
-        "list_channels" => {
-            let ctx = server.introspection_ctx(config.clone());
-            let guild_id = parse_id(&args, "guild_id")?.guild();
-            list_channels(&ctx, guild_id).await
-        }
-        "get_channel" => {
-            let ctx = server.introspection_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?.channel();
-            get_channel(&ctx, channel_id).await
-        }
-        "get_user" => {
-            let ctx = server.introspection_ctx(config.clone());
-            let user_id = parse_id(&args, "user_id")?.user();
-            get_user(&ctx, user_id).await
-        }
-        "get_member" => {
-            let ctx = server.introspection_ctx(config.clone());
-            let guild_id = parse_id(&args, "guild_id")?.guild();
-            let user_id = parse_id(&args, "user_id")?.user();
-            get_member(&ctx, guild_id, user_id).await
-        }
-        "list_roles" => {
-            let ctx = server.introspection_ctx(config.clone());
-            let guild_id = parse_id(&args, "guild_id")?.guild();
-            list_roles(&ctx, guild_id).await
-        }
-        "can_view_channel" => {
-            let ctx = server.introspection_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?.channel();
-            let user_ids: Vec<_> = parse_id_array(&args, "user_ids", MAX_CAN_VIEW_USER_IDS)?
-                .into_iter()
-                .map(Snowflake::user)
-                .collect();
-            can_view_channel(&ctx, channel_id, &user_ids).await
-        }
-        "list_emojis" => {
-            let ctx = server.introspection_ctx(config.clone());
-            let guild_id = parse_id(&args, "guild_id")?.guild();
-            list_emojis(&ctx, guild_id).await
-        }
+            // Config management — mutations (serialized through ConfigRuntime, admin-gated)
+            "add_channel" => {
+                check_admin_gate(&config)?;
+                let id = parse_str(&args, "id")?.to_owned();
+                let response_id = id.clone();
+                DiscordId::parse(&id)?;
+                let require_mention = args.get("require_mention").and_then(Value::as_bool);
+                let allow_from = parse_string_array(&args, "allow_from").unwrap_or_default();
+                for af in &allow_from {
+                    DiscordId::parse(af)?;
+                }
+                match crate::config::ConfigRuntime::new(server.state_dir().clone())
+                    .mutate(move |editor| {
+                        editor.add_channel_entry(&id, require_mention.unwrap_or(true), allow_from)
+                    })
+                    .await
+                {
+                    Ok(outcome) => mutation_receipt_with(outcome, "id", response_id),
+                    Err(e) => json!({ "error": e.to_string() }),
+                }
+            }
+            "remove_channel" => {
+                check_admin_gate(&config)?;
+                let id = parse_str(&args, "id")?.to_owned();
+                let response_id = id.clone();
+                DiscordId::parse(&id)?;
+                match crate::config::ConfigRuntime::new(server.state_dir().clone())
+                    .mutate(move |editor| editor.remove_channel_entry(&id))
+                    .await
+                {
+                    Ok(outcome) => mutation_receipt_with(outcome, "id", response_id),
+                    Err(e) => json!({ "error": e.to_string() }),
+                }
+            }
+            "update_channel" => {
+                check_admin_gate(&config)?;
+                let id = parse_str(&args, "id")?.to_owned();
+                let response_id = id.clone();
+                DiscordId::parse(&id)?;
+                let require_mention = args.get("require_mention").and_then(Value::as_bool);
+                let allow_from = parse_string_array(&args, "allow_from");
+                if require_mention.is_none() && allow_from.is_none() {
+                    json!({ "error": "at least one of require_mention or allow_from must be provided" })
+                } else {
+                    if let Some(ref af) = allow_from {
+                        for entry in af {
+                            DiscordId::parse(entry)?;
+                        }
+                    }
+                    match crate::config::ConfigRuntime::new(server.state_dir().clone())
+                        .mutate(move |editor| {
+                            editor.update_channel_entry(&id, require_mention, allow_from)
+                        })
+                        .await
+                    {
+                        Ok(outcome) => mutation_receipt_with(outcome, "id", response_id),
+                        Err(e) => json!({ "error": e.to_string() }),
+                    }
+                }
+            }
+            "update_dm_policy" => {
+                check_admin_gate(&config)?;
+                let policy = parse_str(&args, "policy")?.to_owned();
+                let response_policy = policy.clone();
+                if !matches!(policy.as_str(), "drop" | "queue" | "disabled") {
+                    json!({ "error": format!("invalid dm_policy: {policy}; must be one of: drop, queue, disabled") })
+                } else {
+                    match crate::config::ConfigRuntime::new(server.state_dir().clone())
+                        .mutate(move |editor| {
+                            editor.set_dm_policy(&policy);
+                            Ok(())
+                        })
+                        .await
+                    {
+                        Ok(outcome) => mutation_receipt_with(outcome, "dm_policy", response_policy),
+                        Err(e) => json!({ "error": e.to_string() }),
+                    }
+                }
+            }
+            "add_allow_from" => {
+                check_admin_gate(&config)?;
+                let user_id = parse_str(&args, "user_id")?.to_owned();
+                let response_user_id = user_id.clone();
+                DiscordId::parse(&user_id)?;
+                match crate::config::ConfigRuntime::new(server.state_dir().clone())
+                    .mutate(move |editor| editor.add_to_allow_from(&user_id))
+                    .await
+                {
+                    Ok(outcome) => mutation_receipt_with(outcome, "user_id", response_user_id),
+                    Err(e) => json!({ "error": e.to_string() }),
+                }
+            }
+            "remove_allow_from" => {
+                check_admin_gate(&config)?;
+                let user_id = parse_str(&args, "user_id")?.to_owned();
+                let response_user_id = user_id.clone();
+                DiscordId::parse(&user_id)?;
+                match crate::config::ConfigRuntime::new(server.state_dir().clone())
+                    .mutate(move |editor| editor.remove_from_allow_from(&user_id))
+                    .await
+                {
+                    Ok(outcome) => mutation_receipt_with(outcome, "user_id", response_user_id),
+                    Err(e) => json!({ "error": e.to_string() }),
+                }
+            }
 
-        // Management
-        "pin_message" => {
-            let ctx = server.management_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?.channel();
-            let message_id = parse_id(&args, "message_id")?.message();
-            pin_message(&ctx, channel_id, message_id).await
-        }
-        "unpin_message" => {
-            let ctx = server.management_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?.channel();
-            let message_id = parse_id(&args, "message_id")?.message();
-            unpin_message(&ctx, channel_id, message_id).await
-        }
-        "create_thread" => {
-            let ctx = server.management_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?.channel();
-            let message_id = parse_optional_id(&args, "message_id")?.map(Snowflake::message);
-            let name = args
-                .get("name")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "missing name".to_string())?;
-            create_thread(&ctx, channel_id, message_id, name).await
-        }
-        "delete_message" => {
-            let ctx = server.management_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?.channel();
-            let message_id = parse_id(&args, "message_id")?.message();
-            delete_message(&ctx, channel_id, message_id).await
-        }
+            // Bot state
+            "send_typing" => {
+                let ctx = server.typing_ctx(config.clone());
+                let channel_id = parse_id(&args, "channel_id")?.channel();
+                presence_wire::typing(send_typing(&ctx, channel_id).await)
+            }
+            "get_presence" => presence_wire::get(server.presence.snapshot().await),
+            "set_presence" => match presence_wire::parse_request(&args) {
+                Ok(request) => presence_wire::set(server.presence.set(request).await),
+                Err(error) => json!({ "error": error.to_string() }),
+            },
 
-        // Access
-        "list_access_requests" => {
-            let ctx = server.access_ctx(config.clone());
-            list_access_requests(&ctx).await
-        }
-        "approve_access" => {
-            check_admin_gate(&config)?;
-            let ctx = server.access_ctx(config.clone());
-            let user_id = parse_id(&args, "user_id")?.user();
-            approve_access(&ctx, user_id).await
-        }
-        "deny_access" => {
-            check_admin_gate(&config)?;
-            let ctx = server.access_ctx(config.clone());
-            let user_id = parse_id(&args, "user_id")?.user();
-            deny_access(&ctx, user_id).await
-        }
+            // Rendering
+            "render_latex" => {
+                let latex = args
+                    .get("latex")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing latex".to_string())?;
+                render_wire::file(rendering::render_file(latex))
+            }
+            "render_latex_to_channel" => {
+                let ctx = server.messaging_ctx(config.clone());
+                let channel_id = parse_id(&args, "channel_id")?.channel();
+                let latex = args
+                    .get("latex")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing latex".to_string())?;
+                let caption = args.get("caption").and_then(Value::as_str);
+                let no_rly_hooks = parse_hook_overrides(&args)?;
+                render_wire::channel(
+                    render_to_channel(&ctx, channel_id, latex, caption, &no_rly_hooks).await,
+                )
+            }
 
-        // Config management — read-only (no ConfigStore mutation needed)
-        "list_config_channels" => {
-            let mut result = ConfigStore::list_channels(&server.state_dir);
-            // Annotate with active guild mutes so the caller sees muted guilds
-            // alongside the channel list (channels don't carry guild_id, so
-            // per-channel annotation isn't possible).
-            if let Some(store) = crate::mute_store::global() {
+            // Diagnostics
+            "reload_config" => {
+                check_admin_gate(&config)?;
+                // Async entry: serialized under the config writer, file I/O on
+                // the blocking pool — never blocks the async runtime.
+                let (_, error) = crate::config::ConfigRuntime::new(server.state_dir().clone())
+                    .reload()
+                    .await;
+                match error {
+                    Some(e) => json!({ "error": e }),
+                    None => json!({ "ok": true }),
+                }
+            }
+            "get_version" => get_version().await,
+
+            // Guild mute management (admin-gated)
+            "mute_server" => {
+                check_admin_gate(&config)?;
+                let guild_id_str = parse_str(&args, "guild_id")?;
+                DiscordId::parse(guild_id_str)?;
+                let guild_id: u64 = guild_id_str
+                    .parse()
+                    .map_err(|_| format!("invalid guild_id: {guild_id_str}"))?;
+                let ttl_minutes = args
+                    .get("ttl_minutes")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| "missing or invalid ttl_minutes".to_string())?;
+                if ttl_minutes == 0 {
+                    return Err("ttl_minutes must be at least 1".to_string());
+                }
+                if ttl_minutes > crate::mute_store::MAX_TTL_MINUTES {
+                    return Err(format!(
+                        "ttl_minutes ({ttl_minutes}) exceeds maximum ({})",
+                        crate::mute_store::MAX_TTL_MINUTES,
+                    ));
+                }
+                let reason = args.get("reason").and_then(Value::as_str).map(String::from);
+                let store = crate::mute_store::global()
+                    .ok_or_else(|| "mute store not initialized".to_string())?;
+                match store
+                    .mute_guild(guild_id, ttl_minutes, "admin".into(), reason)
+                    .await
+                {
+                    Ok(mute) => json!({
+                        "ok": true,
+                        "guild_id": guild_id.to_string(),
+                        "muted_until": mute.muted_until.to_rfc3339(),
+                        "remaining_seconds": mute.remaining_seconds(store.now()),
+                        "cutoff_event_id": mute.cutoff_event_id,
+                    }),
+                    Err(e) => json!({ "error": e }),
+                }
+            }
+            "unmute_server" => {
+                check_admin_gate(&config)?;
+                let guild_id_str = parse_str(&args, "guild_id")?;
+                DiscordId::parse(guild_id_str)?;
+                let guild_id: u64 = guild_id_str
+                    .parse()
+                    .map_err(|_| format!("invalid guild_id: {guild_id_str}"))?;
+                let store = crate::mute_store::global()
+                    .ok_or_else(|| "mute store not initialized".to_string())?;
+                match store.unmute_guild(guild_id).await {
+                    Ok(mute) => json!({
+                        "ok": true,
+                        "guild_id": guild_id.to_string(),
+                        "was_muted_until": mute.muted_until.to_rfc3339(),
+                    }),
+                    Err(e) => json!({ "error": e }),
+                }
+            }
+            "list_muted_servers" => {
+                check_admin_gate(&config)?;
+                let store = crate::mute_store::global()
+                    .ok_or_else(|| "mute store not initialized".to_string())?;
                 let now = store.now();
                 let mutes: Vec<Value> = store
                     .list_muted()
@@ -498,295 +469,35 @@ pub(crate) async fn call_tool(
                         json!({
                             "guild_id": m.guild_id.to_string(),
                             "muted_until": m.muted_until.to_rfc3339(),
+                            "muted_at": m.muted_at.to_rfc3339(),
+                            "muted_by": m.muted_by,
+                            "reason": m.reason,
                             "remaining_seconds": m.remaining_seconds(now),
                             "cutoff_event_id": m.cutoff_event_id,
                         })
                     })
                     .collect();
-                if !mutes.is_empty() {
-                    result["guild_mutes"] = json!(mutes);
-                }
+                json!({ "muted_servers": mutes })
             }
-            result
-        }
-        "get_access_config" => ConfigStore::get_access(&server.state_dir),
-        "attention" => {
-            let command: crate::attention::control::AttentionCommand =
-                serde_json::from_value(args.clone())
-                    .map_err(|error| format!("invalid attention command: {error}"))?;
-            crate::attention::control::execute(
-                server.attention.clone(),
-                command,
-                !config.access.admin_only_mutations,
-            )
-            .await?
-        }
+            "set_trace_level" => {
+                let ctx = server.diagnostics_ctx();
+                let filter = args
+                    .get("filter")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing filter".to_string())?;
+                set_trace_level(&ctx, filter).await
+            }
+            "set_stderr_level" => {
+                let ctx = server.diagnostics_ctx();
+                let filter = args
+                    .get("filter")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing filter".to_string())?;
+                set_stderr_level(&ctx, filter).await
+            }
 
-        // Config management — mutations (serialized through ConfigRuntime, admin-gated)
-        "add_channel" => {
-            check_admin_gate(&config)?;
-            let id = parse_str(&args, "id")?.to_owned();
-            let response_id = id.clone();
-            DiscordId::parse(&id)?;
-            let require_mention = args.get("require_mention").and_then(Value::as_bool);
-            let allow_from = parse_string_array(&args, "allow_from").unwrap_or_default();
-            for af in &allow_from {
-                DiscordId::parse(af)?;
-            }
-            match crate::config::ConfigRuntime::new(server.state_dir.clone())
-                .mutate(move |editor| {
-                    editor.add_channel_entry(&id, require_mention.unwrap_or(true), allow_from)
-                })
-                .await
-            {
-                Ok(outcome) => mutation_receipt_with(outcome, "id", response_id),
-                Err(e) => json!({ "error": e.to_string() }),
-            }
+            unknown => return Err(format!("unknown tool: {unknown}")),
         }
-        "remove_channel" => {
-            check_admin_gate(&config)?;
-            let id = parse_str(&args, "id")?.to_owned();
-            let response_id = id.clone();
-            DiscordId::parse(&id)?;
-            match crate::config::ConfigRuntime::new(server.state_dir.clone())
-                .mutate(move |editor| editor.remove_channel_entry(&id))
-                .await
-            {
-                Ok(outcome) => mutation_receipt_with(outcome, "id", response_id),
-                Err(e) => json!({ "error": e.to_string() }),
-            }
-        }
-        "update_channel" => {
-            check_admin_gate(&config)?;
-            let id = parse_str(&args, "id")?.to_owned();
-            let response_id = id.clone();
-            DiscordId::parse(&id)?;
-            let require_mention = args.get("require_mention").and_then(Value::as_bool);
-            let allow_from = parse_string_array(&args, "allow_from");
-            if require_mention.is_none() && allow_from.is_none() {
-                json!({ "error": "at least one of require_mention or allow_from must be provided" })
-            } else {
-                if let Some(ref af) = allow_from {
-                    for entry in af {
-                        DiscordId::parse(entry)?;
-                    }
-                }
-                match crate::config::ConfigRuntime::new(server.state_dir.clone())
-                    .mutate(move |editor| {
-                        editor.update_channel_entry(&id, require_mention, allow_from)
-                    })
-                    .await
-                {
-                    Ok(outcome) => mutation_receipt_with(outcome, "id", response_id),
-                    Err(e) => json!({ "error": e.to_string() }),
-                }
-            }
-        }
-        "update_dm_policy" => {
-            check_admin_gate(&config)?;
-            let policy = parse_str(&args, "policy")?.to_owned();
-            let response_policy = policy.clone();
-            if !matches!(policy.as_str(), "drop" | "queue" | "disabled") {
-                json!({ "error": format!("invalid dm_policy: {policy}; must be one of: drop, queue, disabled") })
-            } else {
-                match crate::config::ConfigRuntime::new(server.state_dir.clone())
-                    .mutate(move |editor| {
-                        editor.set_dm_policy(&policy);
-                        Ok(())
-                    })
-                    .await
-                {
-                    Ok(outcome) => mutation_receipt_with(outcome, "dm_policy", response_policy),
-                    Err(e) => json!({ "error": e.to_string() }),
-                }
-            }
-        }
-        "add_allow_from" => {
-            check_admin_gate(&config)?;
-            let user_id = parse_str(&args, "user_id")?.to_owned();
-            let response_user_id = user_id.clone();
-            DiscordId::parse(&user_id)?;
-            match crate::config::ConfigRuntime::new(server.state_dir.clone())
-                .mutate(move |editor| editor.add_to_allow_from(&user_id))
-                .await
-            {
-                Ok(outcome) => mutation_receipt_with(outcome, "user_id", response_user_id),
-                Err(e) => json!({ "error": e.to_string() }),
-            }
-        }
-        "remove_allow_from" => {
-            check_admin_gate(&config)?;
-            let user_id = parse_str(&args, "user_id")?.to_owned();
-            let response_user_id = user_id.clone();
-            DiscordId::parse(&user_id)?;
-            match crate::config::ConfigRuntime::new(server.state_dir.clone())
-                .mutate(move |editor| editor.remove_from_allow_from(&user_id))
-                .await
-            {
-                Ok(outcome) => mutation_receipt_with(outcome, "user_id", response_user_id),
-                Err(e) => json!({ "error": e.to_string() }),
-            }
-        }
-
-        // Bot state
-        "send_typing" => {
-            let ctx = server.bot_state_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?.channel();
-            send_typing(&ctx, channel_id).await
-        }
-        "get_presence" => {
-            let ctx = server.bot_state_ctx(config.clone());
-            get_presence(&ctx).await
-        }
-        "set_presence" => {
-            let ctx = server.bot_state_ctx(config.clone());
-            let online_status = args
-                .get("online_status")
-                .and_then(Value::as_str)
-                .unwrap_or("online");
-            let activity_type = args.get("activity_type").and_then(Value::as_str);
-            let activity_name = args.get("activity_name").and_then(Value::as_str);
-            set_presence(&ctx, online_status, activity_type, activity_name).await
-        }
-
-        // Rendering
-        "render_latex" => {
-            let latex = args
-                .get("latex")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "missing latex".to_string())?;
-            render_latex(latex).await
-        }
-        "render_latex_to_channel" => {
-            let ctx = server.messaging_ctx(config.clone());
-            let channel_id = parse_id(&args, "channel_id")?.channel();
-            let latex = args
-                .get("latex")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "missing latex".to_string())?;
-            let caption = args.get("caption").and_then(Value::as_str);
-            let no_rly_hooks = parse_hook_overrides(&args)?;
-            render_latex_to_channel_with_hook_overrides(
-                &ctx,
-                channel_id,
-                latex,
-                caption,
-                &no_rly_hooks,
-            )
-            .await
-        }
-
-        // Diagnostics
-        "reload_config" => {
-            check_admin_gate(&config)?;
-            // Async entry: serialized under the config writer, file I/O on
-            // the blocking pool — never blocks the async runtime.
-            let (_, error) = crate::config::ConfigRuntime::new(server.state_dir.clone())
-                .reload()
-                .await;
-            match error {
-                Some(e) => json!({ "error": e }),
-                None => json!({ "ok": true }),
-            }
-        }
-        "get_version" => get_version().await,
-
-        // Guild mute management (admin-gated)
-        "mute_server" => {
-            check_admin_gate(&config)?;
-            let guild_id_str = parse_str(&args, "guild_id")?;
-            DiscordId::parse(guild_id_str)?;
-            let guild_id: u64 = guild_id_str
-                .parse()
-                .map_err(|_| format!("invalid guild_id: {guild_id_str}"))?;
-            let ttl_minutes = args
-                .get("ttl_minutes")
-                .and_then(Value::as_u64)
-                .ok_or_else(|| "missing or invalid ttl_minutes".to_string())?;
-            if ttl_minutes == 0 {
-                return Err("ttl_minutes must be at least 1".to_string());
-            }
-            if ttl_minutes > crate::mute_store::MAX_TTL_MINUTES {
-                return Err(format!(
-                    "ttl_minutes ({ttl_minutes}) exceeds maximum ({})",
-                    crate::mute_store::MAX_TTL_MINUTES,
-                ));
-            }
-            let reason = args.get("reason").and_then(Value::as_str).map(String::from);
-            let store = crate::mute_store::global()
-                .ok_or_else(|| "mute store not initialized".to_string())?;
-            match store
-                .mute_guild(guild_id, ttl_minutes, "admin".into(), reason)
-                .await
-            {
-                Ok(mute) => json!({
-                    "ok": true,
-                    "guild_id": guild_id.to_string(),
-                    "muted_until": mute.muted_until.to_rfc3339(),
-                    "remaining_seconds": mute.remaining_seconds(store.now()),
-                    "cutoff_event_id": mute.cutoff_event_id,
-                }),
-                Err(e) => json!({ "error": e }),
-            }
-        }
-        "unmute_server" => {
-            check_admin_gate(&config)?;
-            let guild_id_str = parse_str(&args, "guild_id")?;
-            DiscordId::parse(guild_id_str)?;
-            let guild_id: u64 = guild_id_str
-                .parse()
-                .map_err(|_| format!("invalid guild_id: {guild_id_str}"))?;
-            let store = crate::mute_store::global()
-                .ok_or_else(|| "mute store not initialized".to_string())?;
-            match store.unmute_guild(guild_id).await {
-                Ok(mute) => json!({
-                    "ok": true,
-                    "guild_id": guild_id.to_string(),
-                    "was_muted_until": mute.muted_until.to_rfc3339(),
-                }),
-                Err(e) => json!({ "error": e }),
-            }
-        }
-        "list_muted_servers" => {
-            check_admin_gate(&config)?;
-            let store = crate::mute_store::global()
-                .ok_or_else(|| "mute store not initialized".to_string())?;
-            let now = store.now();
-            let mutes: Vec<Value> = store
-                .list_muted()
-                .into_iter()
-                .map(|m| {
-                    json!({
-                        "guild_id": m.guild_id.to_string(),
-                        "muted_until": m.muted_until.to_rfc3339(),
-                        "muted_at": m.muted_at.to_rfc3339(),
-                        "muted_by": m.muted_by,
-                        "reason": m.reason,
-                        "remaining_seconds": m.remaining_seconds(now),
-                        "cutoff_event_id": m.cutoff_event_id,
-                    })
-                })
-                .collect();
-            json!({ "muted_servers": mutes })
-        }
-        "set_trace_level" => {
-            let ctx = server.diagnostics_ctx();
-            let filter = args
-                .get("filter")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "missing filter".to_string())?;
-            set_trace_level(&ctx, filter).await
-        }
-        "set_stderr_level" => {
-            let ctx = server.diagnostics_ctx();
-            let filter = args
-                .get("filter")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "missing filter".to_string())?;
-            set_stderr_level(&ctx, filter).await
-        }
-
-        unknown => return Err(format!("unknown tool: {unknown}")),
     };
 
     // Wrap result in MCP tool result format.
@@ -801,145 +512,6 @@ pub(crate) async fn call_tool(
         response["isError"] = json!(true);
     }
     Ok(response)
-}
-
-fn parse_enabled_sentex_handles(
-    args: &Value,
-    evidence_markers_enabled: bool,
-) -> Result<SentexHandles, String> {
-    let handles = parse_tool_sentex_handles(args)?;
-    if evidence_markers_enabled {
-        return Ok(handles);
-    }
-    if args.get("claim_handles").is_some() || args.get("citation_handles").is_some() {
-        return Err(
-            "claim_handles and citation_handles require evidence_markers_enabled".to_string(),
-        );
-    }
-    Ok(SentexHandles::empty())
-}
-
-// ── Parameter parsing helpers ─────────────────────────────────────────────────
-
-pub(crate) fn parse_id(args: &Value, key: &str) -> Result<Snowflake, String> {
-    // Accept both numeric and string IDs.
-    let id = if let Some(n) = args.get(key).and_then(Value::as_u64) {
-        n
-    } else if let Some(s) = args.get(key).and_then(Value::as_str) {
-        s.parse::<u64>()
-            .map_err(|_| format!("invalid {key}: not a valid u64"))?
-    } else if args.get(key).is_some() {
-        return Err(format!("invalid {key}: expected a numeric or string ID"));
-    } else {
-        return Err(format!("missing {key}"));
-    };
-    Snowflake::new(id).ok_or_else(|| format!("invalid {key}: must be a nonzero Discord snowflake"))
-}
-
-/// Parses a required, non-empty array of Discord IDs given as numbers or
-/// strings, rejecting arrays longer than `max`.
-fn parse_id_array(args: &Value, key: &str, max: usize) -> Result<Vec<Snowflake>, String> {
-    let values = args
-        .get(key)
-        .ok_or_else(|| format!("missing {key}"))?
-        .as_array()
-        .ok_or_else(|| format!("invalid {key}: expected an array of IDs"))?;
-    if values.is_empty() {
-        return Err(format!("invalid {key}: must contain at least one ID"));
-    }
-    if values.len() > max {
-        return Err(format!("invalid {key}: at most {max} IDs are allowed"));
-    }
-    values
-        .iter()
-        .map(|value| {
-            let id = match value {
-                Value::Number(n) => n.as_u64(),
-                Value::String(s) => s.parse::<u64>().ok(),
-                _ => None,
-            }
-            .ok_or_else(|| format!("invalid {key}: each ID must be a numeric or string u64"))?;
-            Snowflake::new(id)
-                .ok_or_else(|| format!("invalid {key}: must be nonzero Discord snowflakes"))
-        })
-        .collect()
-}
-
-/// Parses an optional `limit` argument, clamping it into Discord's accepted
-/// `1..=100` range.
-///
-/// Clamping the lower bound matters for cursor-based pagination: a `limit` of
-/// 0 would always satisfy `count == limit`, producing an empty page that
-/// claims `has_more: true` — a pagination dead end.
-pub(crate) fn parse_limit(args: &Value, default: u8) -> u8 {
-    args.get("limit")
-        .and_then(Value::as_u64)
-        .map(|v| v.clamp(1, 100) as u8)
-        .unwrap_or(default)
-}
-
-pub(crate) fn parse_optional_id(args: &Value, key: &str) -> Result<Option<Snowflake>, String> {
-    // A value of zero is explicitly wrong — silently promoting it to "absent"
-    // would hide the caller's bug; return an error so they know their ID is invalid.
-    if let Some(n) = args.get(key).and_then(Value::as_u64) {
-        return Snowflake::new(n)
-            .map(Some)
-            .ok_or_else(|| format!("invalid {key}: must be a nonzero Discord snowflake"));
-    }
-    if let Some(s) = args.get(key).and_then(Value::as_str) {
-        if s.is_empty() {
-            return Ok(None);
-        }
-        let n = s
-            .parse::<u64>()
-            .map_err(|_| format!("invalid {key}: not a valid u64"))?;
-        return Snowflake::new(n)
-            .map(Some)
-            .ok_or_else(|| format!("invalid {key}: must be a nonzero Discord snowflake"));
-    }
-    Ok(None)
-}
-
-fn parse_optional_bool(args: &Value, name: &str) -> Result<Option<bool>, String> {
-    args.get(name)
-        .map(|value| {
-            value
-                .as_bool()
-                .ok_or_else(|| format!("{name} must be a boolean"))
-        })
-        .transpose()
-}
-
-fn parse_strict_optional_id(args: &Value, key: &str) -> Result<Option<Snowflake>, String> {
-    match args.get(key) {
-        None => Ok(None),
-        Some(v) if v.is_null() => Err(format!(
-            "invalid {key}: null is not a valid snowflake; omit the field instead"
-        )),
-        Some(v) if v.is_u64() => {
-            let n = v.as_u64().unwrap();
-            Snowflake::new(n)
-                .map(Some)
-                .ok_or_else(|| format!("invalid {key}: must be a nonzero Discord snowflake"))
-        }
-        Some(v) if v.is_string() => {
-            let s = v.as_str().unwrap();
-            if s.is_empty() {
-                return Err(format!(
-                    "invalid {key}: empty string is not a valid snowflake"
-                ));
-            }
-            let n = s
-                .parse::<u64>()
-                .map_err(|_| format!("invalid {key}: not a valid u64"))?;
-            Snowflake::new(n)
-                .map(Some)
-                .ok_or_else(|| format!("invalid {key}: must be a nonzero Discord snowflake"))
-        }
-        Some(_) => Err(format!(
-            "invalid {key}: expected a Discord snowflake (string or integer), got unexpected type"
-        )),
-    }
 }
 
 fn parse_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -980,47 +552,762 @@ fn parse_string_array(args: &Value, key: &str) -> Option<Vec<String>> {
     })
 }
 
-fn parse_hook_overrides(args: &Value) -> Result<Vec<HookName>, String> {
-    let Some(value) = args.get("no_rly_hooks") else {
-        return Ok(Vec::new());
-    };
-    let values = value
-        .as_array()
-        .ok_or_else(|| "no_rly_hooks must be an array of hook-name strings".to_owned())?;
-    values
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .map(|name| HookName::parse(name).map_err(|error| error.to_string()))
-                .ok_or_else(|| "no_rly_hooks must contain only strings".to_owned())
-                .and_then(std::convert::identity)
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{discord::tool_arguments::parse_optional_id, pre_send::HookName};
     use proptest::prelude::*;
 
-    /// Boundary pin for the presence tools: the round trip crosses the real
-    /// dispatch match arms and the real `DioneServer → BotStateCtx`
-    /// composition, and the server presence comes from the same production
-    /// assembly (`wire_shared_presence`) that `main` uses — the
-    /// gateway-side handle must observe every MCP-side write, so splitting
-    /// the two consumers onto different stores fails here.
+    #[tokio::test]
+    async fn access_contract_dispatch_gate_parser_and_tool_error_envelopes() {
+        let (_dir, server) = presence_test_server().await;
+        std::fs::write(
+            server.state_dir().join("config.toml"),
+            "[access]\nadmin_only_mutations = true\n",
+        )
+        .unwrap();
+        assert!(
+            crate::config::reload_config(server.state_dir())
+                .await
+                .1
+                .is_none()
+        );
+        for tool in ["approve_access", "deny_access"] {
+            assert_eq!(
+                call_tool(&server, tool, json!({"user_id":"bad"}))
+                    .await
+                    .unwrap_err(),
+                "admin_only_mutations is enabled; config mutation tools are disabled"
+            );
+        }
+        assert_eq!(
+            call_tool(&server, "list_access_requests", json!({}))
+                .await
+                .unwrap(),
+            json!({"content":[{"type":"text","text":"{\"requests\":[]}"}]})
+        );
+        std::fs::write(
+            server.state_dir().join("config.toml"),
+            "[access]\nadmin_only_mutations = false\n",
+        )
+        .unwrap();
+        assert!(
+            crate::config::reload_config(server.state_dir())
+                .await
+                .1
+                .is_none()
+        );
+        for tool in ["approve_access", "deny_access"] {
+            for (args, error) in [
+                (json!({}), "missing user_id"),
+                (
+                    json!({"user_id":0}),
+                    "invalid user_id: must be a nonzero Discord snowflake",
+                ),
+                (json!({"user_id":"bad"}), "invalid user_id: not a valid u64"),
+                (
+                    json!({"user_id":false}),
+                    "invalid user_id: expected a numeric or string ID",
+                ),
+            ] {
+                assert_eq!(call_tool(&server, tool, args).await.unwrap_err(), error);
+            }
+            for args in [json!({"user_id":42}), json!({"user_id":"42"})] {
+                assert_eq!(
+                    call_tool(&server, tool, args).await.unwrap(),
+                    json!({
+                        "content":[{"type":"text","text":"{\"error\":\"no pending request for user 42\"}"}],
+                        "isError":true
+                    })
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn render_contract_dispatch_argument_order_and_error_envelopes() {
+        let (_dir, server) = presence_test_server().await;
+        for latex in [Value::Null, json!(false), json!(3), json!([]), json!({})] {
+            assert_eq!(
+                call_tool(&server, "render_latex", json!({"latex":latex}))
+                    .await
+                    .unwrap_err(),
+                "missing latex"
+            );
+        }
+        for (tool, args, expected) in [
+            ("render_latex", json!({}), "missing latex"),
+            (
+                "render_latex_to_channel",
+                json!({"no_rly_hooks":false}),
+                "missing channel_id",
+            ),
+            (
+                "render_latex_to_channel",
+                json!({"channel_id":0,"latex":false}),
+                "invalid channel_id: must be a nonzero Discord snowflake",
+            ),
+            (
+                "render_latex_to_channel",
+                json!({"channel_id":"bad","latex":"x"}),
+                "invalid channel_id: not a valid u64",
+            ),
+            (
+                "render_latex_to_channel",
+                json!({"channel_id":42,"no_rly_hooks":false}),
+                "missing latex",
+            ),
+            (
+                "render_latex_to_channel",
+                json!({"channel_id":42,"latex":"x","no_rly_hooks":false}),
+                "no_rly_hooks must be an array of hook-name strings",
+            ),
+            (
+                "render_latex_to_channel",
+                json!({"channel_id":42,"latex":"x","no_rly_hooks":[3]}),
+                "no_rly_hooks must contain only strings",
+            ),
+        ] {
+            assert_eq!(call_tool(&server, tool, args).await.unwrap_err(), expected);
+        }
+        assert_presence_tool_result(
+            call_tool(
+                &server,
+                "render_latex",
+                json!({"latex":"\\iftypst","ignored":true}),
+            )
+            .await
+            .unwrap(),
+            json!({"error":"\\iftypst is not supported"}),
+            true,
+        );
+        for caption in [Value::Null, json!(false), json!(8), json!([]), json!({})] {
+            assert_presence_tool_result(
+                call_tool(
+                    &server,
+                    "render_latex_to_channel",
+                    json!({
+                        "channel_id":"+42",
+                        "latex":"\\iftypst",
+                        "caption":caption,
+                        "no_rly_hooks":["tier-1"]
+                    }),
+                )
+                .await
+                .unwrap(),
+                json!({"error":"no_rly_hooks cannot be used when no caption is sent"}),
+                true,
+            );
+        }
+        assert_presence_tool_result(
+            call_tool(
+                &server,
+                "render_latex_to_channel",
+                json!({"channel_id":42,"latex":"\\iftypst","caption":"","no_rly_hooks":["tier-1"]}),
+            )
+            .await
+            .unwrap(),
+            json!({"error":"channel 42 is not a permitted outbound target"}),
+            true,
+        );
+    }
+
+    #[tokio::test]
+    async fn render_contract_dispatch_file_success_envelope() {
+        let (_dir, server) = presence_test_server().await;
+        let response = call_tool(&server, "render_latex", json!({"latex":"x","ignored":true}))
+            .await
+            .unwrap();
+        let result: Value =
+            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+        let path = result["path"].as_str().unwrap();
+        let bytes = std::fs::read(path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert_presence_tool_result(
+            response,
+            json!({"ok":true,"path":path,"size_bytes":bytes.len()}),
+            false,
+        );
+    }
+
+    #[tokio::test]
+    async fn introspection_contract_registered_member_uses_reloaded_configuration() {
+        let member = json!({
+            "user":{"id":"91","username":"returned"}, "nick":null,
+            "roles":[], "joined_at":"2026-07-10T12:30:00Z",
+            "deaf":false,"mute":false,"flags":0
+        });
+        let (ctx, requests) = crate::discord::introspection_wire::tests::fixture(vec![
+            ("200 OK", member.clone()),
+            ("200 OK", member),
+        ])
+        .await;
+        let (_dir, server) = presence_test_server_with_http(ctx.http).await;
+        for (timezone, expected) in [
+            ("America/Chicago", "2026-07-10T07:30:00-05:00"),
+            ("Asia/Tokyo", "2026-07-10T21:30:00+09:00"),
+        ] {
+            std::fs::write(
+                server.state_dir().join("config.toml"),
+                format!("timezone = \"{timezone}\"\n"),
+            )
+            .unwrap();
+            assert!(
+                crate::config::reload_config(server.state_dir())
+                    .await
+                    .1
+                    .is_none()
+            );
+            let response = call_tool(
+                &server,
+                "get_member",
+                json!({"guild_id":"7","user_id":"80"}),
+            )
+            .await
+            .unwrap();
+            let value: Value =
+                serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                value,
+                json!({"user_id":"91","username":"returned","nick":null,"roles":[],"joined_at":expected})
+            );
+        }
+        assert_eq!(
+            requests.await.unwrap(),
+            ["GET /api/v10/guilds/7/members/80 HTTP/1.1"; 2]
+        );
+    }
+
+    #[tokio::test]
+    async fn introspection_contract_dispatch_parsing_and_http_envelopes() {
+        let (ctx, requests) = crate::discord::introspection_wire::tests::fixture(vec![
+            ("200 OK", json!([])),
+            ("200 OK", json!([])),
+            ("200 OK", json!({"id":"91","type":0,"name":"returned-channel"})),
+            ("200 OK", json!({"id":"92","username":"returned-user","discriminator":"7","bot":true})),
+            ("200 OK", json!({"user":{"id":"93","username":"returned-member"},"nick":null,"roles":["9","2"],"joined_at":null,"deaf":false,"mute":false,"flags":0})),
+            ("200 OK", json!([])),
+            ("200 OK", json!([])),
+            ("403 Forbidden", json!({"code":50013,"message":"Missing Permissions"})),
+        ]).await;
+        let (_dir, server) = presence_test_server_with_http(ctx.http).await;
+        for (tool, args, expected) in [
+            ("list_channels", json!({}), "missing guild_id"),
+            (
+                "list_roles",
+                json!({"guild_id":null}),
+                "invalid guild_id: expected a numeric or string ID",
+            ),
+            (
+                "list_emojis",
+                json!({"guild_id":0}),
+                "invalid guild_id: must be a nonzero Discord snowflake",
+            ),
+            (
+                "get_channel",
+                json!({"channel_id":"bad"}),
+                "invalid channel_id: not a valid u64",
+            ),
+            (
+                "get_channel",
+                json!({"channel_id":-1}),
+                "invalid channel_id: expected a numeric or string ID",
+            ),
+            (
+                "get_user",
+                json!({"user_id":1.5}),
+                "invalid user_id: expected a numeric or string ID",
+            ),
+            (
+                "get_user",
+                json!({"user_id":[]}),
+                "invalid user_id: expected a numeric or string ID",
+            ),
+            (
+                "get_user",
+                json!({"user_id":{}}),
+                "invalid user_id: expected a numeric or string ID",
+            ),
+            (
+                "get_user",
+                json!({"user_id":true}),
+                "invalid user_id: expected a numeric or string ID",
+            ),
+            (
+                "get_member",
+                json!({"guild_id":0,"user_id":"bad"}),
+                "invalid guild_id: must be a nonzero Discord snowflake",
+            ),
+            ("get_member", json!({"guild_id":7}), "missing user_id"),
+            (
+                "get_member",
+                json!({"guild_id":7,"user_id":"bad"}),
+                "invalid user_id: not a valid u64",
+            ),
+        ] {
+            assert_eq!(call_tool(&server, tool, args).await.unwrap_err(), expected);
+        }
+        for (tool, args, expected) in [
+            (
+                "list_guilds",
+                json!({"guild_id":false,"ignored":[1,2]}),
+                json!({"content":[{"type":"text","text":"{\"guilds\":[]}"}]}),
+            ),
+            (
+                "list_channels",
+                json!({"guild_id":7,"ignored":true}),
+                json!({"content":[{"type":"text","text":"{\"channels\":[]}"}]}),
+            ),
+            (
+                "get_channel",
+                json!({"channel_id":"42"}),
+                json!({"content":[{"type":"text","text":"{\"id\":\"91\",\"kind\":\"guild\",\"name\":\"returned-channel\",\"permission_overwrites\":[]}"}]}),
+            ),
+            (
+                "get_user",
+                json!({"user_id":"+80"}),
+                json!({"content":[{"type":"text","text":"{\"bot\":true,\"discriminator\":\"7\",\"id\":\"92\",\"name\":\"returned-user\"}"}]}),
+            ),
+            (
+                "get_member",
+                json!({"guild_id":"+7","user_id":80}),
+                json!({"content":[{"type":"text","text":"{\"joined_at\":null,\"nick\":null,\"roles\":[\"9\",\"2\"],\"user_id\":\"93\",\"username\":\"returned-member\"}"}]}),
+            ),
+            (
+                "list_roles",
+                json!({"guild_id":"7"}),
+                json!({"content":[{"type":"text","text":"{\"roles\":[]}"}]}),
+            ),
+            (
+                "list_emojis",
+                json!({"guild_id":7}),
+                json!({"content":[{"type":"text","text":"{\"emojis\":[]}"}]}),
+            ),
+            (
+                "get_user",
+                json!({"user_id":80}),
+                json!({"content":[{"type":"text","text":"{\"error\":\"Missing Permissions\"}"}],"isError":true}),
+            ),
+        ] {
+            assert_eq!(call_tool(&server, tool, args).await.unwrap(), expected);
+        }
+        assert_eq!(
+            requests.await.unwrap(),
+            [
+                "GET /api/v10/users/@me/guilds? HTTP/1.1",
+                "GET /api/v10/guilds/7/channels HTTP/1.1",
+                "GET /api/v10/channels/42 HTTP/1.1",
+                "GET /api/v10/users/80 HTTP/1.1",
+                "GET /api/v10/guilds/7/members/80 HTTP/1.1",
+                "GET /api/v10/guilds/7/roles HTTP/1.1",
+                "GET /api/v10/guilds/7/emojis HTTP/1.1",
+                "GET /api/v10/users/80 HTTP/1.1",
+            ]
+        );
+    }
+    #[tokio::test]
+    async fn search_contract_dispatch_guild_then_arguments_and_tool_errors() {
+        let (_dir, server) = presence_test_server().await;
+        for (args, expected) in [
+            (json!({"limit":0}), "missing guild_id"),
+            (
+                json!({"guild_id":0,"limit":0}),
+                "invalid guild_id: must be a nonzero Discord snowflake",
+            ),
+            (
+                json!({"guild_id":"bad","has":null}),
+                "invalid guild_id: not a valid u64",
+            ),
+            (
+                json!({"guild_id":"7","limit":0}),
+                "invalid search params: search limit must be 1..=25, got 0",
+            ),
+            (
+                json!({"guild_id":"7","before":"bad","after":"also-bad"}),
+                "invalid search params: expected snowflake ID or YYYY-MM-DD, got 'also-bad'",
+            ),
+            (
+                json!({"guild_id":"7","has":null}),
+                "invalid search params: invalid type: null, expected a sequence",
+            ),
+        ] {
+            assert_eq!(
+                call_tool(&server, "search_messages", args)
+                    .await
+                    .unwrap_err(),
+                expected
+            );
+        }
+        for args in [
+            json!({"guild_id":7}),
+            json!({"guild_id":"7","sort_by":"timestamp","sort_order":"desc","author_id":null}),
+        ] {
+            assert_eq!(
+                call_tool(&server, "search_messages", args).await.unwrap(),
+                json!({
+                    "content":[{"type":"text","text":"{\"error\":\"at least one search filter is required (content, author_id, mentions, has, before, after, or channel_id)\"}"}],
+                    "isError":true
+                })
+            );
+        }
+        assert_eq!(
+            call_tool(
+                &server,
+                "search_messages",
+                json!({
+                    "guild_id":"7","before":"2014-01-01","after":"2013-01-01"
+                })
+            )
+            .await
+            .unwrap(),
+            json!({
+                "content":[{"type":"text","text":"{\"error\":\"invalid date '2014-01-01: date is before Discord epoch (2015-01-01)': expected YYYY-MM-DD\"}"}],
+                "isError":true
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn management_contract_dispatch_parse_order_and_error_envelopes() {
+        let (_dir, server) = presence_test_server().await;
+        for tool in [
+            "pin_message",
+            "unpin_message",
+            "delete_message",
+            "create_thread",
+        ] {
+            for (args, expected) in [
+                (json!({}), "missing channel_id"),
+                (
+                    json!({"channel_id":0,"message_id":"bad"}),
+                    "invalid channel_id: must be a nonzero Discord snowflake",
+                ),
+                (
+                    json!({"channel_id":"bad","message_id":0}),
+                    "invalid channel_id: not a valid u64",
+                ),
+                (
+                    json!({"channel_id":42,"message_id":0}),
+                    "invalid message_id: must be a nonzero Discord snowflake",
+                ),
+                (
+                    json!({"channel_id":"42","message_id":"bad"}),
+                    "invalid message_id: not a valid u64",
+                ),
+            ] {
+                assert_eq!(call_tool(&server, tool, args).await.unwrap_err(), expected);
+            }
+            assert_eq!(
+                call_tool(
+                    &server,
+                    tool,
+                    json!({"channel_id":42,"message_id":"9001","name":"","extra":true})
+                )
+                .await
+                .unwrap(),
+                json!({
+                    "content":[{"type":"text","text":"{\"error\":\"channel not in allowlist\"}"}], "isError":true
+                })
+            );
+        }
+        for tool in ["pin_message", "unpin_message", "delete_message"] {
+            assert_eq!(
+                call_tool(&server, tool, json!({"channel_id":42}))
+                    .await
+                    .unwrap_err(),
+                "missing message_id"
+            );
+        }
+        for message in [
+            Value::Null,
+            json!(""),
+            json!(false),
+            json!(-1),
+            json!(1.5),
+            json!([]),
+            json!({}),
+        ] {
+            let args = json!({"channel_id":"42","message_id":message});
+            assert_eq!(parse_optional_id(&args, "message_id").unwrap(), None);
+            assert_eq!(
+                call_tool(&server, "create_thread", args.clone())
+                    .await
+                    .unwrap_err(),
+                "missing name"
+            );
+            let mut args = args;
+            args["name"] = json!("");
+            assert_eq!(
+                call_tool(&server, "create_thread", args).await.unwrap(),
+                json!({
+                    "content":[{"type":"text","text":"{\"error\":\"channel not in allowlist\"}"}], "isError":true
+                })
+            );
+        }
+        for args in [
+            json!({"channel_id":42}),
+            json!({"channel_id":42,"name":7}),
+            json!({"channel_id":42,"message_id":9001}),
+        ] {
+            assert_eq!(
+                call_tool(&server, "create_thread", args).await.unwrap_err(),
+                "missing name"
+            );
+        }
+    }
+    async fn presence_test_server() -> (tempfile::TempDir, DioneServer) {
+        presence_test_server_with_http(std::sync::Arc::new(serenity::http::Http::new("fake"))).await
+    }
+    async fn presence_test_server_with_http(
+        http: std::sync::Arc<serenity::http::Http>,
+    ) -> (tempfile::TempDir, DioneServer) {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let state_dir =
+            camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf-8 path");
+        let (notification_tx, _notification_rx) = tokio::sync::mpsc::channel(1);
+        let server = DioneServer::new(
+            crate::state::new_state(),
+            std::sync::Arc::new(tokio::sync::Mutex::new(crate::queue::AccessQueue::load(
+                &state_dir,
+            ))),
+            http,
+            state_dir.clone(),
+            notification_tx,
+            crate::tracing_channel::TraceLevelController::noop(),
+            crate::harness::HarnessConnection::claude(),
+            std::sync::Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
+            std::sync::Arc::new(crate::ingress_ledger::IngressLedger::new()),
+            crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            ),
+            None,
+        )
+        .await
+        .expect("Discord reply registration");
+        (dir, server)
+    }
+
+    fn assert_presence_tool_result(response: Value, expected: Value, is_error: bool) {
+        let expected = if is_error {
+            json!({
+                "content": [{"type": "text", "text": expected.to_string()}],
+                "isError": true
+            })
+        } else {
+            json!({"content": [{"type": "text", "text": expected.to_string()}]})
+        };
+        assert_eq!(response, expected);
+    }
+
+    #[tokio::test]
+    async fn presence_wire_defaults_and_activity_text() {
+        let (_dir, server) = presence_test_server().await;
+        let (_, presence) = crate::discord::presence::wire_shared_presence();
+        let server = server.with_presence(presence);
+        assert_presence_tool_result(
+            call_tool(&server, "get_presence", json!({})).await.unwrap(),
+            json!({
+                "set_this_process": false,
+                "sink_installed": false,
+                "note": "no presence has been requested since this process started; Discord is showing the gateway default. sink_installed reports whether a shard messenger has been installed since the last gateway ready — disconnects are not tracked"
+            }),
+            false,
+        );
+
+        for (args, status, kind, name) in [
+            (json!({}), "online", Value::Null, Value::Null),
+            (
+                json!({"online_status": null, "activity_type": null, "activity_name": null}),
+                "online",
+                Value::Null,
+                Value::Null,
+            ),
+            (
+                json!({"online_status": 17, "activity_type": false, "activity_name": []}),
+                "online",
+                Value::Null,
+                Value::Null,
+            ),
+            (
+                json!({"activity_name": "ignored"}),
+                "online",
+                Value::Null,
+                Value::Null,
+            ),
+            (
+                json!({"online_status": "idle", "activity_type": "playing", "activity_name": ""}),
+                "idle",
+                json!("playing"),
+                json!(""),
+            ),
+            (
+                json!({"online_status": "dnd", "activity_type": "custom", "activity_name": "human text"}),
+                "dnd",
+                json!("custom"),
+                json!("human text"),
+            ),
+            (
+                json!({"online_status": "invisible", "activity_type": "watching", "activity_name": "  "}),
+                "invisible",
+                json!("watching"),
+                json!("  "),
+            ),
+            (
+                json!({"activity_type": "listening", "activity_name": "music"}),
+                "online",
+                json!("listening"),
+                json!("music"),
+            ),
+            (
+                json!({"activity_type": "competing", "activity_name": "chess"}),
+                "online",
+                json!("competing"),
+                json!("chess"),
+            ),
+        ] {
+            let before = chrono::Utc::now();
+            assert_presence_tool_result(
+                call_tool(&server, "set_presence", args).await.unwrap(),
+                json!({"ok": true, "status": "applied"}),
+                false,
+            );
+            let after = chrono::Utc::now();
+            let mut response = call_tool(&server, "get_presence", json!({})).await.unwrap();
+            let mut payload: Value =
+                serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+            let timestamp =
+                chrono::DateTime::parse_from_rfc3339(payload["set_at"].as_str().unwrap())
+                    .unwrap()
+                    .with_timezone(&chrono::Utc);
+            assert!(timestamp >= before && timestamp <= after);
+            payload["set_at"] = json!("2026-10-10T00:00:00+00:00");
+            response["content"][0]["text"] = json!(payload.to_string());
+            assert_presence_tool_result(
+                response,
+                json!({
+                    "set_this_process": true,
+                    "online_status": status,
+                    "activity_type": kind,
+                    "activity_name": name,
+                    "set_at": "2026-10-10T00:00:00+00:00",
+                    "sink_installed": false,
+                    "source": "last requested presence (replayed on reconnect), not a Discord read-back; sink_installed is not a live connection probe"
+                }),
+                false,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn presence_wire_validation_precedes_capability_and_preserves_state() {
+        let (_dir, unavailable) = presence_test_server().await;
+        let (_direct_dir, direct) = presence_test_server().await;
+        let (_, presence) = crate::discord::presence::wire_shared_presence();
+        let direct = direct.with_presence(presence);
+        call_tool(&direct, "set_presence", json!({"online_status": "idle"}))
+            .await
+            .unwrap();
+        let original = call_tool(&direct, "get_presence", json!({})).await.unwrap();
+        for server in [&unavailable, &direct] {
+            for (args, error) in [
+                (
+                    json!({"online_status": "bad", "activity_type": "bad"}),
+                    "invalid online_status: bad; must be one of: online, idle, dnd, invisible",
+                ),
+                (
+                    json!({"activity_type": "bad"}),
+                    "invalid activity_type: bad; must be one of: playing, watching, listening, competing, custom",
+                ),
+                (
+                    json!({"activity_type": "custom"}),
+                    "activity_name is required when activity_type is set",
+                ),
+                (
+                    json!({"activity_type": "custom", "activity_name": null}),
+                    "activity_name is required when activity_type is set",
+                ),
+                (
+                    json!({"activity_type": "custom", "activity_name": 7}),
+                    "activity_name is required when activity_type is set",
+                ),
+            ] {
+                assert_presence_tool_result(
+                    call_tool(server, "set_presence", args)
+                        .await
+                        .expect("validation is a tool error"),
+                    json!({"error": error}),
+                    true,
+                );
+            }
+        }
+        assert_eq!(
+            call_tool(&direct, "get_presence", json!({})).await.unwrap(),
+            original
+        );
+        assert_presence_tool_result(
+            call_tool(&unavailable, "set_presence", json!({}))
+                .await
+                .unwrap(),
+            json!({"error": "presence updates require the discord gateway command channel"}),
+            true,
+        );
+        assert_presence_tool_result(
+            call_tool(&unavailable, "get_presence", json!({}))
+                .await
+                .unwrap(),
+            json!({"error": "presence state is not wired on this transport"}),
+            true,
+        );
+    }
+
+    #[tokio::test]
+    async fn presence_wire_queue_acceptance_and_closed_channel() {
+        let (_dir, server) = presence_test_server().await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let server = server.with_presence(crate::discord::presence::PresenceCapability::Queued(tx));
+        assert_presence_tool_result(
+            call_tool(&server, "set_presence", json!({"activity_type": "custom"}))
+                .await
+                .unwrap(),
+            json!({"error": "activity_name is required when activity_type is set"}),
+            true,
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        assert_presence_tool_result(
+            call_tool(&server, "set_presence", json!({})).await.unwrap(),
+            json!({"ok": true, "status": "accepted"}),
+            false,
+        );
+        assert_presence_tool_result(
+            call_tool(&server, "get_presence", json!({})).await.unwrap(),
+            json!({"error": "presence state is not wired on this transport"}),
+            true,
+        );
+        drop(rx);
+        assert_presence_tool_result(
+            call_tool(&server, "set_presence", json!({})).await.unwrap(),
+            json!({"error": "failed to send presence command: channel closed"}),
+            true,
+        );
+    }
+
     #[tokio::test]
     async fn presence_round_trip_crosses_dispatch_and_composition() {
         let dir = tempfile::TempDir::new().expect("temp dir");
         let state_dir =
             camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf-8 path");
         let (notification_tx, _notification_rx) = tokio::sync::mpsc::channel(1);
-        let (gateway_handle, server_presence) = crate::discord::events::wire_shared_presence();
-        let server_handle = server_presence
-            .clone()
-            .expect("assembly wires the MCP handle");
-        assert!(gateway_handle.is_same_authority(&server_handle));
+        let (gateway_handle, server_presence) = crate::discord::presence::wire_shared_presence();
+        let crate::discord::presence::PresenceCapability::Direct(server_handle) = &server_presence
+        else {
+            panic!("assembly wires the direct MCP handle");
+        };
+        assert!(gateway_handle.is_same_authority(server_handle));
         let server = DioneServer::new(
             crate::state::new_state(),
             std::sync::Arc::new(tokio::sync::Mutex::new(crate::queue::AccessQueue::load(
@@ -1030,11 +1317,17 @@ mod tests {
             state_dir.clone(),
             notification_tx,
             crate::tracing_channel::TraceLevelController::noop(),
-            crate::codex::TransportMode::ClaudeCode,
+            crate::harness::HarnessConnection::claude(),
             std::sync::Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
             std::sync::Arc::new(crate::ingress_ledger::IngressLedger::new()),
+            crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            ),
+            None,
         )
         .await
+        .expect("Discord reply registration")
         .with_presence(server_presence);
 
         fn unwrap_tool_result(response: &Value) -> Value {
@@ -1072,40 +1365,11 @@ mod tests {
         assert_eq!(get["activity_name"], "boundary proof");
         assert_eq!(get["sink_installed"], false);
 
-        // The gateway-side handle observes the MCP-side write: one
-        // authority, not two stores that merely look alike.
         let observed = gateway_handle.snapshot().await;
         assert_eq!(
-            observed.desired.map(|d| d.status),
-            Some(serenity::model::user::OnlineStatus::DoNotDisturb)
+            observed.desired().map(|d| d.request().status()),
+            Some(crate::discord::presence::OnlineStatus::Dnd)
         );
-    }
-
-    #[test]
-    fn parse_id_array_accepts_string_and_numeric_ids() {
-        let parsed = parse_id_array(&json!({ "user_ids": ["12", 34] }), "user_ids", 2).unwrap();
-        assert_eq!(
-            parsed.into_iter().map(Snowflake::get).collect::<Vec<_>>(),
-            [12, 34]
-        );
-    }
-
-    #[test]
-    fn parse_id_array_rejects_missing_empty_oversized_and_invalid_ids() {
-        for args in [
-            json!({}),
-            json!({ "user_ids": "12" }),
-            json!({ "user_ids": [] }),
-            json!({ "user_ids": ["1", "2", "3"] }),
-            json!({ "user_ids": ["0"] }),
-            json!({ "user_ids": ["abc"] }),
-            json!({ "user_ids": [true] }),
-        ] {
-            assert!(
-                parse_id_array(&args, "user_ids", 2).is_err(),
-                "{args} must be rejected"
-            );
-        }
     }
 
     #[test]
@@ -1152,7 +1416,7 @@ mod tests {
             if id == 0 {
                 prop_assert!(result.is_err(), "zero must be rejected, got: {:?}", result);
             } else {
-                prop_assert_eq!(result.map(|s| s.get()), Ok(id));
+                prop_assert_eq!(result.unwrap().get(), id);
             }
         }
 
@@ -1177,7 +1441,7 @@ mod tests {
                     result
                 );
             } else {
-                prop_assert_eq!(result.map(|opt| opt.map(|s| s.get())), Ok(Some(id)));
+                prop_assert_eq!(result.unwrap().map(|s| s.get()), Some(id));
             }
         }
 
@@ -1186,91 +1450,11 @@ mod tests {
         fn parse_optional_id_absent_yields_none(_id in id_strategy()) {
             // Completely absent key
             let args_absent = json!({});
-            prop_assert_eq!(parse_optional_id(&args_absent, "id").map(|opt| opt.map(|s| s.get())), Ok(None));
+            prop_assert_eq!(parse_optional_id(&args_absent, "id").unwrap(), None);
             // Empty string
             let args_empty = json!({ "id": "" });
-            prop_assert_eq!(parse_optional_id(&args_empty, "id").map(|opt| opt.map(|s| s.get())), Ok(None));
+            prop_assert_eq!(parse_optional_id(&args_empty, "id").unwrap(), None);
         }
-
-        /// The parsed limit always lands in Discord's accepted 1..=100 window
-        /// (a limit of 0 would make `has_more: count == limit` hold vacuously
-        /// on an empty page), and an absent limit yields the default.
-        #[test]
-        fn parse_limit_always_in_range(
-            // Edge-weighted for the same reason as id_strategy: uniform u64
-            // almost never lands on 0 (clamp-to-1 branch) or in 1..=100
-            // (exact passthrough branch), leaving both untested.
-            limit in proptest::option::of(prop_oneof![
-                1 => Just(0u64),
-                5 => 1u64..=100,
-                4 => 101u64..,
-            ]),
-            default in 1u8..=100,
-        ) {
-            let args = match limit {
-                Some(l) => json!({ "limit": l }),
-                None => json!({}),
-            };
-            let parsed = parse_limit(&args, default);
-            prop_assert!((1..=100).contains(&parsed));
-            match limit {
-                None => prop_assert_eq!(parsed, default),
-                Some(l) => prop_assert_eq!(u64::from(parsed), l.clamp(1, 100)),
-            }
-        }
-    }
-
-    #[test]
-    fn strict_optional_id_absent_yields_none() {
-        assert_eq!(
-            parse_strict_optional_id(&json!({}), "id").map(|o| o.map(|s| s.get())),
-            Ok(None)
-        );
-    }
-
-    #[test]
-    fn strict_optional_id_valid_snowflake() {
-        let result = parse_strict_optional_id(&json!({"id": "1234567890"}), "id");
-        assert_eq!(result.map(|o| o.map(|s| s.get())), Ok(Some(1234567890)));
-
-        let result = parse_strict_optional_id(&json!({"id": 1234567890u64}), "id");
-        assert_eq!(result.map(|o| o.map(|s| s.get())), Ok(Some(1234567890)));
-    }
-
-    #[test]
-    fn strict_optional_id_rejects_null() {
-        assert!(parse_strict_optional_id(&json!({"id": null}), "id").is_err());
-    }
-
-    #[test]
-    fn strict_optional_id_rejects_bool() {
-        assert!(parse_strict_optional_id(&json!({"id": true}), "id").is_err());
-    }
-
-    #[test]
-    fn strict_optional_id_rejects_object() {
-        assert!(parse_strict_optional_id(&json!({"id": {}}), "id").is_err());
-    }
-
-    #[test]
-    fn strict_optional_id_rejects_array() {
-        assert!(parse_strict_optional_id(&json!({"id": []}), "id").is_err());
-    }
-
-    #[test]
-    fn strict_optional_id_rejects_empty_string() {
-        assert!(parse_strict_optional_id(&json!({"id": ""}), "id").is_err());
-    }
-
-    #[test]
-    fn strict_optional_id_rejects_zero() {
-        assert!(parse_strict_optional_id(&json!({"id": 0}), "id").is_err());
-        assert!(parse_strict_optional_id(&json!({"id": "0"}), "id").is_err());
-    }
-
-    #[test]
-    fn strict_optional_id_rejects_non_numeric_string() {
-        assert!(parse_strict_optional_id(&json!({"id": "abc"}), "id").is_err());
     }
 }
 
@@ -1279,11 +1463,14 @@ mod embed_control_tests {
     use super::*;
     #[test]
     fn suppress_embeds_requires_boolean_when_present() {
-        assert_eq!(parse_optional_bool(&json!({}), "suppress_embeds"), Ok(None));
+        assert_eq!(
+            parse_optional_bool(&json!({}), "suppress_embeds").unwrap(),
+            None
+        );
         for value in [true, false] {
             assert_eq!(
-                parse_optional_bool(&json!({"suppress_embeds": value}), "suppress_embeds"),
-                Ok(Some(value))
+                parse_optional_bool(&json!({"suppress_embeds": value}), "suppress_embeds").unwrap(),
+                Some(value)
             );
         }
         for value in [Value::Null, json!("true"), json!(1), json!([]), json!({})] {

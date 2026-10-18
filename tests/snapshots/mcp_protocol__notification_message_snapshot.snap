@@ -12,7 +12,7 @@ expression: notif
       "chat_id": "1000",
       "message_id": "2000",
       "ts": "2026-01-01T00:00:00+00:00",
-      "user": "snapuser",
+      "user": "3000=snapuser",
       "user_id": "3000"
     }
   }

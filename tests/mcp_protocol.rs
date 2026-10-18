@@ -6,14 +6,17 @@
 //! either up to the gate-rejection path or against a local mock HTTP server.
 
 use dione::{
-    codex::TransportMode,
     discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
+    harness::HarnessConnection,
     mcp::server::{DioneServer, test_helpers},
     no_rly::consent::ConsentGate,
     queue::AccessQueue,
     state::new_state,
-    teams_edge::LiveReplyReceipt,
-    teams_runtime::{TeamsReplyAuthority, TeamsRuntimeError},
+    teams::{
+        ReplyHandle,
+        edge::LiveReplyReceipt,
+        runtime::{TeamsReplyAuthority, TeamsRuntimeError},
+    },
     timestamp::Timestamp,
     tracing_channel::TraceLevelController,
 };
@@ -31,8 +34,6 @@ use tokio::{
     task::JoinHandle,
 };
 
-// ── Test fixture ──────────────────────────────────────────────────────────────
-
 fn temp_state_dir() -> (TempDir, camino::Utf8PathBuf) {
     let dir = TempDir::new().unwrap();
     let path = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
@@ -40,6 +41,42 @@ fn temp_state_dir() -> (TempDir, camino::Utf8PathBuf) {
 }
 
 static CONFIG_FIXTURE_LOCK: Mutex<()> = Mutex::const_new(());
+
+#[tokio::test]
+async fn can_view_channel_is_discovered_with_main_schema_in_every_harness() {
+    let (_directory, state_dir) = temp_state_dir();
+    for harness in [
+        HarnessConnection::claude(),
+        HarnessConnection::oh_my_pi(),
+        codex_connection(&state_dir),
+    ] {
+        let server = make_server_with_harness(&state_dir, harness).await;
+        let list = test_helpers::dispatch_request(
+            &server,
+            json!({
+                "jsonrpc":"2.0", "id":1, "method":"tools/list"
+            }),
+        )
+        .await
+        .unwrap();
+        let tools = list["result"]["tools"].as_array().unwrap();
+        let matches: Vec<_> = tools
+            .iter()
+            .filter(|tool| tool["name"] == "can_view_channel")
+            .collect();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0]["inputSchema"],
+            json!({
+                "type":"object", "required":["channel_id","user_ids"],
+                "properties":{
+                    "channel_id":{"type":"string"},
+                    "user_ids":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":25}
+                }
+            })
+        );
+    }
+}
 
 struct ConfigFixtureGuard {
     state_dir: camino::Utf8PathBuf,
@@ -84,6 +121,26 @@ async fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
 }
 
 async fn make_server_with_http(state_dir: &camino::Utf8PathBuf, http: Arc<Http>) -> DioneServer {
+    make_server_with_connection(state_dir, http, HarnessConnection::claude()).await
+}
+
+async fn make_server_with_harness(
+    state_dir: &camino::Utf8PathBuf,
+    harness: HarnessConnection,
+) -> DioneServer {
+    make_server_with_connection(
+        state_dir,
+        Arc::new(serenity::http::Http::new("fake-token-for-tests")),
+        harness,
+    )
+    .await
+}
+
+async fn make_server_with_connection(
+    state_dir: &camino::Utf8PathBuf,
+    http: Arc<Http>,
+    harness: HarnessConnection,
+) -> DioneServer {
     let state = new_state();
     let queue = Arc::new(Mutex::new(AccessQueue::load(state_dir)));
     let (tx, _rx) = mpsc::channel(4);
@@ -94,22 +151,29 @@ async fn make_server_with_http(state_dir: &camino::Utf8PathBuf, http: Arc<Http>)
         state_dir.clone(),
         tx,
         TraceLevelController::noop(),
-        TransportMode::ClaudeCode,
+        harness,
         Arc::new(ConsentGate::new(state_dir)),
         Arc::new(dione::ingress_ledger::IngressLedger::new()),
+        dione::core::ModuleInstanceId::new(
+            dione::core::ProviderId::new("discord").unwrap(),
+            dione::core::ModuleSlotId::new("primary").unwrap(),
+        ),
+        None,
     )
     .await
+    .expect("Discord reply registration")
 }
 
 #[derive(Default)]
 struct CapturingTeamsReply {
     calls: std::sync::Mutex<Vec<(String, String)>>,
+    reject_unknown_handle: bool,
 }
 
 impl TeamsReplyAuthority for CapturingTeamsReply {
     fn reply<'a>(
         &'a self,
-        handle: &'a str,
+        handle: &'a ReplyHandle,
         text: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<LiveReplyReceipt, TeamsRuntimeError>> + Send + 'a>>
     {
@@ -117,11 +181,16 @@ impl TeamsReplyAuthority for CapturingTeamsReply {
             self.calls
                 .lock()
                 .expect("capture Teams reply")
-                .push((handle.to_owned(), text.to_owned()));
+                .push((handle.as_str().to_owned(), text.to_owned()));
+            if self.reject_unknown_handle {
+                return Err(TeamsRuntimeError {
+                    kind: dione::teams::TeamsRuntimeErrorKind::UnknownReplyHandle,
+                });
+            }
             Ok(LiveReplyReceipt {
-                incoming_activity_id: "incoming".to_owned(),
-                outgoing_activity_id: "outgoing".to_owned(),
-                conversation_id: "conversation".to_owned(),
+                incoming_activity_id: "incoming".parse().unwrap(),
+                outgoing_activity_id: "outgoing".parse().unwrap(),
+                conversation_id: "conversation".parse().unwrap(),
             })
         })
     }
@@ -228,7 +297,160 @@ async fn permission_http(
     (Arc::new(http), requests, server)
 }
 
-// ── Initialize handshake ──────────────────────────────────────────────────────
+#[tokio::test]
+async fn harness_contract_initialize_capabilities() {
+    let (_dir, state_dir) = temp_state_dir();
+    for (harness, capabilities) in [
+        (
+            HarnessConnection::claude(),
+            json!({
+                "tools": {},
+                "experimental": {"claude/channel": {}, "claude/channel/permission": {}}
+            }),
+        ),
+        (codex_connection(&state_dir), json!({"tools": {}})),
+    ] {
+        let server = make_server_with_harness(&state_dir, harness).await;
+        let response = test_helpers::dispatch_request(
+            &server,
+            json!({
+                "jsonrpc": "2.0", "id": 81, "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"}
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response["result"]["capabilities"], capabilities);
+        assert_eq!(response["result"]["protocolVersion"], "2025-06-18");
+        assert_eq!(response["result"]["serverInfo"]["name"], "dione");
+    }
+}
+
+#[tokio::test]
+async fn harness_contract_claude_queue_tools_reject_before_parsing() {
+    let (_dir, state_dir) = temp_state_dir();
+    let server = make_server(&state_dir).await;
+    for (name, message) in [
+        (
+            "bind_codex_thread",
+            "bind_codex_thread is only available in Codex mode",
+        ),
+        ("next_event", "next_event is only available in Codex mode"),
+        ("ack_event", "ack_event is only available in Codex mode"),
+        (
+            "event_queue_status",
+            "event_queue_status is only available in Codex mode",
+        ),
+        (
+            "register_event_consumer",
+            "register_event_consumer is only available in Codex mode",
+        ),
+        (
+            "handoff_event_consumer",
+            "handoff_event_consumer is only available in Codex mode",
+        ),
+        (
+            "claim_event_consumer",
+            "claim_event_consumer is only available in Codex mode",
+        ),
+    ] {
+        let response = test_helpers::dispatch_request(
+            &server,
+            json!({
+                "jsonrpc": "2.0", "id": 82, "method": "tools/call",
+                "params": {"name": name, "arguments": {}}
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            response,
+            json!({
+                "jsonrpc": "2.0", "id": 82,
+                "error": {"code": -32000, "message": message}
+            })
+        );
+    }
+}
+
+#[tokio::test]
+async fn harness_contract_codex_consumer_receives_and_acknowledges_event() {
+    let (_dir, state_dir) = temp_state_dir();
+    let queue = dione::codex::CodexEventQueue::load(
+        &state_dir,
+        dione::codex::LegacyDiscordScope::new(dione::core::ModuleInstanceId::new(
+            dione::core::ProviderId::new("discord").unwrap(),
+            dione::core::ModuleSlotId::new("primary").unwrap(),
+        )),
+    )
+    .unwrap();
+    queue
+        .enqueue(json!({
+            "jsonrpc": "2.0", "method": "notifications/claude/channel",
+            "params": {"content": "hello", "meta": {"message_id": "42", "chat_id": "123"}}
+        }))
+        .await
+        .unwrap();
+    let server = make_server_with_harness(
+        &state_dir,
+        HarnessConnection::codex(queue, tokio::sync::watch::channel(None).0),
+    )
+    .await;
+    for (name, arguments, expected) in [
+        (
+            "event_queue_status",
+            json!({}),
+            json!({"queued": 1, "leased": 0, "next_event_id": 1,
+                "primary_consumer": null, "consumers": [], "unassigned": 1}),
+        ),
+        (
+            "register_event_consumer",
+            json!({"label": " contract reader ", "make_primary": true, "claim_unassigned": true}),
+            json!({"consumer_id": "codex-consumer-0", "primary": true}),
+        ),
+        (
+            "next_event",
+            json!({"consumer_id": "codex-consumer-0", "wait_seconds": 0, "lease_seconds": 60}),
+            json!({"event_id": 0, "delivery_token": "dione-0-0", "consumer_id": "codex-consumer-0",
+                "event": {"jsonrpc": "2.0", "method": "notifications/claude/channel",
+                    "params": {"content": "hello", "meta": {"message_id": "42", "chat_id": "123"}}}}),
+        ),
+        (
+            "ack_event",
+            json!({"consumer_id": "codex-consumer-0", "delivery_token": "dione-0-0"}),
+            json!({"acknowledged": true}),
+        ),
+        (
+            "next_event",
+            json!({"consumer_id": "codex-consumer-0", "wait_seconds": 0}),
+            json!({"event": null, "timed_out": true}),
+        ),
+    ] {
+        let response = test_helpers::dispatch_request(
+            &server,
+            json!({"jsonrpc": "2.0", "id": 83, "method": "tools/call",
+                "params": {"name": name, "arguments": arguments}}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response["jsonrpc"], "2.0");
+        assert_eq!(response["id"], 83);
+        assert_eq!(response["result"]["content"][0]["type"], "text");
+        let mut result: serde_json::Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        let timestamp_field = match name {
+            "register_event_consumer" => Some("expires_at"),
+            "next_event" if result["event"] != serde_json::Value::Null => Some("lease_expires_at"),
+            _ => None,
+        };
+        if let Some(field) = timestamp_field {
+            let timestamp = result.as_object_mut().unwrap().remove(field).unwrap();
+            chrono::DateTime::parse_from_rfc3339(timestamp.as_str().unwrap()).unwrap();
+        }
+        assert_eq!(result, expected, "{name}");
+    }
+}
 
 #[tokio::test]
 async fn test_initialize_returns_capabilities() {
@@ -269,7 +491,8 @@ async fn test_initialize_returns_capabilities() {
 
 #[test]
 fn test_codex_initialize_omits_claude_experimental_capabilities() {
-    let response = test_helpers::get_codex_initialize_response();
+    let (_dir, state_dir) = temp_state_dir();
+    let response = test_helpers::get_codex_initialize_response(&codex_connection(&state_dir));
     assert!(response["capabilities"].get("tools").is_some());
     assert!(response["capabilities"].get("experimental").is_none());
 }
@@ -344,8 +567,6 @@ async fn test_initialize_unknown_protocol_falls_back_to_latest_supported() {
 
     assert_eq!(resp["result"]["protocolVersion"], "2025-11-25");
 }
-
-// ── tools/list ────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_tools_list_contains_expected_tools() {
@@ -501,8 +722,6 @@ async fn test_tools_list_dispatch() {
     );
 }
 
-// ── Invalid method ─────────────────────────────────────────────────────────────
-
 #[tokio::test]
 async fn test_unknown_method_returns_error() {
     let (_dir, state_dir) = temp_state_dir();
@@ -529,8 +748,6 @@ async fn test_unknown_method_returns_error() {
     );
 }
 
-// ── Client notification (no id) ───────────────────────────────────────────────
-
 #[tokio::test]
 async fn test_client_notification_no_response() {
     let (_dir, state_dir) = temp_state_dir();
@@ -550,15 +767,16 @@ async fn test_client_notification_no_response() {
     );
 }
 
-// ── tools/call — gate rejection path ─────────────────────────────────────────
-
 #[tokio::test]
 async fn teams_reply_tool_forwards_only_opaque_handle_and_resident_speech() {
     let (_dir, state_dir) = temp_state_dir();
     let authority = Arc::new(CapturingTeamsReply::default());
     let server = make_server(&state_dir)
         .await
-        .with_teams_reply(Some(authority.clone()));
+        .with_module_tools(
+            dione::teams::mcp_tools(Some(authority.clone())).expect("valid Teams definition"),
+        )
+        .expect("disjoint module tools");
     let response = test_helpers::dispatch_request(
         &server,
         json!({
@@ -568,8 +786,10 @@ async fn teams_reply_tool_forwards_only_opaque_handle_and_resident_speech() {
             "params": {
                 "name": "teams_reply",
                 "arguments": {
-                    "reply_handle": "teams-opaque",
-                    "content": "resident speech"
+                    "reply_handle": "teams-00000000-0000-4000-8000-000000000003",
+                    "content": "resident speech",
+                    "service_url": "https://caller-supplied.invalid",
+                    "conversation_id": "caller-supplied"
                 }
             }
         }),
@@ -579,15 +799,125 @@ async fn teams_reply_tool_forwards_only_opaque_handle_and_resident_speech() {
     assert!(response.get("error").is_none(), "{response}");
     assert_eq!(
         authority.calls.lock().unwrap().as_slice(),
-        &[("teams-opaque".to_owned(), "resident speech".to_owned())]
+        &[(
+            "teams-00000000-0000-4000-8000-000000000003".to_owned(),
+            "resident speech".to_owned()
+        )]
     );
     let text = response["result"]["content"][0]["text"]
         .as_str()
         .expect("receipt text");
     let receipt: serde_json::Value = serde_json::from_str(text).expect("receipt JSON");
-    assert_eq!(receipt["incoming_activity_id"], "incoming");
-    assert_eq!(receipt["outgoing_activity_id"], "outgoing");
-    assert_eq!(receipt["conversation_id"], "conversation");
+    assert_eq!(
+        receipt,
+        json!({
+            "incoming_activity_id": "incoming",
+            "outgoing_activity_id": "outgoing",
+            "conversation_id": "conversation",
+        })
+    );
+}
+
+#[tokio::test]
+async fn teams_reply_boundary_preserves_errors_and_borrowed_text() {
+    let (_dir, state_dir) = temp_state_dir();
+    let request = |arguments| {
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": "teams_reply", "arguments": arguments }
+        })
+    };
+    let server = make_server(&state_dir).await;
+    let response = test_helpers::dispatch_request(&server, request(json!({})))
+        .await
+        .unwrap();
+    assert_eq!(
+        response["error"],
+        json!({
+            "code": -32000,
+            "message": "unknown tool: teams_reply"
+        })
+    );
+
+    let authority = Arc::new(CapturingTeamsReply::default());
+    let server = server
+        .with_module_tools(
+            dione::teams::mcp_tools(Some(authority.clone())).expect("valid Teams definition"),
+        )
+        .expect("disjoint module tools");
+    for arguments in [
+        json!({}),
+        json!({"reply_handle": null, "content": 1}),
+        json!({"reply_handle": 1, "content": "text"}),
+        json!({"reply_handle": "handle"}),
+        json!({"reply_handle": "handle", "content": null}),
+        json!({"reply_handle": "handle", "content": 1}),
+    ] {
+        let response = test_helpers::dispatch_request(&server, request(arguments))
+            .await
+            .unwrap();
+        assert_eq!(response["error"]["code"], -32000);
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .expect("error message")
+                .starts_with("tool call failed: invalid arguments:")
+        );
+        assert!(response.get("result").is_none());
+    }
+    assert!(authority.calls.lock().unwrap().is_empty());
+
+    let response = test_helpers::dispatch_request(
+        &server,
+        request(json!({"reply_handle": "", "content": " \n"})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response["error"]["code"], -32000);
+    assert!(authority.calls.lock().unwrap().is_empty());
+    let response = test_helpers::dispatch_request(
+        &server,
+        request(
+            json!({"reply_handle": "teams-00000000-0000-4000-8000-000000000003", "content": " \n"}),
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(response.get("error").is_none(), "{response}");
+    assert_eq!(
+        authority.calls.lock().unwrap().as_slice(),
+        &[(
+            "teams-00000000-0000-4000-8000-000000000003".to_owned(),
+            " \n".to_owned()
+        )]
+    );
+
+    let failing = Arc::new(CapturingTeamsReply {
+        reject_unknown_handle: true,
+        ..Default::default()
+    });
+    let server = server
+        .with_module_tools(
+            dione::teams::mcp_tools(Some(failing.clone())).expect("valid Teams definition"),
+        )
+        .expect("disjoint module tools");
+    let response = test_helpers::dispatch_request(
+        &server,
+        request(json!({"reply_handle": "teams-00000000-0000-4000-8000-000000000004", "content": "text"})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        response["error"],
+        json!({
+            "code": -32000,
+            "message": "tool call failed: execution failed: teams reply handle is unknown or already consumed"
+        })
+    );
+    assert!(response.get("result").is_none());
+    assert_eq!(failing.calls.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -944,8 +1274,6 @@ async fn test_tools_call_missing_tool_name_returns_error() {
     );
 }
 
-// ── list_access_requests tool — empty queue ───────────────────────────────────
-
 #[tokio::test]
 async fn test_tools_call_list_access_requests_empty() {
     let (_dir, state_dir) = temp_state_dir();
@@ -976,11 +1304,22 @@ async fn test_tools_call_list_access_requests_empty() {
 #[tokio::test]
 async fn test_bind_codex_thread_updates_live_binding() {
     let (_dir, state_dir) = temp_state_dir();
-    let mut server = make_server(&state_dir).await;
     let (binding_tx, mut binding_rx) = tokio::sync::watch::channel(None);
-    server.mode = TransportMode::Codex;
-    server.codex_queue = Some(dione::codex::CodexEventQueue::load(&state_dir).unwrap());
-    server.codex_thread_binding = Some(binding_tx);
+    let server = make_server_with_harness(
+        &state_dir,
+        HarnessConnection::codex(
+            dione::codex::CodexEventQueue::load(
+                &state_dir,
+                dione::codex::LegacyDiscordScope::new(dione::core::ModuleInstanceId::new(
+                    dione::core::ProviderId::new("discord").unwrap(),
+                    dione::core::ModuleSlotId::new("primary").unwrap(),
+                )),
+            )
+            .unwrap(),
+            binding_tx,
+        ),
+    )
+    .await;
     let thread_id = "019f4b14-ccc7-7db2-80c8-fe2b888c8844";
     let request = json!({
         "jsonrpc": "2.0",
@@ -1001,7 +1340,7 @@ async fn test_bind_codex_thread_updates_live_binding() {
         binding_rx
             .borrow_and_update()
             .as_ref()
-            .map(dione::codex::CodexThreadId::as_str),
+            .map(dione::codex::EndpointId::as_str),
         Some(thread_id)
     );
 
@@ -1017,8 +1356,6 @@ async fn test_bind_codex_thread_updates_live_binding() {
         "binding the current thread again must not notify the delivery worker"
     );
 }
-
-// ── Notification format tests ─────────────────────────────────────────────────
 
 // Semantic property tests — wire format is pinned by snapshots below.
 
@@ -1043,7 +1380,7 @@ fn test_notification_has_no_id_field() {
         bells: None,
         bells_status: None,
     });
-    let notif = test_helpers::make_notification(event);
+    let notif = test_helpers::make_notification(event).unwrap();
     assert!(
         notif.get("id").is_none(),
         "notifications must not have an id field"
@@ -1075,7 +1412,7 @@ fn test_notification_attachment_metadata_present() {
         bells: None,
         bells_status: None,
     });
-    let notif = test_helpers::make_notification(event);
+    let notif = test_helpers::make_notification(event).unwrap();
     let meta = &notif["params"]["meta"];
     assert_eq!(meta["attachment_count"], "1");
     assert!(meta["attachments"].as_str().unwrap().contains("photo.png"));
@@ -1102,7 +1439,7 @@ fn test_notification_voice_flag_in_meta() {
         bells: None,
         bells_status: None,
     });
-    let notif = test_helpers::make_notification(event);
+    let notif = test_helpers::make_notification(event).unwrap();
     assert_eq!(notif["params"]["meta"]["is_voice_message"], true);
 }
 
@@ -1112,12 +1449,10 @@ fn test_permission_deny_uses_deny_behavior() {
         request_id: "req-xyz".to_string(),
         granted: false,
     };
-    let notif = test_helpers::make_notification(event);
+    let notif = test_helpers::make_notification(event).unwrap();
     assert_eq!(notif["params"]["behavior"], "deny");
     assert_eq!(notif["method"], "notifications/claude/channel/permission");
 }
-
-// ── Snapshot tests ────────────────────────────────────────────────────────────
 
 #[test]
 fn test_notification_message_snapshot() {
@@ -1140,7 +1475,7 @@ fn test_notification_message_snapshot() {
         bells: None,
         bells_status: None,
     });
-    let notif = test_helpers::make_notification(event);
+    let notif = test_helpers::make_notification(event).unwrap();
     insta::assert_json_snapshot!(notif);
 }
 
@@ -1154,7 +1489,7 @@ fn test_notification_reaction_snapshot() {
         emoji: "🎉".to_string(),
         self_react: false,
     };
-    let notif = test_helpers::make_notification(event);
+    let notif = test_helpers::make_notification(event).unwrap();
     insta::assert_json_snapshot!(notif);
 }
 
@@ -1171,7 +1506,7 @@ fn test_notification_self_react_snapshot() {
         emoji: "✨".to_string(),
         self_react: true,
     };
-    let notif = test_helpers::make_notification(event);
+    let notif = test_helpers::make_notification(event).unwrap();
     insta::assert_json_snapshot!(notif);
 }
 
@@ -1181,7 +1516,7 @@ fn test_notification_permission_response_snapshot() {
         request_id: "snap-req-42".to_string(),
         granted: true,
     };
-    let notif = test_helpers::make_notification(event);
+    let notif = test_helpers::make_notification(event).unwrap();
     insta::assert_json_snapshot!(notif);
 }
 
@@ -1197,7 +1532,7 @@ fn test_notification_message_edit_snapshot() {
         thread_parent_id: None,
         reply_to_message_id: None,
     };
-    let notif = test_helpers::make_notification(event);
+    let notif = test_helpers::make_notification(event).unwrap();
     insta::assert_json_snapshot!(notif);
 }
 
@@ -1213,7 +1548,7 @@ fn test_notification_message_edit_reply_snapshot() {
         thread_parent_id: None,
         reply_to_message_id: Some(MessageId::new(8888)),
     };
-    let notif = test_helpers::make_notification(event);
+    let notif = test_helpers::make_notification(event).unwrap();
     insta::assert_json_snapshot!(notif);
 }
 
@@ -1224,11 +1559,9 @@ fn test_notification_message_delete_snapshot() {
         message_id: MessageId::new(2003),
         thread_parent_id: None,
     };
-    let notif = test_helpers::make_notification(event);
+    let notif = test_helpers::make_notification(event).unwrap();
     insta::assert_json_snapshot!(notif);
 }
-
-// ── Snapshot: message with thread_parent_id present ─────────────────────────
 
 #[test]
 fn test_notification_message_in_thread_snapshot() {
@@ -1251,11 +1584,9 @@ fn test_notification_message_in_thread_snapshot() {
         bells: None,
         bells_status: None,
     });
-    let notif = test_helpers::make_notification(event);
+    let notif = test_helpers::make_notification(event).unwrap();
     insta::assert_json_snapshot!(notif);
 }
-
-// ── Snapshot: message with reply_to_message_id present ────────────────────────
 
 #[test]
 fn test_notification_message_reply_snapshot() {
@@ -1278,7 +1609,7 @@ fn test_notification_message_reply_snapshot() {
         bells: None,
         bells_status: None,
     });
-    let notif = test_helpers::make_notification(event);
+    let notif = test_helpers::make_notification(event).unwrap();
     insta::assert_json_snapshot!(notif);
 }
 
@@ -1303,16 +1634,14 @@ fn test_notification_message_reply_in_thread_snapshot() {
         bells: None,
         bells_status: None,
     });
-    let notif = test_helpers::make_notification(event);
+    let notif = test_helpers::make_notification(event).unwrap();
     insta::assert_json_snapshot!(notif);
 }
-
-// ── Trace notification tests ─────────────────────────────────────────────────
 
 #[test]
 fn test_trace_notification_format() {
     let event = NotificationEvent::Trace {
-        level: "DEBUG".to_string(),
+        level: tracing::Level::DEBUG,
         target: "dione::discord::events".to_string(),
         message: "reaction_add fired".to_string(),
         fields: vec![
@@ -1320,7 +1649,7 @@ fn test_trace_notification_format() {
             ("cached".to_string(), "None".to_string()),
         ],
     };
-    let notif = test_helpers::make_notification(event);
+    let notif = test_helpers::make_notification(event).unwrap();
     assert_eq!(notif["method"], "notifications/claude/channel");
     assert_eq!(notif["params"]["meta"]["type"], "trace");
     assert_eq!(notif["params"]["meta"]["level"], "DEBUG");
@@ -1334,12 +1663,12 @@ fn test_trace_notification_format() {
 #[test]
 fn test_trace_notification_no_fields() {
     let event = NotificationEvent::Trace {
-        level: "INFO".to_string(),
+        level: tracing::Level::INFO,
         target: "dione".to_string(),
         message: "dione starting".to_string(),
         fields: vec![],
     };
-    let notif = test_helpers::make_notification(event);
+    let notif = test_helpers::make_notification(event).unwrap();
     assert_eq!(notif["params"]["content"], "dione starting");
     assert_eq!(notif["params"]["meta"]["type"], "trace");
 }
@@ -1347,16 +1676,14 @@ fn test_trace_notification_no_fields() {
 #[test]
 fn test_trace_notification_snapshot() {
     let event = NotificationEvent::Trace {
-        level: "WARN".to_string(),
+        level: tracing::Level::WARN,
         target: "dione::mcp".to_string(),
         message: "something happened".to_string(),
         fields: vec![("key".to_string(), "value".to_string())],
     };
-    let notif = test_helpers::make_notification(event);
+    let notif = test_helpers::make_notification(event).unwrap();
     insta::assert_json_snapshot!(notif);
 }
-
-// ── Diagnostics tool tests ───────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_get_version_returns_current_version() {
@@ -1439,8 +1766,6 @@ async fn test_set_trace_level_missing_filter_param() {
     assert!(resp["error"].is_object());
 }
 
-// ── Permission request handler tests ─────────────────────────────────────────
-
 #[tokio::test]
 async fn test_permission_request_ignores_missing_ids_but_relays_valid_id() {
     let (_dir, state_dir) = temp_state_dir();
@@ -1512,8 +1837,6 @@ async fn test_permission_request_ignores_missing_ids_but_relays_valid_id() {
         "perm:deny:perm-123"
     );
 }
-
-// ── no_rly tool dispatch tests ───────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_no_rly_unknown_handle_errors() {
@@ -1639,8 +1962,6 @@ async fn test_no_rly_condense_and_vacuum_empty_journal() {
     assert_eq!(parsed["dropped_summaries"], 0);
     assert_eq!(parsed["kept"], 0);
 }
-
-// ── suppress_ping tests ─────────────────────────────────────────────────────
 
 #[test]
 fn test_reply_tool_schema_includes_suppress_ping() {
@@ -1958,8 +2279,6 @@ async fn test_reply_suppress_ping_false_passes_gate_with_configured_channel() {
     insta::assert_json_snapshot!(resp["result"]);
 }
 
-// ── no_rly v2: bounce dispatch + fail-closed + filter typing ───────────────────
-
 /// A blocking config with channel 42 permitted and "straightforward" as a
 /// block-tier tell.
 const BLOCKING_CONFIG: &str = r#"
@@ -2075,8 +2394,6 @@ async fn test_no_rly_stats_rejects_wrong_type_filter() {
     );
 }
 
-// ── missing-access boundary tests ────────────────────────────────────────────
-
 #[tokio::test]
 async fn test_fetch_messages_preserves_discord_missing_access_after_gate() {
     let (_dir, state_dir) = temp_state_dir();
@@ -2170,4 +2487,18 @@ async fn test_reply_preserves_discord_missing_access_after_gate() {
         }),
         "expected a Discord send request, got: {requests:#?}"
     );
+}
+
+fn codex_connection(state_dir: &camino::Utf8Path) -> HarnessConnection {
+    HarnessConnection::codex(
+        dione::codex::CodexEventQueue::load(
+            state_dir,
+            dione::codex::LegacyDiscordScope::new(dione::core::ModuleInstanceId::new(
+                dione::core::ProviderId::new("discord").unwrap(),
+                dione::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap(),
+        tokio::sync::watch::channel(None).0,
+    )
 }

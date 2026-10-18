@@ -780,8 +780,7 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
     let github_ci = include_str!("../.github/workflows/build.yml");
     let github_release = include_str!("../.github/workflows/release.yml");
 
-    let forgejo_triggers =
-        "on:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\n";
+    let forgejo_triggers = "on:\n  push:\n    branches: [main]\n  pull_request:\n    branches:\n      - main\n      - refactor/vertical-slices\n      - refactor/teams-identities-publication\n      - fix/reply-secure-publication\n      - publication/secure-management-tools\n      - publication/secure-query-tools\n      - publication/secure-reply-teams-base\n      - refactor/owned-durable-admission\n      - refactor/discord-query-observation-errors\n      - refactor/generic-durable-store\n      - feat/rook-event-ingress\n";
     assert!(workflow.contains(forgejo_triggers));
     assert!(!workflow.contains("\n  workflow_dispatch:"));
     assert_eq!(workflow.matches("toolchain: \"1.98.0\"").count(), 7);
@@ -892,7 +891,7 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
     let legacy_hygiene = include_str!("../.forgejo/workflows/release-hygiene.yml");
     assert!(legacy_hygiene.contains("name: Release Hygiene"));
     assert!(legacy_hygiene.contains("name: Version + changelog accompany source changes"));
-    assert!(legacy_hygiene.contains("  pull_request:\n    branches: [main]"));
+    assert!(legacy_hygiene.contains(forgejo_triggers));
     assert!(legacy_hygiene.contains("run: sh .forgejo/scripts/release-hygiene.sh"));
 
     let release_tag = workflow

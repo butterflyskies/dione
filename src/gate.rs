@@ -225,7 +225,7 @@ impl InboundGate {
         // When any identity filter is active, a direct user must be explicitly
         // present in `allow_from`. Provider-specific selectors cannot authorize
         // a direct transport.
-        if policy.has_identity_filter() && !policy.allow_from.contains(&sender_id) {
+        if !direct_sender_allowed(policy, sender_id) {
             tracing::debug!(
                 channel_id,
                 sender_id,
@@ -461,6 +461,11 @@ pub fn sanitize_filename(name: &str) -> String {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+/// Provider-specific identity selectors cannot authorize a direct Discord author.
+pub(crate) fn direct_sender_allowed(policy: &crate::config::ChannelPolicy, sender_id: u64) -> bool {
+    !policy.has_identity_filter() || policy.allow_from.contains(&sender_id)
+}
 
 #[cfg(test)]
 mod tests {

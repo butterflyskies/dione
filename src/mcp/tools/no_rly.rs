@@ -1,6 +1,6 @@
 //! MCP tools for the no_rly audit journal: stats, condense, and vacuum.
 //!
-//! Release and rephrase live in [`super::messaging`] (they send messages);
+//! Release and rephrase live in [`crate::discord::messaging`] (they send messages);
 //! these tools only read and maintain the journal, plus report the live
 //! queue depth.
 

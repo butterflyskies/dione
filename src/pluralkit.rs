@@ -519,6 +519,7 @@ impl PkResolver {
         }
 
         let client = reqwest::Client::builder()
+            .use_rustls_tls()
             .timeout(config.request_timeout)
             .redirect(reqwest::redirect::Policy::none())
             .user_agent(

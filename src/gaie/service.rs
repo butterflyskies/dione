@@ -706,6 +706,7 @@ fn advance_archive_snowflake_cursor(
 
 fn archive_http_client() -> reqwest::Client {
     reqwest::Client::builder()
+        .use_rustls_tls()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
         .build()

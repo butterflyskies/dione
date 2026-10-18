@@ -32,4 +32,7 @@ jobs:
           FORGEJO_REPOSITORY: ${{ forgejo.repository }}
           FORGEJO_EVENT_NAME: ${{ forgejo.event_name }}
           FORGEJO_EVENT_PATH: ${{ forgejo.event_path }}
-        run: python3 .forgejo/scripts/review_receipt.py
+        run: |
+          set -eu
+          python3 -c 'import sys; print(sys.version); sys.exit(0 if sys.version_info >= (3, 9) else "Python 3.9 or newer is required for review receipt checks")'
+          python3 .forgejo/scripts/review_receipt.py

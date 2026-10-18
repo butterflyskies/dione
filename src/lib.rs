@@ -1,7 +1,6 @@
+mod atomic_snapshot;
 pub mod attention;
-pub mod batch;
 pub mod bell_rings;
-pub mod coalesce;
 pub mod codex;
 pub mod config;
 pub(crate) mod config_candidate;
@@ -9,6 +8,8 @@ pub mod config_store;
 pub mod config_watcher;
 pub mod contradictionary;
 pub mod coordination;
+pub mod core;
+pub(crate) mod delivery;
 pub mod delivery_buffer;
 pub mod discord;
 pub mod drop_ledger;
@@ -34,13 +35,23 @@ pub mod rate_limiter;
     reason = "standalone receipt-gate fixture is runtime-wired in a follow-up PR"
 )]
 pub(crate) mod receipt_gate;
+pub(crate) mod rendering;
+pub mod rook;
 pub mod state;
 pub(crate) mod status_lint;
 pub mod teams;
-pub mod teams_edge;
-pub(crate) mod teams_reply_store;
-pub mod teams_runtime;
 pub mod timestamp;
 pub mod tracing_channel;
 pub mod util;
 pub mod vaelii;
+
+/// Agent harness integration.
+pub mod harness;
+
+/// Process composition and offline operator commands.
+pub mod startup;
+
+/// Explicit application composition adapters.
+pub mod composition;
+/// Generic durable queue ownership and adapter-selected storage.
+pub(crate) mod durable;

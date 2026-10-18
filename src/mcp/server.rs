@@ -11,27 +11,36 @@
 //! - Error    → `{"jsonrpc":"2.0","id":N,"error":{"code":-32000,"message":"..."}}`
 //! - Notification (no id) → `{"jsonrpc":"2.0","method":"...","params":{...}}`
 
+#[cfg(test)]
+use crate::core::{ModuleSlotId, ProviderId};
 pub use crate::tracing_channel::TraceLevelController;
 use crate::{
+    attention::{
+        delivery::AttentionGuardFailure,
+        types::{Admission, DeliveryState},
+    },
     bell_rings::{BellEvaluator, render_bells},
-    coalesce::{CoalesceResult, coalesce},
-    codex::{CodexEventQueue, TransportMode},
     config::BellMode,
-    delivery_buffer::{BufferResult, DeliveryBuffer},
-    discord::events::{MessageEvent, NotificationEvent},
+    core::{
+        ModuleInstanceId,
+        delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
+    },
+    delivery_buffer::BufferResult,
+    discord::{
+        access::AccessCtx,
+        events::{MessageEvent, NotificationEvent},
+        messaging::MessagingCtx,
+        presence::PresenceCapability,
+        scheduling::DeliveryBuffer,
+        typing::TypingCtx,
+    },
+    harness::{AttentionPolicy, HarnessConnection, HarnessError, ProtocolOutput},
     mcp::{
         dispatch::call_tool,
-        notifications::IntoNotification,
-        protocol::{initialize_response, tools_list_with_teams},
-        tools::{
-            access::AccessCtx,
-            bot_state::{BotStateCtx, DiscordCommand},
-            diagnostics::DiagnosticsCtx,
-            introspection::IntrospectionCtx,
-            management::ManagementCtx,
-            messaging::MessagingCtx,
-            no_rly::NoRlyCtx,
-        },
+        harness_wire::{PRIVATE_CONTROL_TOOLS, RequestOrigin},
+        protocol::{initialize_response, tools_list},
+        tool_registry::{RegisteredTool, RegistrationError, ToolNameError, ToolRegistry},
+        tools::{diagnostics::DiagnosticsCtx, no_rly::NoRlyCtx},
     },
     no_rly::consent::ConsentGate,
     rate_limiter::{ChannelRef, ParticipantId, RateLimitDecision, RateLimiter},
@@ -39,49 +48,97 @@ use crate::{
 use camino::Utf8PathBuf;
 use serde_json::{Value, json};
 use std::{
-    os::unix::{fs::FileTypeExt, fs::MetadataExt, fs::PermissionsExt},
+    os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
     sync::Arc,
     time::{Duration, Instant},
 };
+use thiserror::Error;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncReadExt, BufReader},
     net::{UnixListener, UnixStream},
-    sync::{Mutex, Semaphore, mpsc, watch},
+    sync::{Mutex, Semaphore, mpsc},
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
-// ── Server struct ─────────────────────────────────────────────────────────────
+/// Failure to construct the server's immutable owner registrations.
+#[derive(Debug, Error)]
+#[error("{kind}")]
+pub struct ServerConstructionError {
+    /// The definition or registration failure with its original cause.
+    #[source]
+    pub kind: ServerConstructionErrorKind,
+}
+
+/// The stage that prevented the server from accepting requests.
+#[derive(Debug, Error)]
+pub enum ServerConstructionErrorKind {
+    /// An owner supplied an invalid tool name.
+    #[error("invalid module tool definition: {0}")]
+    Definition(#[source] ToolNameError),
+    /// Two callable tools would share a name.
+    #[error("invalid module tool registration: {0}")]
+    Registration(#[source] RegistrationError),
+}
+
+impl ServerConstructionError {
+    fn definition(source: ToolNameError) -> Self {
+        Self {
+            kind: ServerConstructionErrorKind::Definition(source),
+        }
+    }
+
+    fn registration(source: RegistrationError) -> Self {
+        Self {
+            kind: ServerConstructionErrorKind::Registration(source),
+        }
+    }
+}
 
 /// Runtime context for the MCP server.
 #[derive(Clone)]
 pub struct DioneServer {
-    pub state: crate::state::State,
     pub queue: Arc<Mutex<crate::queue::AccessQueue>>,
-    pub http: Arc<serenity::http::Http>,
-    pub state_dir: Utf8PathBuf,
     pub notification_tx: mpsc::Sender<Value>,
-    pub discord_cmd_tx: Option<mpsc::Sender<DiscordCommand>>,
-    pub presence: Option<crate::discord::events::SharedPresence>,
+    pub presence: PresenceCapability,
     pub trace_controller: TraceLevelController,
-    pub mode: TransportMode,
-    pub codex_queue: Option<CodexEventQueue>,
-    pub codex_thread_binding: Option<watch::Sender<Option<crate::codex::CodexThreadId>>>,
-    pub no_rly: Arc<ConsentGate>,
-    pub event_tx: Option<mpsc::Sender<NotificationEvent>>,
-    pub ingress_ledger: Arc<crate::ingress_ledger::IngressLedger>,
+    harness: HarnessConnection,
     pub attention: Arc<crate::attention::runtime::AttentionRuntime>,
-    pub teams_reply: Option<Arc<dyn crate::teams_runtime::TeamsReplyAuthority>>,
+    pub(super) module_tools: ToolRegistry,
+    discord_tools: Vec<RegisteredTool>,
+    discord: Arc<crate::discord::reply_tool::ReplyServices>,
 }
 
-// ── Construction ──────────────────────────────────────────────────────────────
-
 impl DioneServer {
+    /// Borrows the Discord HTTP service shared by registered and legacy tools.
+    pub fn http(&self) -> &Arc<serenity::http::Http> {
+        self.discord.http()
+    }
+    /// Borrows the shared Discord state.
+    pub fn state(&self) -> &crate::state::State {
+        self.discord.state()
+    }
+    /// Borrows the state directory shared by every tool.
+    pub fn state_dir(&self) -> &Utf8PathBuf {
+        self.discord.state_dir()
+    }
+    /// Borrows the consent authority used by reply and release tools.
+    pub fn no_rly(&self) -> &Arc<ConsentGate> {
+        self.discord.no_rly()
+    }
+    /// Borrows the ingress authority shared by Discord tools.
+    pub fn ingress_ledger(&self) -> &Arc<crate::ingress_ledger::IngressLedger> {
+        self.discord.ingress_ledger()
+    }
+    /// Borrows the configured gateway event sender.
+    pub fn event_tx(&self) -> &Option<mpsc::Sender<NotificationEvent>> {
+        self.discord.event_tx()
+    }
     /// Builds the core server and awaits attention state initialization.
-    /// Gateway and Codex transports attach optional channels through the
-    /// `with_*` builders.
+    /// The harness connection supplies delivery, protocol capabilities, and
+    /// the attention policy. Construction fixes shared Discord services; builders attach presence and module tools.
     #[expect(
         clippy::too_many_arguments,
-        reason = "these are the always-required core dependencies; optional wiring goes through the with_* builders instead of widening this list"
+        reason = "composition supplies the shared services and event sender together so registered and legacy tools use one authority"
     )]
     pub async fn new(
         state: crate::state::State,
@@ -90,10 +147,12 @@ impl DioneServer {
         state_dir: Utf8PathBuf,
         notification_tx: mpsc::Sender<Value>,
         trace_controller: TraceLevelController,
-        mode: TransportMode,
+        harness: HarnessConnection,
         no_rly: Arc<ConsentGate>,
         ingress_ledger: Arc<crate::ingress_ledger::IngressLedger>,
-    ) -> Self {
+        authority_module: ModuleInstanceId,
+        event_tx: Option<mpsc::Sender<NotificationEvent>>,
+    ) -> Result<Self, ServerConstructionError> {
         let attention = Arc::new(
             crate::attention::runtime::AttentionRuntime::new(
                 crate::attention::source::SourceResolver {
@@ -102,124 +161,91 @@ impl DioneServer {
                     state_dir: state_dir.clone(),
                     ledger: ingress_ledger.clone(),
                 },
-                mode == TransportMode::Codex,
+                harness.attention_policy() == AttentionPolicy::SafeTurn,
+                authority_module,
             )
             .await,
         );
-        Self {
-            state,
-            queue,
+        let discord = Arc::new(crate::discord::reply_tool::ReplyServices::new(
             http,
+            state,
             state_dir,
-            notification_tx,
-            discord_cmd_tx: None,
-            presence: None,
-            trace_controller,
-            mode,
-            codex_queue: None,
-            codex_thread_binding: None,
             no_rly,
-            event_tx: None,
             ingress_ledger,
+            event_tx,
+        ));
+        let mut discord_tools = crate::discord::introspection_tools::registrations(discord.clone())
+            .map_err(ServerConstructionError::definition)?;
+        discord_tools.extend(
+            crate::discord::query_tools::registrations(
+                discord.clone(),
+                attention.authority_module().clone(),
+            )
+            .map_err(ServerConstructionError::definition)?,
+        );
+        discord_tools.extend(
+            crate::discord::management_tools::registrations(discord.clone())
+                .map_err(ServerConstructionError::definition)?,
+        );
+        discord_tools.push(
+            crate::discord::reply_tool::registration(discord.clone())
+                .map_err(ServerConstructionError::definition)?,
+        );
+        let module_tools = ToolRegistry::new(&harness, discord_tools.clone())
+            .map_err(ServerConstructionError::registration)?;
+        Ok(Self {
+            queue,
+            notification_tx,
+            presence: PresenceCapability::Unavailable,
+            trace_controller,
+            harness,
             attention,
-            teams_reply: None,
-        }
+            module_tools,
+            discord_tools,
+            discord,
+        })
     }
 
-    pub fn with_discord_cmd_tx(mut self, tx: Option<mpsc::Sender<DiscordCommand>>) -> Self {
-        self.discord_cmd_tx = tx;
-        self
-    }
-
-    pub fn with_presence(
-        mut self,
-        presence: Option<crate::discord::events::SharedPresence>,
-    ) -> Self {
+    /// Selects the direct, queued, or unavailable presence connection.
+    pub fn with_presence(mut self, presence: PresenceCapability) -> Self {
         self.presence = presence;
         self
     }
 
-    pub fn with_codex_queue(mut self, codex_queue: Option<CodexEventQueue>) -> Self {
-        self.codex_queue = codex_queue;
-        self
-    }
-
-    pub fn with_codex_thread_binding(
+    /// Replaces optional module tools while retaining the Discord registrations.
+    /// The resulting registrations remain immutable while serving requests.
+    pub fn with_module_tools(
         mut self,
-        binding: Option<watch::Sender<Option<crate::codex::CodexThreadId>>>,
-    ) -> Self {
-        self.codex_thread_binding = binding;
-        self
-    }
-
-    pub fn with_teams_reply(
-        mut self,
-        authority: Option<Arc<dyn crate::teams_runtime::TeamsReplyAuthority>>,
-    ) -> Self {
-        self.teams_reply = authority;
-        self
-    }
-
-    pub fn with_event_tx(mut self, event_tx: Option<mpsc::Sender<NotificationEvent>>) -> Self {
-        self.event_tx = event_tx;
-        self
+        mut tools: Vec<RegisteredTool>,
+    ) -> Result<Self, RegistrationError> {
+        tools.extend(self.discord_tools.iter().cloned());
+        self.module_tools = ToolRegistry::new(&self.harness, tools)?;
+        Ok(self)
     }
 }
 
-// ── Context factory methods ───────────────────────────────────────────────────
-
 impl DioneServer {
+    pub(crate) fn harness(&self) -> &HarnessConnection {
+        &self.harness
+    }
+
     pub(crate) fn messaging_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> MessagingCtx {
-        let mut ctx = MessagingCtx::new(
-            self.http.clone(),
-            self.state.clone(),
-            config,
-            self.state_dir.clone(),
-            self.no_rly.clone(),
-            self.ingress_ledger.clone(),
-        );
-        ctx.event_tx = self.event_tx.clone();
-        ctx
+        self.discord.messaging_ctx(config)
     }
 
     pub(crate) fn no_rly_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> NoRlyCtx {
         NoRlyCtx {
-            gate: self.no_rly.clone(),
+            gate: self.no_rly().clone(),
             config,
-        }
-    }
-
-    pub(crate) fn introspection_ctx(
-        &self,
-        config: Arc<crate::config::LoadedConfig>,
-    ) -> IntrospectionCtx {
-        IntrospectionCtx {
-            http: self.http.clone(),
-            config,
-        }
-    }
-
-    pub(crate) fn management_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> ManagementCtx {
-        ManagementCtx {
-            http: self.http.clone(),
-            state: self.state.clone(),
-            config,
-            ingress_ledger: self.ingress_ledger.clone(),
         }
     }
 
     pub(crate) fn access_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> AccessCtx {
-        AccessCtx {
-            queue: self.queue.clone(),
-            config,
-            state_dir: self.state_dir.clone(),
-        }
+        AccessCtx::new(self.queue.clone(), config, self.state_dir().clone())
     }
 
-    pub(crate) fn bot_state_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> BotStateCtx {
-        BotStateCtx::new(self.http.clone(), self.state.clone(), config)
-            .with_discord_cmd_tx(self.discord_cmd_tx.clone())
-            .with_presence(self.presence.clone())
+    pub(crate) fn typing_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> TypingCtx {
+        TypingCtx::new(self.http().clone(), self.state().clone(), config)
     }
 
     pub(crate) fn diagnostics_ctx(&self) -> DiagnosticsCtx<'_> {
@@ -235,8 +261,6 @@ pub enum StdioExitPolicy {
     DetachUntilCancellation,
 }
 
-// ── Entry point ───────────────────────────────────────────────────────────────
-
 /// Runs the MCP server: reads JSON-RPC from stdin, writes to stdout.
 ///
 /// Also spawns a task that converts [`NotificationEvent`]s from Discord into
@@ -247,15 +271,31 @@ pub async fn run(
     cancel: CancellationToken,
     stdio_exit_policy: StdioExitPolicy,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let stdin = BufReader::new(tokio::io::stdin());
-    let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
+    run_with_input(
+        server,
+        event_rx,
+        cancel,
+        stdio_exit_policy,
+        BufReader::new(tokio::io::stdin()),
+    )
+    .await
+}
+
+async fn run_with_input(
+    server: Arc<DioneServer>,
+    event_rx: mpsc::Receiver<NotificationEvent>,
+    cancel: CancellationToken,
+    stdio_exit_policy: StdioExitPolicy,
+    stdin: impl tokio::io::AsyncBufRead + Unpin,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let stdout = server.harness.output().clone();
 
     // Both rate limiter and delivery buffer configs are live-reloadable
     // via the ArcSwap config cache. Rate limiter config is refreshed per
     // event; existing bucket state is preserved across config changes.
-    let config = crate::config::load_config(&server.state_dir);
+    let config = crate::config::load_config(server.state_dir());
     let mut rate_limiter = RateLimiter::new(config.rate_limit_runtime().clone());
-    let mut delivery_buffer = DeliveryBuffer::new();
+    let mut delivery_buffer = DeliveryBuffer::new(server.attention.authority_module().clone());
     let bell_evaluator = Arc::new(BellEvaluator::new());
 
     // Lazy-init: providers connect on first message, no pre-warming.
@@ -266,14 +306,14 @@ pub async fn run(
     let initial_tz = config.tz;
     let initial_evidence_markers_enabled = config.delivery.evidence_markers_enabled;
 
-    let state_dir_notif = server.state_dir.clone();
+    let state_dir_notif = server.state_dir().clone();
 
     // Expiry sweeper for the no_rly hold queue. Expiry is enforced lazily at
     // claim time too — this task just makes sure abandoned handles get their
     // journal record promptly instead of at the next claim. On shutdown it
     // drains everything still pending as expired, so the in-memory queue
     // never swallows a bounce without an audit trail.
-    let no_rly_sweeper = server.no_rly.clone();
+    let no_rly_sweeper = server.no_rly().clone();
     let cancel_sweep = cancel.clone();
     let sweep_task = tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(15));
@@ -298,14 +338,11 @@ pub async fn run(
 
     // Notification forwarding task.
     // Exits on cancellation or when the event channel closes.
-    let notification_sink =
-        NotificationSink::new(server.mode, stdout.clone(), server.codex_queue.clone())
-            .map_err(std::io::Error::other)?;
+    let notification_sink = server.harness.clone();
     let cancel_notif = cancel.clone();
     let attention = server.attention.clone();
-    let attention_codex_queue = server.codex_queue.clone();
-    let notice_no_rly = server.no_rly.clone();
-    let notice_event_tx = server.event_tx.clone();
+    let notice_no_rly = server.no_rly().clone();
+    let notice_event_tx = server.event_tx().clone();
     let notif_task = tokio::spawn(async move {
         let mut rx = event_rx;
         let mut events_since_prune: u64 = 0;
@@ -450,6 +487,7 @@ pub async fn run(
                     let flushed = delivery_buffer.flush_ready(now);
                     let outcome = deliver_flushed(
                         &notification_sink,
+                        delivery_buffer.module(),
                         flushed,
                         tz,
                         evidence_markers_enabled,
@@ -504,7 +542,7 @@ pub async fn run(
                                 tracing::info!(
                                     user_id = key.user_id,
                                     chat_id = key.chat_id,
-                                    retry_after_ms = retry_after.as_millis() as u64,
+                                    retry_after_ms = %retry_after.as_millis(),
                                     "rate limiter: message denied, dropping"
                                 );
                                 continue;
@@ -517,9 +555,12 @@ pub async fn run(
                         | NotificationEvent::MessageDelete { chat_id, message_id, .. } = &event {
                         let source = crate::attention::types::SourceKey { channel_id: *chat_id, message_id: *message_id };
                         let ready = admissions.invalidate(source);
-                        if let Err(error) = attention.invalidate(source).await { attention.unknown(error); }
-                        if let Some(queue) = &attention_codex_queue
-                            && let Err(error) = queue.invalidate_attention(Some(*message_id), None).await {
+                        if let Err(error) = attention.invalidate(source).await { attention.unknown(error.to_string()); }
+                        let scoped_source = crate::core::MessageRef::new(
+                            crate::core::ConversationRef::new(attention.authority_module().clone(), crate::core::ConversationId::numeric(source.channel_id.into())),
+                            crate::core::MessageId::numeric(source.message_id.into()),
+                        );
+                        if let Err(error) = notification_sink.invalidate_attention(scoped_source).await {
                             attention.unknown(error.to_string());
                         }
                         if let Err(error) = forward_attention_results(
@@ -570,8 +611,14 @@ pub async fn run(
 
         // Channel closed — flush any remaining buffered events.
         let remaining = delivery_buffer.flush_all();
-        let outcome =
-            deliver_flushed(&notification_sink, remaining, tz, evidence_markers_enabled).await;
+        let outcome = deliver_flushed(
+            &notification_sink,
+            delivery_buffer.module(),
+            remaining,
+            tz,
+            evidence_markers_enabled,
+        )
+        .await;
         if !outcome.undelivered.is_empty() {
             tracing::error!(
                 dropped = outcome.undelivered.len(),
@@ -591,6 +638,12 @@ pub async fn run(
         tokio::select! {
             biased;
 
+            _ = stdout.failed() => {
+                tracing::error!("MCP output failed; shutting down");
+                cancel.cancel();
+                break;
+            }
+
             _ = cancel.cancelled() => {
                 tracing::info!("MCP server shutting down");
                 break;
@@ -606,8 +659,11 @@ pub async fn run(
                         match serde_json::from_str::<Value>(trimmed) {
                             Ok(req) => {
                                 let resp = handle_request(&server, req).await;
-                                if let Some(resp_value) = resp {
-                                    write_line(&stdout, &resp_value).await;
+                                if let Some(resp_value) = resp
+                                    && let Err(error) = stdout.write(&resp_value).await {
+                                    tracing::error!(%error, "MCP response output failed");
+                                    cancel.cancel();
+                                    break;
                                 }
                             }
                             Err(e) => {
@@ -617,7 +673,11 @@ pub async fn run(
                                     "id": null,
                                     "error": { "code": -32700, "message": "parse error" }
                                 });
-                                write_line(&stdout, &err_resp).await;
+                                if let Err(error) = stdout.write(&err_resp).await {
+                                    tracing::error!(%error, "MCP error response output failed");
+                                    cancel.cancel();
+                                    break;
+                                }
                             }
                         }
                     }
@@ -651,6 +711,11 @@ pub async fn run(
         }
     }
 
+    if let Err(error) = server.harness.protocol().stdio_disconnected().await {
+        tracing::error!(%error, "failed to revoke stdio readiness");
+        cancel.cancel();
+    }
+
     // The resident socket may keep the process alive after stdio detaches.
     // Drain notification and sweeper tasks only after process cancellation.
     cancel.cancelled().await;
@@ -669,29 +734,9 @@ const RESIDENT_QUEUE_TOOLS: &[&str] = &[
     "event_queue_status",
 ];
 const RESIDENT_SOCIAL_TOOLS: &[&str] = &[
-    "fetch_messages",
-    "fetch_new_since",
-    "fetch_pins",
-    "get_message",
-    "search_messages",
-    "get_channel",
-    "get_user",
-    "get_member",
-    "list_channels",
-    "list_guilds",
-    "list_emojis",
-    "list_roles",
-    "can_view_channel",
-    "download_attachment",
-    "reply",
-    "teams_reply",
     "react",
     "edit_message",
-    "delete_message",
     "send_file",
-    "create_thread",
-    "pin_message",
-    "unpin_message",
     "render_latex",
     "render_latex_to_channel",
 ];
@@ -699,14 +744,17 @@ const RESIDENT_MAX_FRAME_BYTES: usize = 1024 * 1024;
 const RESIDENT_MAX_CONNECTIONS: usize = 4;
 const RESIDENT_READ_TIMEOUT: Duration = Duration::from_secs(15);
 
-fn resident_request_allowed(request: &Value) -> bool {
+fn resident_request_allowed(registry: &ToolRegistry, request: &Value) -> bool {
     match request.get("method").and_then(Value::as_str).unwrap_or("") {
         "initialize" | "notifications/initialized" => true,
         "tools/call" => request
             .pointer("/params/name")
             .and_then(Value::as_str)
             .is_some_and(|name| {
-                RESIDENT_QUEUE_TOOLS.contains(&name) || RESIDENT_SOCIAL_TOOLS.contains(&name)
+                PRIVATE_CONTROL_TOOLS.contains(&name)
+                    || RESIDENT_QUEUE_TOOLS.contains(&name)
+                    || RESIDENT_SOCIAL_TOOLS.contains(&name)
+                    || registry.resident_allowed(name)
             }),
         _ => false,
     }
@@ -751,7 +799,7 @@ async fn serve_resident_connection(
     cancel: CancellationToken,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (mut reader, writer) = stream.into_split();
-    let writer = Arc::new(Mutex::new(writer));
+    let writer = ProtocolOutput::new(writer);
     let mut input = Vec::new();
     loop {
         // Only idle reads are cancellable. Once a request is accepted its
@@ -770,48 +818,48 @@ async fn serve_resident_connection(
         let request = match serde_json::from_str::<Value>(trimmed) {
             Ok(request) => request,
             Err(_) => {
-                write_line(
-                    &writer,
-                    &json!({
+                writer
+                    .write(&json!({
                         "jsonrpc": "2.0",
                         "id": null,
                         "error": { "code": -32700, "message": "parse error" }
-                    }),
-                )
-                .await;
+                    }))
+                    .await?;
                 continue;
             }
         };
-        if !resident_request_allowed(&request) {
+        if !resident_request_allowed(&server.module_tools, &request) {
             let id = request.get("id").cloned().unwrap_or(Value::Null);
-            write_line(
-                    &writer,
+            writer.write(
                     &json!({
                         "jsonrpc": "2.0",
                         "id": id,
                         "error": { "code": -32601, "message": "method is unavailable on the resident control socket" }
                     }),
                 )
-                .await;
+                .await?;
             continue;
         }
-        if let Some(response) = handle_request(&server, request).await {
-            write_line(&writer, &response).await;
+        if let Some(response) =
+            handle_request_from(&server, request, RequestOrigin::ResidentControl).await
+        {
+            writer.write(&response).await?;
         }
     }
     Ok(())
 }
 
-/// Serve the minimum resident queue/publication API on an operator-owned Unix
-/// socket. The socket has no Discord ingress stream and intentionally omits
-/// configuration, access-control, diagnostics, and arbitrary messaging tools.
+/// Serves the resident control API on an operator-owned Unix socket.
+///
+/// Permits the fixed queue and social tool allowlists and explicitly
+/// resident-enabled module registrations. Rejects other methods and tools.
 pub async fn run_resident_control(
     server: Arc<DioneServer>,
     socket_path: Utf8PathBuf,
     cancel: CancellationToken,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if server.mode != TransportMode::Codex {
-        return Err("resident control requires Codex mode".into());
+    if !server.harness.protocol().resident_control() {
+        return Err("resident control is unavailable for this harness".into());
     }
     let parent = socket_path
         .parent()
@@ -856,6 +904,10 @@ pub async fn run_resident_control(
             _ = cancel.cancelled() => break,
             accepted = listener.accept() => {
                 let (stream, _) = accepted?;
+                if stream.peer_cred()?.uid() != unsafe { libc::geteuid() } {
+                    tracing::warn!("rejected resident control connection from another user");
+                    continue;
+                }
                 let Ok(permit) = connections.clone().try_acquire_owned() else {
                     drop(stream);
                     continue;
@@ -878,23 +930,22 @@ pub async fn run_resident_control(
     Ok(())
 }
 
-// ── Request dispatch ──────────────────────────────────────────────────────────
-
 async fn handle_request(server: &DioneServer, req: Value) -> Option<Value> {
+    handle_request_from(server, req, RequestOrigin::Stdio).await
+}
+
+async fn handle_request_from(
+    server: &DioneServer,
+    req: Value,
+    origin: RequestOrigin,
+) -> Option<Value> {
     let id = req.get("id").cloned();
     let method = req.get("method").and_then(Value::as_str).unwrap_or("");
     let params = req.get("params").cloned().unwrap_or(json!({}));
 
-    // Notifications (no id) from client — process but don't respond.
-    let is_notification = id.is_none();
+    let result = dispatch(server, method, params, origin).await;
 
-    let result = dispatch(server, method, params).await;
-
-    if is_notification {
-        return None;
-    }
-
-    let id = id.unwrap();
+    let id = id?;
     Some(match result {
         Ok(v) => json!({ "jsonrpc": "2.0", "id": id, "result": v }),
         Err(msg) => json!({
@@ -905,38 +956,63 @@ async fn handle_request(server: &DioneServer, req: Value) -> Option<Value> {
     })
 }
 
-async fn dispatch(server: &DioneServer, method: &str, params: Value) -> Result<Value, String> {
+async fn dispatch(
+    server: &DioneServer,
+    method: &str,
+    params: Value,
+    origin: RequestOrigin,
+) -> Result<Value, String> {
     match method {
-        // ── MCP lifecycle ─────────────────────────────────────────────────────
         "initialize" => Ok(initialize_response(
-            server.mode,
+            &server.harness,
             params.get("protocolVersion").and_then(Value::as_str),
         )),
-        "notifications/initialized" => Ok(json!({})),
-
-        // ── Tool discovery ────────────────────────────────────────────────────
-        "tools/list" => {
-            let config = crate::config::load_config(&server.state_dir);
-            Ok(tools_list_with_teams(
-                server.mode,
-                config.delivery.evidence_markers_enabled,
-                server.teams_reply.is_some(),
-            ))
+        "notifications/initialized" => {
+            if origin == RequestOrigin::Stdio {
+                server
+                    .harness
+                    .protocol()
+                    .stdio_initialized()
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            Ok(json!({}))
         }
-
-        // ── Tool invocation ───────────────────────────────────────────────────
+        "tools/list" => {
+            let config = crate::config::load_config(server.state_dir());
+            let mut response =
+                tools_list(&server.harness, config.delivery.evidence_markers_enabled);
+            server.module_tools.append_definitions(
+                &mut response,
+                crate::mcp::tool_registry::ToolDiscoveryContext {
+                    evidence_markers_enabled: config.delivery.evidence_markers_enabled,
+                },
+            );
+            Ok(response)
+        }
         "tools/call" => {
             let tool_name = params
                 .get("name")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing tool name".to_string())?;
             let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
+            if PRIVATE_CONTROL_TOOLS.contains(&tool_name) {
+                if origin != RequestOrigin::ResidentControl {
+                    return Err("tool is unavailable on stdio".to_owned());
+                }
+                let result = server
+                    .harness
+                    .protocol()
+                    .private_control(tool_name, &arguments)
+                    .await
+                    .ok_or_else(|| "private control is unavailable for this harness".to_owned())?
+                    .map_err(|error| error.to_string())?;
+                return Ok(json!({"content": [{"type": "text", "text": result.to_string()}]}));
+            }
             call_tool(server, tool_name, arguments).await
         }
-
-        // ── Permission relay (inbound from Claude Code) ──────────────────────
         "notifications/claude/channel/permission_request"
-            if server.mode == TransportMode::ClaudeCode =>
+            if server.harness.protocol().permission_relay() =>
         {
             let request_id = params
                 .get("request_id")
@@ -959,11 +1035,11 @@ async fn dispatch(server: &DioneServer, method: &str, params: Value) -> Result<V
                 .and_then(Value::as_str)
                 .unwrap_or("");
 
-            let config = crate::config::load_config(&server.state_dir);
+            let config = crate::config::load_config(server.state_dir());
             if let Err(e) = crate::permissions::send_permission_request(
-                &server.http,
+                server.http(),
                 &config,
-                &server.state,
+                server.state(),
                 request_id,
                 tool_name,
                 description,
@@ -983,68 +1059,10 @@ async fn dispatch(server: &DioneServer, method: &str, params: Value) -> Result<V
     }
 }
 
-// ── I/O helpers ───────────────────────────────────────────────────────────────
-
-#[derive(Clone)]
-enum NotificationSink {
-    ClaudeCode(Arc<Mutex<tokio::io::Stdout>>),
-    Codex(CodexEventQueue),
-}
-
-impl NotificationSink {
-    fn new(
-        mode: TransportMode,
-        stdout: Arc<Mutex<tokio::io::Stdout>>,
-        codex_queue: Option<CodexEventQueue>,
-    ) -> Result<Self, &'static str> {
-        match mode {
-            // Claude Code must always retain the original MCP stdout path,
-            // even if a stray Codex sender is present in the server fixture.
-            TransportMode::ClaudeCode => Ok(Self::ClaudeCode(stdout)),
-            TransportMode::Codex => codex_queue
-                .map(Self::Codex)
-                .ok_or("Codex mode requires a durable event queue"),
-        }
-    }
-
-    async fn deliver(&self, value: &Value) -> Result<(), String> {
-        match self {
-            Self::ClaudeCode(stdout) => {
-                write_line(stdout, value).await;
-                Ok(())
-            }
-            Self::Codex(queue) => queue
-                .enqueue(value.clone())
-                .await
-                .map(|_| ())
-                .map_err(|error| error.to_string()),
-        }
-    }
-}
-
-async fn write_line<W: tokio::io::AsyncWrite + Unpin>(stdout: &Arc<Mutex<W>>, value: &Value) {
-    let mut line = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string());
-    line.push('\n');
-    let mut out = stdout.lock().await;
-    if let Err(e) = out.write_all(line.as_bytes()).await {
-        tracing::warn!(error = %e, "failed to write MCP response to stdout");
-    }
-    if let Err(e) = out.flush().await {
-        tracing::warn!(error = %e, "failed to flush stdout");
-    }
-}
-
-// ── Notification helpers ─────────────────────────────────────────────────────
-
-/// Deliver flushed events, coalescing multiple events into a single envelope.
-///
-/// Single events pass through as individual notifications. Multiple events
-/// are coalesced into a single batched notification so the LLM receives one
-/// prompt injection per batch window instead of N.
 /// Outcome of attempting to deliver a batch of flushed events.
 struct DeliverOutcome {
     /// First error encountered, if any.
-    error: Option<String>,
+    error: Option<HarnessError>,
     /// Evidence events that could not be delivered due to a mid-FIFO sink
     /// error. The caller should re-buffer these to prevent silent drops.
     undelivered: Vec<NotificationEvent>,
@@ -1059,7 +1077,7 @@ impl DeliverOutcome {
     }
 
     #[cfg(test)]
-    fn into_result(self) -> Result<(), String> {
+    fn into_result(self) -> Result<(), HarnessError> {
         match self.error {
             Some(error) => Err(error),
             None => Ok(()),
@@ -1067,80 +1085,67 @@ impl DeliverOutcome {
     }
 }
 
+fn presentation(tz: Option<chrono_tz::Tz>, evidence: bool) -> PresentationContext {
+    PresentationContext::new(
+        tz,
+        if evidence {
+            EvidenceVisibility::Enabled
+        } else {
+            EvidenceVisibility::Disabled
+        },
+    )
+}
+
 async fn deliver_flushed(
-    sink: &NotificationSink,
+    sink: &HarnessConnection,
+    module: &ModuleInstanceId,
     events: Vec<NotificationEvent>,
     tz: Option<chrono_tz::Tz>,
     evidence_markers_enabled: bool,
 ) -> DeliverOutcome {
-    if events.is_empty() {
+    let mut iterator = events.iter().cloned();
+    let Some(first) = iterator.next() else {
         return DeliverOutcome::ok();
-    }
-
-    let event_count = events.len();
-
-    // The legacy coalesced format is intentionally compact and cannot carry
-    // author-bound structured evidence per event. If any delayed event bears
-    // evidence, preserve the entire FIFO as individual notifications at the
-    // normal flush deadline rather than silently erasing provenance.
-    if evidence_markers_enabled && events.iter().any(NotificationEvent::has_offered_evidence) {
-        tracing::debug!(
-            event_count,
-            "delivering evidence-bearing flush as individual FIFO notifications"
-        );
+    };
+    let context = presentation(tz, evidence_markers_enabled);
+    let delivery = match crate::discord::delivery::batch(module, first, iterator.collect(), context)
+    {
+        Ok(delivery) => delivery,
+        Err(error) => {
+            return DeliverOutcome {
+                error: Some(HarnessError::source(error)),
+                undelivered: events,
+            };
+        }
+    };
+    if evidence_markers_enabled
+        && events.iter().any(NotificationEvent::has_offered_evidence)
+        && let DeliveryKind::Ordinary { first, rest } = delivery.kind()
+    {
         let mut events = events;
-        let mut index = 0;
-        while index < events.len() {
-            // Clone to build the notification — the original stays in the
-            // Vec so it can be returned on failure.
-            let notification = events[index].clone().into_notification_with_evidence(true);
-            match sink.deliver(&notification).await {
-                Ok(()) => index += 1,
-                Err(error) => {
-                    // Preserve the failed event AND the unattempted tail.
-                    let undelivered = events.split_off(index);
-                    tracing::warn!(
-                        remaining = undelivered.len(),
-                        "mid-FIFO sink error; preserving {} undelivered evidence events for requeue",
-                        undelivered.len()
-                    );
-                    return DeliverOutcome {
-                        error: Some(error),
-                        undelivered,
-                    };
-                }
+        for (index, event) in std::iter::once(first).chain(rest).enumerate() {
+            let single = Delivery::single(event.clone(), context);
+            if let Err(error) = sink.deliver(&single).await {
+                let retry_from = if error.completion_is_unknown() {
+                    index + 1
+                } else {
+                    index
+                };
+                return DeliverOutcome {
+                    error: Some(error),
+                    undelivered: events.split_off(retry_from),
+                };
             }
         }
         return DeliverOutcome::ok();
     }
-
-    match coalesce(events, tz) {
-        Some(CoalesceResult::Single(event)) => {
-            let notification = event.into_notification_with_evidence(evidence_markers_enabled);
-            if let Err(error) = sink.deliver(&notification).await {
-                return DeliverOutcome {
-                    error: Some(error),
-                    undelivered: Vec::new(),
-                };
-            }
-        }
-        Some(CoalesceResult::Coalesced(notification)) => {
-            tracing::debug!(
-                event_count,
-                "coalesced {event_count} events into single delivery"
-            );
-            if let Err(error) = sink.deliver(&notification).await {
-                return DeliverOutcome {
-                    error: Some(error),
-                    undelivered: Vec::new(),
-                };
-            }
-        }
-        None => {
-            // Empty — nothing to deliver.
-        }
+    match sink.deliver(&delivery).await {
+        Ok(()) => DeliverOutcome::ok(),
+        Err(error) => DeliverOutcome {
+            error: Some(error),
+            undelivered: Vec::new(),
+        },
     }
-    DeliverOutcome::ok()
 }
 
 struct MessageRateLimitKey {
@@ -1167,60 +1172,113 @@ fn message_rate_limit_key(event: &NotificationEvent) -> Option<MessageRateLimitK
     })
 }
 
-/// Extract the delivery delay (ms) for an event based on its channel ID.
+/// Extracts the configured duration at the Discord configuration boundary.
 ///
 /// Returns the configured delay for channel events (Message, MessageEdit,
-/// MessageDelete, Reaction). Non-channel events always return 0.
-fn extract_delay_ms(event: &NotificationEvent, config: &crate::config::LoadedConfig) -> u64 {
+/// MessageDelete, Reaction). Control events have no delay.
+fn extract_delay(event: &NotificationEvent, config: &crate::config::LoadedConfig) -> Duration {
     let channel_id = match event {
         NotificationEvent::Message(msg) => Some(msg.chat_id.get()),
         NotificationEvent::MessageEdit { chat_id, .. }
         | NotificationEvent::MessageDelete { chat_id, .. }
         | NotificationEvent::Reaction { chat_id, .. } => Some(chat_id.get()),
-        _ => None,
+        NotificationEvent::PermissionResponse { .. }
+        | NotificationEvent::Trace { .. }
+        | NotificationEvent::ConfigError { .. }
+        | NotificationEvent::Coordination(_) => None,
     };
     match channel_id {
-        Some(id) => config.delivery_delay_ms(id),
-        None => 0,
+        Some(id) => Duration::from_millis(config.delivery_delay_ms(id)),
+        None => Duration::ZERO,
     }
 }
 
-// ── Test helpers ─────────────────────────────────────────────────────────────
-
 /// Test helpers that expose internal functions through the crate's public API.
-///
-/// Always compiled (zero-cost: only re-exports existing functions for
-/// testability).
 pub mod test_helpers {
     use super::*;
 
-    /// Exposes `IntoNotification::into_notification` for unit testing notification format.
-    pub fn make_notification(event: NotificationEvent) -> Value {
-        use crate::mcp::notifications::IntoNotification;
-        event.into_notification()
+    /// Projects a test event through the current typed delivery and legacy codec.
+    pub fn make_notification(
+        event: NotificationEvent,
+    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+        let module = crate::core::ModuleInstanceId::new(
+            crate::core::ProviderId::new("discord")?,
+            crate::core::ModuleSlotId::new("fixture")?,
+        );
+        let delivery = crate::discord::delivery::single(&module, event, presentation(None, true))?;
+        Ok(crate::codex::legacy_delivery::encode(
+            &delivery,
+            &crate::codex::LegacyDiscordScope::new(module),
+        )?)
+    }
+
+    /// Projects a nonempty batch through the current typed delivery and legacy codec.
+    pub fn make_batch(
+        events: Vec<NotificationEvent>,
+        tz: Option<chrono_tz::Tz>,
+    ) -> Result<Option<Value>, Box<dyn std::error::Error + Send + Sync>> {
+        let mut events = events.into_iter();
+        let Some(first) = events.next() else {
+            return Ok(None);
+        };
+        let module = crate::core::ModuleInstanceId::new(
+            crate::core::ProviderId::new("discord")?,
+            crate::core::ModuleSlotId::new("fixture")?,
+        );
+        let delivery = crate::discord::delivery::batch(
+            &module,
+            first,
+            events.collect(),
+            presentation(tz, true),
+        )?;
+        Ok(Some(crate::codex::legacy_delivery::encode(
+            &delivery,
+            &crate::codex::LegacyDiscordScope::new(module),
+        )?))
+    }
+
+    fn complete_tools_list(harness: &HarnessConnection, evidence: bool) -> Value {
+        let mut response = crate::mcp::protocol::tools_list(harness, evidence);
+        response["tools"]
+            .as_array_mut()
+            .expect("tools array")
+            .push(crate::discord::reply_tool::definition(evidence));
+        response["tools"]
+            .as_array_mut()
+            .expect("tools array")
+            .extend(crate::discord::introspection_tools::definitions());
+        response["tools"]
+            .as_array_mut()
+            .unwrap()
+            .extend(crate::discord::query_tools::definitions());
+        response["tools"]
+            .as_array_mut()
+            .expect("tools array")
+            .extend(crate::discord::management_tools::definitions());
+        response
     }
 
     /// Exposes `tools_list` for unit testing tool discovery.
     pub fn get_tools_list() -> Value {
-        crate::mcp::protocol::tools_list(TransportMode::ClaudeCode, false)
+        complete_tools_list(&HarnessConnection::claude(), false)
     }
 
     pub fn get_tools_list_with_evidence() -> Value {
-        crate::mcp::protocol::tools_list(TransportMode::ClaudeCode, true)
+        complete_tools_list(&HarnessConnection::claude(), true)
     }
 
-    pub fn get_codex_tools_list() -> Value {
-        crate::mcp::protocol::tools_list(TransportMode::Codex, false)
+    pub fn get_codex_tools_list(harness: &HarnessConnection) -> Value {
+        complete_tools_list(harness, false)
     }
 
     /// Exposes `initialize_response` for unit testing the handshake.
     pub fn get_initialize_response() -> Value {
-        crate::mcp::protocol::initialize_response(TransportMode::ClaudeCode, None)
+        crate::mcp::protocol::initialize_response(&HarnessConnection::claude(), None)
     }
 
     /// Exposes the Codex initialize response for protocol tests.
-    pub fn get_codex_initialize_response() -> Value {
-        crate::mcp::protocol::initialize_response(TransportMode::Codex, None)
+    pub fn get_codex_initialize_response(harness: &HarnessConnection) -> Value {
+        crate::mcp::protocol::initialize_response(harness, None)
     }
 
     /// Exposes `handle_request` for unit testing request dispatch.
@@ -1234,9 +1292,11 @@ mod tests {
     use super::*;
     use crate::{
         config::{ChannelConfig, Config, LoadedConfig},
-        delivery_buffer::{BufferResult, DeliveryBuffer},
-        mcp::notifications::IntoNotification,
+        delivery_buffer::BufferResult,
+        discord::scheduling::DeliveryBuffer,
+        harness::test_support::FixtureNotification,
         rate_limiter::{OverflowPolicy, RateLimitConfig, ScopeConfig},
+        teams::ReplyHandle,
         timestamp::Timestamp,
     };
     use serenity::model::id::{ChannelId, MessageId, UserId};
@@ -1244,19 +1304,27 @@ mod tests {
 
     #[test]
     fn resident_control_allows_only_bounded_tools() {
-        for name in RESIDENT_QUEUE_TOOLS.iter().chain(RESIDENT_SOCIAL_TOOLS) {
+        for name in RESIDENT_QUEUE_TOOLS
+            .iter()
+            .chain(RESIDENT_SOCIAL_TOOLS)
+            .chain(PRIVATE_CONTROL_TOOLS)
+        {
             let allowed = json!({
                 "method": "tools/call",
                 "params": { "name": name, "arguments": {} }
             });
-            assert!(resident_request_allowed(&allowed), "{name} must be allowed");
+            assert!(
+                resident_request_allowed(&ToolRegistry::default(), &allowed),
+                "{name} must be allowed"
+            );
         }
         let denied = json!({
             "method": "tools/call",
             "params": { "name": "reload_config", "arguments": {} }
         });
-        assert!(!resident_request_allowed(&denied));
+        assert!(!resident_request_allowed(&ToolRegistry::default(), &denied));
         assert!(!resident_request_allowed(
+            &ToolRegistry::default(),
             &json!({ "method": "tools/list" })
         ));
     }
@@ -1266,29 +1334,9 @@ mod tests {
         assert_eq!(
             RESIDENT_SOCIAL_TOOLS,
             &[
-                "fetch_messages",
-                "fetch_new_since",
-                "fetch_pins",
-                "get_message",
-                "search_messages",
-                "get_channel",
-                "get_user",
-                "get_member",
-                "list_channels",
-                "list_guilds",
-                "list_emojis",
-                "list_roles",
-                "can_view_channel",
-                "download_attachment",
-                "reply",
-                "teams_reply",
                 "react",
                 "edit_message",
-                "delete_message",
                 "send_file",
-                "create_thread",
-                "pin_message",
-                "unpin_message",
                 "render_latex",
                 "render_latex_to_channel",
             ]
@@ -1343,23 +1391,28 @@ mod tests {
             settled: Arc<AtomicBool>,
         }
 
-        impl crate::teams_runtime::TeamsReplyAuthority for HeldReply {
+        impl crate::teams::runtime::TeamsReplyAuthority for HeldReply {
             fn reply<'a>(
                 &'a self,
-                _handle: &'a str,
-                _text: &'a str,
+                handle: &'a ReplyHandle,
+                text: &'a str,
             ) -> std::pin::Pin<
                 Box<
                     dyn std::future::Future<
                             Output = Result<
-                                crate::teams_edge::LiveReplyReceipt,
-                                crate::teams_runtime::TeamsRuntimeError,
+                                crate::teams::edge::LiveReplyReceipt,
+                                crate::teams::runtime::TeamsRuntimeError,
                             >,
                         > + Send
                         + 'a,
                 >,
             > {
                 Box::pin(async move {
+                    assert_eq!(
+                        handle.as_str(),
+                        "teams-00000000-0000-4000-8000-000000000001"
+                    );
+                    assert_eq!(text, "resident reply");
                     self.started
                         .lock()
                         .expect("started lock")
@@ -1375,10 +1428,10 @@ mod tests {
                         .expect("single release");
                     release.await.expect("test releases settlement");
                     self.settled.store(true, Ordering::SeqCst);
-                    Ok(crate::teams_edge::LiveReplyReceipt {
-                        incoming_activity_id: "inbound".to_owned(),
-                        outgoing_activity_id: "outbound".to_owned(),
-                        conversation_id: "conversation".to_owned(),
+                    Ok(crate::teams::edge::LiveReplyReceipt {
+                        incoming_activity_id: "inbound".parse().unwrap(),
+                        outgoing_activity_id: "outbound".parse().unwrap(),
+                        conversation_id: "conversation".parse().unwrap(),
                     })
                 })
             }
@@ -1399,6 +1452,7 @@ mod tests {
             settled: settled.clone(),
         });
         let (notification_tx, _notification_rx) = mpsc::channel(1);
+        let (_queue_dir, harness) = test_codex_connection();
         let server = DioneServer::new(
             crate::state::new_state(),
             Arc::new(Mutex::new(crate::queue::AccessQueue::load(&state_dir))),
@@ -1406,12 +1460,19 @@ mod tests {
             state_dir.clone(),
             notification_tx,
             TraceLevelController::noop(),
-            TransportMode::Codex,
+            harness,
             Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
             Arc::new(crate::ingress_ledger::IngressLedger::new()),
+            crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            ),
+            None,
         )
         .await
-        .with_teams_reply(Some(authority));
+        .expect("Discord reply registration")
+        .with_module_tools(crate::teams::mcp_tools(Some(authority)).expect("valid Teams tool"))
+        .expect("disjoint tool registrations");
         let cancel = CancellationToken::new();
         let mut listener = tokio::spawn(run_resident_control(
             Arc::new(server),
@@ -1438,7 +1499,7 @@ mod tests {
             "method": "tools/call",
             "params": {
                 "name": "teams_reply",
-                "arguments": { "reply_handle": "opaque", "content": "resident reply" }
+                "arguments": { "reply_handle": "teams-00000000-0000-4000-8000-000000000001", "content": "resident reply" }
             }
         });
         client
@@ -1486,11 +1547,17 @@ mod tests {
             state_dir.clone(),
             notification_tx,
             TraceLevelController::noop(),
-            TransportMode::ClaudeCode,
+            HarnessConnection::claude(),
             Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
             Arc::new(crate::ingress_ledger::IngressLedger::new()),
+            crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            ),
+            None,
         )
-        .await;
+        .await
+        .expect("Discord reply registration");
 
         let context = server.messaging_ctx(Arc::new(LoadedConfig::from_raw(Config::default())));
 
@@ -1506,41 +1573,6 @@ mod tests {
             ..Default::default()
         });
         LoadedConfig::from_raw(raw)
-    }
-
-    #[test]
-    fn claude_code_mode_always_selects_mcp_stdout() {
-        let sink = NotificationSink::new(
-            TransportMode::ClaudeCode,
-            Arc::new(Mutex::new(tokio::io::stdout())),
-            None,
-        )
-        .unwrap();
-        assert!(matches!(sink, NotificationSink::ClaudeCode(_)));
-    }
-
-    #[test]
-    fn codex_mode_requires_durable_event_queue() {
-        let result = NotificationSink::new(
-            TransportMode::Codex,
-            Arc::new(Mutex::new(tokio::io::stdout())),
-            None,
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn codex_mode_selects_durable_event_queue() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-        let queue = crate::codex::CodexEventQueue::load(&path).unwrap();
-        let sink = NotificationSink::new(
-            TransportMode::Codex,
-            Arc::new(Mutex::new(tokio::io::stdout())),
-            Some(queue),
-        )
-        .unwrap();
-        assert!(matches!(sink, NotificationSink::Codex(_)));
     }
 
     fn config_with_global_delay(delay_ms: u64) -> LoadedConfig {
@@ -1571,7 +1603,7 @@ mod tests {
         })
     }
 
-    fn evidence_message_event(index: u64) -> NotificationEvent {
+    pub(super) fn evidence_message_event(index: u64) -> NotificationEvent {
         NotificationEvent::Message(MessageEvent {
             chat_id: ChannelId::new(42),
             message_id: MessageId::new(100 + index),
@@ -1593,11 +1625,60 @@ mod tests {
         })
     }
 
+    #[tokio::test]
+    async fn unknown_admission_does_not_requeue_ambiguous_event_but_retains_tail() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let root = camino::Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
+        let module = ModuleInstanceId::new(
+            ProviderId::new("discord").unwrap(),
+            ModuleSlotId::new("primary").unwrap(),
+        );
+        let queue = crate::codex::CodexEventQueue::open(
+            &root,
+            crate::codex::LegacyDiscordScope::new(module.clone()),
+        )
+        .await
+        .unwrap();
+        let sink = test_connection_for_queue(queue.clone());
+        let (reached, release) = queue.pause_owned_completion_for_test(true);
+        let events = vec![evidence_message_event(0), evidence_message_event(1)];
+        let producer =
+            tokio::spawn(async move { deliver_flushed(&sink, &module, events, None, true).await });
+        reached.await.unwrap();
+        release.send(()).unwrap();
+        let outcome = producer.await.unwrap();
+        assert!(outcome.error.as_ref().unwrap().completion_is_unknown());
+        assert_eq!(outcome.undelivered.len(), 1);
+        let NotificationEvent::Message(tail) = &outcome.undelivered[0] else {
+            panic!("literal message tail")
+        };
+        assert_eq!(tail.message_id, MessageId::new(101));
+        assert_eq!(queue.status().await.queued, 1);
+        let sink = test_connection_for_queue(queue.clone());
+        let recovered = deliver_flushed(
+            &sink,
+            queue.legacy_scope().module(),
+            outcome.undelivered,
+            None,
+            true,
+        )
+        .await;
+        assert!(recovered.error.is_none());
+        assert_eq!(queue.status().await.queued, 2);
+    }
+
     #[tokio::test(start_paused = true)]
     async fn evidence_burst_overflow_reaches_real_sink_losslessly_in_fifo_order() {
         let dir = tempfile::TempDir::new().unwrap();
         let state_dir = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-        let queue = CodexEventQueue::load(&state_dir).unwrap();
+        let queue = crate::codex::CodexEventQueue::load(
+            &state_dir,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
         let consumer = queue
             .register_consumer(
                 "evidence overflow test".to_owned(),
@@ -1608,16 +1689,31 @@ mod tests {
             .await
             .unwrap()
             .consumer_id;
-        let sink = NotificationSink::Codex(queue.clone());
-        let mut buffer = DeliveryBuffer::new();
+        let sink = test_connection_for_queue(queue.clone());
+        let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
+            ProviderId::new("discord").unwrap(),
+            ModuleSlotId::new("primary").unwrap(),
+        ));
 
         for index in 0..6 {
-            match buffer.buffer_event(evidence_message_event(index), 500) {
+            match buffer.buffer_event(evidence_message_event(index), Duration::from_millis(500)) {
                 BufferResult::Immediate(event) => {
-                    sink.deliver(&event.into_notification()).await.unwrap();
+                    sink.deliver(
+                        &crate::discord::delivery::single(
+                            buffer.module(),
+                            *event,
+                            presentation(None, true),
+                        )
+                        .unwrap(),
+                    )
+                    .await
+                    .unwrap();
                 }
                 BufferResult::Buffered => {
                     assert!(index >= 4, "only budget overflow may be delayed");
+                }
+                BufferResult::Rejected { error, .. } => {
+                    panic!("valid fixture delay rejected: {error}")
                 }
                 BufferResult::FlushThenImmediate { .. } => {
                     panic!("one uninterrupted burst has no buffered predecessor recovery")
@@ -1628,7 +1724,7 @@ mod tests {
         tokio::time::advance(Duration::from_millis(500)).await;
         let overflow = buffer.flush_ready(tokio::time::Instant::now());
         assert_eq!(overflow.len(), 2);
-        let outcome = deliver_flushed(&sink, overflow, None, true).await;
+        let outcome = deliver_flushed(&sink, buffer.module(), overflow, None, true).await;
         assert!(outcome.undelivered.is_empty());
         outcome.into_result().unwrap();
 
@@ -1667,7 +1763,14 @@ mod tests {
     async fn disabled_evidence_delivery_preserves_text_without_projection() {
         let dir = tempfile::TempDir::new().unwrap();
         let state_dir = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-        let queue = CodexEventQueue::load(&state_dir).unwrap();
+        let queue = crate::codex::CodexEventQueue::load(
+            &state_dir,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap();
         let consumer = queue
             .register_consumer(
                 "disabled evidence test".to_owned(),
@@ -1678,17 +1781,23 @@ mod tests {
             .await
             .unwrap()
             .consumer_id;
-        let sink = NotificationSink::Codex(queue.clone());
+        let sink = test_connection_for_queue(queue.clone());
         let event = evidence_message_event(0);
         let expected_content = match &event {
             NotificationEvent::Message(message) => message.content.clone(),
             _ => unreachable!(),
         };
 
-        deliver_flushed(&sink, vec![event], None, false)
-            .await
-            .into_result()
-            .unwrap();
+        deliver_flushed(
+            &sink,
+            queue.legacy_scope().module(),
+            vec![event],
+            None,
+            false,
+        )
+        .await
+        .into_result()
+        .unwrap();
         let leased = queue
             .next_event(&consumer, Duration::ZERO, Duration::from_secs(60))
             .await
@@ -1711,7 +1820,10 @@ mod tests {
     #[test]
     fn extract_delay_message_uses_channel_config() {
         let config = config_with_channel_delay(42, 500);
-        assert_eq!(extract_delay_ms(&message_event(42), &config), 500);
+        assert_eq!(
+            extract_delay(&message_event(42), &config),
+            Duration::from_millis(500)
+        );
     }
 
     #[test]
@@ -1767,7 +1879,7 @@ mod tests {
             emoji: "👍".into(),
             self_react: false,
         };
-        assert_eq!(extract_delay_ms(&event, &config), 200);
+        assert_eq!(extract_delay(&event, &config), Duration::from_millis(200));
     }
 
     #[test]
@@ -1783,7 +1895,7 @@ mod tests {
             thread_parent_id: None,
             reply_to_message_id: None,
         };
-        assert_eq!(extract_delay_ms(&event, &config), 300);
+        assert_eq!(extract_delay(&event, &config), Duration::from_millis(300));
     }
 
     #[test]
@@ -1794,7 +1906,7 @@ mod tests {
             message_id: MessageId::new(1),
             thread_parent_id: None,
         };
-        assert_eq!(extract_delay_ms(&event, &config), 100);
+        assert_eq!(extract_delay(&event, &config), Duration::from_millis(100));
     }
 
     #[test]
@@ -1803,28 +1915,32 @@ mod tests {
         let event = NotificationEvent::ConfigError {
             error: "oops".into(),
         };
-        assert_eq!(extract_delay_ms(&event, &config), 0);
+        assert_eq!(extract_delay(&event, &config), Duration::from_millis(0));
     }
 
     #[test]
     fn extract_delay_unconfigured_channel_falls_back_to_global() {
         let config = config_with_global_delay(750);
-        assert_eq!(extract_delay_ms(&message_event(9999), &config), 750);
+        assert_eq!(
+            extract_delay(&message_event(9999), &config),
+            Duration::from_millis(750)
+        );
     }
 
     #[test]
     fn immediate_buffer_result_dereferences_to_notification() {
-        // server.rs consumes a Immediate(Box<event>) as (*event).into_notification().
-        // Verify the dereference-then-consume pattern produces a well-formed notification
-        // with the correct channel ID.
-        let mut buf = DeliveryBuffer::new();
-        let result = buf.buffer_event(message_event(42), 0);
+        let mut buf = DeliveryBuffer::new(ModuleInstanceId::new(
+            ProviderId::new("discord").unwrap(),
+            ModuleSlotId::new("primary").unwrap(),
+        ));
+        let result = buf.buffer_event(message_event(42), Duration::from_millis(0));
         let notification = match result {
-            BufferResult::Immediate(event) => (*event).into_notification(),
+            BufferResult::Immediate(event) => (*event).fixture_notification(),
             BufferResult::FlushThenImmediate { .. } => {
                 panic!("delay=0 cannot require a preceding flush")
             }
             BufferResult::Buffered => panic!("expected Immediate for delay=0"),
+            BufferResult::Rejected { error, .. } => panic!("zero delay rejected: {error}"),
         };
         assert_eq!(notification["jsonrpc"], "2.0");
         assert_eq!(notification["method"], "notifications/claude/channel");
@@ -1868,27 +1984,51 @@ async fn forward_ordinary(
     cfg: &crate::config::LoadedConfig,
     buffer: &mut DeliveryBuffer,
     evaluator: &Arc<BellEvaluator>,
-    sink: &NotificationSink,
-) -> Result<(), String> {
+    sink: &HarnessConnection,
+) -> Result<(), HarnessError> {
     let event = prepare_bells(event, cfg, evaluator).await;
     let evidence = cfg.delivery.evidence_markers_enabled;
-    let delay = extract_delay_ms(&event, cfg);
+    let delay = extract_delay(&event, cfg);
     match buffer.buffer_event_with_evidence(event, delay, evidence) {
         BufferResult::Immediate(event) => {
-            sink.deliver(&(*event).into_notification_with_evidence(evidence))
-                .await
+            let delivery = match crate::discord::delivery::single(
+                buffer.module(),
+                (*event).clone(),
+                presentation(cfg.tz, evidence),
+            ) {
+                Ok(delivery) => delivery,
+                Err(error) => {
+                    buffer.requeue(vec![*event]);
+                    return Err(HarnessError::source(error));
+                }
+            };
+            sink.deliver(&delivery).await
         }
         BufferResult::FlushThenImmediate { preceding, event } => {
-            let outcome = deliver_flushed(sink, preceding, cfg.tz, evidence).await;
+            let outcome = deliver_flushed(sink, buffer.module(), preceding, cfg.tz, evidence).await;
             buffer.requeue(outcome.undelivered);
             if let Some(error) = outcome.error {
                 buffer.requeue(vec![*event]);
                 return Err(error);
             }
-            sink.deliver(&(*event).into_notification_with_evidence(evidence))
-                .await
+            let delivery = match crate::discord::delivery::single(
+                buffer.module(),
+                (*event).clone(),
+                presentation(cfg.tz, evidence),
+            ) {
+                Ok(delivery) => delivery,
+                Err(error) => {
+                    buffer.requeue(vec![*event]);
+                    return Err(HarnessError::source(error));
+                }
+            };
+            sink.deliver(&delivery).await
         }
         BufferResult::Buffered => Ok(()),
+        BufferResult::Rejected { event, error } => {
+            buffer.requeue(vec![*event]);
+            Err(HarnessError::source(error))
+        }
     }
 }
 
@@ -1898,12 +2038,8 @@ async fn forward_attention_results(
     attention: &Arc<crate::attention::runtime::AttentionRuntime>,
     buffer: &mut DeliveryBuffer,
     evaluator: &Arc<BellEvaluator>,
-    sink: &NotificationSink,
-) -> Result<(), String> {
-    use crate::{
-        attention::types::{Admission, DeliveryState},
-        codex::AttentionGuardFailure,
-    };
+    sink: &HarnessConnection,
+) -> Result<(), HarnessError> {
     let mut results = results.into_iter();
     while let Some(mut result) = results.next() {
         let cfg = crate::config::load_config(&attention.resolver.state_dir);
@@ -1938,7 +2074,7 @@ async fn forward_attention_results(
                     .mark_delivery(result.record.id, DeliveryState::Invalidated)
                     .await
                 {
-                    attention.unknown(error);
+                    attention.unknown(error.to_string());
                 }
                 continue;
             }
@@ -1960,13 +2096,14 @@ async fn forward_attention_results(
                 // ordinary work. Direct sink delivery would overtake its buffer.
                 let event = match buffer.buffer_event_with_evidence(
                     event,
-                    0,
+                    Duration::from_millis(0),
                     cfg.delivery.evidence_markers_enabled,
                 ) {
                     BufferResult::Immediate(event) => *event,
                     BufferResult::FlushThenImmediate { preceding, event } => {
                         let outcome = deliver_flushed(
                             sink,
+                            buffer.module(),
                             preceding,
                             cfg.tz,
                             cfg.delivery.evidence_markers_enabled,
@@ -1978,22 +2115,40 @@ async fn forward_attention_results(
                         }
                         *event
                     }
-                    BufferResult::Buffered => unreachable!("zero-delay events are immediate"),
+                    BufferResult::Buffered | BufferResult::Rejected { .. } => {
+                        unreachable!("zero-delay events are immediate")
+                    }
                 };
-                let mut notification =
-                    event.into_notification_with_evidence(cfg.delivery.evidence_markers_enabled);
-                notification["params"]["meta"]["attention_delivery"] =
-                    serde_json::json!(if result.record.actual == Admission::Prompt {
-                        "prompt"
-                    } else {
-                        "next_turn"
-                    });
-                notification["params"]["meta"]["attention_record"] =
-                    serde_json::json!(result.record.id.as_str());
+                let NotificationEvent::Message(managed_message) = event else {
+                    return Err(HarnessError::source(std::io::Error::other(
+                        "managed attention delivery lost its source message",
+                    )));
+                };
+                let directive = if result.record.actual == Admission::Prompt {
+                    crate::attention::delivery::AttentionDirective::Prompt
+                } else {
+                    crate::attention::delivery::AttentionDirective::NextTurn
+                };
+                let notification = Delivery::managed(
+                    crate::discord::delivery::message(
+                        attention.authority_module(),
+                        managed_message,
+                    ),
+                    directive,
+                    result.record.id.clone(),
+                    presentation(cfg.tz, cfg.delivery.evidence_markers_enabled),
+                );
+                let Some(descriptor) = notification.attention() else {
+                    return Err(HarnessError::source(std::io::Error::other(
+                        "managed attention descriptor is unavailable",
+                    )));
+                };
                 // A managed event must remain a source-bound envelope; coalescing
                 // it with an ordinary event would erase its lifecycle fence.
-                match crate::codex::AttentionDeliveryGuard::check(attention.as_ref(), &notification)
-                {
+                match crate::attention::delivery::AttentionDeliveryGuard::check(
+                    attention.as_ref(),
+                    &descriptor,
+                ) {
                     Ok(()) => sink.deliver(&notification).await?,
                     Err(AttentionGuardFailure::Unavailable) => {
                         attention.unknown("pending source authority is unavailable");
@@ -2008,7 +2163,7 @@ async fn forward_attention_results(
                             .mark_delivery(result.record.id, DeliveryState::Invalidated)
                             .await
                         {
-                            attention.unknown(error);
+                            attention.unknown(error.to_string());
                         }
                     }
                 }
@@ -2028,7 +2183,7 @@ async fn forward_attention_results(
                     .mark_delivery(result.record.id, DeliveryState::Observed)
                     .await
                 {
-                    attention.unknown(error);
+                    attention.unknown(error.to_string());
                 }
             }
         }
@@ -2040,7 +2195,6 @@ async fn attention_transition(
     admissions: &mut crate::attention::admission::AdmissionController,
     attention: &Arc<crate::attention::runtime::AttentionRuntime>,
 ) -> Vec<crate::attention::admission::AdmissionResult> {
-    use crate::attention::types::DeliveryState;
     let _publication = crate::config::attention_effect_guard().await;
     admissions.cancel_work();
     let incarnation = admissions.incarnation().to_owned();
@@ -2117,3 +2271,37 @@ fn begin_attention(
 #[cfg(test)]
 #[path = "attention_tests.rs"]
 mod attention_tests;
+
+#[cfg(test)]
+fn test_connection_for_queue(queue: crate::codex::CodexEventQueue) -> HarnessConnection {
+    let (binding, _receiver) = tokio::sync::watch::channel(None);
+    HarnessConnection::codex(queue, binding)
+}
+#[cfg(test)]
+pub(super) fn test_codex_connection() -> (tempfile::TempDir, HarnessConnection) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+    let harness = test_connection_for_queue(
+        crate::codex::CodexEventQueue::load(
+            &path,
+            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
+                crate::core::ProviderId::new("discord").unwrap(),
+                crate::core::ModuleSlotId::new("primary").unwrap(),
+            )),
+        )
+        .unwrap(),
+    );
+    (dir, harness)
+}
+
+#[cfg(test)]
+#[path = "harness_tests.rs"]
+mod harness_tests;
+
+#[cfg(test)]
+#[path = "scheduling_tests.rs"]
+mod scheduling_tests;
+
+#[cfg(test)]
+#[path = "registration_tests.rs"]
+mod registration_tests;
