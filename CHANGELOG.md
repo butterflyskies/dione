@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.84.1]
+
+### Fixed
+
+- Make the concurrent attention ordering acceptance test independent of elapsed wall time while preserving real provider requests, successful judgments, and direct-delivery ordering checks.
+
 ## [0.84.0]
 
 ### Fixed
