@@ -186,6 +186,8 @@ enum Command {
         Option<AuthorizationRevision>,
     ),
     Tick,
+    #[cfg(test)]
+    DrainCallbacks,
     Stop,
     #[cfg(all(test, unix))]
     Crash,
@@ -327,6 +329,10 @@ impl RookHandle {
     /// Evaluate due work using the injected clock; the resident timer also does this.
     pub async fn tick(&self) -> Result<(), OwnerError> {
         self.request(Command::Tick).await.map(|_| ())
+    }
+    #[cfg(test)]
+    pub(super) async fn drain_callbacks_for_test(&self) -> Result<(), OwnerError> {
+        self.request(Command::DrainCallbacks).await.map(|_| ())
     }
     /// Change capacity and timing after operator authorization.
     /// Existing records must fit; rejected changes preserve the previous policy.
@@ -844,6 +850,25 @@ impl Owner {
                 self.commit(next).await?;
                 self.capacity_blocked.clear();
                 self.recovery_capacity_blocked = false;
+                Ok(Response::Done)
+            }
+            #[cfg(test)]
+            Command::DrainCallbacks => {
+                // Only tests with known dispatched callbacks may use this barrier.
+                // The actor cannot dispatch future work while joining this set.
+                while let Some(completion) = self.retry_completions.pop_front() {
+                    if let Err(error) = self.complete(completion.clone()).await {
+                        self.retry_completions.push_front(completion);
+                        return Err(error);
+                    }
+                }
+                while let Some(completion) = self.sends.join_next().await {
+                    let completion = completion.map_err(OwnerError::worker_join)?;
+                    if let Err(error) = self.complete(completion.clone()).await {
+                        self.retry_completions.push_back(completion);
+                        return Err(error);
+                    }
+                }
                 Ok(Response::Done)
             }
             Command::Tick => {
