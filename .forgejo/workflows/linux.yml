@@ -107,8 +107,17 @@ jobs:
           tar xzf /tmp/cargo-nextest.tar.gz -C /usr/local/bin
       - name: Record storage before tests
         run: df -h .
+      - name: Record resource counters before Nextest
+        run: |
+          python3 -B .forgejo/scripts/ci-resource-snapshot.py before-nextest ||
+            printf '%s\n' '{"schema":"dione-ci-resources-v1","phase":"before-nextest","status":"unknown","reason":"snapshot-helper-failed"}'
       - name: Run full suite including compile-time contracts
         run: cargo nextest run --workspace --locked --no-fail-fast --features oneshot-test-seam
+      - name: Record resource counters after Nextest
+        if: ${{ always() }}
+        run: |
+          python3 -B .forgejo/scripts/ci-resource-snapshot.py after-nextest ||
+            printf '%s\n' '{"schema":"dione-ci-resources-v1","phase":"after-nextest","status":"unknown","reason":"snapshot-helper-failed"}'
       - name: Record storage after feature suite
         if: ${{ always() }}
         run: |

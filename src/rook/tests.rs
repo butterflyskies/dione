@@ -292,6 +292,18 @@ async fn wait_for_receipts(fixture: &Fixture, predicate: impl Fn(&RecipientState
     panic!("expected durable callback receipt");
 }
 
+async fn assert_committed_receipt(
+    fixture: &Fixture,
+    service: &RookService,
+    predicate: impl Fn(&RecipientState) -> bool,
+) {
+    service.handle.drain_callbacks_for_test().await.unwrap();
+    assert!(
+        predicate(&retained(fixture).await),
+        "expected durable callback receipt"
+    );
+}
+
 #[tokio::test]
 async fn interrupted_final_attempt_parks_without_refund_and_budget_two_retries_once() {
     for budget in [1, 2] {
@@ -361,72 +373,124 @@ async fn interrupted_final_attempt_parks_without_refund_and_budget_two_retries_o
 }
 
 #[tokio::test]
+async fn callback_barrier_waits_for_the_dispatched_callback_and_durable_receipt() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut fixture = Fixture::new();
+        fixture.transport.block.store(true, Ordering::SeqCst);
+        let service = fixture.open().await;
+        let observation = event("callback-barrier", "body");
+        service
+            .handle
+            .configure(
+                operator(),
+                vec![subscription(&observation, fixture.clock.now())],
+            )
+            .await
+            .unwrap();
+        service.handle.admit(observation).await.unwrap();
+        service.handle.tick().await.unwrap();
+        fixture.next().await;
+        let handle = service.handle.clone();
+        let mut barrier = tokio::spawn(async move { handle.drain_callbacks_for_test().await });
+        let premature = tokio::time::timeout(Duration::from_millis(100), &mut barrier).await;
+        let acknowledged_early = premature.is_ok();
+        let before = retained(&fixture).await;
+        fixture.transport.release.notify_one();
+        let completed = match premature {
+            Ok(result) => result,
+            Err(_) => barrier.await,
+        };
+        completed.unwrap().unwrap();
+        let after = retained(&fixture).await;
+        service.shutdown().await.unwrap();
+        assert!(
+            !acknowledged_early,
+            "barrier acknowledged a withheld callback"
+        );
+        assert!(before.events[0].accepted_deadline.is_none());
+        assert!(matches!(
+            before.events[0].links[0].wake,
+            WakeState::Dispatching { .. }
+        ));
+        assert!(after.events[0].accepted_deadline.is_some());
+        assert!(matches!(after.events[0].links[0].wake, WakeState::Accepted));
+    })
+    .await
+    .expect("callback barrier scenario did not complete");
+}
+
+#[tokio::test]
 async fn exhausted_recovery_binding_uses_alternate_then_parks_finitely() {
-    let mut fixture = Fixture::new();
-    fixture.limits.attempts_per_binding = 2;
-    let service = fixture.open().await;
-    let observation = event("overlap", "body");
-    let mut first = subscription(&observation, fixture.clock.now());
-    first.priority = 0;
-    let mut second = subscription(&observation, fixture.clock.now());
-    second.priority = 1;
-    service
-        .handle
-        .configure(operator(), vec![first.clone(), second.clone()])
-        .await
-        .unwrap();
-    service.handle.admit(observation).await.unwrap();
-    service.handle.tick().await.unwrap();
-    fixture.next().await;
-    service.handle.tick().await.unwrap();
-    fixture.next().await;
-    wait_for_receipts(&fixture, |state| {
-        state.events[0]
-            .links
-            .iter()
-            .all(|link| matches!(link.wake, WakeState::Accepted))
-    })
-    .await;
-    fixture.transport.outcome.store(1, Ordering::SeqCst);
-    fixture.clock.advance(3);
-    service.handle.tick().await.unwrap();
-    assert_eq!(fixture.next().await.subscription, first.id);
-    wait_for_receipts(&fixture, |state| {
-        state.events[0].links.iter().any(|link| {
-            link.subscription == first.id
-                && link.attempts == 2
-                && link.last_failure == Some(DeliveryFailure::Rejected)
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut fixture = Fixture::new();
+        fixture.limits.attempts_per_binding = 2;
+        let service = fixture.open().await;
+        let observation = event("overlap", "body");
+        let mut first = subscription(&observation, fixture.clock.now());
+        first.priority = 0;
+        let mut second = subscription(&observation, fixture.clock.now());
+        second.priority = 1;
+        service
+            .handle
+            .configure(operator(), vec![first.clone(), second.clone()])
+            .await
+            .unwrap();
+        service.handle.admit(observation).await.unwrap();
+        service.handle.tick().await.unwrap();
+        fixture.next().await;
+        service.handle.tick().await.unwrap();
+        fixture.next().await;
+        assert_committed_receipt(&fixture, &service, |state| {
+            state.events[0]
+                .links
+                .iter()
+                .all(|link| matches!(link.wake, WakeState::Accepted))
         })
+        .await;
+        fixture.transport.outcome.store(1, Ordering::SeqCst);
+        fixture.clock.advance(3);
+        service.handle.tick().await.unwrap();
+        assert_eq!(fixture.next().await.subscription, first.id);
+        assert_committed_receipt(&fixture, &service, |state| {
+            state.events[0].links.iter().any(|link| {
+                link.subscription == first.id
+                    && link.attempts == 2
+                    && link.last_failure == Some(DeliveryFailure::Rejected)
+            })
+        })
+        .await;
+        service.handle.tick().await.unwrap();
+        assert_eq!(fixture.next().await.subscription, second.id);
+        service.handle.drain_callbacks_for_test().await.unwrap();
+        service.handle.tick().await.unwrap();
+        assert_committed_receipt(&fixture, &service, |state| {
+            matches!(
+                state.events[0].handling,
+                Handling::Parked {
+                    reason: ParkReason::DeliveryAttemptsExhausted
+                }
+            ) && state.events[0].links.iter().all(|link| {
+                link.attempts == 2 && link.last_failure == Some(DeliveryFailure::Rejected)
+            })
+        })
+        .await;
+        service.handle.tick().await.unwrap();
+        let status = service.handle.status(fixture.recipient()).await.unwrap();
+        assert_eq!(
+            status.events[0].disposition,
+            EventDisposition::Parked(ParkReason::DeliveryAttemptsExhausted)
+        );
+        assert!(
+            status.events[0]
+                .attempts
+                .iter()
+                .all(|(_, attempts, _)| *attempts == 2)
+        );
+        assert_eq!(status.enabled_subscriptions, 2);
+        service.shutdown().await.unwrap();
     })
-    .await;
-    service.handle.tick().await.unwrap();
-    assert_eq!(fixture.next().await.subscription, second.id);
-    wait_for_receipts(&fixture, |state| {
-        matches!(
-            state.events[0].handling,
-            Handling::Parked {
-                reason: ParkReason::DeliveryAttemptsExhausted
-            }
-        ) && state.events[0]
-            .links
-            .iter()
-            .all(|link| link.attempts == 2 && link.last_failure == Some(DeliveryFailure::Rejected))
-    })
-    .await;
-    service.handle.tick().await.unwrap();
-    let status = service.handle.status(fixture.recipient()).await.unwrap();
-    assert_eq!(
-        status.events[0].disposition,
-        EventDisposition::Parked(ParkReason::DeliveryAttemptsExhausted)
-    );
-    assert!(
-        status.events[0]
-            .attempts
-            .iter()
-            .all(|(_, attempts, _)| *attempts == 2)
-    );
-    assert_eq!(status.enabled_subscriptions, 2);
-    service.shutdown().await.unwrap();
+    .await
+    .expect("recovery scenario did not complete");
 }
 
 #[tokio::test]
@@ -565,103 +629,108 @@ async fn recovery_binding_lease_expiry_selects_current_alternate_without_configu
 
 #[tokio::test]
 async fn mandatory_recovery_capacity_failure_keeps_owner_inspectable_across_restart() {
-    for history_limit in [true, false] {
-        let mut fixture = Fixture::new();
-        if history_limit {
-            fixture.limits.history = 1;
-        }
-        let service = fixture.open().await;
-        let first = event("expiring", "body");
-        let second = event("inspectable", "other body");
-        let mut binding = subscription(&first, fixture.clock.now());
-        if history_limit {
-            binding.binding = BindingState::NeedsRefresh;
-        }
-        service
-            .handle
-            .configure(operator(), vec![binding.clone()])
-            .await
-            .unwrap();
-        service.handle.admit(first.clone()).await.unwrap();
-        if history_limit {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        for history_limit in [true, false] {
+            let mut fixture = Fixture::new();
+            if history_limit {
+                fixture.limits.history = 1;
+            }
+            let service = fixture.open().await;
+            let first = event("expiring", "body");
+            let second = event("inspectable", "other body");
+            let mut binding = subscription(&first, fixture.clock.now());
+            if history_limit {
+                binding.binding = BindingState::NeedsRefresh;
+            }
             service
                 .handle
-                .claim(fixture.recipient(), first.key().clone(), RequestId::new())
+                .configure(operator(), vec![binding.clone()])
                 .await
                 .unwrap();
-        } else {
-            fixture.next().await;
-            wait_for_receipts(&fixture, |state| {
-                state.events[0].accepted_deadline.is_some()
-            })
-            .await;
-            binding.binding = BindingState::NeedsRefresh;
-            service
-                .handle
-                .configure(operator(), vec![binding])
-                .await
-                .unwrap();
-            assert!(matches!(
-                retained(&fixture).await.events[0].handling,
-                Handling::Unclaimed
-            ));
-        }
-        service.handle.admit(second).await.unwrap();
-        if !history_limit {
-            let length = serde_json::to_vec(&retained(&fixture).await).unwrap().len();
-            fixture.limits.snapshot_bytes = length;
-            service
+            service.handle.admit(first.clone()).await.unwrap();
+            if history_limit {
+                service
+                    .handle
+                    .claim(fixture.recipient(), first.key().clone(), RequestId::new())
+                    .await
+                    .unwrap();
+            } else {
+                service.handle.tick().await.unwrap();
+                fixture.next().await;
+                assert_committed_receipt(&fixture, &service, |state| {
+                    state.events[0].accepted_deadline.is_some()
+                })
+                .await;
+                binding.binding = BindingState::NeedsRefresh;
+                service
+                    .handle
+                    .configure(operator(), vec![binding])
+                    .await
+                    .unwrap();
+                assert!(matches!(
+                    retained(&fixture).await.events[0].handling,
+                    Handling::Unclaimed
+                ));
+            }
+            service.handle.admit(second).await.unwrap();
+            if !history_limit {
+                let length = serde_json::to_vec(&retained(&fixture).await).unwrap().len();
+                fixture.limits.snapshot_bytes = length;
+                service
+                    .handle
+                    .set_limits(operator(), fixture.limits.clone())
+                    .await
+                    .unwrap();
+            }
+            fixture.clock.advance(4);
+            for _ in 0..3 {
+                let _ = service.handle.tick().await;
+            }
+            let status = service.handle.status(fixture.recipient()).await.unwrap();
+            assert!(
+                status.capacity_blocked,
+                "history_limit={history_limit}: recovery must remain blocked"
+            );
+            assert_eq!(status.events.len(), 2);
+            assert_eq!(status.enabled_subscriptions, 1);
+            assert_eq!(
+                status.events[0].required_action,
+                RequiredAction::IncreaseCapacity
+            );
+            assert_eq!(
+                status.events[1].required_action,
+                RequiredAction::RefreshBinding
+            );
+            service.shutdown().await.unwrap();
+            let reopened = fixture.open().await;
+            for _ in 0..3 {
+                let _ = reopened.handle.tick().await;
+            }
+            assert!(
+                reopened
+                    .handle
+                    .status(fixture.recipient())
+                    .await
+                    .unwrap()
+                    .capacity_blocked
+            );
+            fixture.limits.history = 16;
+            fixture.limits.snapshot_bytes = Limits::default().snapshot_bytes;
+            reopened
                 .handle
                 .set_limits(operator(), fixture.limits.clone())
                 .await
                 .unwrap();
+            reopened.handle.tick().await.unwrap();
+            let status = reopened.handle.status(fixture.recipient()).await.unwrap();
+            assert!(!status.capacity_blocked);
+            assert_eq!(status.events[0].recovery_round, 1);
+            assert_eq!(status.events.len(), 2);
+            reopened.shutdown().await.unwrap();
         }
-        fixture.clock.advance(4);
-        for _ in 0..3 {
-            let _ = service.handle.tick().await;
-        }
-        let status = service.handle.status(fixture.recipient()).await.unwrap();
-        assert!(
-            status.capacity_blocked,
-            "history_limit={history_limit}: recovery must remain blocked"
-        );
-        assert_eq!(status.events.len(), 2);
-        assert_eq!(status.enabled_subscriptions, 1);
-        assert_eq!(
-            status.events[0].required_action,
-            RequiredAction::IncreaseCapacity
-        );
-        assert_eq!(
-            status.events[1].required_action,
-            RequiredAction::RefreshBinding
-        );
-        service.shutdown().await.unwrap();
-        let reopened = fixture.open().await;
-        for _ in 0..3 {
-            let _ = reopened.handle.tick().await;
-        }
-        assert!(
-            reopened
-                .handle
-                .status(fixture.recipient())
-                .await
-                .unwrap()
-                .capacity_blocked
-        );
-        fixture.limits.history = 16;
-        fixture.limits.snapshot_bytes = Limits::default().snapshot_bytes;
-        reopened
-            .handle
-            .set_limits(operator(), fixture.limits.clone())
-            .await
-            .unwrap();
-        reopened.handle.tick().await.unwrap();
-        let status = reopened.handle.status(fixture.recipient()).await.unwrap();
-        assert!(!status.capacity_blocked);
-        assert_eq!(status.events[0].recovery_round, 1);
-        assert_eq!(status.events.len(), 2);
-        reopened.shutdown().await.unwrap();
-    }
+    })
+    .await
+    .expect("recovery scenario did not complete");
 }
 
 #[tokio::test]

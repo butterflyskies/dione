@@ -304,13 +304,56 @@ async fn ordered_off_baseline() -> BoundaryTrace {
     }
 }
 
+fn ordering_scenario<F: Future<Output = ()>>(run: impl FnOnce() -> F) {
+    scenario(|| async {
+        tokio::time::pause();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let operation = run();
+        tokio::pin!(operation);
+        loop {
+            tokio::select! {
+                () = &mut operation => break,
+                _ = tokio::task::yield_now() => {
+                    // Keep virtual time fixed while real socket and storage work is pending.
+                    assert!(std::time::Instant::now() < deadline, "ordering scenario exceeded the 30-second wall-clock watchdog");
+                }
+            }
+        }
+    });
+}
+
+async fn await_ordered_provider(
+    fixture: &Fixture,
+    requests: &mut tokio::sync::mpsc::UnboundedReceiver<WireRequest>,
+    evaluation: &mut tokio::task::JoinHandle<DecisionRecord>,
+    source: &SourceVersion,
+) {
+    let expected = serde_json::to_value(source).unwrap();
+    loop {
+        tokio::select! {
+            request = requests.recv() => {
+                let request = request.expect("request observer remains connected");
+                if request.path.ends_with("/systemone") {
+                    assert_eq!(request.body["state"]["trigger"]["source"], expected);
+                    return;
+                }
+            }
+            result = &mut *evaluation => {
+                let paths: Vec<_> = fixture.network.state.lock().requests.iter().map(|request| request.path.clone()).collect();
+                panic!("evaluation ended before provider arrival for {source:?}: {result:?}; health={:?}; requests={paths:?}", fixture.attention.health());
+            }
+        }
+    }
+}
+
 #[test]
 fn a05_log_sink_matches_off_while_y_finishes_before_x_and_direct_does_not_wait() {
-    scenario(|| async {
+    ordering_scenario(|| async {
         let baseline = ordered_off_baseline().await;
         assert_eq!(baseline.sink.len(), 3);
 
         let mut fixture = Fixture::new(AttentionMode::Log).await;
+        let mut requests = fixture.network.observe_requests();
         fixture.network.insert(100, 1_401, "prompt ordered x", None);
         fixture.network.insert(100, 1_402, "prompt ordered y", None);
         fixture.network.insert(100, 1_403, "ordered direct d", None);
@@ -322,8 +365,8 @@ fn a05_log_sink_matches_off_while_y_finishes_before_x_and_direct_does_not_wait()
             .await
             .unwrap();
         let x_source = x_work.record.sources[0].clone();
-        let x_pending = tokio::spawn(fixture.attention.clone().evaluate(x_work));
-        fixture.network.wait_for_provider(1).await;
+        let mut x_pending = tokio::spawn(fixture.attention.clone().evaluate(x_work));
+        await_ordered_provider(&fixture, &mut requests, &mut x_pending, &x_source).await;
 
         let y_gate = Arc::new(Semaphore::new(0));
         fixture.network.state.lock().provider_gate = Some(y_gate.clone());
@@ -332,8 +375,8 @@ fn a05_log_sink_matches_off_while_y_finishes_before_x_and_direct_does_not_wait()
             .await
             .unwrap();
         let y_source = y_work.record.sources[0].clone();
-        let y_pending = tokio::spawn(fixture.attention.clone().evaluate(y_work));
-        fixture.network.wait_for_provider(2).await;
+        let mut y_pending = tokio::spawn(fixture.attention.clone().evaluate(y_work));
+        await_ordered_provider(&fixture, &mut requests, &mut y_pending, &y_source).await;
 
         let mut direct = fixture.event(100, 1_403).await;
         direct.targeting = MessageTargeting::GuildDirected(crate::gate::MentionKind::DirectMention);
@@ -347,10 +390,18 @@ fn a05_log_sink_matches_off_while_y_finishes_before_x_and_direct_does_not_wait()
         let y_record = y_pending.await.unwrap();
         assert!(!x_pending.is_finished());
         assert_eq!(y_record.actual, Admission::Ordinary);
+        assert!(
+            y_record.judgment.is_some(),
+            "y must finish with a successful judgment"
+        );
         fixture.finish(y_record).await;
         x_gate.add_permits(1);
         let x_record = x_pending.await.unwrap();
         assert_eq!(x_record.actual, Admission::Ordinary);
+        assert!(
+            x_record.judgment.is_some(),
+            "x must finish with a successful judgment"
+        );
         fixture.finish(x_record).await;
         assert_eq!(fixture.drain().await, Vec::<Value>::new());
 
