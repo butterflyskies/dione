@@ -150,7 +150,7 @@ pub(crate) fn sentex_handles_schema(role_description: &str) -> Value {
             "maxLength": 20
         },
         "description": format!(
-            "{role_description}. Canonical positive decimal u64 strings naming opaque Vaelii sentex handles; JSON numbers are rejected to avoid precision loss. Dione transports the role and handle in terminal [🔍=v2:<role>:<token>] locators after pre-send hooks. At most {} claim and citation handles combined and {} aggregate marker bytes. A locator is author-offered metadata, not verification or truth.",
+            "{role_description}. Canonical positive decimal u64 strings naming opaque Vaelii sentex handles; JSON numbers are rejected to avoid precision loss. Dione transports the role and handle in terminal [🔍=v3:<role>:<token>] locators after pre-send hooks, where the token is the minimal-width big-endian handle bytes in unpadded base64url. At most {} claim and citation handles combined and {} aggregate marker bytes. A locator is author-offered metadata, not verification or truth.",
             crate::evidence::MAX_SENTEX_REFS,
             crate::evidence::MAX_SENTEX_MARKER_BYTES,
         )

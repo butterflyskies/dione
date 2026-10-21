@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.85.0]
+
+### Changed
+
+- Sentex locators drop the leading-zero padding: `reply` and `send_dm` now emit
+  `[🔍=v3:<role>:<token>]`, where the token is the handle's minimal-width
+  big-endian bytes in unpadded base64url (handle 2326 → `[🔍=v3:claim:CRY]`
+  instead of `[🔍=v2:claim:AAAAAAAACRY]`). Decoding is canonical: it rejects
+  an empty token, padding, non-base64url characters, a leading zero byte and
+  zero. v1 and v2 markers remain readable and project as written. Hook and
+  audit metadata report `sentex_transport` as
+  `terminal-visible-role-suffix-v3-after-hooks`. The 124-byte marker budget is
+  unchanged and is now computed from the actual token lengths (#541).
+- Rollout: 0.84 and earlier silently ignore v3 markers, and rolling back to
+  0.84 does not recover the v3 locators already sent. Upgrade all
+  evidence-enabled seats together (#541).
+
 ## [0.84.1]
 
 ### Fixed

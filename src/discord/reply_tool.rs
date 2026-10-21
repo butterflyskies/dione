@@ -246,7 +246,7 @@ mod tests {
         let request = ReplyRequest::parse(&valid, true).unwrap();
         assert_eq!(
             crate::evidence::append_markers(request.content, &request.handles),
-            "text [🔍=v2:claim:__________8] [🔍=v2:citation:AAAAAAAAAAE]"
+            "text [🔍=v3:claim:__________8] [🔍=v3:citation:AQ]"
         );
     }
 

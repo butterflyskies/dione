@@ -385,6 +385,10 @@ mod tests {
         assert!(has_terminal_sentex_syntax(
             "malformed [🔍=v2:claim:garbage]"
         ));
+        assert!(has_terminal_sentex_syntax("current [🔍=v3:claim:CRY]"));
+        assert!(has_terminal_sentex_syntax(
+            "malformed [🔍=v3:citation:garbage]"
+        ));
         assert!(has_terminal_sentex_syntax(concat!(
             "over limit ",
             "[🔍=v2:claim:AAAAAAAAAAE] ",
@@ -396,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn appending_markers_uses_role_preserving_v2_big_endian_base64url() {
+    fn appending_markers_uses_role_preserving_v3_minimal_base64url() {
         let handles = parse_tool_sentex_handles(&json!({
             "claim_handles": ["12"],
             "citation_handles": ["34"]
@@ -404,8 +408,120 @@ mod tests {
         .unwrap();
         assert_eq!(
             append_markers("claim", &handles),
-            "claim [🔍=v2:claim:AAAAAAAAAAw] [🔍=v2:citation:AAAAAAAAACI]"
+            "claim [🔍=v3:claim:DA] [🔍=v3:citation:Ig]"
         );
+    }
+
+    #[test]
+    fn v3_tokens_are_minimal_width_and_round_trip_at_byte_boundaries() {
+        for (handle, token) in [
+            (1u64, "AQ"),
+            (255, "_w"),
+            (256, "AQA"),
+            (2326, "CRY"),
+            (65535, "__8"),
+            (65536, "AQAA"),
+            (0x00ff_ffff, "____"),
+            (0x0100_0000, "AQAAAA"),
+            (0xffff_ffff, "_____w"),
+            (0x0001_0000_0000, "AQAAAAA"),
+            (0x00ff_ffff_ffff, "______8"),
+            (0x0100_0000_0000, "AQAAAAAA"),
+            (0xffff_ffff_ffff, "________"),
+            (0x0001_0000_0000_0000, "AQAAAAAAAA"),
+            (0x00ff_ffff_ffff_ffff, "_________w"),
+            (0x0100_0000_0000_0000, "AQAAAAAAAAA"),
+            (0x0102_0304_0506_0708, "AQIDBAUGBwg"),
+            (u64::MAX, "__________8"),
+        ] {
+            let handles =
+                parse_tool_sentex_handles(&json!({ "citation_handles": [handle.to_string()] }))
+                    .unwrap();
+            let content = append_markers("claim", &handles);
+            assert_eq!(content, format!("claim [🔍=v3:citation:{token}]"));
+            let locators = parse_sentex_locators(&content);
+            assert_eq!(locators.len(), 1, "{content}");
+            assert_eq!(locators[0].as_str(), format!("v3:citation:{token}"));
+            assert_eq!(locators[0].role(), SentexRole::Citation);
+        }
+    }
+
+    #[test]
+    fn v3_terminal_markers_parse_with_roles_and_order() {
+        let content = "claim [🔍=v3:citation:CRY] [🔍=v3:claim:DA]";
+        let sentexes = parse_offered_sentexes(content, UserId::new(99));
+        assert_eq!(sentexes.len(), 2);
+        assert_eq!(sentexes[0].locator.role(), SentexRole::Citation);
+        assert_eq!(sentexes[0].locator.as_str(), "v3:citation:CRY");
+        assert_eq!(sentexes[1].locator.role(), SentexRole::Claim);
+        assert_eq!(sentexes[1].locator.as_str(), "v3:claim:DA");
+    }
+
+    #[test]
+    fn v3_decoding_rejects_noncanonical_tokens() {
+        for token in [
+            // Empty.
+            "",
+            // Zero, as one byte and as the padded eight-byte form.
+            "AA",
+            "AAAAAAAAAAA",
+            // Leading zero byte, including the v2-style padded form under v3.
+            "AAkW",
+            "AAAAAAAACRY",
+            // Padding characters.
+            "CRY=",
+            "AQ==",
+            // Standard (non-url-safe) alphabet and other non-base64url bytes.
+            "CR+",
+            "CR/",
+            "CR Y",
+            "CR.Y",
+            // Nonzero unused trailing bits.
+            "CRZ",
+            "AR",
+            // Impossible base64 length.
+            "A",
+            "AQIDB",
+            // More than eight bytes.
+            "AQAAAAAAAAAA",
+        ] {
+            let content = format!("claim [🔍=v3:claim:{token}]");
+            assert!(
+                parse_sentex_locators(&content).is_empty(),
+                "accepted noncanonical v3 token {token:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_version_suffix_keeps_each_locator_as_written() {
+        let content = concat!(
+            "claim ",
+            "[🔍=v1:AAAAAAAAACI] ",
+            "[🔍=v2:claim:AAAAAAAAAAw] ",
+            "[🔍=v3:citation:CRY]"
+        );
+        let locators = parse_sentex_locators(content);
+        let rendered: Vec<_> = locators.iter().map(SentexLocator::as_str).collect();
+        assert_eq!(
+            rendered,
+            ["v1:AAAAAAAAACI", "v2:claim:AAAAAAAAAAw", "v3:citation:CRY"]
+        );
+    }
+
+    #[test]
+    fn fixed_width_v1_and_v2_tokens_still_decode_to_the_same_handles() {
+        assert_eq!(
+            VaeliiSentexHandle::from_locator_token("AAAAAAAAAAw"),
+            Some(VaeliiSentexHandle(NonZeroU64::new(12).unwrap()))
+        );
+        assert_eq!(
+            VaeliiSentexHandle::from_locator_token("AAAAAAAACRY"),
+            Some(VaeliiSentexHandle(NonZeroU64::new(2326).unwrap()))
+        );
+        // Minimal tokens are not valid in the fixed-width v1/v2 grammar.
+        assert!(parse_sentex_locators("claim [🔍=v2:claim:CRY]").is_empty());
+        assert!(parse_sentex_locators("claim [🔍=v1:CRY]").is_empty());
     }
 
     #[test]
@@ -413,10 +529,10 @@ mod tests {
         let handles =
             parse_tool_sentex_handles(&json!({ "claim_handles": [u64::MAX.to_string()] })).unwrap();
         let content = append_markers("claim", &handles);
-        assert_eq!(content, "claim [🔍=v2:claim:__________8]");
+        assert_eq!(content, "claim [🔍=v3:claim:__________8]");
         assert_eq!(
             parse_sentex_locators(&content)[0].as_str(),
-            "v2:claim:__________8"
+            "v3:claim:__________8"
         );
     }
 
@@ -429,12 +545,100 @@ mod tests {
         .unwrap();
         assert_eq!(
             locator_metadata(handles.claims(), SentexRole::Claim),
-            "v2:claim:AAAAAAAAAAw,v2:claim:AAAAAAAAACI"
+            "v3:claim:DA,v3:claim:Ig"
         );
         assert_eq!(
             locator_metadata(handles.citations(), SentexRole::Citation),
-            "v2:citation:AAAAAAAAADg"
+            "v3:citation:OA"
         );
+    }
+
+    #[test]
+    fn minimal_token_decoder_is_canonical() {
+        let handle = |value| Some(VaeliiSentexHandle(NonZeroU64::new(value).unwrap()));
+        assert_eq!(
+            VaeliiSentexHandle::from_minimal_locator_token("CRY"),
+            handle(2326)
+        );
+        assert_eq!(
+            VaeliiSentexHandle::from_minimal_locator_token("AQ"),
+            handle(1)
+        );
+        assert_eq!(
+            VaeliiSentexHandle::from_minimal_locator_token("__________8"),
+            handle(u64::MAX)
+        );
+        for token in [
+            "",
+            "AA",
+            "AAkW",
+            "AAAAAAAACRY",
+            "CRY=",
+            "CR+",
+            "CRZ",
+            "AQAAAAAAAAAA",
+        ] {
+            assert!(
+                VaeliiSentexHandle::from_minimal_locator_token(token).is_none(),
+                "accepted {token:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn minimal_decoder_rejects_tokens_longer_than_eleven_chars() {
+        // Twelve characters decode to nine bytes, which do not fit in a u64.
+        assert!(VaeliiSentexHandle::from_minimal_locator_token("AQAAAAAAAAAA").is_none());
+        assert!(VaeliiSentexHandle::from_minimal_locator_token("____________").is_none());
+    }
+
+    #[test]
+    fn minimal_decoder_rejects_the_empty_token() {
+        assert!(VaeliiSentexHandle::from_minimal_locator_token("").is_none());
+    }
+
+    #[test]
+    fn minimal_decoder_rejects_a_leading_zero_byte() {
+        for token in ["AA", "AAE", "AAAAAAAACRY"] {
+            assert!(
+                VaeliiSentexHandle::from_minimal_locator_token(token).is_none(),
+                "accepted {token:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn minimal_decoder_rejects_padding_and_nonzero_trailing_bits() {
+        for token in ["CRY=", "AQ==", "CRZ", "AR"] {
+            assert!(
+                VaeliiSentexHandle::from_minimal_locator_token(token).is_none(),
+                "accepted {token:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn marker_bytes_match_the_appended_suffix_exactly() {
+        for (claims, citations) in [
+            (vec!["1"], vec![]),
+            (vec![], vec!["2326"]),
+            (vec!["255", "256"], vec!["65536"]),
+            (
+                vec!["1", "65535"],
+                vec!["18446744073709551615", "72623859790382856"],
+            ),
+        ] {
+            let handles = parse_tool_sentex_handles(&json!({
+                "claim_handles": claims,
+                "citation_handles": citations
+            }))
+            .unwrap();
+            let content = "claim";
+            assert_eq!(
+                append_markers(content, &handles).len() - content.len(),
+                marker_bytes(&handles)
+            );
+        }
     }
 
     #[test]
@@ -449,13 +653,36 @@ mod tests {
         };
         assert_eq!(marker_bytes(&largest), MAX_SENTEX_MARKER_BYTES);
         assert!(validate_marker_bytes(&largest).is_ok());
+        // Minimal tokens make small handles cheap, so only full-width handles
+        // beyond the count limit exceed the byte bound.
         let over_limit = SentexHandles {
             claims: Vec::new(),
-            citations: std::iter::repeat_with(|| VaeliiSentexHandle(NonZeroU64::new(1).unwrap()))
-                .take(MAX_SENTEX_REFS + 1)
-                .collect(),
+            citations: std::iter::repeat_with(|| {
+                VaeliiSentexHandle(NonZeroU64::new(u64::MAX).unwrap())
+            })
+            .take(MAX_SENTEX_REFS + 1)
+            .collect(),
         };
         assert!(validate_marker_bytes(&over_limit).is_err());
+    }
+
+    #[test]
+    fn marker_byte_bound_is_pinned_from_above() {
+        let citations = |values: &[u64]| SentexHandles {
+            claims: Vec::new(),
+            citations: values
+                .iter()
+                .map(|value| VaeliiSentexHandle(NonZeroU64::new(*value).unwrap()))
+                .collect(),
+        };
+        // Token lengths 11 + 4 + 3 + 3 + 3: exactly the limit, so accepted.
+        let at_limit = citations(&[u64::MAX, 0x00ff_ffff, 256, 256, 256]);
+        assert_eq!(marker_bytes(&at_limit), MAX_SENTEX_MARKER_BYTES);
+        assert!(validate_marker_bytes(&at_limit).is_ok());
+        // One token one character longer (3 -> 4): one byte over, so rejected.
+        let over_by_one = citations(&[u64::MAX, 0x00ff_ffff, 0x00ff_ffff, 256, 256]);
+        assert_eq!(marker_bytes(&over_by_one), MAX_SENTEX_MARKER_BYTES + 1);
+        assert!(validate_marker_bytes(&over_by_one).is_err());
     }
 }
 

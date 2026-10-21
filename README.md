@@ -243,13 +243,18 @@ write boundary.
 When `delivery.evidence_markers_enabled` is true, `reply` and `send_dm` accept
 up to four total `claim_handles` and `citation_handles`. Handles are canonical
 positive-decimal `u64` strings; JSON numbers are rejected. Dione appends
-role-bearing terminal v2 locators after pre-send hooks and exposes them as
-`claim_locators` and `citation_locators` on receive surfaces. Locators are
-author-offered metadata, not verification or truth.
+role-bearing terminal v3 locators after pre-send hooks, such as
+`[🔍=v3:claim:CRY]` for handle 2326, and exposes them as `claim_locators` and
+`citation_locators` on receive surfaces. A v3 token is the handle's
+minimal-width big-endian bytes in unpadded base64url; decoding rejects empty
+tokens, padding, non-base64url characters, a leading zero byte and zero.
+Locators are author-offered metadata, not verification or truth.
 
 The former `evidence_keys` input is not accepted. Existing v1 terminal markers
-remain readable as citations, including events already queued for Codex before
-an upgrade. Put literal marker examples inside quoted or fenced content; raw
+remain readable as citations, and fixed-width v2 markers (`[🔍=v2:claim:…]`,
+an eight-byte token) remain readable with their roles, including events already
+queued for Codex before an upgrade. Parsed locators are projected exactly as
+written, so a v2 marker still reads as `v2:…`. Put literal marker examples inside quoted or fenced content; raw
 terminal locators in outbound message text are rejected so they cannot bypass
 the structured handle and audit path.
 

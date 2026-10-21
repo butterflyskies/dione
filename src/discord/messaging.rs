@@ -658,7 +658,7 @@ async fn prepare_outbound(
         }
         hook_context = hook_context.with_metadata(
             "sentex_transport",
-            SentexTransport::TerminalVisibleRoleSuffixV2AfterHooks.as_str(),
+            SentexTransport::TerminalVisibleRoleSuffixV3AfterHooks.as_str(),
         );
     }
     let outcome =
@@ -3127,36 +3127,33 @@ mod tests {
 
         let hook_context = hook_context.lock().unwrap().clone().unwrap();
         assert_eq!(hook_context.text(), "original");
-        assert_eq!(
-            hook_context.metadata("claim_locators"),
-            Some("v2:claim:AAAAAAAAACI")
-        );
+        assert_eq!(hook_context.metadata("claim_locators"), Some("v3:claim:Ig"));
         assert_eq!(
             hook_context.metadata("citation_locators"),
-            Some("v2:citation:AAAAAAAAAAw")
+            Some("v3:citation:DA")
         );
         assert_eq!(
             hook_context.metadata("sentex_transport"),
-            Some("terminal-visible-role-suffix-v2-after-hooks")
+            Some("terminal-visible-role-suffix-v3-after-hooks")
         );
 
         let audit_context = audit_context.lock().unwrap().clone().unwrap();
         assert_eq!(audit_context.text(), "rewritten");
         assert_eq!(
             audit_context.metadata("claim_locators"),
-            Some("v2:claim:AAAAAAAAACI")
+            Some("v3:claim:Ig")
         );
         assert_eq!(
             audit_context.metadata("citation_locators"),
-            Some("v2:citation:AAAAAAAAAAw")
+            Some("v3:citation:DA")
         );
         assert_eq!(
             audit_context.metadata("sentex_transport"),
-            Some(SentexTransport::TerminalVisibleRoleSuffixV2AfterHooks.as_str())
+            Some(SentexTransport::TerminalVisibleRoleSuffixV3AfterHooks.as_str())
         );
         assert_eq!(
             prepared.text,
-            "rewritten [🔍=v2:claim:AAAAAAAAACI] [🔍=v2:citation:AAAAAAAAAAw]"
+            "rewritten [🔍=v3:claim:Ig] [🔍=v3:citation:DA]"
         );
     }
 
@@ -3176,6 +3173,9 @@ mod tests {
                 "[🔍=v2:claim:AAAAAAAAAAw]",
                 "[🔍=v2:citation:AAAAAAAAAAw]",
                 "[🔍=v2:claim:garbage]",
+                "[🔍=v3:claim:CRY]",
+                "[🔍=v3:citation:AAAAAAAAAAw]",
+                "[🔍=v3:claim:garbage]",
                 concat!(
                     "[🔍=v2:claim:AAAAAAAAAAE] ",
                     "[🔍=v2:claim:AAAAAAAAAAI] ",
@@ -3273,6 +3273,8 @@ mod tests {
         for marker in [
             "[🔍=v2:claim:AAAAAAAAAAw]",
             "[🔍=v2:claim:garbage]",
+            "[🔍=v3:claim:CRY]",
+            "[🔍=v3:citation:garbage]",
             concat!(
                 "[🔍=v2:claim:AAAAAAAAAAE] ",
                 "[🔍=v2:claim:AAAAAAAAAAI] ",
@@ -4224,8 +4226,8 @@ mod tests {
                 "ok": true,
                 "channel_id": "4242",
                 "message_ids": [9001],
-                "claim_locators": ["v2:claim:AAAAAAAAACI"],
-                "citation_locators": ["v2:citation:AAAAAAAAAAw"],
+                "claim_locators": ["v3:claim:Ig"],
+                "citation_locators": ["v3:citation:DA"],
             })
         );
         let requests = requests.lock().expect("request capture lock");
@@ -4242,7 +4244,7 @@ mod tests {
             .expect("the first-contact branch must send the prepared message");
         assert_eq!(
             serde_json::from_str::<Value>(sent_body).unwrap()["content"],
-            "grounded [🔍=v2:claim:AAAAAAAAACI] [🔍=v2:citation:AAAAAAAAAAw]"
+            "grounded [🔍=v3:claim:Ig] [🔍=v3:citation:DA]"
         );
     }
 
@@ -4621,7 +4623,7 @@ mod tests {
         ));
         assert_eq!(
             crate::discord::messaging_wire::dm(result),
-            json!({"ok":true,"message_ids":[9001],"claim_locators":["v2:claim:AAAAAAAAACI"],"citation_locators":["v2:citation:AAAAAAAAAAw"]})
+            json!({"ok":true,"message_ids":[9001],"claim_locators":["v3:claim:Ig"],"citation_locators":["v3:citation:DA"]})
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert!(
@@ -5710,7 +5712,7 @@ mod tests {
             sent[0]["content"]
                 .as_str()
                 .unwrap()
-                .starts_with("hello [🔍=v2:claim:")
+                .starts_with("hello [🔍=v3:claim:")
         );
 
         std::fs::write(path.join("config.toml"), "[[channels]]\nid = \"42\"\nrequire_mention = false\n[contradictionary]\nenabled = true\n[[contradictionary.entries]]\npattern = \"blocked\"\naction = \"block\"\nmatch_mode = \"word\"\n").unwrap();
