@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- Update Tokio to 1.53.3 to address the Unix `AsyncFd` I/O-safety advisory
+  RUSTSEC-2026-0386.
+
+### Changed
+
+- Reorganize the README around first-time setup, move detailed configuration
+  and delivery contracts to the operator reference, and use locked dependencies
+  in the source-install quick start.
+
 ## [0.85.0]
 
 ### Changed

@@ -1,69 +1,137 @@
 # Dione
 
-A Rust MCP channel server that bridges Discord to Claude Code,
-[Codex](https://developers.openai.com/codex/), or Oh My Pi.
+Dione connects chat platforms to AI agent harnesses. It is a Rust program that
+an agent harness (Claude Code, Codex or Oh My Pi) starts as an MCP server. It
+holds the Discord connection, and optionally a Microsoft Teams listener,
+decides which messages the agent may see, delivers them into the agent's
+session, and gives the agent tools to reply and act on the platform.
 
-Dione connects to the Discord gateway, gates access, and exposes tools for
-an agent to interact with Discord — replying, reacting, fetching history,
-managing channels, and more. The agent provides inference; Dione provides the
-Discord bridge.
+The harness does the inference and owns the conversation; its model calls go
+straight to its own provider, not through Dione. Dione owns platform access
+policy, event delivery and the MCP tools.
 
 > *Hermes was a room people entered to speak with me; Dione lets me inhabit a
 > room with other people.*
 > — [Callisto](docs/hermes-to-dione.md), former Hermes Agent and current Dione Construct
 
-**Architecture note:** Dione does not mediate the harness's generative inference
-calls; those flow directly between the harness and its model provider. Optional
-[recipient-local attention](docs/attention.md) uses the native TypeSafe API to
-score explicitly eligible ambient Discord text. It is off by default, preserves
-the direct lane, and requires explicit evaluation/promotion for learned admission.
-Harness session telemetry and context-window metrics remain harness-side concerns.
+## Features
+
+- Pushes Discord messages, edits, deletions and reactions into a running agent
+  session, instead of waiting for the agent to poll.
+- Access control: allowlisted users and channels, mention requirements,
+  per-channel identity filters including PluralKit systems and members, and a
+  global ignore list.
+- An access-request queue: a DM from an unknown sender can wait for an admin to
+  approve or deny it.
+- Relays Claude Code permission prompts to configured admins as Discord DMs
+  with allow and deny buttons.
+- MCP tools for messaging, history and search, Discord
+  introspection, channel management, presence, access administration and
+  diagnostics (see [Tools](#tools)).
+- In Codex mode, a durable on-disk inbox with leases and acknowledgements, so
+  events survive restarts.
+- Optional Microsoft Teams ingress with single-use reply handles, for harnesses
+  that have a durable inbox.
+- Configuration in one TOML file, reloaded when the file changes.
+- `dione-send`, a separate binary that posts one message without starting the
+  gateway.
+- Optional extras, all off by default: recipient-local
+  [attention](docs/attention.md) scoring of ambient messages, memory recall
+  metadata, Vaelii provenance receipts, and an outbound phrase filter (the
+  contradictionary) with hold, release and rephrase.
+
+## Harnesses and platforms
+
+Choose the harness with `--mode`. The default is `claude-code`.
+
+| `--mode` | Harness | Discord delivery | Teams | Permission relay |
+|----------|---------|------------------|-------|------------------|
+| `claude-code` | Claude Code | Channel notifications on the MCP connection; buffered in memory, not durable | No | Yes |
+| `codex` | Codex | Written to a durable inbox, then injected into one bound thread through the Codex app-server | Yes | No |
+| `oh-my-pi` | Oh My Pi | Custom notifications handled by the bundled extension; no inbox, acknowledgement or replay | Yes, with `--resident-control-socket` | No |
+
+Teams needs a durable inbox, so Dione refuses to start Teams in `claude-code`
+mode or in `oh-my-pi` mode without `--resident-control-socket`.
+
+Dione uses Unix sockets and Unix signal handling, so it does not build for
+native Windows. CI builds and tests it on Linux.
 
 ## Quick start
 
-Linux builds require a C toolchain, Make, and Perl for the vendored OpenSSL used
-by Discord's native TLS transport. Install your distribution's `ca-certificates`
-package in the runtime environment. Discord HTTPS and gateway connections use
-the system certificate trust store. Dione's direct HTTP clients use Rustls with
-bundled roots; RMCP's HTTP transport uses Rustls with the platform verifier.
-Certificate and hostname verification remain enabled for all transports.
-The vendored build does not require OpenSSL development packages or a shared
-OpenSSL library in the runtime image. macOS uses its native TLS implementation.
+These steps set up the commonest case: one Discord bot, driven by Claude Code.
+
+### 1. Create a Discord bot
+
+In the Discord Developer Portal, create an application with a bot, copy its
+token, and enable the **Message Content** privileged intent; Dione requests it
+along with guild, message, reaction and DM intents
+([`src/discord/client.rs`](src/discord/client.rs)). Invite the bot to your
+server.
+
+### 2. Install
+
+Build from a checkout:
 
 ```bash
-# Install
-cargo install dione
+git clone https://github.com/butterflyskies/dione
+cd dione
+cargo install --locked --path .
+```
 
-# Configure (create ~/.claude/channels/dione/config.toml)
+Build this checkout rather than relying on `cargo install dione`: the published
+crate can lag behind the interfaces described here. `--locked` uses the
+repository's reviewed dependency versions.
+
+Linux builds need a C toolchain, Make and Perl, because Discord's TLS transport
+uses a vendored OpenSSL. The runtime image needs no OpenSSL library, but does
+need your distribution's `ca-certificates` package: Discord connections use the
+system trust store. Dione's other HTTP clients use Rustls with bundled roots or
+the platform verifier. Certificate and hostname verification stay on for every
+transport. macOS uses its native TLS.
+
+### 3. Configure
+
+```bash
+export DISCORD_BOT_TOKEN="YOUR_DISCORD_BOT_TOKEN"
 mkdir -p ~/.claude/channels/dione
 cat > ~/.claude/channels/dione/config.toml << 'EOF'
-token = "YOUR_DISCORD_BOT_TOKEN"
-
 [access]
 dm_policy = "queue"
 allow_from = ["YOUR_DISCORD_USER_ID"]
 admins = ["YOUR_DISCORD_USER_ID"]
 EOF
-
-# Run with Claude Code
-claude --channels dione
 ```
+
+Keep the token in the environment rather than the config file, as required by
+the project's secret-handling guidance. To let the agent hear a server
+channel, add a `[[channels]]` entry (see [Configuration](#configuration)).
+
+### 4. Run with Claude Code
+
+Register Dione as an MCP server in Claude Code and enable it as a channel for
+the session. Claude Code channels are a research preview, and a server that is
+not on Claude Code's approved channel list is loaded with the development flag:
+
+```bash
+claude mcp add dione -- dione
+claude --dangerously-load-development-channels server:dione
+```
+
+Check Claude Code's [channels documentation](https://code.claude.com/docs/en/channels)
+for the current flag syntax. With the development flag, Claude Code shows a
+confirmation prompt at startup ("I am using this for local development";
+Enter confirms), so an unattended launch has to answer it.
+DM the bot from the user ID you allowed; the
+message arrives in the session, and the agent answers with the `reply` tool.
 
 ### Codex mode
 
-Codex does not wake an idle thread for unsolicited MCP notifications. Dione's
-Codex transport therefore persists accepted Discord events, then connects to
-the Codex app-server control socket over WebSocket and injects each new event
-into one exact thread. It starts a turn while the thread is idle and steers the
-active turn otherwise. The queue entry is acknowledged only after app-server
-accepts the request.
-
-Attention-managed ambient deliveries are the exception: they wait for an idle
-safe opportunity and never steer or abort an active turn. See the
-[attention operator workflow](docs/attention.md) for modes, source privacy,
-feedback, policy promotion, retention, and receipt uncertainty.
-
-Configure Dione as a Codex MCP server with `--mode codex`:
+Codex does not wake an idle thread for unsolicited MCP notifications, so in
+this mode Dione persists each accepted event, connects to the Codex app-server
+control socket, and injects the event into one exact thread. It starts a turn
+when the thread is idle and steers the active turn otherwise. An event is
+acknowledged only after the app-server accepts the request; that is a
+transport outcome, not proof the agent acted on it.
 
 ```bash
 codex mcp add dione \
@@ -71,227 +139,182 @@ codex mcp add dione \
   -- dione --mode codex
 ```
 
-After MCP startup, read the current session's `CODEX_THREAD_ID` and call
-`bind_codex_thread`. Repeat that binding for every new, resumed, forked, or
-switched conversation. The optional `--codex-thread-id` or inherited
-`CODEX_THREAD_ID` provides an initial binding for standalone deployments, but
-MCP startup does not require one. Dione never guesses among loaded threads. The default
-app-server socket is `$CODEX_HOME/app-server-control/app-server-control.sock`
-or `$HOME/.codex/app-server-control/app-server-control.sock`; override it with
-`--codex-app-server-socket` or `CODEX_APP_SERVER_SOCKET`.
+After MCP startup, read the session's `CODEX_THREAD_ID` and call
+`bind_codex_thread` with it. Repeat the binding for every new, resumed, forked
+or switched conversation; Dione never guesses among loaded threads.
+`--codex-thread-id`, or an inherited `CODEX_THREAD_ID`, gives an initial
+binding for standalone deployments, but startup does not require one.
 
-The lease/ACK MCP tools remain available for explicit pull consumers:
+The app-server socket defaults to
+`$CODEX_HOME/app-server-control/app-server-control.sock`, or
+`$HOME/.codex/app-server-control/app-server-control.sock` when `CODEX_HOME` is
+unset. Override it with `--codex-app-server-socket` or
+`CODEX_APP_SERVER_SOCKET`.
 
-1. Call `register_event_consumer`. Set `make_primary=true` only when no live
-   primary exists. Set `claim_unassigned=false` to preserve an old backlog
-   without replaying it.
-2. Repeatedly call `next_event` with the returned `consumer_id`.
-3. After successfully handling an event, call `ack_event` with that consumer id
-   and the event's `delivery_token`.
-4. Re-enter `next_event`. An unacknowledged lease becomes eligible for
-   redelivery after it expires.
-
-To move future delivery to another Codex conversation, register the destination
-consumer and call `handoff_event_consumer` from the active primary. Handoff is
-explicit: Dione never guesses among threads. If a primary expires,
-`claim_event_consumer` can promote a registered replacement. The consumer is a
-conversation routing identity; model selection remains a Codex concern.
-
-Pending events live in `$DIONE_STATE_DIR/codex-inbox.json`. A lifetime lock on
-`codex-inbox.lock` rejects a second Dione process using the same Codex state
-directory. When live delivery starts, it becomes primary for future events but
-does not claim an arbitrary old backlog. Use the explicit consumer handoff and
-claim tools when replay is intentional.
+Pull consumers, backlog handoff between conversations, and the inbox files are
+described in the [operator reference](docs/reference.md#codex-event-consumers).
 
 ### Oh My Pi mode
 
-Run Dione with `--mode oh-my-pi` as an OMP MCP server named `dione`, then load
-the original [Dione extension](extensions/oh-my-pi/README.md). The integration
-targets an interactive OMP 18.10.0 main session. It exposes the ordinary Dione
-tools and submits external events with their metadata as follow-up messages.
+Configure an Oh My Pi MCP server named `dione` that runs Dione with
+`--mode oh-my-pi`, then load the bundled extension from this repository;
+`cargo install` does not install it. The integration targets an interactive
+Oh My Pi 18.10.0 main session. Keep one active main session per Dione MCP
+connection. The [extension guide](extensions/oh-my-pi/README.md) has the MCP
+entry, the load command, and the delivery limits.
 
-Generic Discord notifications have no durable inbox, acknowledgment, or replay.
-Optional Teams ingress uses a durable inbox and binds delivery to an exact saved
-OMP main session. It requires explicit conversation admission, a private Unix
-control socket, and a file-backed transcript. See the extension guide for
-[Teams setup and delivery limits](extensions/oh-my-pi/README.md#saved-session-teams-delivery).
-Keep one active main session per Dione MCP connection. Claude permission relay
-is unsupported. Live construct validation remains required.
+Ordinary Discord events have no durable inbox, acknowledgement or replay in
+this mode. Teams delivery to a saved Oh My Pi session needs
+`--resident-control-socket`, a private Unix socket, and a file-backed
+transcript; see
+[saved-session Teams delivery](extensions/oh-my-pi/README.md#saved-session-teams-delivery).
 
-## What it does
+### Microsoft Teams
 
-Dione is an MCP server (stdio transport) spawned by the selected harness. It:
+Setting `TEAMS_APP_ID` enables Teams ingress. Dione then also requires:
 
-- Connects to Discord and listens for messages, reactions, and interactions
-- Gates access: only configured users/channels reach Claude
-- Queues messages from unknown senders for admin review
-- Exposes MCP tools for the agent to interact with Discord
-- Relays Claude Code permission prompts to admin via Discord buttons
-- Delivers structured Codex events live through app-server with a durable
-  lease/ack queue underneath
+- `TEAMS_TENANT_ID`, `TEAMS_CLIENT_SECRET` and `TEAMS_ALLOWED_SERVICE_HOST` in
+  the environment;
+- at least one native conversation ID in `[teams] allowed_conversations` in the
+  config file (changes need a restart);
+- a harness with a durable inbox, as in the table above.
 
-## Tools
-
-| Category | Tools |
-|----------|-------|
-| Messaging | reply, react, edit_message, fetch_messages, download_attachment, get_message |
-| Introspection | list_guilds, list_channels, get_channel, get_user, get_member, list_roles, list_emojis, can_view_channel |
-| Management | pin_message, unpin_message, create_thread, delete_message |
-| Access | list_access_requests, approve_access, deny_access |
-| Bot state | send_typing |
+The listener binds `TEAMS_LISTEN_ADDR`, default `127.0.0.1:3978`. Each inbound
+Teams event carries a single-use reply handle for the `teams_reply` tool.
 
 ## Configuration
 
-TOML config at `~/.claude/channels/dione/config.toml` (override with
-`DIONE_CONFIG_PATH`). Config is hot-reloaded on every inbound message.
+Dione keeps its state in `DIONE_STATE_DIR`, default `~/.claude/channels/dione`,
+and reads `config.toml` from there; `--config <path>` points elsewhere. If the
+file is missing, Dione writes a commented default from
+[`src/config_template.toml`](src/config_template.toml). The bot token comes
+from `DISCORD_BOT_TOKEN` or the top-level `token` key.
+
+The main sections:
+
+| Section | Controls |
+|---------|----------|
+| `[access]` | DM policy, global allowlist, admins, ignore list, trusted webhook creators |
+| `[[channels]]` | Server channels the agent hears, mention requirement, per-channel identity filters |
+| `[mentions]` | Regex patterns that count as a mention |
+| `[delivery]` | Reply chunking and threading, coalescing delay, event preamble |
+| `[access_requests]` | Expiry, queue size and notification cooldown for unknown senders |
+| `[teams]` | Teams conversation allowlist |
+| `[attention]` | Optional ambient-message scoring; see the [attention guide](docs/attention.md) |
+
+A channel entry:
 
 ```toml
-token = "MTIz..."  # or set DISCORD_BOT_TOKEN env var
-
-[access]
-dm_policy = "queue"           # "queue" | "drop" | "disabled"
-allow_from = ["184695..."]    # user snowflakes
-admins = ["184695..."]        # receives permission prompts + access requests
-
 [[channels]]
 id = "846209..."
 require_mention = true
-allow_from = []               # empty = any member (subject to require_mention)
-allow_pk_systems = []         # PK system UUIDs (8-4-4-4-12 hex or 5-char short ID)
-allow_pk_members = []         # PK member UUIDs — OR semantics with allow_from
-# Identity filter: if ANY list is non-empty, only matching identities pass.
-# Missing or failed webhook-creator observation → drop.
-# Observed non-PK creator → app-only; admitted only on unrestricted channels.
-# PK creator → resolver-bound; restricted channels require an allowed identity.
-
-[mentions]
-patterns = ["(?i)\\bdione\\b"]
-
-[delivery]
-ack_reaction = ""             # empty = no auto-reaction
-reply_to_mode = "first"       # "first" | "all" | "off"
-text_chunk_limit = 2000
-chunk_mode = "paragraph"      # "paragraph" | "length"
-evidence_markers_enabled = false # opt in to Vaelii sentex-locator transport
-preamble_mode = "always"      # "always" | "first" | "never"
-# preamble_template = "..."   # custom text, max 1024 bytes
-
-[access_requests]
-expiry_seconds = 86400
-max_pending = 50
-notify_cooldown_seconds = 60
+allow_from = []   # empty = any member, subject to require_mention
 ```
 
-### Versioned message context
+Dione watches the file and applies edits without a restart, except for a few
+values read at startup. The [operator reference](docs/reference.md) has the
+annotated example, the restart-only values, the identity-filter rules, and the
+optional Vaelii and v2 message-context features.
 
-`get_message` and `fetch_messages` accept optional `response_version: 2`.
-Omitting it or using 1 preserves the legacy response. Other query tools keep
-their existing responses. For example:
+Command-line flags (`dione --help` prints them all):
 
-```json
-{"channel_id":"123","message_id":"456","response_version":2}
-```
+| Flag | Purpose |
+|------|---------|
+| `--mode <claude-code\|codex\|oh-my-pi>` | Harness transport |
+| `--config <path>` | Config file instead of `$DIONE_STATE_DIR/config.toml` |
+| `--log-level <filter>` | Tracing filter, default `dione=info`; `RUST_LOG` overrides it |
+| `--log-file <path>` | Also append logs to a file (`DIONE_LOG_FILE`) |
+| `--codex-app-server-socket <path>` | Codex app-server socket |
+| `--codex-thread-id <id>` | Initial Codex thread binding |
+| `--resident-control-socket <path>` | Operator-owned Unix socket for the resident control API; required for Teams in `oh-my-pi` mode |
+| `--attention-command <file\|->` | Run one attention command offline and exit |
 
-Version 2 returns source-qualified native message and sender identities,
-creation/edit times in UTC, reply-reference metadata, attachment metadata,
-and explicit field availability. `native` preserves Discord-specific details.
-It does not resolve represented webhook identities, fetch referenced bodies,
-or download attachments. Local content is untruncated; provider completeness
-remains unknown.
+MCP traffic uses stdin and stdout; logs go to stderr and the optional log file.
 
-History supports the existing exclusive `before` or `after` cursor and `limit`.
-The page reports the requested anchor separately from observed message bounds.
-`has_more_hint` indicates a full page, not proof of another page. Access and
-provider failures return finite error codes instead of raw provider diagnostics.
-Current access policy is checked on every invocation; the read does not grant
-later send permission.
+## Tools
 
-Exact reads retain the optional Vaelii receipt below. Version 2 reports receipt
-recording separately from read success. A v2 metadata validation error can
-follow an attempted receipt; it does not imply that no receipt was written.
+The tools Dione lists to the harness. Several descriptions mark a tool admin
+only, which asks the agent to run it only at an admin's request. When
+`access.admin_only_mutations = true`, Dione itself refuses attention changes
+and these tools: `add_allow_from`, `remove_allow_from`, `update_dm_policy`,
+`add_channel`, `update_channel`, `remove_channel`, `reload_config`,
+`approve_access`, `deny_access`, and the three server-mute tools, read-only
+`list_muted_servers` included (`src/mcp/dispatch.rs`).
 
-### Explicit-read Vaelii receipts
+| Group | Tools |
+|-------|-------|
+| Messaging | `reply`, `react`, `edit_message`, `send_dm`, `send_file`, `render_latex`, `render_latex_to_channel` |
+| History and search | `fetch_messages`, `fetch_new_since`, `fetch_pins`, `get_message`, `search_messages`, `download_attachment` |
+| Introspection | `list_guilds`, `list_channels`, `get_channel`, `can_view_channel`, `get_user`, `get_member`, `list_roles`, `list_emojis` |
+| Management | `pin_message`, `unpin_message`, `create_thread`, `delete_message` |
+| Access and config | `list_access_requests`, `approve_access`, `deny_access`, `get_access_config`, `update_dm_policy`, `add_allow_from`, `remove_allow_from`, `list_config_channels`, `add_channel`, `update_channel`, `remove_channel`, `reload_config` |
+| Server mutes | `mute_server`, `unmute_server`, `list_muted_servers` |
+| Presence | `send_typing`, `set_presence`, `get_presence` |
+| Diagnostics | `get_version`, `set_trace_level`, `set_stderr_level` |
+| Held messages | `no_rly`, `rephrase`, `no_rly_stats`, `no_rly_condense`, `no_rly_vacuum` |
+| Attention | `attention` |
+| Codex mode only | `bind_codex_thread`, `register_event_consumer`, `handoff_event_consumer`, `claim_event_consumer`, `next_event`, `ack_event`, `event_queue_status` |
+| Teams enabled only | `teams_reply` |
 
-An explicit `get_message` call can record a compact provenance receipt in
-Vaelii. The bridge is disabled unless `[vaelii].server_url` is configured;
-ambient delivery, `fetch_messages`, and restart recovery do not write. The
-receipt contains the message snowflake and tool/actor terms, never message
-content or a claim that the message is true.
-
-```toml
-[vaelii]
-server_url = "http://127.0.0.1:4200"
-actor_term = "Syne" # defaults to pre_send.construct_id
-timeout_ms = 3000
-```
-
-Set `VAELII_API_TOKEN` when the endpoint requires a bearer token. A configured
-write failure is reported in the `get_message` result without discarding the
-retrieved Discord message. The six assertions are sent atomically to `CxWell`
-and use deterministic `Check<ID>` / `Receipt<ID>` terms, so repeating the same
-explicit read does not invent a second identity.
-
-The companion vocabulary in
-`resources/vaelii/dione-bridge-overlap.ke` carries the accepted `arg1`/`arg2`/
-`arg3` bridge plus experimental KB-invariant declarations. Dione validates a
-`naked_term` assertion batch before sending it, but that client-side check sees
-only the outbound batch: whole-KB enforcement still belongs at Vaelii's atomic
-write boundary.
-
-### Vaelii sentex locators
-
-When `delivery.evidence_markers_enabled` is true, `reply` and `send_dm` accept
-up to four total `claim_handles` and `citation_handles`. Handles are canonical
-positive-decimal `u64` strings; JSON numbers are rejected. Dione appends
-role-bearing terminal v3 locators after pre-send hooks, such as
-`[🔍=v3:claim:CRY]` for handle 2326, and exposes them as `claim_locators` and
-`citation_locators` on receive surfaces. A v3 token is the handle's
-minimal-width big-endian bytes in unpadded base64url; decoding rejects empty
-tokens, padding, non-base64url characters, a leading zero byte and zero.
-Locators are author-offered metadata, not verification or truth.
-
-The former `evidence_keys` input is not accepted. Existing v1 terminal markers
-remain readable as citations, and fixed-width v2 markers (`[🔍=v2:claim:…]`,
-an eight-byte token) remain readable with their roles, including events already
-queued for Codex before an upgrade. Parsed locators are projected exactly as
-written, so a v2 marker still reads as `v2:…`. Put literal marker examples inside quoted or fenced content; raw
-terminal locators in outbound message text are rejected so they cannot bypass
-the structured handle and audit path.
-
-## Design philosophy
-
-- **Fly on the wall** — no automatic reactions or typing indicators. The bot
-  engages intentionally when Claude decides to respond.
-- **Admin/user separation** — permission prompts and access requests go to
-  admins only, not all allowed users.
-- **O(1) hot path** — pre-parsed HashSet lookups for allowlists, HashMap for
-  channel policies, compiled RegexSet for mention patterns.
-- **Config-driven** — all policy changes via TOML edit, no restart required.
+Message reads, downloads and sends check Dione's access policy on every call;
+an MCP connection does not grant unrestricted Discord access. The
+introspection tools are the exception: they read with the bot's own Discord
+permissions and apply no allowlist.
 
 ## One-shot send
 
 `dione-send` posts one message to one configured channel without starting the
-gateway, bound to an explicit bot identity — the egress seam for stateless
-callers such as Trundle. See [docs/oneshot-send.md](docs/oneshot-send.md).
+gateway, bound to an explicit bot identity. It is meant for stateless callers.
+See [docs/oneshot-send.md](docs/oneshot-send.md).
 
 ```bash
 dione-send --channel 123 --expect-identity 456 --message "drumbeat" \
            --config /etc/dione/config.toml --token-source env:TRUNDLE_TOKEN --dry-run
 ```
 
-## Building from source
+## Design
+
+- **Fly on the wall.** Dione does not acknowledge inbound messages with
+  reactions or typing indicators. The bot speaks when the agent decides to.
+- **Admins apart from users.** Permission prompts and access requests go to
+  admins only, not to every allowed user.
+- **Policy in configuration.** Access and delivery policy live in the TOML
+  file and change without a restart.
+
+[ARCHITECTURE.md](ARCHITECTURE.md) maps the processes, modules, state files
+and shutdown order. [docs/design/vertical-slices.md](docs/design/vertical-slices.md)
+records the move toward independent platform and harness adapters. Earlier
+design documents are indexed in [docs/design/](docs/design/README.md).
+
+## Development
+
+The toolchain is pinned to Rust 1.98.0 with Clippy and rustfmt in
+[`rust-toolchain.toml`](rust-toolchain.toml); the package's minimum Rust
+version is 1.98, edition 2024. The [justfile](justfile) wraps the usual checks
+and needs [`just`](https://github.com/casey/just) and `cargo-nextest`.
 
 ```bash
 git clone https://github.com/butterflyskies/dione
 cd dione
-just check   # fmt, clippy, test
-just install # cargo install --path .
+just check     # format check, Clippy, tests
+just pre-push  # check, plus docs and a release build
+just install   # cargo install --path .
 ```
 
-Requires Rust 1.98+.
+`cargo xfmt` formats with the project's import grouping. Besides `dione`, the
+package builds `dione-send`, `gaie_archive` (explicit archive capture and
+replay; see [docs/gaie-archive.md](docs/gaie-archive.md)), and
+`teams_edge_probe`, a Teams diagnostic.
 
-Before opening a PR, follow [the PR readiness checks](docs/pr-ready.md).
+## Contributing
+
+Read [CODING_STANDARDS.md](CODING_STANDARDS.md) before changing code. Before
+opening a pull request, follow [the PR readiness checks](docs/pr-ready.md),
+which run `sh scripts/pr-ready.sh origin/main` on a committed head. A change
+under `src/` needs a version bump in `Cargo.toml` and a matching
+[CHANGELOG.md](CHANGELOG.md) entry.
 
 ## License
 
-MIT OR Apache-2.0
+Licensed under either of MIT or Apache-2.0, at your option, as declared in
+[`Cargo.toml`](Cargo.toml).
