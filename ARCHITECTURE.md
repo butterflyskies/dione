@@ -8,6 +8,10 @@ and event-bound replies support Codex and saved Oh My Pi sessions.
 This map describes the implementation assembled by [startup.rs](src/startup.rs).
 The executable [main.rs](src/main.rs) installs error reporting and calls the
 library's process startup entry.
+The [adopted three-machine target](docs/design/architecture.md) is a separate
+contract; its bridge-wide custody, turn, effect, and supervisor guarantees are
+not all present in this implementation. PR551's typed module boundaries and
+specific durable owners do not by themselves establish every target guarantee.
 The former design on this page proposed direct Anthropic inference, SQLite,
 Qdrant, and local ONNX embeddings. Those are historical proposals, not the
 runtime or dependencies in [Cargo.toml](Cargo.toml).

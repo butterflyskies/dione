@@ -951,9 +951,8 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
     assert!(!std::path::Path::new(".github/workflows/tag-release.yml").exists());
     assert!(github_release.contains("gh release create \"$TAG_NAME\" --verify-tag"));
 
-    assert!(github_ci.contains("cross-compile:"));
-    assert!(github_ci.contains("target: x86_64-unknown-linux-gnu"));
-    assert!(github_ci.contains("cargo build --release"));
+    assert!(github_native_build_contract(github_ci));
+    assert!(!github_ci.contains("universal-apple-darwin"));
     assert!(github_release.contains("dione-${TAG_NAME}-${{ matrix.target }}"));
     assert!(!workflow.contains("macos-latest"));
     assert!(!workflow.contains("universal-apple-darwin"));
@@ -981,6 +980,90 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
     assert!(github_ci.contains("toolchain: \"1.98.0\""));
     assert!(github_ci.contains("key: msrv-1.98"));
     assert!(github_ci.contains("cargo +1.98.0 check --workspace --all-targets --locked"));
+}
+
+fn github_native_build_contract(workflow: &str) -> bool {
+    let Some((_, native_build)) = workflow.split_once("\n  native-build:") else {
+        return false;
+    };
+    let native_build = native_build
+        .split_inclusive('\n')
+        .take_while(|line| {
+            let heading = line.split_once('#').map_or(*line, |(heading, _)| heading);
+            !(line.starts_with("  ")
+                && !line.starts_with("   ")
+                && heading.trim_end().ends_with(':'))
+        })
+        .collect::<String>();
+
+    native_build.contains("name: Native release build (${{ matrix.os }})")
+        && native_build.contains("os: [ubuntu-latest, macos-latest]")
+        && native_build.contains("runs-on: ${{ matrix.os }}")
+        && native_build.contains("key: ${{ matrix.os }}")
+        && native_build.contains("\n      - run: cargo build --release\n")
+        && !native_build.contains("--target")
+}
+
+#[test]
+fn github_native_build_rejects_targeted_or_moved_build_steps() {
+    let workflow = include_str!("../.github/workflows/build.yml");
+    let build_step = "      - run: cargo build --release\n";
+    assert!(github_native_build_contract(workflow));
+
+    let targeted = workflow.replacen(
+        build_step,
+        "      - run: cargo build --release --target aarch64-apple-darwin\n",
+        1,
+    );
+    assert_ne!(targeted, workflow);
+    assert!(!github_native_build_contract(&targeted));
+
+    let moved = workflow.replacen(build_step, "", 1).replacen(
+        "      - run: cargo nextest run --workspace --no-fail-fast\n",
+        &format!("      - run: cargo nextest run --workspace --no-fail-fast\n{build_step}"),
+        1,
+    );
+    assert_ne!(moved, workflow);
+    let test_job = moved
+        .split_once("\n  native-build:")
+        .expect("mutated workflow must retain the native-build job")
+        .0;
+    assert!(test_job.contains(build_step));
+    assert!(!github_native_build_contract(&moved));
+
+    let intervening_sibling = workflow.replacen(build_step, "", 1).replacen(
+        "\n  msrv:",
+        &format!("\n  extra-build:\n    runs-on: ubuntu-latest\n    steps:\n{build_step}\n  msrv:"),
+        1,
+    );
+    assert_ne!(intervening_sibling, workflow);
+    assert!(intervening_sibling.contains("\n  extra-build:\n"));
+    assert_eq!(intervening_sibling.matches(build_step).count(), 1);
+    assert!(!github_native_build_contract(&intervening_sibling));
+
+    let commented_sibling = intervening_sibling.replacen(
+        "\n  extra-build:\n",
+        "\n  extra-build: # separate sibling job\n",
+        1,
+    );
+    assert_ne!(commented_sibling, intervening_sibling);
+    assert_eq!(commented_sibling.matches(build_step).count(), 1);
+    assert!(!github_native_build_contract(&commented_sibling));
+
+    let msrv_step = "      - run: cargo +1.98.0 check --workspace --all-targets --locked\n";
+    let commented_msrv = workflow
+        .replacen(build_step, "", 1)
+        .replacen("\n  msrv:\n", "\n  msrv: # separate job\n", 1)
+        .replacen(msrv_step, &format!("{msrv_step}{build_step}"), 1);
+    assert_ne!(commented_msrv, workflow);
+    assert!(commented_msrv.contains("\n  msrv: # separate job\n"));
+    assert_eq!(commented_msrv.matches(build_step).count(), 1);
+    let msrv_job = commented_msrv
+        .split_once("\n  msrv: # separate job\n")
+        .expect("mutated workflow must retain the commented MSRV job")
+        .1;
+    assert!(msrv_job.contains(&format!("{msrv_step}{build_step}")));
+    assert!(!github_native_build_contract(&commented_msrv));
 }
 
 #[test]

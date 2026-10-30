@@ -1,8 +1,10 @@
 # Dione — Agent Instructions
 
-Dione is a Discord bot powered by the Anthropic commercial API. She has an
-emergent personality, semantic memory, multi-turn conversations, MCP tool
-execution, and tiered model routing. Written in Rust.
+Dione is a Rust Discord bridge for Claude Code, Codex, and Oh My Pi. The agent host owns
+inference and conversation state; Dione owns Discord access policy, event
+delivery, and MCP tools. The [architecture map](ARCHITECTURE.md) describes the
+current implementation, while the [design target](docs/design/architecture.md)
+records the adopted direction.
 
 See [AGENTS.md](AGENTS.md) for the full knowledge index.
 

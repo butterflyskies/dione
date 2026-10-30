@@ -36,15 +36,12 @@ jobs:
       - run: cargo clippy -- -D warnings
       - run: cargo nextest run --workspace --no-fail-fast
 
-  cross-compile:
+  native-build:
+    name: Native release build (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: universal-apple-darwin
-            os: macos-latest
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -55,7 +52,7 @@ jobs:
           toolchain: "1.98.0"
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.os }}
       - run: cargo build --release
 
   msrv:
