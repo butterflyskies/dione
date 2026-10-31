@@ -288,6 +288,10 @@ design documents are indexed in [docs/design/](docs/design/README.md).
 
 ## Development
 
+On Windows, develop inside WSL with Linux Git and Rust. Clone into the WSL
+filesystem and run the commands below from the WSL shell. Native Windows
+builds are not supported.
+
 The toolchain is pinned to Rust 1.98.0 with Clippy and rustfmt in
 [`rust-toolchain.toml`](rust-toolchain.toml); the package's minimum Rust
 version is 1.98, edition 2024. The [justfile](justfile) wraps the usual checks
@@ -305,6 +309,18 @@ just install   # cargo install --path .
 package builds `dione-send`, `gaie_archive` (explicit archive capture and
 replay; see [docs/gaie-archive.md](docs/gaie-archive.md)), and
 `teams_edge_probe`, a Teams diagnostic.
+
+The repository keeps shell scripts, the pre-commit hook, Rust sources and build
+configuration in LF format through [`.gitattributes`](.gitattributes). Files in
+`tests/fixtures/`, trybuild expected outputs under `tests/ui/`, and
+all `.snap` snapshots retain their exact committed bytes. Avoid manual
+line-ending conversion of these files, especially content-addressed blobs.
+
+If an existing checkout used `core.autocrlf=true`, updating `.gitattributes`
+does not refresh unchanged files that Git already checked out with CRLF.
+Save local work before migrating, then make a fresh clone inside the WSL/Linux
+filesystem. Keep the old checkout until you have transferred and verified
+your local work. Do not discard or force-refresh files in the old checkout.
 
 ## Contributing
 

@@ -1,5 +1,12 @@
 *.sh text eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
+/justfile text eol=lf
+/.githooks/pre-commit text eol=lf
 scripts/public-package-*.txt text eol=lf
+/tests/fixtures/** -text
 tests/fixtures/codex-inbox/*.json -text
+/tests/ui/**/*.stderr -text
+*.snap -text
