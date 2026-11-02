@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.85.1]
+
+### Fixed
+
+- Wait for owned binding publication and completion in the cancellation test
+  instead of imposing two-second disk I/O deadlines.
+
 ## [0.85.0]
 
 ### Changed

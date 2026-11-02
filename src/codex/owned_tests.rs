@@ -96,18 +96,13 @@ async fn cancelled_binding_publishes_before_next_owned_binding() {
             )
             .await
     });
-    tokio::time::timeout(Duration::from_secs(2), wait)
-        .await
-        .unwrap()
-        .unwrap();
+    wait.await.unwrap();
     first.abort();
     assert!(first.await.unwrap_err().is_cancelled());
     assert!(watched.borrow().is_none());
     release.send(()).unwrap();
-    tokio::time::timeout(Duration::from_secs(2), watched.changed())
-        .await
-        .unwrap()
-        .unwrap();
+    queue.drain_owned().await;
+    assert!(watched.has_changed().unwrap());
     assert_eq!(
         watched.borrow_and_update().as_ref().unwrap().as_str(),
         "first"
