@@ -1,9 +1,13 @@
 //! Main visibility contracts exercised through the current Discord registrations and wire path.
 
 use super::{
+    audience,
     introspection::{self, IntrospectionCtx},
     introspection_tools,
-    introspection_wire::{self, tests::fixture},
+    introspection_wire::{
+        self,
+        tests::{fixture, fixture_http},
+    },
     reply_tool::ReplyServices,
     visibility::VisibilityRequest,
     visibility_read,
@@ -12,7 +16,13 @@ use crate::{harness::HarnessConnection, mcp::tool_registry::ToolRegistry};
 use camino::Utf8PathBuf;
 use serde_json::{Value, json};
 use serenity::model::id::{ChannelId, UserId};
-use std::sync::Arc;
+use std::{future::pending, sync::Arc, time::Duration};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt},
+    net::TcpListener,
+    sync::oneshot,
+    time::{advance, pause, timeout},
+};
 
 fn guild() -> Value {
     json!({
@@ -26,6 +36,338 @@ fn guild() -> Value {
         "premium_tier":0, "preferred_locale":"en-US", "nsfw_level":0,
         "stickers":[], "premium_progress_bar_enabled":false
     })
+}
+
+#[tokio::test]
+async fn audience_lists_viewers_and_denials_through_registered_tool() {
+    let mut observed = channel(0);
+    observed["permission_overwrites"] = json!([{"id":"3","type":1,"allow":"0","deny":"1024"}]);
+    let (ctx, server) = fixture(vec![
+        ("200 OK", observed),
+        ("200 OK", guild()),
+        (
+            "200 OK",
+            json!([
+                member("1", json!([])),
+                member("2", json!(["9"])),
+                member("3", json!([])),
+                member("4", json!([]))
+            ]),
+        ),
+        ("200 OK", json!([])),
+    ])
+    .await;
+    let directory = tempfile::tempdir().unwrap();
+    let state_dir = Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
+    let registry = registry(&ctx, &state_dir);
+    assert!(registry.resident_allowed("channel_effective_audience"));
+    let result = registry
+        .find("channel_effective_audience")
+        .unwrap()
+        .call(&json!({"channel_id":"42"}))
+        .await
+        .unwrap();
+    assert_eq!(result["complete"], true);
+    assert_eq!(result["member_census_complete"], true);
+    assert_eq!(result["snapshot_consistent"], false);
+    assert_eq!(result["members_examined"], 4);
+    assert_eq!(result["non_viewer_count"], 1);
+    assert_eq!(
+        result["members"],
+        json!([
+            {"user_id":"1","username":"fixture","nick":null,"can_view":true,"reason":"owner"},
+            {"user_id":"2","username":"fixture","nick":null,"can_view":true,"reason":"administrator"},
+            {"user_id":"4","username":"fixture","nick":null,"can_view":true,"reason":"base_permissions"}
+        ])
+    );
+    assert_eq!(result["unknown_members"], json!([]));
+    assert!(
+        result["observed_at"]
+            .as_str()
+            .is_some_and(|value| crate::timestamp::Timestamp::parse(value).is_ok())
+    );
+    assert!(
+        result["completed_at"]
+            .as_str()
+            .is_some_and(|value| crate::timestamp::Timestamp::parse(value).is_ok())
+    );
+    assert_eq!(
+        server.await.unwrap(),
+        [
+            "GET /api/v10/channels/42 HTTP/1.1",
+            "GET /api/v10/guilds/7 HTTP/1.1",
+            "GET /api/v10/guilds/7/members?&limit=100 HTTP/1.1",
+            "GET /api/v10/guilds/7/members?&limit=100&after=4 HTTP/1.1",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn audience_failed_member_page_preserves_partial_viewers_and_error() {
+    let (ctx, server) = fixture(vec![
+        ("200 OK", channel(0)),
+        ("200 OK", guild()),
+        ("200 OK", json!([member("1", json!([]))])),
+        (
+            "403 Forbidden",
+            json!({"code":50013,"message":"Missing Permissions"}),
+        ),
+    ])
+    .await;
+    let result = introspection_wire::audience(
+        audience::channel_effective_audience(&ctx, ChannelId::new(42)).await,
+    );
+    assert_eq!(result["complete"], false);
+    assert_eq!(result["member_census_complete"], false);
+    assert_eq!(result["census_reason"], "member_listing_failed");
+    assert_eq!(result["members"][0]["user_id"], "1");
+    assert_eq!(result["error"], "Missing Permissions");
+    assert_eq!(server.await.unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn audience_initial_member_failure_is_not_complete_empty() {
+    let (ctx, server) = fixture(vec![
+        ("200 OK", channel(0)),
+        ("200 OK", guild()),
+        (
+            "403 Forbidden",
+            json!({"code":50013,"message":"Missing Permissions"}),
+        ),
+    ])
+    .await;
+    let result = introspection_wire::audience(
+        audience::channel_effective_audience(&ctx, ChannelId::new(42)).await,
+    );
+    assert_eq!(result["members"], json!([]));
+    assert_eq!(result["complete"], false);
+    assert_eq!(result["member_census_complete"], false);
+    assert_eq!(result["census_reason"], "member_listing_failed");
+    assert_eq!(server.await.unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn audience_repeated_page_is_partial_not_an_infinite_or_complete_scan() {
+    let (ctx, server) = fixture(vec![
+        ("200 OK", channel(0)),
+        ("200 OK", guild()),
+        ("200 OK", json!([member("1", json!([]))])),
+        ("200 OK", json!([member("1", json!([]))])),
+    ])
+    .await;
+    let result = introspection_wire::audience(
+        audience::channel_effective_audience(&ctx, ChannelId::new(42)).await,
+    );
+    assert_eq!(result["members_examined"], 1);
+    assert_eq!(result["members"].as_array().unwrap().len(), 1);
+    assert_eq!(result["complete"], false);
+    assert_eq!(result["census_reason"], "invalid_member_page");
+    assert_eq!(server.await.unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn audience_private_thread_preserves_unknown_members_without_per_user_reads() {
+    let mut thread = channel(12);
+    thread["parent_id"] = json!("41");
+    let mut parent = channel(0);
+    parent["id"] = json!("41");
+    parent["permission_overwrites"] = json!([
+        {"id":"3","type":1,"allow":"17179869184","deny":"0"},
+        {"id":"5","type":1,"allow":"0","deny":"1024"}
+    ]);
+    let (ctx, server) = fixture(vec![
+        ("200 OK", thread),
+        ("200 OK", parent),
+        ("200 OK", guild()),
+        (
+            "200 OK",
+            json!([
+                member("1", json!([])),
+                member("2", json!(["9"])),
+                member("3", json!([])),
+                member("4", json!([])),
+                member("5", json!([]))
+            ]),
+        ),
+        ("200 OK", json!([])),
+    ])
+    .await;
+    let result = introspection_wire::audience(
+        audience::channel_effective_audience(&ctx, ChannelId::new(42)).await,
+    );
+    assert_eq!(result["member_census_complete"], true);
+    assert_eq!(result["complete"], false);
+    assert_eq!(result["members"].as_array().unwrap().len(), 3);
+    assert_eq!(result["members"][2]["reason"], "manage_threads");
+    assert_eq!(
+        result["unknown_members"],
+        json!([
+            {"user_id":"4","username":"fixture","nick":null,"can_view":"unknown","reason":"private_thread_membership_unknown"}
+        ])
+    );
+    assert_eq!(result["non_viewer_count"], 1);
+    assert_eq!(server.await.unwrap().len(), 5);
+}
+
+#[tokio::test]
+async fn audience_missing_role_and_owner_data_remains_incomplete() {
+    let (ctx, server) = fixture(vec![
+        ("200 OK", channel(0)),
+        ("200 OK", guild()),
+        ("200 OK", json!([member("4", json!(["999"]))])),
+        ("200 OK", json!([])),
+    ])
+    .await;
+    let result = introspection_wire::audience(
+        audience::channel_effective_audience(&ctx, ChannelId::new(42)).await,
+    );
+    assert_eq!(result["complete"], false);
+    assert_eq!(result["member_census_complete"], false);
+    assert_eq!(result["census_reason"], "guild_owner_not_observed");
+    assert_eq!(
+        result["unknown_members"][0]["reason"],
+        "role_permissions_missing"
+    );
+    assert_eq!(server.await.unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn audience_rejects_invalid_channel_before_http() {
+    let (ctx, server) = fixture(vec![]).await;
+    let directory = tempfile::tempdir().unwrap();
+    let state_dir = Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
+    let registry = registry(&ctx, &state_dir);
+    assert!(
+        registry
+            .find("channel_effective_audience")
+            .unwrap()
+            .call(&json!({"channel_id":"0"}))
+            .await
+            .is_err()
+    );
+    assert!(server.await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn audience_member_cap_and_exact_boundary_have_distinct_completion() {
+    for extra_member in [false, true] {
+        let mut responses = vec![("200 OK", channel(0)), ("200 OK", guild())];
+        for page in 0..10 {
+            responses.push((
+                "200 OK",
+                Value::Array(
+                    (1 + page * 100..=100 + page * 100)
+                        .map(|id| member(&id.to_string(), json!([])))
+                        .collect(),
+                ),
+            ));
+        }
+        responses.push((
+            "200 OK",
+            if extra_member {
+                json!([member("1001", json!([]))])
+            } else {
+                json!([])
+            },
+        ));
+        let (ctx, server) = fixture(responses).await;
+        let result = introspection_wire::audience(
+            audience::channel_effective_audience(&ctx, ChannelId::new(42)).await,
+        );
+        assert_eq!(result["members_examined"], 1000);
+        assert_eq!(result["members"].as_array().unwrap().len(), 1000);
+        assert_eq!(result["complete"], !extra_member);
+        assert_eq!(result["member_census_complete"], !extra_member);
+        assert_eq!(
+            result["census_reason"],
+            if extra_member {
+                "member_limit"
+            } else {
+                "end_of_members"
+            }
+        );
+        let requests = server.await.unwrap();
+        assert_eq!(requests.len(), 13);
+        assert_eq!(
+            requests.last().unwrap(),
+            "GET /api/v10/guilds/7/members?&limit=1&after=1000 HTTP/1.1"
+        );
+    }
+}
+
+#[tokio::test]
+async fn audience_sparse_pages_are_bounded_even_when_member_cap_is_not_reached() {
+    let mut responses = vec![("200 OK", channel(0)), ("200 OK", guild())];
+    responses.extend((1..=11).map(|id| ("200 OK", json!([member(&id.to_string(), json!([]))]))));
+    let (ctx, server) = fixture(responses).await;
+    let result = introspection_wire::audience(
+        audience::channel_effective_audience(&ctx, ChannelId::new(42)).await,
+    );
+    assert_eq!(result["members_examined"], 11);
+    assert_eq!(result["complete"], false);
+    assert_eq!(result["census_reason"], "page_limit");
+    assert_eq!(server.await.unwrap().len(), 13);
+}
+
+#[tokio::test]
+async fn audience_channel_failure_is_not_an_empty_roster() {
+    let (ctx, server) = fixture(vec![(
+        "403 Forbidden",
+        json!({"code":50001,"message":"Missing Access"}),
+    )])
+    .await;
+    let result = introspection_wire::audience(
+        audience::channel_effective_audience(&ctx, ChannelId::new(42)).await,
+    );
+    assert_eq!(result["complete"], false);
+    assert_eq!(result["member_census_complete"], false);
+    assert!(result["error"].as_str().unwrap().contains("Missing Access"));
+    assert!(result.get("members").is_none());
+    assert_eq!(server.await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn audience_deadline_bounds_an_unresponsive_permission_read() {
+    let (mut ctx, unused) = fixture(vec![]).await;
+    assert!(unused.await.unwrap().is_empty());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    ctx.http = Arc::new(fixture_http(address));
+    let (accepted, arrived) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = tokio::io::BufReader::new(stream);
+        loop {
+            let mut line = String::new();
+            assert_ne!(reader.read_line(&mut line).await.unwrap(), 0);
+            if line == "\r\n" {
+                break;
+            }
+        }
+        accepted.send(()).unwrap();
+        pending::<()>().await;
+        reader.get_mut().shutdown().await.unwrap();
+    });
+    let mut read = tokio::spawn(async move {
+        audience::channel_effective_audience(&ctx, ChannelId::new(42)).await
+    });
+    timeout(Duration::from_secs(5), arrived)
+        .await
+        .unwrap()
+        .unwrap();
+    pause();
+    advance(Duration::from_secs(31)).await;
+    let result = timeout(Duration::from_secs(1), &mut read).await;
+    if result.is_err() {
+        read.abort();
+        assert!(read.await.unwrap_err().is_cancelled());
+    }
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+    assert!(matches!(
+        result,
+        Ok(Ok(Err(audience::AudienceError::Deadline)))
+    ));
 }
 
 fn channel(kind: u8) -> Value {

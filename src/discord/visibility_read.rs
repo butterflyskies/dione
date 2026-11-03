@@ -11,9 +11,9 @@ use serenity::{
     http::HttpError,
     model::{
         Permissions,
-        channel::{Channel, ChannelType},
+        channel::{Channel, ChannelType, PermissionOverwrite},
         guild::{Member, ThreadMember},
-        id::{ChannelId, RoleId, UserId},
+        id::{ChannelId, GuildId, RoleId, UserId},
     },
 };
 use std::collections::HashMap;
@@ -67,57 +67,46 @@ pub(crate) enum VisibilityErrorKind {
     Guild(#[source] Box<serenity::Error>),
 }
 
+/// One observed channel and guild permission context shared by visibility reads.
+pub(super) struct PreparedVisibility {
+    pub(super) guild: GuildId,
+    pub(super) owner: UserId,
+    pub(super) roles: HashMap<RoleId, Permissions>,
+    pub(super) overwrites: Vec<PermissionOverwrite>,
+    pub(super) private_thread: bool,
+}
+
+impl PreparedVisibility {
+    pub(super) fn context(&self) -> ChannelPermissionContext<'_> {
+        ChannelPermissionContext {
+            guild_id: self.guild,
+            owner_id: self.owner,
+            role_permissions: &self.roles,
+            overwrites: &self.overwrites,
+        }
+    }
+
+    pub(super) fn initial_access(&self) -> ThreadAccess {
+        if self.private_thread {
+            ThreadAccess::Unknown
+        } else {
+            ThreadAccess::NotRequired
+        }
+    }
+}
+
 /// Evaluates users in request order and reads private membership only when decisive.
 pub(crate) async fn can_view_channel(
     ctx: &IntrospectionCtx,
     request: &VisibilityRequest,
 ) -> Result<VisibilityObservation, VisibilityError> {
     let channel_id = request.channel();
-    let fail = |kind| VisibilityError {
-        channel: channel_id,
-        kind,
-    };
-    let channel = match ctx.http.get_channel(channel_id).await {
-        Ok(Channel::Guild(channel)) => channel,
-        Ok(_) => return Err(fail(VisibilityErrorKind::NotGuildChannel)),
-        Err(cause) => return Err(fail(VisibilityErrorKind::Channel(Box::new(cause)))),
-    };
-    let overwrites = if is_thread(channel.kind) {
-        let parent = channel
-            .parent_id
-            .ok_or_else(|| fail(VisibilityErrorKind::MissingParent))?;
-        match ctx.http.get_channel(parent).await {
-            Ok(Channel::Guild(parent)) => parent.permission_overwrites,
-            Ok(_) => return Err(fail(VisibilityErrorKind::NotGuildParent)),
-            Err(cause) => return Err(fail(VisibilityErrorKind::Parent(Box::new(cause)))),
-        }
-    } else {
-        channel.permission_overwrites
-    };
-    let guild = ctx
-        .http
-        .get_guild(channel.guild_id)
-        .await
-        .map_err(|cause| fail(VisibilityErrorKind::Guild(Box::new(cause))))?;
-    let role_permissions: HashMap<RoleId, Permissions> = guild
-        .roles
-        .iter()
-        .map(|(id, role)| (*id, role.permissions))
-        .collect();
-    let context = ChannelPermissionContext {
-        guild_id: channel.guild_id,
-        owner_id: guild.owner_id,
-        role_permissions: &role_permissions,
-        overwrites: &overwrites,
-    };
-    let initial_access = if channel.kind == ChannelType::PrivateThread {
-        ThreadAccess::Unknown
-    } else {
-        ThreadAccess::NotRequired
-    };
+    let prepared = prepare_visibility(ctx, channel_id).await?;
+    let context = prepared.context();
+    let initial_access = prepared.initial_access();
     let mut results = Vec::with_capacity(request.users().len());
     for &user in request.users() {
-        let outcome = match member_roles(ctx.http.get_member(channel.guild_id, user).await) {
+        let outcome = match member_roles(ctx.http.get_member(prepared.guild, user).await) {
             Err(cause) => VisibilityOutcome::MemberLookupFailed(cause),
             Ok(roles) => {
                 let verdict = compute_can_view(&context, user, roles.as_deref(), initial_access);
@@ -145,6 +134,51 @@ pub(crate) async fn can_view_channel(
     Ok(VisibilityObservation {
         channel: channel_id,
         users: results,
+    })
+}
+
+/// Reads the common permission prerequisites without enumerating users.
+pub(super) async fn prepare_visibility(
+    ctx: &IntrospectionCtx,
+    channel_id: ChannelId,
+) -> Result<PreparedVisibility, VisibilityError> {
+    let fail = |kind| VisibilityError {
+        channel: channel_id,
+        kind,
+    };
+    let channel = match ctx.http.get_channel(channel_id).await {
+        Ok(Channel::Guild(channel)) => channel,
+        Ok(_) => return Err(fail(VisibilityErrorKind::NotGuildChannel)),
+        Err(cause) => return Err(fail(VisibilityErrorKind::Channel(Box::new(cause)))),
+    };
+    let overwrites = if is_thread(channel.kind) {
+        let parent = channel
+            .parent_id
+            .ok_or_else(|| fail(VisibilityErrorKind::MissingParent))?;
+        match ctx.http.get_channel(parent).await {
+            Ok(Channel::Guild(parent)) => parent.permission_overwrites,
+            Ok(_) => return Err(fail(VisibilityErrorKind::NotGuildParent)),
+            Err(cause) => return Err(fail(VisibilityErrorKind::Parent(Box::new(cause)))),
+        }
+    } else {
+        channel.permission_overwrites
+    };
+    let guild = ctx
+        .http
+        .get_guild(channel.guild_id)
+        .await
+        .map_err(|cause| fail(VisibilityErrorKind::Guild(Box::new(cause))))?;
+    let roles = guild
+        .roles
+        .iter()
+        .map(|(id, role)| (*id, role.permissions))
+        .collect();
+    Ok(PreparedVisibility {
+        guild: channel.guild_id,
+        owner: guild.owner_id,
+        roles,
+        overwrites,
+        private_thread: channel.kind == ChannelType::PrivateThread,
     })
 }
 

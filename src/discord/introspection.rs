@@ -111,6 +111,7 @@ pub(crate) enum IntrospectionOperation {
     Roles(GuildId),
     Emojis(GuildId),
     Visibility(VisibilityRequest),
+    Audience(ChannelId),
 }
 
 impl fmt::Display for IntrospectionOperation {
@@ -126,6 +127,7 @@ impl fmt::Display for IntrospectionOperation {
             Self::Visibility(request) => {
                 write!(f, "check visibility of channel {}", request.channel())
             }
+            Self::Audience(channel) => write!(f, "read effective audience of channel {channel}"),
         }
     }
 }

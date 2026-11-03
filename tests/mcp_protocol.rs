@@ -78,6 +78,37 @@ async fn can_view_channel_is_discovered_with_main_schema_in_every_harness() {
     }
 }
 
+#[tokio::test]
+async fn channel_audience_is_discovered_without_requiring_candidate_users() {
+    let (_directory, state_dir) = temp_state_dir();
+    for harness in [
+        HarnessConnection::claude(),
+        HarnessConnection::oh_my_pi(),
+        codex_connection(&state_dir),
+    ] {
+        let server = make_server_with_harness(&state_dir, harness).await;
+        let list = test_helpers::dispatch_request(
+            &server,
+            json!({"jsonrpc":"2.0", "id":1, "method":"tools/list"}),
+        )
+        .await
+        .unwrap();
+        let tools = list["result"]["tools"].as_array().unwrap();
+        let definitions: Vec<_> = tools
+            .iter()
+            .filter(|tool| tool["name"] == "channel_effective_audience")
+            .collect();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(
+            definitions[0]["inputSchema"],
+            json!({
+                "type":"object", "required":["channel_id"],
+                "properties":{"channel_id":{"type":"string"}}
+            })
+        );
+    }
+}
+
 struct ConfigFixtureGuard {
     state_dir: camino::Utf8PathBuf,
     #[allow(dead_code)]

@@ -1,12 +1,15 @@
 //! MCP result projection for Discord metadata reads.
 
 use crate::discord::{
+    audience::{AudienceError, AudienceMember, AudienceObservation, AudiencePermission, CensusEnd},
     introspection::{
         ChannelObservation, EmojiObservation, GuildObservation, IntrospectionError,
         IntrospectionErrorKind, ListedChannel, MemberObservation, RoleObservation, UserObservation,
     },
     visibility::{CanView, Reason, ViewVerdict},
-    visibility_read::{VisibilityError, VisibilityObservation, VisibilityOutcome},
+    visibility_read::{
+        VisibilityError, VisibilityErrorKind, VisibilityObservation, VisibilityOutcome,
+    },
 };
 use serde_json::{Value, json};
 use serenity::model::{
@@ -122,6 +125,70 @@ fn verdict_json(user: UserId, verdict: ViewVerdict) -> Value {
     json!({"user_id":user.to_string(),"can_view":can_view,"reason":verdict.reason().as_str()})
 }
 
+fn audience_member(member: AudienceMember) -> Value {
+    let mut value = match member.permission {
+        AudiencePermission::Determined(verdict) => verdict_json(member.user, verdict),
+        AudiencePermission::MissingRoles => json!({
+            "user_id":member.user.to_string(), "can_view":"unknown", "reason":"role_permissions_missing",
+        }),
+    };
+    value["username"] = json!(member.username);
+    value["nick"] = json!(member.nick);
+    value
+}
+
+/// Projects a bounded census without mistaking unknown or incomplete data for denial.
+pub(crate) fn audience(result: Result<AudienceObservation, AudienceError>) -> Value {
+    let observation = match result {
+        Ok(observation) => observation,
+        Err(cause) => {
+            let message = match &cause {
+                AudienceError::Visibility(error)
+                    if matches!(error.kind, VisibilityErrorKind::NotGuildChannel) =>
+                {
+                    "channel_effective_audience requires a guild channel or thread".to_owned()
+                }
+                AudienceError::Visibility(_)
+                | AudienceError::Deadline
+                | AudienceError::PageSize(_) => cause.to_string(),
+            };
+            return json!({"error":message,"complete":false,"member_census_complete":false});
+        }
+    };
+    let complete = observation.is_complete();
+    let mut members = Vec::new();
+    let mut unknown = Vec::new();
+    let examined = observation.members.len();
+    let mut non_viewers = 0;
+    for member in observation.members {
+        match member.permission {
+            AudiencePermission::Determined(verdict) if verdict.can_view() == CanView::No => {
+                non_viewers += 1;
+            }
+            AudiencePermission::Determined(_) | AudiencePermission::MissingRoles => {
+                if member.is_unknown() {
+                    unknown.push(audience_member(member));
+                } else {
+                    members.push(audience_member(member));
+                }
+            }
+        }
+    }
+    let mut value = json!({
+        "channel_id":observation.channel.to_string(), "guild_id":observation.guild.to_string(),
+        "observed_at":observation.observed_at,"completed_at":observation.completed_at,
+        "snapshot_consistent":false, "complete":complete,
+        "member_census_complete":observation.census_end.is_complete(),
+        "census_reason":observation.census_end.reason(),
+        "members_examined":examined, "non_viewer_count":non_viewers,
+        "members":members, "unknown_members":unknown,
+    });
+    if let CensusEnd::LookupFailed(cause) = observation.census_end {
+        value["error"] = json!(cause.to_string());
+    }
+    value
+}
+
 /// Projects lookup uncertainty without turning it into a permission denial.
 pub(crate) fn visibility(result: Result<VisibilityObservation, VisibilityError>) -> Value {
     match result {
@@ -169,13 +236,35 @@ pub(crate) mod tests {
         Permissions,
         id::{ChannelId, GuildId, RoleId, UserId},
     };
-    use std::{sync::Arc, time::Duration};
+    use std::{net::SocketAddr, sync::Arc, time::Duration};
     use tokio::{
         io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
         task::JoinHandle,
         time::timeout,
     };
+
+    /// Keeps fixture traffic on the local SDK proxy rather than its rate-limiter route.
+    pub(crate) fn fixture_http(address: SocketAddr) -> serenity::http::Http {
+        let proxy = format!("http://{address}");
+        let http = serenity::http::HttpBuilder::new("fake")
+            .proxy(&proxy)
+            .ratelimiter_disabled(true)
+            .client(
+                reqwest::Client::builder()
+                    .no_proxy()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+        assert!(
+            http.ratelimiter.is_none(),
+            "the SDK rate limiter bypasses the local proxy"
+        );
+        assert_eq!(http.proxy.as_deref(), Some(proxy.as_str()));
+        http
+    }
 
     pub(crate) async fn fixture(
         responses: Vec<(&'static str, Value)>,
@@ -211,12 +300,7 @@ pub(crate) mod tests {
             }).await.expect("fake Discord exchange deadline")
         });
         let ctx = IntrospectionCtx {
-            http: Arc::new(
-                serenity::http::HttpBuilder::new("fake")
-                    .proxy(format!("http://{address}"))
-                    .ratelimiter_disabled(true)
-                    .build(),
-            ),
+            http: Arc::new(fixture_http(address)),
             config: Arc::new(LoadedConfig::from_raw(Config {
                 timezone: Some("America/Chicago".into()),
                 ..Config::default()
