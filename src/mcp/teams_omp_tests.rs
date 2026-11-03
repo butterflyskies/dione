@@ -537,7 +537,7 @@ async fn actual_child_stdin_close_stops_socket_releases_lock_and_preserves_backl
     let directory = tempfile::Builder::new()
         .prefix("dione-omp-")
         .permissions(std::fs::Permissions::from_mode(0o700))
-        .tempdir_in("/tmp")
+        .tempdir()
         .unwrap();
     let path = Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
     let mut evidence = LifecycleFixtureEvidence {
