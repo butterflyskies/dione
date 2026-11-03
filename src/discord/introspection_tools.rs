@@ -1,6 +1,7 @@
 //! Discord-owned metadata tool definitions, parsing, and execution.
 
 use super::{
+    audience,
     ids::Snowflake,
     introspection::{self, IntrospectionCtx, IntrospectionOperation},
     introspection_wire,
@@ -30,10 +31,11 @@ enum MetadataTool {
     Roles,
     Emojis,
     Visibility,
+    Audience,
 }
 
 impl MetadataTool {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Guilds,
         Self::Channels,
         Self::Channel,
@@ -42,6 +44,7 @@ impl MetadataTool {
         Self::Roles,
         Self::Emojis,
         Self::Visibility,
+        Self::Audience,
     ];
 
     fn name(self) -> &'static str {
@@ -54,6 +57,7 @@ impl MetadataTool {
             Self::Roles => "list_roles",
             Self::Emojis => "list_emojis",
             Self::Visibility => "can_view_channel",
+            Self::Audience => "channel_effective_audience",
         }
     }
 
@@ -73,6 +77,9 @@ impl MetadataTool {
             Self::Visibility => {
                 "Report whether each user can view a guild channel or thread, using Discord's permission overwrite rules; a thread is checked against its parent channel's overwrites, since a thread's own permission_overwrites is empty. Returns can_view true, false, or \"unknown\" with the deciding reason for each user, plus an error field describing the lookup failure when can_view is \"unknown\" because a member or thread-membership lookup failed."
             }
+            Self::Audience => {
+                "List observed members who can view a guild channel or thread without supplying candidate users. Returns members, unknown_members, and separate census/permission completeness with observation times. Classifies at most 1000 guild members within 30 seconds, fetching at most one additional member to distinguish exhaustion; REST member listing requires application GUILD_MEMBERS access. Private-thread membership is not enumerated: members needing that check remain unknown; owner/admin/MANAGE_THREADS can be definite. This is a non-atomic Discord permission observation, not connector reachability or relay authorization."
+            }
         }
     }
 
@@ -83,7 +90,7 @@ impl MetadataTool {
                 "type":"object", "required":["guild_id"],
                 "properties":{"guild_id":{"type":"string"}}
             }),
-            Self::Channel => json!({
+            Self::Channel | Self::Audience => json!({
                 "type":"object", "required":["channel_id"],
                 "properties":{"channel_id":{"type":"string"}}
             }),
@@ -125,6 +132,9 @@ impl MetadataTool {
             }
             Self::Visibility => {
                 IntrospectionOperation::Visibility(parse_visibility_request(arguments)?)
+            }
+            Self::Audience => {
+                IntrospectionOperation::Audience(parse_id(arguments, "channel_id")?.channel())
             }
         })
     }
@@ -195,6 +205,9 @@ impl McpTool for IntrospectionTool {
                 }
                 IntrospectionOperation::Visibility(request) => introspection_wire::visibility(
                     visibility_read::can_view_channel(&ctx, &request).await,
+                ),
+                IntrospectionOperation::Audience(channel) => introspection_wire::audience(
+                    audience::channel_effective_audience(&ctx, channel).await,
                 ),
             })
         })

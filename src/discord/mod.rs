@@ -1,4 +1,5 @@
 pub(crate) mod access;
+pub(crate) mod audience;
 pub mod chunker;
 pub mod client;
 pub mod events;

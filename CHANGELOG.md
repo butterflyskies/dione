@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.86.0]
+
+### Added
+
+- Add `channel_effective_audience` to enumerate a bounded observed channel
+  audience using the existing permission evaluator. Return viewer identities,
+  unresolved permissions, census completeness, and observation times without
+  treating partial member reads or private-thread uncertainty as denial.
+
 ## [0.85.1]
 
 ### Fixed
