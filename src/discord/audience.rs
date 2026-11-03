@@ -10,13 +10,13 @@ use serenity::model::{
     guild::Member,
     id::{ChannelId, GuildId, UserId},
 };
-use std::{num::TryFromIntError, time::Duration};
+use std::time::Duration;
 use thiserror::Error;
 use tokio::time::{Instant, timeout_at};
 
 /// Maximum number of members examined by one audience read.
 pub(crate) const MAX_AUDIENCE_MEMBERS: usize = 1_000;
-const MEMBER_PAGE_SIZE: usize = 100;
+const MEMBER_PAGE_SIZE: u8 = 100;
 const MAX_MEMBER_PAGES: usize = 11;
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -99,8 +99,6 @@ pub(crate) enum AudienceError {
     Visibility(#[from] VisibilityError),
     #[error("channel audience read deadline elapsed")]
     Deadline,
-    #[error("invalid member page size: {0}")]
-    PageSize(#[from] TryFromIntError),
 }
 
 /// Enumerates observed members and reuses the candidate visibility evaluator.
@@ -122,12 +120,15 @@ pub(crate) async fn channel_effective_audience(
         }
         pages += 1;
         let remaining = MAX_AUDIENCE_MEMBERS - members.len();
-        let limit = remaining.clamp(1, MEMBER_PAGE_SIZE);
+        // Saturating larger counts preserves the page cap; subsequent conversions widen.
+        let limit = u8::try_from(remaining)
+            .unwrap_or(u8::MAX)
+            .clamp(1, MEMBER_PAGE_SIZE);
         let page = match timeout_at(
             deadline,
             ctx.http.get_guild_members(
                 prepared.guild,
-                Some(u64::try_from(limit)?),
+                Some(u64::from(limit)),
                 after.map(UserId::get),
             ),
         )
@@ -137,7 +138,7 @@ pub(crate) async fn channel_effective_audience(
             Ok(Err(cause)) => break CensusEnd::LookupFailed(Box::new(cause)),
             Ok(Ok(page)) => page,
         };
-        if !valid_page(&page, limit, after) {
+        if !valid_page(&page, usize::from(limit), after) {
             break CensusEnd::InvalidPage;
         }
         if page.is_empty() {

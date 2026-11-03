@@ -12,6 +12,10 @@ The result separates:
 - `members`: definite viewers, with user IDs, usernames, nicknames, and deciding
   permission reasons.
 - `unknown_members`: observed members whose visibility could not be determined.
+- `members_examined`: classified members, equal to the lengths of `members` and
+  `unknown_members` plus `non_viewer_count`; excludes the discarded exhaustion probe.
+- `non_viewer_count`: classified definite non-viewers, whose identities are omitted
+  from both member arrays.
 - `member_census_complete`: the REST member scan reached its end and included
   the observed guild owner.
 - `complete`: the member census completed and no observed member has an

@@ -279,6 +279,42 @@ async fn audience_missing_role_and_owner_data_remains_incomplete() {
 }
 
 #[tokio::test]
+async fn audience_missing_everyone_role_keeps_nonowners_unknown_but_owner_visible() {
+    let mut observed_guild = guild();
+    observed_guild["roles"] = json!([]);
+    let (ctx, server) = fixture(vec![
+        ("200 OK", channel(0)),
+        ("200 OK", observed_guild),
+        (
+            "200 OK",
+            json!([member("1", json!([])), member("2", json!([]))]),
+        ),
+        ("200 OK", json!([])),
+    ])
+    .await;
+    let result = introspection_wire::audience(
+        audience::channel_effective_audience(&ctx, ChannelId::new(42)).await,
+    );
+    assert_eq!(server.await.unwrap().len(), 4);
+    assert_eq!(result["member_census_complete"], true);
+    assert_eq!(result["complete"], false);
+    assert_eq!(result["members_examined"], 2);
+    assert_eq!(result["non_viewer_count"], 0);
+    assert_eq!(
+        result["members"],
+        json!([
+            {"user_id":"1","username":"fixture","nick":null,"can_view":true,"reason":"owner"}
+        ])
+    );
+    assert_eq!(
+        result["unknown_members"],
+        json!([
+            {"user_id":"2","username":"fixture","nick":null,"can_view":"unknown","reason":"role_permissions_missing"}
+        ])
+    );
+}
+
+#[tokio::test]
 async fn audience_rejects_invalid_channel_before_http() {
     let (ctx, server) = fixture(vec![]).await;
     let directory = tempfile::tempdir().unwrap();
@@ -395,26 +431,39 @@ async fn audience_deadline_bounds_an_unresponsive_permission_read() {
         pending::<()>().await;
         reader.get_mut().shutdown().await.unwrap();
     });
+    let (starting, started) = oneshot::channel();
     let mut read = tokio::spawn(async move {
+        starting.send(tokio::time::Instant::now()).unwrap();
         audience::channel_effective_audience(&ctx, ChannelId::new(42)).await
     });
     timeout(Duration::from_secs(5), arrived)
         .await
         .unwrap()
         .unwrap();
+    let started = started.await.unwrap();
     pause();
-    advance(Duration::from_secs(31)).await;
-    let result = timeout(Duration::from_secs(1), &mut read).await;
-    if result.is_err() {
-        read.abort();
-        assert!(read.await.unwrap_err().is_cancelled());
+    advance((started + Duration::from_millis(29_900)) - tokio::time::Instant::now()).await;
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
     }
+    let finished_before_deadline = read.is_finished();
+    advance(Duration::from_millis(200)).await;
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    let finished_after_deadline = read.is_finished();
+    if !finished_after_deadline {
+        read.abort();
+    }
+    let result = (&mut read).await;
     server.abort();
     assert!(server.await.unwrap_err().is_cancelled());
-    assert!(matches!(
-        result,
-        Ok(Ok(Err(audience::AudienceError::Deadline)))
-    ));
+    assert!(
+        !finished_before_deadline,
+        "must remain pending at 29.9 seconds"
+    );
+    assert!(finished_after_deadline, "must time out by 30.1 seconds");
+    assert!(matches!(result, Ok(Err(audience::AudienceError::Deadline))));
 }
 
 #[tokio::test]
@@ -811,6 +860,22 @@ async fn prerequisite_errors_preserve_main_wire_text() {
     ];
     for (responses, expected) in cases {
         let count = responses.len();
+        let (audience_ctx, audience_server) = fixture(responses.clone()).await;
+        let audience_error =
+            audience::channel_effective_audience(&audience_ctx, ChannelId::new(42)).await;
+        let audience_expected = if expected == "can_view_channel requires a guild channel or thread"
+        {
+            "channel_effective_audience requires a guild channel or thread"
+        } else {
+            expected
+        };
+        assert_eq!(
+            introspection_wire::audience(audience_error),
+            json!({
+                "error":audience_expected,"complete":false,"member_census_complete":false
+            })
+        );
+        assert_eq!(audience_server.await.unwrap().len(), count);
         let (ctx, server) = fixture(responses).await;
         let error = visibility_read::can_view_channel(&ctx, &request(&[80]))
             .await

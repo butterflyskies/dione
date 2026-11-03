@@ -148,9 +148,8 @@ pub(crate) fn audience(result: Result<AudienceObservation, AudienceError>) -> Va
                 {
                     "channel_effective_audience requires a guild channel or thread".to_owned()
                 }
-                AudienceError::Visibility(_)
-                | AudienceError::Deadline
-                | AudienceError::PageSize(_) => cause.to_string(),
+                AudienceError::Visibility(error) => error.kind.to_string(),
+                AudienceError::Deadline => cause.to_string(),
             };
             return json!({"error":message,"complete":false,"member_census_complete":false});
         }
