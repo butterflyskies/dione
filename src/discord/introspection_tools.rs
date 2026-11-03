@@ -78,7 +78,7 @@ impl MetadataTool {
                 "Report whether each user can view a guild channel or thread, using Discord's permission overwrite rules; a thread is checked against its parent channel's overwrites, since a thread's own permission_overwrites is empty. Returns can_view true, false, or \"unknown\" with the deciding reason for each user, plus an error field describing the lookup failure when can_view is \"unknown\" because a member or thread-membership lookup failed."
             }
             Self::Audience => {
-                "List observed members who can view a guild channel or thread without supplying candidate users. Returns members, unknown_members, and separate census/permission completeness with observation times. Reads at most 1000 guild members within 30 seconds; REST member listing requires application GUILD_MEMBERS access. Private-thread membership is not enumerated: members needing that check remain unknown; owner/admin/MANAGE_THREADS can be definite. This is a non-atomic Discord permission observation, not connector reachability or relay authorization."
+                "List observed members who can view a guild channel or thread without supplying candidate users. Returns members, unknown_members, and separate census/permission completeness with observation times. Classifies at most 1000 guild members within 30 seconds, fetching at most one additional member to distinguish exhaustion; REST member listing requires application GUILD_MEMBERS access. Private-thread membership is not enumerated: members needing that check remain unknown; owner/admin/MANAGE_THREADS can be definite. This is a non-atomic Discord permission observation, not connector reachability or relay authorization."
             }
         }
     }

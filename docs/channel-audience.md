@@ -18,11 +18,13 @@ The result separates:
   unknown permission result.
 - `census_reason`: why the scan stopped. API errors also retain an `error`.
 
-The call examines at most 1,000 members over at most 11 REST pages, within a
-30-second deadline. A final empty page proves that the observed member scan
-ended; hitting a cap, a failed page, or a non-advancing/duplicate page instead
-returns partial results. Omitted members are not denials. A prerequisite
-failure returns an error with `complete: false`, not a complete empty roster.
+The call classifies and retains at most 1,000 members over at most 11 REST
+pages, within a 30-second deadline. It may fetch one additional member as an
+exhaustion probe; that member is not classified or returned. A final empty
+page proves that the observed member scan ended; hitting a cap, a failed
+page, or a non-advancing/duplicate page instead returns partial results.
+Omitted members are not denials. A prerequisite failure returns an error with
+`complete: false`, not a complete empty roster.
 
 Private-thread membership is not enumerated. The guild owner, administrators,
 and members with effective `MANAGE_THREADS` can be definite viewers; other

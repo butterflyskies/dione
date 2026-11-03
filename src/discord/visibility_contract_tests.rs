@@ -21,7 +21,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt},
     net::TcpListener,
     sync::oneshot,
-    time::{advance, pause, timeout},
+    time::{advance, pause, resume, timeout},
 };
 
 fn guild() -> Value {
@@ -368,6 +368,106 @@ async fn audience_deadline_bounds_an_unresponsive_permission_read() {
         result,
         Ok(Ok(Err(audience::AudienceError::Deadline)))
     ));
+}
+
+#[tokio::test]
+async fn audience_member_page_uses_original_deadline_and_retains_viewers() {
+    let (mut ctx, unused) = fixture(vec![]).await;
+    assert!(unused.await.unwrap().is_empty());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    ctx.http = Arc::new(fixture_http(listener.local_addr().unwrap()));
+    let (first_page, first_arrival) = oneshot::channel();
+    let (release_page, released) = oneshot::channel();
+    let (stalled_page, stalled_arrival) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let mut first_page = Some(first_page);
+        let mut released = Some(released);
+        for (index, body) in [channel(0), guild(), json!([member("1", json!([]))])]
+            .into_iter()
+            .enumerate()
+        {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut reader = tokio::io::BufReader::new(stream);
+            let mut request = String::new();
+            assert_ne!(reader.read_line(&mut request).await.unwrap(), 0);
+            loop {
+                let mut header = String::new();
+                assert_ne!(reader.read_line(&mut header).await.unwrap(), 0);
+                if header == "\r\n" {
+                    break;
+                }
+            }
+            if index == 2 {
+                assert_eq!(
+                    request.trim_end(),
+                    "GET /api/v10/guilds/7/members?&limit=100 HTTP/1.1"
+                );
+                first_page.take().unwrap().send(()).unwrap();
+                released.take().unwrap().await.unwrap();
+            }
+            let body = body.to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            reader
+                .get_mut()
+                .write_all(response.as_bytes())
+                .await
+                .unwrap();
+        }
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = tokio::io::BufReader::new(stream);
+        let mut request = String::new();
+        assert_ne!(reader.read_line(&mut request).await.unwrap(), 0);
+        assert_eq!(
+            request.trim_end(),
+            "GET /api/v10/guilds/7/members?&limit=100&after=1 HTTP/1.1"
+        );
+        stalled_page.send(()).unwrap();
+        pending::<()>().await;
+        reader.get_mut().shutdown().await.unwrap();
+    });
+    let mut read = tokio::spawn(async move {
+        introspection_wire::audience(
+            audience::channel_effective_audience(&ctx, ChannelId::new(42)).await,
+        )
+    });
+    timeout(Duration::from_secs(5), first_arrival)
+        .await
+        .unwrap()
+        .unwrap();
+    pause();
+    advance(Duration::from_secs(20)).await;
+    resume();
+    release_page.send(()).unwrap();
+    timeout(Duration::from_secs(5), stalled_arrival)
+        .await
+        .unwrap()
+        .unwrap();
+    pause();
+    advance(Duration::from_secs(11)).await;
+    let result = timeout(Duration::from_secs(1), &mut read).await;
+    if result.is_err() {
+        read.abort();
+        assert!(read.await.unwrap_err().is_cancelled());
+    }
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+    let result = result
+        .expect("member enumeration must retain the original deadline")
+        .unwrap();
+    assert_eq!(result["census_reason"], "deadline");
+    assert_eq!(result["complete"], false);
+    assert_eq!(result["member_census_complete"], false);
+    assert_eq!(result["members_examined"], 1);
+    assert_eq!(
+        result["members"],
+        json!([
+            {"user_id":"1","username":"fixture","nick":null,"can_view":true,"reason":"owner"}
+        ])
+    );
+    assert_eq!(result["unknown_members"], json!([]));
 }
 
 fn channel(kind: u8) -> Value {
