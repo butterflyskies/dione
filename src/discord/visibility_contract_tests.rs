@@ -166,6 +166,53 @@ async fn audience_repeated_page_is_partial_not_an_infinite_or_complete_scan() {
 }
 
 #[tokio::test]
+async fn audience_malformed_pages_preserve_prefix_without_claiming_complete_census() {
+    let cases = [
+        (
+            "duplicate_ids",
+            json!([member("2", json!([])), member("2", json!([]))]),
+        ),
+        (
+            "oversized_page",
+            Value::Array(
+                (2..=102)
+                    .map(|id| member(&id.to_string(), json!([])))
+                    .collect(),
+            ),
+        ),
+    ];
+    for (case, page) in cases {
+        let (ctx, server) = fixture(vec![
+            ("200 OK", channel(0)),
+            ("200 OK", guild()),
+            ("200 OK", json!([member("1", json!([]))])),
+            ("200 OK", page),
+            ("200 OK", json!([])),
+        ])
+        .await;
+        let result = introspection_wire::audience(
+            audience::channel_effective_audience(&ctx, ChannelId::new(42)).await,
+        );
+        server.abort();
+        if let Err(cause) = server.await {
+            assert!(cause.is_cancelled());
+        }
+        assert_eq!(result["census_reason"], "invalid_member_page", "{case}");
+        assert_eq!(result["complete"], false, "{case}");
+        assert_eq!(result["member_census_complete"], false, "{case}");
+        assert_eq!(result["members_examined"], 1, "{case}");
+        assert_eq!(
+            result["members"],
+            json!([
+                {"user_id":"1","username":"fixture","nick":null,"can_view":true,"reason":"owner"}
+            ]),
+            "{case}"
+        );
+        assert_eq!(result["unknown_members"], json!([]), "{case}");
+    }
+}
+
+#[tokio::test]
 async fn audience_private_thread_preserves_unknown_members_without_per_user_reads() {
     let mut thread = channel(12);
     thread["parent_id"] = json!("41");
