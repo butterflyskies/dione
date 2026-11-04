@@ -5,10 +5,7 @@ use futures_util::future::BoxFuture;
 use serenity::model::id::{ChannelId, MessageId};
 use std::sync::Mutex as StdMutex;
 use {
-    crate::{
-        harness::{HarnessDelivery, HarnessError},
-        mcp::harness_wire::HarnessProtocol,
-    },
+    dione_harness::{HarnessDelivery, HarnessError, HarnessProtocol},
     dione_messages::delivery::Delivery,
 };
 
@@ -325,8 +322,7 @@ async fn notification_loop_invalidates_edits_and_deletes_before_delivery() {
 
 #[tokio::test]
 async fn oh_my_pi_ordinary_mcp_tools_remain_available() {
-    let connection =
-        HarnessConnection::oh_my_pi_with_output(ProtocolOutput::new(tokio::io::sink()));
+    let connection = crate::harness::oh_my_pi_with_output(ProtocolOutput::new(tokio::io::sink()));
     let dir = tempfile::TempDir::new().unwrap();
     let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
     let server = DioneServer::new(

@@ -12,7 +12,7 @@ use super::{
     visibility::VisibilityRequest,
     visibility_read,
 };
-use crate::{harness::HarnessConnection, mcp::tool_registry::ToolRegistry};
+use crate::mcp::tool_registry::ToolRegistry;
 use camino::Utf8PathBuf;
 use serde_json::{Value, json};
 use serenity::model::id::{ChannelId, UserId};
@@ -592,7 +592,7 @@ fn registry(ctx: &IntrospectionCtx, state_dir: &camino::Utf8Path) -> ToolRegistr
         None,
     ));
     ToolRegistry::new(
-        &HarnessConnection::claude(),
+        &crate::harness::connect_claude(),
         introspection_tools::registrations(services).unwrap(),
     )
     .unwrap()

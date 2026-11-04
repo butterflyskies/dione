@@ -6,10 +6,7 @@ use futures_util::future::BoxFuture;
 use serenity::model::id::MessageId;
 use std::{io, sync::Mutex as StdMutex};
 use {
-    crate::{
-        harness::{HarnessDelivery, HarnessError},
-        mcp::harness_wire::HarnessProtocol,
-    },
+    dione_harness::{HarnessDelivery, HarnessError, HarnessProtocol},
     dione_messages::delivery::{Delivery, DeliveryKind},
 };
 

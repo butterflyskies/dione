@@ -6,9 +6,6 @@ use super::{
         OmpSessionErrorKind, SavedSessionId,
     },
 };
-use crate::{
-    delivery::ProviderEventKey, harness::ProtocolOutput, teams::delivery::TeamsResidentEvent,
-};
 use camino::Utf8Path;
 #[cfg(test)]
 use dione_durable::PersistFailure;
@@ -26,6 +23,10 @@ use tokio::{
     time::interval,
 };
 use tokio_util::sync::CancellationToken;
+use {
+    crate::{delivery::ProviderEventKey, teams::delivery::TeamsResidentEvent},
+    dione_harness::ProtocolOutput,
+};
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

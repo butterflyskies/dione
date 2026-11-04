@@ -1628,9 +1628,8 @@ mod tests {
         )
         .unwrap();
         let (writer, reader) = tokio::io::duplex(4096);
-        let connection = crate::harness::HarnessConnection::claude_with_output(
-            crate::harness::ProtocolOutput::new(writer),
-        );
+        let connection =
+            crate::harness::claude_with_output(dione_harness::ProtocolOutput::new(writer));
         connection.deliver(&delivery).await.unwrap();
         let output: Value = serde_json::from_str(
             &BufReader::new(reader)

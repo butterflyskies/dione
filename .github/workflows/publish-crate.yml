@@ -44,6 +44,8 @@ jobs:
       publish-gaie: ${{ steps.package.outputs.publish-gaie }}
       identity-display-version: ${{ steps.package.outputs.identity-display-version }}
       publish-identity-display: ${{ steps.package.outputs.publish-identity-display }}
+      harness-version: ${{ steps.package.outputs.harness-version }}
+      publish-harness: ${{ steps.package.outputs.publish-harness }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -225,6 +227,20 @@ jobs:
             missing) echo "publish-identity-display=true" >> "${GITHUB_OUTPUT}" ;;
           esac
           echo "identity-display-version=${identity_display_version}" >> "${GITHUB_OUTPUT}"
+
+          harness_version="$(scripts/workspace-package-version.sh dione-harness)"
+          harness_crate="target/package/dione-harness-${harness_version}.crate"
+          scripts/verify-public-package-privacy.sh "${harness_crate}"
+          scripts/verify-crates-io-owners.sh dione-harness \
+            butterflysky \
+            github:butterflyskies:lacuna-blinkers \
+            github:butterflyskies:superadmins
+          package_state="$(scripts/crates-io-package-state.sh dione-harness "${harness_version}" "${harness_crate}" --ignore-vcs-info)"
+          case "$package_state" in
+            published) echo "publish-harness=false" >> "${GITHUB_OUTPUT}" ;;
+            missing) echo "publish-harness=true" >> "${GITHUB_OUTPUT}" ;;
+          esac
+          echo "harness-version=${harness_version}" >> "${GITHUB_OUTPUT}"
 
   publish-rendering:
     needs: verify-dione
@@ -1282,8 +1298,104 @@ jobs:
             github:butterflyskies:lacuna-blinkers \
             github:butterflyskies:superadmins
 
+  publish-harness:
+    needs: [verify-dione, reconcile-contracts, reconcile-messages]
+    if: needs.verify-dione.outputs.publish-harness == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: "1.98.0"
+      - name: Recheck harness package contents
+        id: preflight
+        run: |
+          set -euo pipefail
+
+          harness_version="$(scripts/workspace-package-version.sh dione-harness)"
+          test "${harness_version}" = "${{ needs.verify-dione.outputs.harness-version }}"
+          cargo package -p dione-harness --locked --no-verify
+          harness_crate="target/package/dione-harness-${harness_version}.crate"
+          scripts/verify-public-package-privacy.sh "${harness_crate}"
+          scripts/verify-crates-io-owners.sh dione-harness \
+            butterflysky \
+            github:butterflyskies:lacuna-blinkers \
+            github:butterflyskies:superadmins
+
+          package_state="$(scripts/crates-io-package-state.sh dione-harness "${harness_version}" "${harness_crate}" --ignore-vcs-info)"
+          case "$package_state" in
+            published)
+              echo "harness ${harness_version} was already published with matching contents"
+              echo "upload=false" >> "${GITHUB_OUTPUT}"
+              ;;
+            missing)
+              echo "upload=true" >> "${GITHUB_OUTPUT}"
+              ;;
+          esac
+      - name: Authenticate with crates.io
+        if: steps.preflight.outputs.upload == 'true'
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
+        id: auth
+      - name: Upload pre-verified harness package
+        if: steps.preflight.outputs.upload == 'true'
+        continue-on-error: true
+        run: cargo publish -p dione-harness --locked --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  reconcile-harness:
+    needs: [verify-dione, publish-harness]
+    if: >-
+      always() &&
+      needs.verify-dione.result == 'success' &&
+      (needs.publish-harness.result == 'success' || needs.publish-harness.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: "1.98.0"
+      - name: Reconcile harness registry contents
+        run: |
+          set -euo pipefail
+
+          harness_version="${{ needs.verify-dione.outputs.harness-version }}"
+          for attempt in $(seq 1 20); do
+            if timeout 10s cargo info --registry crates-io "dione-harness@${harness_version}" > /dev/null 2>&1; then
+              break
+            fi
+            if [ "${attempt}" = 20 ]; then
+              echo "Cargo could not resolve dione-harness ${harness_version} after bounded retries" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          cargo package -p dione-harness --locked
+          harness_crate="target/package/dione-harness-${harness_version}.crate"
+          scripts/verify-public-package-privacy.sh "${harness_crate}"
+          test "$(scripts/crates-io-package-state.sh dione-harness "${harness_version}" "${harness_crate}" --ignore-vcs-info)" = published
+          scripts/verify-crates-io-owners.sh dione-harness \
+            butterflysky \
+            github:butterflyskies:lacuna-blinkers \
+            github:butterflyskies:superadmins
+
   publish-crate:
-    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display]
+    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness]
     if: needs.verify-dione.outputs.publish-dione == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -1336,7 +1448,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   reconcile-dione:
-    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, publish-crate]
+    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, publish-crate]
     if: >-
       always() &&
       needs.verify-dione.result == 'success' &&
@@ -1351,6 +1463,7 @@ jobs:
       needs.reconcile-vaelii.result == 'success' &&
       needs.reconcile-gaie.result == 'success' &&
       needs.reconcile-identity-display.result == 'success' &&
+      needs.reconcile-harness.result == 'success' &&
       (needs.publish-crate.result == 'success' || needs.publish-crate.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -206,6 +206,30 @@ new package directly. Messages has no dependency or publication wait on identity
 display. The new package includes its HTTP dependencies even for formatting-only
 checks; no application compile-time improvement is claimed.
 
+## Harness core boundary
+
+`dione-harness` owns the connection, delivery/protocol facets, and bounded
+JSON-line writer. Both facets derive from one adapter allocation. Application
+factories pass the adapter's writer; private fields prevent later independent
+facet replacement. They do not establish an arbitrary adapter's implementation.
+
+Dione retains its public session facade, concrete adapters, provider runtimes,
+selection, private request origins, reserved control names, and tool registration.
+The session facade directly re-exports its external connection and policy types.
+Provider construction uses `connect_claude`, `connect_codex`, and
+`connect_oh_my_pi`; output/control helpers remain application-owned.
+
+The private-control trait hook requires application-authorized routing. No
+request-origin or reserved-name authority moves into the crate. Writer fields,
+error kinds, pending-frame guard, and the ten-second deadline remain private.
+Serialization precedes the shared mutex/write/flush deadline. Cancellation and
+unknown-completion behavior retain their implementations and tests.
+
+Ten existing core tests move with their bodies. The one real adapter uncertainty
+test stays in Dione without writer-fixture duplication. A shared-state test
+checks both facets across clones; compiler examples protect the private fields
+and public constructor. Member dev Tokio adds only the existing test-util feature.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -221,6 +245,7 @@ checks; no application compile-time improvement is claimed.
 9. The optional Vaelii provenance receipt client.
 10. The complete GAIE archive and backfill owner.
 11. Literal identity display and the two enrichment clients.
+12. Coupled harness facets and bounded protocol output.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -232,7 +257,7 @@ test preparation, and release builds separately before making speed claims.
 The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`, and
-`dione-gaie`, and `dione-identity-display`.
+`dione-gaie`, `dione-identity-display`, and `dione-harness`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -253,14 +278,15 @@ The already-published path remains mandatory.
 Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`, and
-`dione-gaie`, and `dione-identity-display`,
+`dione-gaie`, `dione-identity-display`, and `dione-harness`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all eleven capabilities. Messages publishing waits for
+publishing waits for all twelve capabilities. Harness publishing waits for
+contracts and messages reconciliation. Messages publishing waits for
 contracts, attention, and evidence reconciliation. Attention publishing waits for
 contracts reconciliation. Each reconciliation verifies the
 archive contents after registry resolution.

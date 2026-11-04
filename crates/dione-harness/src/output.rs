@@ -13,7 +13,8 @@ const FRAME_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Error)]
 #[error("failed to write protocol frame: {kind}")]
-pub(crate) struct ProtocolOutputError {
+/// A frame serialization, stream, deadline, or poisoned-output failure.
+pub struct ProtocolOutputError {
     #[source]
     kind: ProtocolOutputErrorKind,
     attempt: WriteAttempt,
@@ -26,7 +27,9 @@ enum WriteAttempt {
 }
 
 impl ProtocolOutputError {
-    pub(crate) fn completion_is_unknown(&self) -> bool {
+    /// Return whether a stream write attempt began before failure.
+    /// A begun attempt may have written bytes even when its completion is unknown.
+    pub fn completion_is_unknown(&self) -> bool {
         match self.attempt {
             WriteAttempt::NotStarted => false,
             WriteAttempt::Started => true,
@@ -47,7 +50,8 @@ enum ProtocolOutputErrorKind {
 }
 
 #[derive(Clone)]
-pub(crate) struct ProtocolOutput {
+/// Clonable JSON-line output with shared serialization and poison state.
+pub struct ProtocolOutput {
     writer: Arc<Mutex<Box<dyn AsyncWrite + Send + Unpin>>>,
     poisoned: CancellationToken,
 }
@@ -63,18 +67,23 @@ impl Drop for PendingFrame {
 }
 
 impl ProtocolOutput {
-    pub(crate) fn new(writer: impl AsyncWrite + Send + Unpin + 'static) -> Self {
+    /// Wrap a writer; clones share its mutex and failure state.
+    pub fn new(writer: impl AsyncWrite + Send + Unpin + 'static) -> Self {
         Self {
             writer: Arc::new(Mutex::new(Box::new(writer))),
             poisoned: CancellationToken::new(),
         }
     }
 
-    pub(crate) async fn failed(&self) {
+    /// Wait until this output becomes poisoned.
+    pub async fn failed(&self) {
         self.poisoned.cancelled().await;
     }
 
-    pub(crate) async fn write(&self, value: &Value) -> Result<(), ProtocolOutputError> {
+    /// Serialize one JSON line, then bound mutex acquisition, write, and flush
+    /// by the existing ten-second frame deadline. Serialization precedes that deadline.
+    /// Cancelling an unfinished frame after acquiring the writer poisons later output.
+    pub async fn write(&self, value: &Value) -> Result<(), ProtocolOutputError> {
         if self.poisoned.is_cancelled() {
             return Err(ProtocolOutputError {
                 kind: ProtocolOutputErrorKind::Poisoned,
@@ -130,7 +139,6 @@ impl ProtocolOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness::{HarnessConnection, test_support};
     use serde_json::json;
     use std::{
         pin::Pin,
@@ -175,30 +183,6 @@ mod tests {
 
         fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
             Poll::Ready(Ok(()))
-        }
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn adapters_distinguish_partial_write_timeout_from_unattempted_poison_failure() {
-        for adapter in [
-            HarnessConnection::claude_with_output,
-            HarnessConnection::oh_my_pi_with_output,
-        ] {
-            let (writer, mut reader) = tokio::io::duplex(1);
-            let connection = adapter(ProtocolOutput::new(writer));
-            let error = connection
-                .deliver(&test_support::text("hello"))
-                .await
-                .unwrap_err();
-            assert!(error.completion_is_unknown());
-            let mut first_byte = [0; 1];
-            reader.read_exact(&mut first_byte).await.unwrap();
-            assert_eq!(first_byte, [b'{']);
-            let error = connection
-                .deliver(&test_support::text("never written"))
-                .await
-                .unwrap_err();
-            assert!(!error.completion_is_unknown());
         }
     }
 

@@ -7,13 +7,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::io::AsyncWriteExt;
 use {
     crate::{
-        harness::HarnessDelivery,
-        mcp::{
-            harness_wire::HarnessProtocol,
-            tool_registry::{
-                McpTool, RegisteredTool, RegistrationErrorKind, ToolCallError, ToolDefinition,
-                ToolName,
-            },
+        mcp::tool_registry::{
+            McpTool, RegisteredTool, RegistrationErrorKind, ToolCallError, ToolDefinition, ToolName,
         },
         teams::{
             ReplyHandle,
@@ -21,6 +16,7 @@ use {
             runtime::{TeamsReplyAuthority, TeamsRuntimeError},
         },
     },
+    dione_harness::{HarnessDelivery, HarnessProtocol},
     dione_messages::delivery::Delivery,
 };
 
@@ -123,7 +119,7 @@ fn names_and_collisions_are_rejected_before_serving() {
     assert!(ToolName::new(&"a".repeat(128)).is_ok());
     assert!(ToolName::new(&"a".repeat(129)).is_err());
     let (_dir, codex) = test_codex_connection();
-    for harness in [HarnessConnection::claude(), codex] {
+    for harness in [crate::harness::connect_claude(), codex] {
         for name in ["next_event", "set_presence"]
             .into_iter()
             .chain(PRIVATE_CONTROL_TOOLS.iter().copied())
@@ -146,7 +142,7 @@ fn names_and_collisions_are_rejected_before_serving() {
 #[tokio::test]
 async fn teams_discovery_and_authority_cross_the_request_route() {
     let (_queue_dir, codex) = test_codex_connection();
-    for harness in [HarnessConnection::claude(), codex] {
+    for harness in [crate::harness::connect_claude(), codex] {
         let (_dir, server) = server(harness).await;
         let list_request = json!({"id":1,"method":"tools/list"});
         let before = handle_request(&server, list_request.clone())
@@ -228,7 +224,7 @@ async fn teams_discovery_and_authority_cross_the_request_route() {
 }
 #[tokio::test]
 async fn teams_reply_rejects_non_object_arguments_before_consuming_authority() {
-    let (_dir, server) = server(HarnessConnection::claude()).await;
+    let (_dir, server) = server(crate::harness::connect_claude()).await;
     let authority = Arc::new(ReplyAuthority {
         calls: AtomicUsize::new(0),
         consumed: AtomicBool::new(false),
@@ -272,7 +268,7 @@ async fn teams_reply_rejects_non_object_arguments_before_consuming_authority() {
 }
 #[tokio::test]
 async fn fake_registration_uses_seat_and_resident_request_routes() {
-    let (_dir, server) = server(HarnessConnection::claude()).await;
+    let (_dir, server) = server(crate::harness::connect_claude()).await;
     let mut tools = crate::teams::mcp_tools(Some(Arc::new(ReplyAuthority {
         calls: AtomicUsize::new(0),
         consumed: AtomicBool::new(false),
@@ -336,7 +332,7 @@ async fn fake_registration_uses_seat_and_resident_request_routes() {
 
 #[tokio::test]
 async fn discord_reply_default_is_registered_resident_and_cannot_be_shadowed() {
-    let (_dir, server) = server(HarnessConnection::claude()).await;
+    let (_dir, server) = server(crate::harness::connect_claude()).await;
     assert!(server.module_tools.find("reply").is_some());
     assert!(resident_request_allowed(
         &server.module_tools,
@@ -394,7 +390,7 @@ impl TeamsReplyAuthority for CausalReplyAuthority {
 
 #[tokio::test]
 async fn teams_public_mcp_error_does_not_render_retained_internal_causes() {
-    let (_dir, server) = server(HarnessConnection::claude()).await;
+    let (_dir, server) = server(crate::harness::connect_claude()).await;
     let server = server
         .with_module_tools(crate::teams::mcp_tools(Some(Arc::new(CausalReplyAuthority))).unwrap())
         .unwrap();
@@ -560,7 +556,7 @@ async fn private_controls_require_transport_assigned_origin_and_remain_undiscove
 
 #[tokio::test]
 async fn private_controls_are_unavailable_without_harness_capability() {
-    let (_dir, server) = server(HarnessConnection::claude()).await;
+    let (_dir, server) = server(crate::harness::connect_claude()).await;
     for name in PRIVATE_CONTROL_TOOLS {
         let response = handle_request_from(
             &server,
@@ -611,7 +607,7 @@ mod teams_omp_tests;
 
 #[tokio::test]
 async fn discord_introspection_registration_preserves_discovery_and_resident_authority() {
-    let (_dir, server) = server(HarnessConnection::claude()).await;
+    let (_dir, server) = server(crate::harness::connect_claude()).await;
     let server = server
         .with_module_tools(vec![fake("extension", false)])
         .unwrap();
@@ -676,7 +672,7 @@ async fn discord_introspection_resident_call_uses_registered_owner_without_disco
         json!({"id":"91","username":"observed","discriminator":"0","bot":false}),
     )])
     .await;
-    let (_dir, server) = server_with_http(HarnessConnection::claude(), ctx.http).await;
+    let (_dir, server) = server_with_http(crate::harness::connect_claude(), ctx.http).await;
     let (client, connection) = UnixStream::pair().unwrap();
     let task = tokio::spawn(serve_resident_connection(
         Arc::new(server),
@@ -720,7 +716,7 @@ async fn discord_introspection_resident_call_uses_registered_owner_without_disco
 
 #[tokio::test]
 async fn discord_query_registration_preserves_discovery_and_resident_authority() {
-    let (_dir, server) = server(HarnessConnection::claude()).await;
+    let (_dir, server) = server(crate::harness::connect_claude()).await;
     let server = server
         .with_module_tools(vec![fake("extension", false)])
         .unwrap();
@@ -778,7 +774,7 @@ async fn discord_query_registration_preserves_discovery_and_resident_authority()
 
 #[tokio::test]
 async fn discord_management_registration_preserves_discovery_and_resident_authority() {
-    let (_dir, server) = server(HarnessConnection::claude()).await;
+    let (_dir, server) = server(crate::harness::connect_claude()).await;
     let server = server
         .with_module_tools(vec![fake("extension", false)])
         .unwrap();

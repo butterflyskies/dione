@@ -1,13 +1,13 @@
 //! MCP protocol responses: initialize handshake and tool list.
 
-use crate::{
-    discord::{
+use serde_json::{Value, json};
+use {
+    crate::discord::{
         presence::{ActivityType, OnlineStatus},
         tool_arguments::sentex_handles_schema,
     },
-    harness::HarnessConnection,
+    dione_harness::HarnessConnection,
 };
-use serde_json::{Value, json};
 
 const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
 const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
@@ -319,7 +319,7 @@ mod tests {
     /// advertised list must fail here, not in a reviewer's client.
     #[test]
     fn presence_tools_are_listed_with_their_schemas() {
-        let list = tools_list(&HarnessConnection::claude(), false);
+        let list = tools_list(&crate::harness::connect_claude(), false);
         let tools = list["tools"].as_array().unwrap();
         let set = tools
             .iter()

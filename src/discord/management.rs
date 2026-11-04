@@ -952,7 +952,7 @@ mod tests {
             path.clone(),
             tokio::sync::mpsc::channel(1).0,
             crate::tracing_channel::TraceLevelController::noop(),
-            crate::harness::HarnessConnection::claude(),
+            crate::harness::connect_claude(),
             Arc::new(crate::no_rly::consent::ConsentGate::new(&path)),
             ctx.ingress_ledger.clone(),
             dione_contracts::ModuleInstanceId::new(

@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.98.0]
+
+### Changed
+
+- Extract the coupled harness connection, protocol hooks, and bounded JSON-line
+  output into `dione-harness`. Keep provider adapters, session/runtime ownership,
+  factories, and private-control authorization in Dione. Replace the former
+  connection's provider constructors with application-owned `connect_*` factories.
+
 ## [0.97.0]
 
 ### Changed

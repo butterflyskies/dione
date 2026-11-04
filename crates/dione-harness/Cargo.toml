@@ -1,0 +1,23 @@
+[package]
+name = "dione-harness"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Coupled harness delivery/protocol facets and bounded JSON-line output"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["harness", "mcp", "protocol"]
+categories = ["asynchronous", "development-tools"]
+
+[dependencies]
+dione-contracts.workspace = true
+dione-messages.workspace = true
+futures-util.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

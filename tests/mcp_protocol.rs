@@ -21,7 +21,6 @@ use tokio::{
 use {
     dione::{
         discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
-        harness::HarnessConnection,
         mcp::server::{DioneServer, test_helpers},
         no_rly::consent::ConsentGate,
         queue::AccessQueue,
@@ -33,6 +32,7 @@ use {
         },
         tracing_channel::TraceLevelController,
     },
+    dione_harness::HarnessConnection,
     dione_messages::timestamp::Timestamp,
 };
 
@@ -48,8 +48,8 @@ static CONFIG_FIXTURE_LOCK: Mutex<()> = Mutex::const_new(());
 async fn can_view_channel_is_discovered_with_main_schema_in_every_harness() {
     let (_directory, state_dir) = temp_state_dir();
     for harness in [
-        HarnessConnection::claude(),
-        HarnessConnection::oh_my_pi(),
+        dione::harness::connect_claude(),
+        dione::harness::connect_oh_my_pi(),
         codex_connection(&state_dir),
     ] {
         let server = make_server_with_harness(&state_dir, harness).await;
@@ -84,8 +84,8 @@ async fn can_view_channel_is_discovered_with_main_schema_in_every_harness() {
 async fn channel_audience_is_discovered_without_requiring_candidate_users() {
     let (_directory, state_dir) = temp_state_dir();
     for harness in [
-        HarnessConnection::claude(),
-        HarnessConnection::oh_my_pi(),
+        dione::harness::connect_claude(),
+        dione::harness::connect_oh_my_pi(),
         codex_connection(&state_dir),
     ] {
         let server = make_server_with_harness(&state_dir, harness).await;
@@ -154,7 +154,7 @@ async fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
 }
 
 async fn make_server_with_http(state_dir: &camino::Utf8PathBuf, http: Arc<Http>) -> DioneServer {
-    make_server_with_connection(state_dir, http, HarnessConnection::claude()).await
+    make_server_with_connection(state_dir, http, dione::harness::connect_claude()).await
 }
 
 async fn make_server_with_harness(
@@ -335,7 +335,7 @@ async fn harness_contract_initialize_capabilities() {
     let (_dir, state_dir) = temp_state_dir();
     for (harness, capabilities) in [
         (
-            HarnessConnection::claude(),
+            dione::harness::connect_claude(),
             json!({
                 "tools": {},
                 "experimental": {"claude/channel": {}, "claude/channel/permission": {}}
@@ -426,7 +426,7 @@ async fn harness_contract_codex_consumer_receives_and_acknowledges_event() {
         .unwrap();
     let server = make_server_with_harness(
         &state_dir,
-        HarnessConnection::codex(queue, tokio::sync::watch::channel(None).0),
+        dione::harness::connect_codex(queue, tokio::sync::watch::channel(None).0),
     )
     .await;
     for (name, arguments, expected) in [
@@ -1340,7 +1340,7 @@ async fn test_bind_codex_thread_updates_live_binding() {
     let (binding_tx, mut binding_rx) = tokio::sync::watch::channel(None);
     let server = make_server_with_harness(
         &state_dir,
-        HarnessConnection::codex(
+        dione::harness::connect_codex(
             dione::codex::CodexEventQueue::load(
                 &state_dir,
                 dione::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
@@ -2523,7 +2523,7 @@ async fn test_reply_preserves_discord_missing_access_after_gate() {
 }
 
 fn codex_connection(state_dir: &camino::Utf8Path) -> HarnessConnection {
-    HarnessConnection::codex(
+    dione::harness::connect_codex(
         dione::codex::CodexEventQueue::load(
             state_dir,
             dione::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(

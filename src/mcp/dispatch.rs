@@ -1075,7 +1075,7 @@ mod tests {
             state_dir.clone(),
             notification_tx,
             crate::tracing_channel::TraceLevelController::noop(),
-            crate::harness::HarnessConnection::claude(),
+            crate::harness::connect_claude(),
             std::sync::Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
             std::sync::Arc::new(crate::ingress_ledger::IngressLedger::new()),
             dione_contracts::ModuleInstanceId::new(
@@ -1317,7 +1317,7 @@ mod tests {
             state_dir.clone(),
             notification_tx,
             crate::tracing_channel::TraceLevelController::noop(),
-            crate::harness::HarnessConnection::claude(),
+            crate::harness::connect_claude(),
             std::sync::Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
             std::sync::Arc::new(crate::ingress_ledger::IngressLedger::new()),
             dione_contracts::ModuleInstanceId::new(

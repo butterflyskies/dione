@@ -1,10 +1,6 @@
 #[cfg(unix)]
 use super::SecretEnvironmentError;
 use super::{StartupErrorKind, drain_shutdown, prepare_teams, validate_teams_control};
-use crate::harness::{
-    AttentionPolicy, CodexSessionOptions, HarnessSelection, HarnessSession, HarnessSessionError,
-    HarnessSessionErrorKind,
-};
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::Parser;
 use std::{collections::BTreeMap, env::VarError, ffi::OsString, net::SocketAddr, time::Duration};
@@ -13,6 +9,13 @@ use std::{error::Error, os::unix::ffi::OsStringExt};
 use tokio::{
     sync::{mpsc, oneshot},
     time::timeout,
+};
+use {
+    crate::harness::{
+        CodexSessionOptions, HarnessSelection, HarnessSession, HarnessSessionError,
+        HarnessSessionErrorKind,
+    },
+    dione_harness::AttentionPolicy,
 };
 
 #[tokio::test]

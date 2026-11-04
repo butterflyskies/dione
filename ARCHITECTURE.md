@@ -62,6 +62,9 @@ The public `dione-identity-display` package owns literal formatting and the
 existing nameplate/PronounDB clients. Dione keeps service construction, settings,
 bot/human routing, and current exclusion decisions. The clients share the formatter
 directly and have no messages or attention dependency.
+The public `dione-harness` package owns one-adapter delivery/protocol facets and
+bounded shared JSON-line output. Dione retains provider factories, adapters,
+sessions, request-origin authorization, and private-control registration.
 See the [crate split plan](docs/design/plugin-crates.md) for the next boundaries
 and the package release requirements.
 
@@ -91,7 +94,7 @@ responses on stdin and stdout. Logs use stderr and an optional log file.
 [server.rs](src/mcp/server.rs) implements line-delimited JSON-RPC directly so
 responses and channel notifications can share stdout.
 
-[HarnessConnection](src/harness/connection.rs) couples delivery and MCP
+[HarnessConnection](crates/dione-harness/src/connection.rs) couples delivery and MCP
 capabilities from one adapter instance. Shared routing uses that connection;
 the CLI selects the concrete adapter during construction. The
 [Claude adapter](src/harness/claude.rs) shares one serialized output with MCP

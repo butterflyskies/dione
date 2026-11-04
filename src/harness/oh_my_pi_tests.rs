@@ -89,7 +89,7 @@ fn projects_real_rendered_message_reaction_config_and_trace() {
 #[tokio::test]
 async fn concurrent_response_and_event_are_complete_lines_and_rejection_writes_nothing() {
     let (writer, reader) = tokio::io::duplex(32);
-    let connection = HarnessConnection::oh_my_pi_with_output(ProtocolOutput::new(writer));
+    let connection = crate::harness::oh_my_pi_with_output(ProtocolOutput::new(writer));
     let permission = test_support::delivery(NotificationEvent::PermissionResponse {
         request_id: "no".into(),
         granted: true,
@@ -210,7 +210,7 @@ async fn identity_display_roundtrips_untrusted_names_without_changing_machine_id
     ];
     for event in events {
         let (writer, reader) = tokio::io::duplex(16 * 1024);
-        let connection = HarnessConnection::oh_my_pi_with_output(ProtocolOutput::new(writer));
+        let connection = crate::harness::oh_my_pi_with_output(ProtocolOutput::new(writer));
         connection
             .deliver(&test_support::delivery(event))
             .await

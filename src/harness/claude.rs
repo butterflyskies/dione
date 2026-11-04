@@ -7,7 +7,7 @@ use dione_contracts::MessageRef;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use {
-    crate::mcp::harness_wire::HarnessProtocol,
+    dione_harness::HarnessProtocol,
     dione_messages::{delivery::Delivery, events::PermissionDecision},
 };
 pub(super) const ATTENTION_POLICY: AttentionPolicy = AttentionPolicy::Direct;
@@ -40,20 +40,19 @@ pub(crate) fn notification(delivery: &Delivery) -> Value {
 struct ClaudeAdapter {
     output: ProtocolOutput,
 }
-impl HarnessConnection {
-    /// Connects Claude channel notifications and responses to one stdout writer.
-    pub fn claude() -> Self {
-        Self::claude_with_output(ProtocolOutput::new(tokio::io::stdout()))
-    }
-    pub(crate) fn claude_with_output(output: ProtocolOutput) -> Self {
-        Self::from_adapter(
-            ClaudeAdapter {
-                output: output.clone(),
-            },
-            output,
-        )
-    }
+/// Connects Claude channel notifications and responses to one stdout writer.
+pub fn connect_claude() -> HarnessConnection {
+    claude_with_output(ProtocolOutput::new(tokio::io::stdout()))
 }
+pub(crate) fn claude_with_output(output: ProtocolOutput) -> HarnessConnection {
+    HarnessConnection::from_adapter(
+        ClaudeAdapter {
+            output: output.clone(),
+        },
+        output,
+    )
+}
+
 impl HarnessDelivery for ClaudeAdapter {
     fn attention_policy(&self) -> AttentionPolicy {
         ATTENTION_POLICY
@@ -122,7 +121,7 @@ mod tests {
     #[tokio::test]
     async fn channel_metadata_uses_strings_without_changing_content() {
         let (writer, reader) = tokio::io::duplex(4096);
-        let connection = HarnessConnection::claude_with_output(ProtocolOutput::new(writer));
+        let connection = crate::harness::claude_with_output(ProtocolOutput::new(writer));
         let content = "original text\n\"quoted\" <source> 🛰";
         let delivery = crate::harness::test_support::text(content);
         connection.deliver(&delivery).await.unwrap();
@@ -167,7 +166,7 @@ mod tests {
     #[tokio::test]
     async fn stdout_failure_is_reported_and_poisoned() {
         let flushes = Arc::new(AtomicUsize::new(0));
-        let connection = HarnessConnection::claude_with_output(ProtocolOutput::new(FailedWriter {
+        let connection = crate::harness::claude_with_output(ProtocolOutput::new(FailedWriter {
             flushes: flushes.clone(),
         }));
         assert!(
@@ -185,7 +184,7 @@ mod tests {
         );
         assert_eq!(flushes.load(Ordering::SeqCst), 0);
         let (writer, reader) = tokio::io::duplex(1024);
-        let connection = HarnessConnection::claude_with_output(ProtocolOutput::new(writer));
+        let connection = crate::harness::claude_with_output(ProtocolOutput::new(writer));
         connection
             .deliver(&crate::harness::test_support::text("hello"))
             .await
@@ -200,7 +199,7 @@ mod tests {
     #[tokio::test]
     async fn stdout_response_and_notification_share_complete_lines() {
         let (writer, reader) = tokio::io::duplex(32);
-        let connection = HarnessConnection::claude_with_output(ProtocolOutput::new(writer));
+        let connection = crate::harness::claude_with_output(ProtocolOutput::new(writer));
         let response = json!({"jsonrpc": "2.0", "id": 7, "result": {"message": "response"}});
         let notification = crate::harness::test_support::text("notification");
         let read = async {

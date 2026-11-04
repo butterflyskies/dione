@@ -399,7 +399,7 @@ async fn oh_my_pi_session_is_direct_without_inbox_or_worker() {
         .unwrap();
     assert_eq!(
         session.connection().attention_policy(),
-        crate::harness::AttentionPolicy::Direct
+        dione_harness::AttentionPolicy::Direct
     );
     let error = session.codex_admission().err().unwrap();
     assert!(matches!(
