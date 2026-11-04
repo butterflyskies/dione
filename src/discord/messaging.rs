@@ -908,7 +908,7 @@ fn claim_winner_display(
         .ok()
         .filter(|id| *id != 0 && id.to_string() == *first);
     match user {
-        Some(id) => crate::core::identity_display::format_identity(
+        Some(id) => dione_messages::identity_display::format_identity(
             first,
             names.get(&id).map(String::as_str),
         ),

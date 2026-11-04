@@ -1,16 +1,18 @@
 //! Exact OMP lifecycle identities and immutable Teams event payloads.
-use crate::{
-    delivery::ProviderEventKey,
-    teams::{
-        ActivityId, ActorId, BotId, ConversationId, ReplyHandle, TenantId,
-        delivery::TeamsResidentEvent,
-    },
-    timestamp::Timestamp,
-};
 use dione_durable::{EndpointId, QueueError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
+use {
+    crate::{
+        delivery::ProviderEventKey,
+        teams::{
+            ActivityId, ActorId, BotId, ConversationId, ReplyHandle, TenantId,
+            delivery::TeamsResidentEvent,
+        },
+    },
+    dione_messages::timestamp::Timestamp,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]

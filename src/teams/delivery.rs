@@ -1,9 +1,9 @@
 //! Teams events and acceptance receipts at the resident delivery boundary.
 
 use super::{ActivityId, ActorId, BotId, ConversationId, ReplyHandle, TenantId};
-use crate::{delivery::ProviderEventKey, timestamp::Timestamp};
 use std::{future::Future, pin::Pin, sync::Arc};
 use thiserror::Error;
+use {crate::delivery::ProviderEventKey, dione_messages::timestamp::Timestamp};
 
 pub(crate) struct TeamsResidentEvent {
     pub(crate) provider_key: ProviderEventKey,

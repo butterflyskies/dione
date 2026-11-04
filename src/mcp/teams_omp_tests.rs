@@ -139,7 +139,7 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
             author_kind: Default::default(),
             content: "Discord still works".into(),
             targeting: crate::discord::events::MessageTargeting::DirectMessage,
-            timestamp: crate::timestamp::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            timestamp: dione_messages::timestamp::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
@@ -355,7 +355,7 @@ fn omp_lifecycle_child_entry() {
                         bot_id: "bot".parse().unwrap(),
                         tenant_id: "tenant".parse().unwrap(),
                         reply_handle: ReplyHandle::generate(),
-                        timestamp: crate::timestamp::Timestamp::now(),
+                        timestamp: dione_messages::timestamp::Timestamp::now(),
                     }
                 };
                 tokio::time::timeout(Duration::from_secs(8), async {

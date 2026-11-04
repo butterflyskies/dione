@@ -1,7 +1,7 @@
 //! Literal human-facing identity display, independent of identity authority.
 
 /// Format a supplied observed/cached name without fetching or escaping it.
-pub(crate) fn format_identity(id: &str, display_name: Option<&str>) -> String {
+pub fn format_identity(id: &str, display_name: Option<&str>) -> String {
     match display_name.filter(|name| !name.trim().is_empty()) {
         Some(name) => format!("{id}={name}"),
         None => id.to_owned(),
@@ -9,7 +9,7 @@ pub(crate) fn format_identity(id: &str, display_name: Option<&str>) -> String {
 }
 
 /// Preserve explicit display-name pronouns over separately obtained enrichment.
-pub(crate) fn display_name_with_pronouns(name: &str, pronouns: Option<&str>) -> String {
+pub fn display_name_with_pronouns(name: &str, pronouns: Option<&str>) -> String {
     match pronouns.filter(|value| !value.trim().is_empty()) {
         Some(value) if !has_pronoun_suffix(name) => format!("{name} ({value})"),
         _ => name.to_owned(),

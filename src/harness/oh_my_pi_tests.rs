@@ -1,11 +1,13 @@
 use super::*;
-use crate::{
-    discord::events::{MessageEvent, MessageTargeting, NotificationEvent},
-    harness::test_support,
-    timestamp::Timestamp,
-};
 use serenity::model::id::{ChannelId, MessageId, UserId};
 use tokio::io::{AsyncBufReadExt, BufReader};
+use {
+    crate::{
+        discord::events::{MessageEvent, MessageTargeting, NotificationEvent},
+        harness::test_support,
+    },
+    dione_messages::timestamp::Timestamp,
+};
 
 #[test]
 fn typed_permission_is_rejected_without_parsing_a_foreign_envelope() {

@@ -5,21 +5,6 @@
 //! a real Discord connection. Tool calls that require Discord HTTP are tested
 //! either up to the gate-rejection path or against a local mock HTTP server.
 
-use dione::{
-    discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
-    harness::HarnessConnection,
-    mcp::server::{DioneServer, test_helpers},
-    no_rly::consent::ConsentGate,
-    queue::AccessQueue,
-    state::new_state,
-    teams::{
-        ReplyHandle,
-        edge::LiveReplyReceipt,
-        runtime::{TeamsReplyAuthority, TeamsRuntimeError},
-    },
-    timestamp::Timestamp,
-    tracing_channel::TraceLevelController,
-};
 use serde_json::json;
 use serenity::{
     http::{Http, HttpBuilder},
@@ -32,6 +17,23 @@ use tokio::{
     net::TcpListener,
     sync::{Mutex, mpsc},
     task::JoinHandle,
+};
+use {
+    dione::{
+        discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
+        harness::HarnessConnection,
+        mcp::server::{DioneServer, test_helpers},
+        no_rly::consent::ConsentGate,
+        queue::AccessQueue,
+        state::new_state,
+        teams::{
+            ReplyHandle,
+            edge::LiveReplyReceipt,
+            runtime::{TeamsReplyAuthority, TeamsRuntimeError},
+        },
+        tracing_channel::TraceLevelController,
+    },
+    dione_messages::timestamp::Timestamp,
 };
 
 fn temp_state_dir() -> (TempDir, camino::Utf8PathBuf) {

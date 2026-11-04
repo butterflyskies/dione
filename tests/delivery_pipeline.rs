@@ -4,25 +4,27 @@
 //! output, verifying coalescing, rate limiting, bypass behavior, and config
 //! integration.
 
-use dione::{
-    config::{ChannelConfig, Config, DeliveryConfig, LoadedConfig, RateLimitTomlConfig},
-    delivery_buffer::BufferResult,
-    discord::{
-        events::{MessageEvent, NotificationEvent},
-        scheduling::DeliveryBuffer,
-    },
-    mcp::server::test_helpers,
-    rate_limiter::{
-        ChannelRef, OverflowPolicy, ParticipantId, RateLimitConfig, RateLimitDecision, RateLimiter,
-        ScopeConfig,
-    },
-    timestamp::Timestamp,
-};
 use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use serenity::model::id::{ChannelId, MessageId, UserId};
 use std::{
     collections::HashMap,
     time::{Duration, Instant},
+};
+use {
+    dione::{
+        config::{ChannelConfig, Config, DeliveryConfig, LoadedConfig, RateLimitTomlConfig},
+        delivery_buffer::BufferResult,
+        discord::{
+            events::{MessageEvent, NotificationEvent},
+            scheduling::DeliveryBuffer,
+        },
+        mcp::server::test_helpers,
+        rate_limiter::{
+            ChannelRef, OverflowPolicy, ParticipantId, RateLimitConfig, RateLimitDecision,
+            RateLimiter, ScopeConfig,
+        },
+    },
+    dione_messages::timestamp::Timestamp,
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

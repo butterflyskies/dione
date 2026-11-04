@@ -1,9 +1,9 @@
 [workspace]
-members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention", "crates/dione-evidence"]
+members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention", "crates/dione-evidence", "crates/dione-messages"]
 
 [package]
 name = "dione"
-version = "0.92.0"
+version = "0.93.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -14,6 +14,8 @@ keywords = ["discord", "mcp", "claude-code", "codex", "bot"]
 categories = ["command-line-utilities"]
 
 [workspace.dependencies]
+chrono-tz = "0.10"
+dione-messages = { version = "=0.1.0", path = "crates/dione-messages" }
 base64 = "0.22"
 dione-evidence = { version = "=0.1.0", path = "crates/dione-evidence" }
 dione-attention = { version = "=0.1.0", path = "crates/dione-attention" }
@@ -53,6 +55,7 @@ serenity = { version = "0.12", default-features = false, features = ["client", "
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 [dependencies]
+dione-messages.workspace = true
 dione-evidence.workspace = true
 dione-attention.workspace = true
 dione-rook.workspace = true
@@ -82,7 +85,7 @@ regex = "1"
 aho-corasick = "1"
 base64.workspace = true
 chrono.workspace = true
-chrono-tz = "0.10"
+chrono-tz.workspace = true
 camino.workspace = true
 futures-util.workspace = true
 notify = "8"

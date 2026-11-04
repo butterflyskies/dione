@@ -3,13 +3,13 @@ use super::{
     AttentionPolicy, HarnessConnection, HarnessDelivery, HarnessError, ProtocolOutput,
     codex::{ToolArgumentError, recognizes},
 };
-use crate::{
-    core::{delivery::Delivery, events::PermissionDecision},
-    mcp::harness_wire::HarnessProtocol,
-};
 use dione_contracts::MessageRef;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
+use {
+    crate::mcp::harness_wire::HarnessProtocol,
+    dione_messages::{delivery::Delivery, events::PermissionDecision},
+};
 pub(super) const ATTENTION_POLICY: AttentionPolicy = AttentionPolicy::Direct;
 
 pub(crate) fn notification(delivery: &Delivery) -> Value {

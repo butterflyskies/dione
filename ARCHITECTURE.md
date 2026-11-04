@@ -42,6 +42,10 @@ The public `dione-evidence` package owns terminal sentex syntax, checked handle
 arguments, supplied-author JSON projection, and the Markdown scanner shared by
 chunking, status lint, and filtering. It has no attention or delivery dependency.
 Discord still supplies authenticated authorship and enforces current policy.
+The public `dione-messages` package owns observed events, nonempty ordinary
+deliveries, managed source descriptors, identity presentation, and timestamps.
+Dione retains timezone configuration and current dispatch authority. Message
+values describe supplied observations rather than granting access or permission.
 See the [crate split plan](docs/design/plugin-crates.md) for the next boundaries
 and the package release requirements.
 

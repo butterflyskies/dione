@@ -7,13 +7,13 @@ use serde_json::Value;
 use std::num::NonZeroU64;
 use thiserror::Error;
 use {
-    crate::core::{
-        delivery::DeliveryKind,
-        events::{ControlEvent, CoordinationNotice, OrdinaryEvent},
-    },
     dione_attention::{
         delivery::{AttentionDirective, OwnedAttentionDescriptor},
         types::{RecordId, RecordIdError},
+    },
+    dione_messages::{
+        delivery::DeliveryKind,
+        events::{ControlEvent, CoordinationNotice, OrdinaryEvent},
     },
 };
 
@@ -122,7 +122,7 @@ pub(crate) fn decode_attention(
 }
 
 pub(crate) fn encode(
-    delivery: &crate::core::delivery::Delivery,
+    delivery: &dione_messages::delivery::Delivery,
     scope: &LegacyDiscordScope,
 ) -> Result<Value, LegacyDeliveryError> {
     validate_delivery(delivery, scope)?;
@@ -131,13 +131,13 @@ pub(crate) fn encode(
             serde_json::json!({"jsonrpc":"2.0","method":"notifications/claude/channel","params":{"content":channel.content,"meta":channel.meta}})
         }
         crate::harness::presentation::Presentation::Permission { request, decision } => {
-            serde_json::json!({"jsonrpc":"2.0","method":"notifications/claude/channel/permission","params":{"request_id":request,"behavior":match decision {crate::core::events::PermissionDecision::Granted=>"allow",crate::core::events::PermissionDecision::Denied=>"deny"}}})
+            serde_json::json!({"jsonrpc":"2.0","method":"notifications/claude/channel/permission","params":{"request_id":request,"behavior":match decision {dione_messages::events::PermissionDecision::Granted=>"allow",dione_messages::events::PermissionDecision::Denied=>"deny"}}})
         }
     })
 }
 
 fn validate_delivery(
-    delivery: &crate::core::delivery::Delivery,
+    delivery: &dione_messages::delivery::Delivery,
     scope: &LegacyDiscordScope,
 ) -> Result<(), LegacyDeliveryError> {
     match delivery.kind() {
@@ -199,7 +199,7 @@ fn validate_actor(actor: &ActorRef, scope: &LegacyDiscordScope) -> Result<(), Le
     }
 }
 fn validate_message(
-    message: &crate::core::events::MessageCreated,
+    message: &dione_messages::events::MessageCreated,
     scope: &LegacyDiscordScope,
 ) -> Result<(), LegacyDeliveryError> {
     validate_source(message.source(), scope)?;
@@ -219,7 +219,7 @@ fn validate_message(
     Ok(())
 }
 fn validate_event(
-    event: &crate::core::events::OrdinaryEvent,
+    event: &dione_messages::events::OrdinaryEvent,
     scope: &LegacyDiscordScope,
 ) -> Result<(), LegacyDeliveryError> {
     validate_source(event.source(), scope)?;

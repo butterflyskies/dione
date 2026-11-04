@@ -168,20 +168,22 @@ impl TeamsEventSink for CodexTeamsAdmission {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        codex::{
-            CodexQueueError, CodexQueueErrorKind, CodexThreadId, LegacyReplayIdentity,
-            LiveQueueError,
-        },
-        delivery::ProviderEventKey,
-        teams::ReplyHandle,
-        timestamp::Timestamp,
-    };
     use camino::Utf8PathBuf;
     use chrono::Utc;
     use dione_durable::{PersistFailure, QueueError, QueueErrorKind, state::ReplayReceipt};
     use std::{error::Error, io};
     use tempfile::TempDir;
+    use {
+        crate::{
+            codex::{
+                CodexQueueError, CodexQueueErrorKind, CodexThreadId, LegacyReplayIdentity,
+                LiveQueueError,
+            },
+            delivery::ProviderEventKey,
+            teams::ReplyHandle,
+        },
+        dione_messages::timestamp::Timestamp,
+    };
 
     fn event(activity: &str) -> TeamsResidentEvent {
         TeamsResidentEvent {

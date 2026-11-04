@@ -1,14 +1,16 @@
 //! Exercises a third adapter through common MCP and notification routing.
 use super::*;
-use crate::{
-    core::delivery::Delivery,
-    harness::{HarnessDelivery, HarnessError},
-    mcp::harness_wire::HarnessProtocol,
-};
 use dione_contracts::MessageRef;
 use futures_util::future::BoxFuture;
 use serenity::model::id::{ChannelId, MessageId};
 use std::sync::Mutex as StdMutex;
+use {
+    crate::{
+        harness::{HarnessDelivery, HarnessError},
+        mcp::harness_wire::HarnessProtocol,
+    },
+    dione_messages::delivery::Delivery,
+};
 
 enum Received {
     Delivery(Delivery),
@@ -269,7 +271,7 @@ async fn notification_loop_invalidates_edits_and_deletes_before_delivery() {
             user: "author".into(),
             user_id: serenity::model::id::UserId::new(30),
             new_content: "revised".into(),
-            timestamp: crate::timestamp::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            timestamp: dione_messages::timestamp::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             thread_parent_id: None,
             reply_to_message_id: None,
         })
@@ -418,8 +420,8 @@ async fn third_adapter_retains_opaque_scoped_records_and_unprojected_observation
             dione_contracts::ProviderId::new("fake").unwrap(),
             dione_contracts::ModuleSlotId::new(slot).unwrap(),
         );
-        crate::core::events::OrdinaryEvent::Message(Box::new(
-            crate::core::events::MessageCreated::new(
+        dione_messages::events::OrdinaryEvent::Message(Box::new(
+            dione_messages::events::MessageCreated::new(
                 MessageRef::new(
                     dione_contracts::ConversationRef::new(
                         module.clone(),
@@ -427,23 +429,23 @@ async fn third_adapter_retains_opaque_scoped_records_and_unprojected_observation
                     ),
                     dione_contracts::MessageId::opaque("20").unwrap(),
                 ),
-                crate::core::events::ObservedAuthor::new(
+                dione_messages::events::ObservedAuthor::new(
                     dione_contracts::ActorRef::new(
                         module,
                         dione_contracts::ActorId::opaque("30").unwrap(),
                     ),
                     "same display".into(),
-                    crate::core::events::AuthorOrigin::VerifiedWebhook,
+                    dione_messages::events::AuthorOrigin::VerifiedWebhook,
                 ),
                 text.into(),
-                crate::core::events::Targeting::ReplyToConstruct,
-                crate::timestamp::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+                dione_messages::events::Targeting::ReplyToConstruct,
+                dione_messages::timestamp::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             )
             .with_attachments(
-                vec![crate::core::events::ObservedAttachment::new(
+                vec![dione_messages::events::ObservedAttachment::new(
                     "empty.bin".into(),
                     None,
-                    crate::core::events::ByteSize::new(0),
+                    dione_messages::events::ByteSize::new(0),
                 )],
                 true,
             ),
@@ -461,7 +463,7 @@ async fn third_adapter_retains_opaque_scoped_records_and_unprojected_observation
     let [Received::Delivery(delivery)] = received.as_slice() else {
         panic!("one complete typed delivery");
     };
-    let crate::core::delivery::DeliveryKind::Ordinary { first, rest } = delivery.kind() else {
+    let dione_messages::delivery::DeliveryKind::Ordinary { first, rest } = delivery.kind() else {
         panic!("ordinary records");
     };
     assert_eq!(rest.len(), 1);
@@ -470,7 +472,7 @@ async fn third_adapter_retains_opaque_scoped_records_and_unprojected_observation
         rest[0].source().conversation()
     );
     for (event, expected_text) in [(first, "first\n\n"), (&rest[0], "")] {
-        let crate::core::events::OrdinaryEvent::Message(message) = event else {
+        let dione_messages::events::OrdinaryEvent::Message(message) = event else {
             panic!("created observation");
         };
         assert_eq!(message.source().local().as_opaque(), Some("20"));
@@ -478,11 +480,11 @@ async fn third_adapter_retains_opaque_scoped_records_and_unprojected_observation
         assert_eq!(message.author().actor().local().as_opaque(), Some("30"));
         assert_eq!(
             message.author().origin(),
-            crate::core::events::AuthorOrigin::VerifiedWebhook
+            dione_messages::events::AuthorOrigin::VerifiedWebhook
         );
         assert_eq!(
             message.targeting(),
-            crate::core::events::Targeting::ReplyToConstruct
+            dione_messages::events::Targeting::ReplyToConstruct
         );
         assert_eq!(message.content().text(), expected_text);
         assert!(message.is_voice());

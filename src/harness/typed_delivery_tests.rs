@@ -13,18 +13,16 @@ use tokio::{
     sync::watch,
 };
 use {
-    crate::{
-        codex::{CodexEventQueue, LegacyDiscordScope, legacy_delivery},
-        core::{
-            delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
-            events::{
-                AuthorOrigin, BellObservation, BellStatus, ByteSize, MessageCreated,
-                ObservedAttachment, ObservedAuthor, OrdinaryEvent, ReplyObservation, Targeting,
-            },
+    crate::codex::{CodexEventQueue, LegacyDiscordScope, legacy_delivery},
+    dione_attention::{delivery::AttentionDirective, types::RecordId},
+    dione_messages::{
+        delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
+        events::{
+            AuthorOrigin, BellObservation, BellStatus, ByteSize, MessageCreated,
+            ObservedAttachment, ObservedAuthor, OrdinaryEvent, ReplyObservation, Targeting,
         },
         timestamp::Timestamp,
     },
-    dione_attention::{delivery::AttentionDirective, types::RecordId},
 };
 
 fn conversation(module: &ModuleInstanceId, id: u64) -> ConversationRef {

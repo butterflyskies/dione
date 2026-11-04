@@ -84,12 +84,12 @@ async fn audience_lists_viewers_and_denials_through_registered_tool() {
     assert!(
         result["observed_at"]
             .as_str()
-            .is_some_and(|value| crate::timestamp::Timestamp::parse(value).is_ok())
+            .is_some_and(|value| dione_messages::timestamp::Timestamp::parse(value).is_ok())
     );
     assert!(
         result["completed_at"]
             .as_str()
-            .is_some_and(|value| crate::timestamp::Timestamp::parse(value).is_ok())
+            .is_some_and(|value| dione_messages::timestamp::Timestamp::parse(value).is_ok())
     );
     assert_eq!(
         server.await.unwrap(),

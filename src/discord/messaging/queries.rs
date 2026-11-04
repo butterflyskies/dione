@@ -25,10 +25,10 @@ use tokio::io::AsyncWriteExt;
 use {
     crate::{
         config::LoadedConfig,
-        timestamp::Timestamp,
         vaelii::{GetMessageReceipt, VaeliiError},
     },
     dione_evidence::{OfferedSentex, parse_offered_sentexes},
+    dione_messages::timestamp::Timestamp,
 };
 
 /// A provider observation that cannot satisfy a requested read.

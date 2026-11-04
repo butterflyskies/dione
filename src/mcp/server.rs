@@ -33,7 +33,6 @@ use {
     crate::{
         bell_rings::{BellEvaluator, render_bells},
         config::BellMode,
-        core::delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
         delivery_buffer::BufferResult,
         discord::{
             access::AccessCtx,
@@ -58,6 +57,7 @@ use {
         delivery::AttentionGuardFailure,
         types::{Admission, DeliveryState},
     },
+    dione_messages::delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
 };
 
 /// Failure to construct the server's immutable owner registrations.
@@ -1290,17 +1290,19 @@ pub mod test_helpers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{ChannelConfig, Config, LoadedConfig},
-        delivery_buffer::BufferResult,
-        discord::scheduling::DeliveryBuffer,
-        harness::test_support::FixtureNotification,
-        rate_limiter::{OverflowPolicy, RateLimitConfig, ScopeConfig},
-        teams::ReplyHandle,
-        timestamp::Timestamp,
-    };
     use serenity::model::id::{ChannelId, MessageId, UserId};
     use std::collections::HashMap;
+    use {
+        crate::{
+            config::{ChannelConfig, Config, LoadedConfig},
+            delivery_buffer::BufferResult,
+            discord::scheduling::DeliveryBuffer,
+            harness::test_support::FixtureNotification,
+            rate_limiter::{OverflowPolicy, RateLimitConfig, ScopeConfig},
+            teams::ReplyHandle,
+        },
+        dione_messages::timestamp::Timestamp,
+    };
 
     #[test]
     fn resident_control_allows_only_bounded_tools() {

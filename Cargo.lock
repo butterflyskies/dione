@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.92.0"
+version = "0.93.0"
 dependencies = [
  "aho-corasick",
  "arc-swap",
@@ -944,6 +944,7 @@ dependencies = [
  "dione-contracts",
  "dione-durable",
  "dione-evidence",
+ "dione-messages",
  "dione-rendering",
  "dione-rook",
  "fs2",
@@ -1044,6 +1045,20 @@ dependencies = [
  "serde_json",
  "serenity",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "dione-messages"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "dione-attention",
+ "dione-contracts",
+ "dione-evidence",
+ "serde",
+ "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]

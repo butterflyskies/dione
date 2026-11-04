@@ -18,9 +18,9 @@ use {
             ReplyHandle,
             delivery::{TeamsAdmissionOutcome, TeamsResidentEvent},
         },
-        timestamp::Timestamp,
     },
     dione_attention::delivery::{AttentionDeliveryReceipt, AttentionGuardFailure},
+    dione_messages::timestamp::Timestamp,
 };
 
 #[derive(Debug)]
@@ -41,7 +41,7 @@ impl AttentionDeliveryGuard for Guard {
     }
 }
 
-fn event(content: &str) -> crate::core::delivery::Delivery {
+fn event(content: &str) -> dione_messages::delivery::Delivery {
     crate::harness::test_support::text(content)
 }
 

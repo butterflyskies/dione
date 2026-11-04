@@ -139,11 +139,12 @@ impl DeliveryBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        delivery_buffer::IMMEDIATE_BURST_LIMIT, discord::events::MessageEvent, timestamp::Timestamp,
-    };
     use dione_contracts::{ModuleSlotId, ProviderId};
     use serenity::model::id::{ChannelId, MessageId, UserId};
+    use {
+        crate::{delivery_buffer::IMMEDIATE_BURST_LIMIT, discord::events::MessageEvent},
+        dione_messages::timestamp::Timestamp,
+    };
 
     fn msg_event(chat_id: ChannelId) -> NotificationEvent {
         NotificationEvent::Message(MessageEvent {
@@ -769,10 +770,10 @@ mod tests {
 #[cfg(test)]
 mod proptests {
     use super::*;
-    use crate::{discord::events::MessageEvent, timestamp::Timestamp};
     use dione_contracts::{ModuleSlotId, ProviderId};
     use proptest::prelude::*;
     use serenity::model::id::{ChannelId, MessageId, UserId};
+    use {crate::discord::events::MessageEvent, dione_messages::timestamp::Timestamp};
 
     /// Strategy: pick a channel ID from a small set.
     fn channel_id_strategy() -> impl Strategy<Value = ChannelId> {

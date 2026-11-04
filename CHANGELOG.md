@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.93.0]
+
+### Changed
+
+- Extract observed messages, typed deliveries, identity presentation, and
+  timestamps into `dione-messages`. Keep configuration localization policy in
+  Dione and use the existing timestamp conversion. Preserve event, presentation,
+  and timestamp behavior while migrating callers directly.
+
 ## [0.92.0]
 
 ### Changed

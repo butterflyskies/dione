@@ -1,11 +1,13 @@
 use super::*;
-use crate::{
-    discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
-    harness::test_support,
-    timestamp::Timestamp,
-};
 use chrono_tz::Tz;
 use serenity::model::id::{ChannelId, MessageId, UserId};
+use {
+    crate::{
+        discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
+        harness::test_support,
+    },
+    dione_messages::timestamp::Timestamp,
+};
 
 struct BatchContext {
     channel_id: ChannelId,

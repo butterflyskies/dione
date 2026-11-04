@@ -5,7 +5,7 @@ use super::{
     visibility::{CanView, ViewVerdict, compute_can_view},
     visibility_read::{PreparedVisibility, VisibilityError, prepare_visibility},
 };
-use crate::timestamp::Timestamp;
+use dione_messages::timestamp::Timestamp;
 use serenity::model::{
     guild::Member,
     id::{ChannelId, GuildId, UserId},

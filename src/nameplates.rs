@@ -207,7 +207,7 @@ impl NameplateService {
                     if pronouns.is_empty() {
                         display_name.to_string()
                     } else {
-                        crate::core::identity_display::display_name_with_pronouns(
+                        dione_messages::identity_display::display_name_with_pronouns(
                             display_name,
                             Some(&pronouns.join(" or ")),
                         )

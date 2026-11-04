@@ -1,10 +1,10 @@
 //! A complete harness connection with coupled delivery and protocol facets.
 use super::ProtocolOutput;
-use crate::{core::delivery::Delivery, mcp::harness_wire::HarnessProtocol};
 use dione_contracts::MessageRef;
 use futures_util::future::BoxFuture;
 use std::sync::Arc;
 use thiserror::Error;
+use {crate::mcp::harness_wire::HarnessProtocol, dione_messages::delivery::Delivery};
 
 /// Determines whether managed delivery requires a safe harness turn.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

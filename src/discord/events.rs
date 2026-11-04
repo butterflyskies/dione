@@ -31,9 +31,9 @@ use {
             ReplyParentResolution, classify_reply_parent_ignore_default,
         },
         queue::AccessRequest,
-        timestamp::Timestamp,
     },
     dione_attention::types::{DirectAuthorKind, SourceAuthorKind},
+    dione_messages::timestamp::Timestamp,
 };
 
 struct GatewayPresenceSink(ShardMessenger);
