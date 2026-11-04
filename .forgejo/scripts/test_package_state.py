@@ -80,5 +80,52 @@ class PackageStateTests(unittest.TestCase):
         self.assertIn("does not match local package contents", result.stderr)
 
 
+@unittest.skipUnless(shutil.which("bash"), "release preflight requires Bash")
+class ReleasePreflightTests(unittest.TestCase):
+    def test_package_state_failure_stops_each_preflight(self):
+        lines = (SOURCE / ".github/workflows/publish-crate.yml").read_text().splitlines()
+        blocks = []
+        for index, line in enumerate(lines):
+            if line.strip() != "run: |":
+                continue
+            indent = len(line) - len(line.lstrip()) + 2
+            block = []
+            for following in lines[index + 1:]:
+                if following.strip() and len(following) - len(following.lstrip()) < indent:
+                    break
+                block.append(following[indent:])
+            script = "\n".join(block)
+            if "case " in script and "scripts/crates-io-package-state.sh" in script:
+                blocks.append(script)
+        self.assertEqual(len(blocks), 3)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "scripts").mkdir()
+            stubs = {
+                "cargo": "exit 0",
+                "scripts/workspace-package-version.sh": "echo 1.0.0",
+                "scripts/verify-public-package-privacy.sh": "exit 0",
+                "scripts/verify-crates-io-owners.sh": "exit 0",
+                "scripts/crates-io-package-state.sh":
+                    'if [ "$1" = "$FAIL_PACKAGE" ]; then exit 23; fi; echo missing',
+            }
+            for name, body in stubs.items():
+                path = root / name
+                path.write_text("#!/bin/sh\n" + body + "\n")
+                path.chmod(0o755)
+            for index, block in enumerate(blocks):
+                packages = ("dione", "dione-rendering") if index == 0 else (
+                    "dione-rendering" if index == 1 else "dione",)
+                for package in packages:
+                    with self.subTest(block=index, package=package):
+                        script = block.replace("${{ needs.verify-dione.outputs.rendering-version }}", "1.0.0")
+                        script = script.replace("${{ needs.verify-dione.outputs.dione-version }}", "1.0.0")
+                        environment = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                                           FAIL_PACKAGE=package, GITHUB_OUTPUT=str(root / "output"))
+                        result = subprocess.run(["bash", "-c", script], cwd=root,
+                                                env=environment, capture_output=True, text=True)
+                        self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

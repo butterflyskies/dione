@@ -46,7 +46,8 @@ jobs:
             github:butterflyskies:lacuna-blinkers \
             github:butterflyskies:superadmins
 
-          case "$(scripts/crates-io-package-state.sh dione "${dione_version}" "${dione_crate}")" in
+          package_state="$(scripts/crates-io-package-state.sh dione "${dione_version}" "${dione_crate}")"
+          case "$package_state" in
             published) echo "publish-dione=false" >> "${GITHUB_OUTPUT}" ;;
             missing) echo "publish-dione=true" >> "${GITHUB_OUTPUT}" ;;
           esac
@@ -59,7 +60,8 @@ jobs:
             butterflysky \
             github:butterflyskies:lacuna-blinkers \
             github:butterflyskies:superadmins
-          case "$(scripts/crates-io-package-state.sh dione-rendering "${rendering_version}" "${rendering_crate}" --ignore-vcs-info)" in
+          package_state="$(scripts/crates-io-package-state.sh dione-rendering "${rendering_version}" "${rendering_crate}" --ignore-vcs-info)"
+          case "$package_state" in
             published) echo "publish-rendering=false" >> "${GITHUB_OUTPUT}" ;;
             missing) echo "publish-rendering=true" >> "${GITHUB_OUTPUT}" ;;
           esac
@@ -97,7 +99,8 @@ jobs:
             github:butterflyskies:lacuna-blinkers \
             github:butterflyskies:superadmins
 
-          case "$(scripts/crates-io-package-state.sh dione-rendering "${rendering_version}" "${rendering_crate}" --ignore-vcs-info)" in
+          package_state="$(scripts/crates-io-package-state.sh dione-rendering "${rendering_version}" "${rendering_crate}" --ignore-vcs-info)"
+          case "$package_state" in
             published)
               echo "rendering ${rendering_version} was already published with matching contents"
               echo "upload=false" >> "${GITHUB_OUTPUT}"
@@ -192,7 +195,8 @@ jobs:
             github:butterflyskies:lacuna-blinkers \
             github:butterflyskies:superadmins
 
-          case "$(scripts/crates-io-package-state.sh dione "${dione_version}" "${dione_crate}")" in
+          package_state="$(scripts/crates-io-package-state.sh dione "${dione_version}" "${dione_crate}")"
+          case "$package_state" in
             published)
               echo "Dione ${dione_version} was already published with matching bytes"
               echo "upload=false" >> "${GITHUB_OUTPUT}"

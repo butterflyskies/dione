@@ -33,6 +33,35 @@ git cat-file -e "${CHANGE_BASE}^{commit}"
 git cat-file -e "${VERSION_BASE}^{commit}"
 git cat-file -e "${AFTER}^{commit}"
 changed="$(git diff --name-only "$CHANGE_BASE" "$AFTER")"
+package_version() {
+  git show "$1:$2" | awk '
+    /^\[package\]$/ { package = 1; next }
+    /^\[/ { package = 0 }
+    package && /^version = "/ { sub(/^version = "/, ""); sub(/"$/, ""); print; exit }
+  '
+}
+members="$(printf '%s\n' "$changed" | sed -n 's@^\(crates/[^/]*\)/.*@\1@p' | sort -u)"
+for member in $members; do
+  manifest="${member}/Cargo.toml"
+  if ! git cat-file -e "${AFTER}:${manifest}" 2>/dev/null; then
+    continue
+  fi
+  new_member_version="$(package_version "$AFTER" "$manifest")"
+  if git cat-file -e "${VERSION_BASE}:${manifest}" 2>/dev/null; then
+    old_member_version="$(package_version "$VERSION_BASE" "$manifest")"
+    if ! sh scripts/semver-is-greater.sh "$new_member_version" "$old_member_version"; then
+      echo "::error::${member} changed but its version ${new_member_version} is not greater than current base version ${old_member_version} (both must be valid SemVer)."
+      exit 1
+    fi
+  else
+    comparison_status=0
+    sh scripts/semver-is-greater.sh "$new_member_version" "$new_member_version" || comparison_status="$?"
+    if [ "$comparison_status" -eq 2 ]; then
+      echo "::error::${member} must declare a valid initial SemVer version."
+      exit 1
+    fi
+  fi
+done
 if ! printf '%s\n' "$changed" | grep -Eq '^(src/|crates/[^/]+/src/)'; then
   echo "No Rust source changes in ${CHANGE_BASE}..${AFTER} — release hygiene not required."
   exit 0

@@ -47,6 +47,12 @@ before either new version exists on crates.io. The gate checks both archives wit
 public-package privacy checker. Do not replace verification with an unchecked
 archive or a private package dependency.
 
+Each member declares its own explicit package version. Any change under an
+existing member directory, including its manifest, README, or fixtures, requires
+a greater member version. Rust source changes also require a Dione version bump
+and changelog entry. New members may start at their initial version. Release
+hygiene enforces these rules before tagging.
+
 The release workflow verifies both namespace owner allowlists and package
 states. It publishes and reconciles the renderer before publishing Dione.
 Dione retains exact archive checks. Renderer comparisons ignore only the
@@ -58,3 +64,7 @@ configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
+
+The new publishing and reconciliation jobs have not been exercised against a
+live registry. Local package-state tests mock registry responses; the retry
+fixture proves Cargo dependency resolution with a local registry only.
