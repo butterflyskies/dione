@@ -1,5 +1,5 @@
 use super::*;
-use crate::rook::{
+use crate::{
     CanonicalPublication, DispatchOutcome, IdempotencyKey, MentionPolicy, PreparedPublication,
     PublicationCapabilities, PublicationDispatch, PublicationErrorKind, PublicationProvider,
     PublicationReceipt, PublicationRejection, PublicationState, PublicationStatus,

@@ -411,7 +411,7 @@ mod tests {
             let mut child = ReapChild(std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
-                    "rook::private_dir::tests::partial_write_failure_preserves_snapshot_and_recovers_after_reopen",
+                    "private_dir::tests::partial_write_failure_preserves_snapshot_and_recovers_after_reopen",
                     "--nocapture",
                     "--test-threads=1",
                 ])

@@ -5,6 +5,8 @@
 //! module does not interpret conversation content as configuration or credentials.
 //! Production webhook registration is a separate adapter.
 
+#![warn(missing_docs)]
+
 mod context;
 mod context_observation;
 mod model;

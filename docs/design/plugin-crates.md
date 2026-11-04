@@ -61,6 +61,27 @@ All callers use the new crate directly. Its identity/context unit tests, branded
 identity UI fixtures, and private-field doctests live with the contract. No old
 identity or context re-export remains in Dione's core module.
 
+## Rook boundary
+
+`dione-rook` owns the recipient actor, callback scheduling, private snapshots,
+context service, publication state, and principal-bound tool wrappers. Claim
+and publication transitions share one snapshot commit boundary. Splitting the
+model or tools again would expose private records without an independent consumer.
+
+Discord keeps its current access policy, native observation projection, and HTTP
+transport. Its adapters use the existing Rook provider traits directly. Captures
+and numeric projections expose descriptive data without granting access. Opaque
+numeric-looking identifiers remain opaque.
+
+Member tests retain private fault injection and crash-recovery checks. A
+default-off `test-support` feature lets two Discord adapter fixtures inspect a
+dispatch outcome before running secondary bookkeeping. It does not expose the
+store or owner commands. Production dependencies do not enable the feature.
+
+No compatibility module remains in Dione. The source and behavior checks retain
+the existing wire formats, access revocation checks, uncertain-dispatch policy,
+and callback completion barriers.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -78,7 +99,7 @@ test preparation, and release builds separately before making speed claims.
 ## Package and release requirements
 
 The application uses versioned path dependencies on `dione-rendering`,
-`dione-durable`, and `dione-contracts`.
+`dione-durable`, `dione-contracts`, and `dione-rook`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -96,11 +117,15 @@ Dione retains exact archive checks. Capability comparisons ignore only the
 root `.cargo_vcs_info.json` receipt so an unchanged renderer version can survive
 later application commits; every other archived byte remains protected.
 The already-published path remains mandatory.
-Before the first release, an authorized operator must reserve `dione-rendering`, `dione-durable`, and `dione-contracts`,
+Before the first release, an authorized operator must reserve `dione-rendering`, `dione-durable`, `dione-contracts`, and `dione-rook`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
+
+Rook publishing waits for contracts and durable registry reconciliation. Dione
+publishing waits for all four capabilities. Each reconciliation verifies the
+archive contents after registry resolution.
 
 The new publishing and reconciliation jobs have not been exercised against a
 live registry. Local package-state tests mock registry responses; the retry

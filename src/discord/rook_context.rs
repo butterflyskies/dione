@@ -12,11 +12,11 @@ use super::{
     messaging::{MessagingCtx, MessagingError, MessagingErrorKind, queries},
     rook_observation::native_supplement,
 };
-use crate::rook::{
+use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
+use dione_rook::{
     ContextCapabilities, ContextDirection, ContextError, ContextErrorKind, ContextObservation,
     ContextPage, ContextProvider, ContextQuery, ContextResponse, ConversationKey,
 };
-use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 
 /// Discord context reader bound to one configured module slot.
 ///
@@ -190,11 +190,9 @@ fn map_error(error: MessagingError) -> ContextError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{ChannelConfig, Config, LoadedConfig},
-        rook::{MessageKey, PageLimit},
-    };
+    use crate::config::{ChannelConfig, Config, LoadedConfig};
     use dione_contracts::{ConversationId, ConversationRef, MessageRef};
+    use dione_rook::{MessageKey, PageLimit};
     use serde_json::{Value, json};
     use std::sync::Mutex;
     use tokio::{

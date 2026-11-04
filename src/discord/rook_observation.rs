@@ -9,8 +9,8 @@ use serenity::model::{
 use thiserror::Error;
 
 use super::{messaging::queries::DiscordNativeObservation, observation::DiscordMessageObservation};
-use crate::rook::{NativeSupplement, ObservationError, RetainedObservation};
 use dione_contracts::context::{Availability, UnavailableReason};
+use dione_rook::{NativeSupplement, ObservationError, RetainedObservation};
 
 #[derive(Serialize)]
 struct NativeMetadata<'a> {

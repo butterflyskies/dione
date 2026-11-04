@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.89.0"
+version = "0.90.0"
 dependencies = [
  "aho-corasick",
  "arc-swap",
@@ -943,6 +943,7 @@ dependencies = [
  "dione-contracts",
  "dione-durable",
  "dione-rendering",
+ "dione-rook",
  "fs2",
  "futures-util",
  "insta",
@@ -1024,6 +1025,29 @@ dependencies = [
  "typst-as-lib",
  "typst-assets",
  "typst-render",
+]
+
+[[package]]
+name = "dione-rook"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dione-contracts",
+ "dione-durable",
+ "fs2",
+ "futures-util",
+ "libc",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

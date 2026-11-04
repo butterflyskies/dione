@@ -727,7 +727,9 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     let (publish_durable, remaining) = remaining.split_once("\n  reconcile-durable:").unwrap();
     let (reconcile_durable, remaining) = remaining.split_once("\n  publish-contracts:").unwrap();
     let (publish_contracts, remaining) = remaining.split_once("\n  reconcile-contracts:").unwrap();
-    let (reconcile_contracts, remaining) = remaining.split_once("\n  publish-crate:").unwrap();
+    let (reconcile_contracts, remaining) = remaining.split_once("\n  publish-rook:").unwrap();
+    let (publish_rook, remaining) = remaining.split_once("\n  reconcile-rook:").unwrap();
+    let (reconcile_rook, remaining) = remaining.split_once("\n  publish-crate:").unwrap();
     let (publish_dione, reconcile_dione) = remaining.split_once("\n  reconcile-dione:").unwrap();
 
     assert_eq!(
@@ -735,7 +737,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
             .matches("scripts/verify-public-package-privacy.sh")
             .count(),
         workflow.matches("cargo package -p").count()
-            + 4 * workflow.matches("cargo package --workspace").count(),
+            + 5 * workflow.matches("cargo package --workspace").count(),
         "every workspace archive must cross the privacy verifier"
     );
     for job in [
@@ -743,6 +745,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         reconcile_rendering,
         reconcile_durable,
         reconcile_contracts,
+        reconcile_rook,
         reconcile_dione,
     ] {
         assert!(!job.contains("CARGO_REGISTRY_TOKEN"));
@@ -754,11 +757,11 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     assert!(workflow.contains("github:butterflyskies:lacuna-blinkers"));
     assert!(workflow.contains("github:butterflyskies:superadmins"));
     assert!(publish_dione.contains(
-        "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts]"
+        "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook]"
     ));
     assert!(
         reconcile_dione.contains(
-            "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, publish-crate]"
+            "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, publish-crate]"
         )
     );
     assert!(reconcile_dione.contains("needs.reconcile-rendering.result == 'success'"));
@@ -768,6 +771,11 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     assert!(reconcile_durable.contains("--ignore-vcs-info"));
     assert!(reconcile_contracts.contains("needs: [verify-dione, publish-contracts]"));
     assert!(reconcile_contracts.contains("--ignore-vcs-info"));
+    assert!(publish_rook.contains("needs: [verify-dione, reconcile-durable, reconcile-contracts]"));
+    assert!(reconcile_rook.contains("needs: [verify-dione, publish-rook]"));
+    assert!(reconcile_rook.contains("--ignore-vcs-info"));
+    assert!(reconcile_dione.contains("needs.reconcile-rook.result == 'success'"));
+    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-rook "));
     assert!(reconcile_dione.contains("needs.reconcile-contracts.result == 'success'"));
     assert!(workflow.contains("scripts/crates-io-package-state.sh dione-contracts "));
     assert!(reconcile_dione.contains("needs.reconcile-durable.result == 'success'"));
@@ -781,6 +789,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         publish_rendering,
         publish_durable,
         publish_contracts,
+        publish_rook,
         publish_dione,
     ] {
         assert!(upload_job.contains("id-token: write"));
@@ -873,7 +882,7 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
         package
             .matches("scripts/verify-public-package-privacy.sh")
             .count(),
-        4 * archive_package_calls.len(),
+        5 * archive_package_calls.len(),
         "every archive-producing workspace package call must cross the privacy verifier"
     );
     for (index, _) in archive_package_calls {

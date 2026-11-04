@@ -30,6 +30,10 @@ The public `dione-contracts` package owns source-qualified provider identities,
 context records, and checked message occurrences. Display formatting and
 attention-dependent delivery remain in the application; Rook retains its own
 serialized observation model and authorization checks.
+The public `dione-rook` package owns durable recipients, callback scheduling,
+context reads, and publication slots. Its private snapshot keeps claim and
+publication commits together. Discord retains current policy checks, native
+observation conversion, and HTTP transport behind Rook's existing provider traits.
 See the [crate split plan](docs/design/plugin-crates.md) for the next boundaries
 and the package release requirements.
 

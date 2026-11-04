@@ -97,7 +97,7 @@ class ReleasePreflightTests(unittest.TestCase):
             script = "\n".join(block)
             if "case " in script and "scripts/crates-io-package-state.sh" in script:
                 blocks.append(script)
-        self.assertEqual(len(blocks), 5)
+        self.assertEqual(len(blocks), 6)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "scripts").mkdir()
@@ -114,14 +114,15 @@ class ReleasePreflightTests(unittest.TestCase):
                 path.write_text("#!/bin/sh\n" + body + "\n")
                 path.chmod(0o755)
             for index, block in enumerate(blocks):
-                packages = (("dione", "dione-rendering", "dione-durable", "dione-contracts") if index == 0
-                            else ({1: "dione-rendering", 2: "dione-durable", 3: "dione-contracts", 4: "dione"}[index],))
+                packages = (("dione", "dione-rendering", "dione-durable", "dione-contracts", "dione-rook") if index == 0
+                            else ({1: "dione-rendering", 2: "dione-durable", 3: "dione-contracts", 4: "dione-rook", 5: "dione"}[index],))
                 for package in packages:
                     with self.subTest(block=index, package=package):
                         script = block.replace("${{ needs.verify-dione.outputs.rendering-version }}", "1.0.0")
                         script = script.replace("${{ needs.verify-dione.outputs.dione-version }}", "1.0.0")
                         script = script.replace("${{ needs.verify-dione.outputs.durable-version }}", "1.0.0")
                         script = script.replace("${{ needs.verify-dione.outputs.contracts-version }}", "1.0.0")
+                        script = script.replace("${{ needs.verify-dione.outputs.rook-version }}", "1.0.0")
                         environment = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
                                            FAIL_PACKAGE=package, GITHUB_OUTPUT=str(root / "output"))
                         result = subprocess.run(["bash", "-c", script], cwd=root,

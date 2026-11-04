@@ -131,11 +131,13 @@ impl From<&ConversationRef> for ConversationKey {
 }
 
 impl ConversationKey {
-    pub(crate) fn matches_source(&self, source: &ModuleInstanceId) -> bool {
+    /// Returns whether this conversation belongs to the configured module.
+    pub fn matches_source(&self, source: &ModuleInstanceId) -> bool {
         self.source == SourceKey::from(source)
     }
 
-    pub(crate) fn numeric(&self) -> Option<NonZeroU64> {
+    /// Returns the numeric local identity, or `None` for every opaque identity.
+    pub fn numeric(&self) -> Option<NonZeroU64> {
         match self.local {
             LocalKey::Numeric(value) => Some(value),
             LocalKey::Opaque(_) => None,
@@ -174,7 +176,8 @@ impl ActorKey {
         self.source == room.source
     }
 
-    pub(crate) fn numeric(&self) -> Option<NonZeroU64> {
+    /// Returns the numeric local identity, or `None` for every opaque identity.
+    pub fn numeric(&self) -> Option<NonZeroU64> {
         match self.local {
             LocalKey::Numeric(value) => Some(value),
             LocalKey::Opaque(_) => None,
@@ -242,7 +245,8 @@ impl MessageKey {
         &self.conversation
     }
 
-    pub(crate) fn numeric(&self) -> Option<NonZeroU64> {
+    /// Returns the numeric local identity, or `None` for every opaque identity.
+    pub fn numeric(&self) -> Option<NonZeroU64> {
         match self.local {
             LocalKey::Numeric(value) => Some(value),
             LocalKey::Opaque(_) => None,
@@ -628,7 +632,10 @@ pub struct RetainedObservation {
 }
 
 impl RetainedObservation {
-    pub(crate) fn capture(value: &MessageObservation) -> Self {
+    /// Copies a descriptive source observation without granting action authority.
+    ///
+    /// Call `validate` to check cross-field source agreement before admission.
+    pub fn capture(value: &MessageObservation) -> Self {
         let ContextFields {
             sender,
             content,

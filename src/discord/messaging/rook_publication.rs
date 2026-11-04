@@ -9,14 +9,14 @@ use crate::{
     contradictionary::{Action, DiaryRecord, append_diary_record},
     coordination::{ClaimOutcome, ClaimProgress, Coordinator},
     no_rly::judge::{OutboundJudge, Verdict},
-    rook::{
-        CanonicalPublication, DispatchOutcome, MentionPolicy, MessageKey, PreparedPublication,
-        PublicationCapabilities, PublicationDispatch, PublicationProvider, PublicationReceipt,
-        PublicationRejection, PublicationTarget, PublicationUncertainty,
-    },
 };
 use dione_contracts::{
     ConversationId, ConversationRef, MessageRef, ModuleInstanceId, ModuleSlotId, ProviderId,
+};
+use dione_rook::{
+    CanonicalPublication, DispatchOutcome, MentionPolicy, MessageKey, PreparedPublication,
+    PublicationCapabilities, PublicationDispatch, PublicationProvider, PublicationReceipt,
+    PublicationRejection, PublicationTarget, PublicationUncertainty,
 };
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -772,7 +772,7 @@ mod tests {
             self.dispatch(&prepared).await
         }
         async fn dispatch(&self, prepared: &PreparedPublication) -> DispatchOutcome {
-            let (outcome, completion) = self.provider.dispatch(prepared).await.into_parts();
+            let (outcome, completion) = self.provider.dispatch(prepared).await.into_test_parts();
             if let Some(completion) = completion {
                 completion.await;
             }
@@ -1193,7 +1193,8 @@ mod tests {
                 .prepare(&fixture.request("hello"))
                 .await
                 .unwrap();
-            let (outcome, completion) = fixture.provider.dispatch(&prepared).await.into_parts();
+            let (outcome, completion) =
+                fixture.provider.dispatch(&prepared).await.into_test_parts();
             assert!(
                 matches!(&outcome, DispatchOutcome::Published(receipt) if receipt.message.numeric().unwrap().get() == 31)
             );
