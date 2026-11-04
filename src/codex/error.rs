@@ -3,7 +3,7 @@ use super::{
     LegacyDeliveryError,
     queue_codec::{LegacyCodecError, LegacyCodecErrorKind},
 };
-use crate::durable::{CodecErrorKind, QueueError, QueueErrorKind};
+use dione_durable::{CodecErrorKind, QueueError, QueueErrorKind};
 use thiserror::Error;
 
 /// A Codex adapter or shared durable operation failed.

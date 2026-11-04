@@ -4,12 +4,10 @@ use super::{
     },
     *,
 };
-use crate::{
-    delivery::ProviderEventKey,
-    durable::{PersistFailure, QueueCodec, QueueSnapshot},
-};
+use crate::delivery::ProviderEventKey;
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::TimeDelta;
+use dione_durable::{PersistFailure, QueueCodec, QueueSnapshot};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::sync::Arc;
@@ -2896,7 +2894,7 @@ async fn live_enqueue_replay_capacity_fails_closed_but_allows_duplicates() {
             for index in 0..MAX_RETAINED_TEAMS_EVENT_KEYS {
                 snapshot
                     .acknowledged
-                    .push_back(crate::durable::state::ReplayReceipt {
+                    .push_back(dione_durable::state::ReplayReceipt {
                         key: LegacyReplayIdentity::Provider(teams_key(&format!(
                             "activity-{index}"
                         ))),

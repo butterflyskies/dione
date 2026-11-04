@@ -58,7 +58,7 @@ async fn private_snapshots_remain_owner_only_across_replacement_in_a_traversable
     command
         .args([
             "--exact",
-            "durable::tests::private_snapshot_creation_child_022",
+            "tests::private_snapshot_creation_child_022",
             "--ignored",
             "--nocapture",
             "--test-threads=1",

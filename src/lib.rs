@@ -1,4 +1,3 @@
-mod atomic_snapshot;
 pub mod attention;
 pub mod bell_rings;
 pub mod codex;
@@ -52,5 +51,3 @@ pub mod startup;
 
 /// Explicit application composition adapters.
 pub mod composition;
-/// Generic durable queue ownership and adapter-selected storage.
-pub(crate) mod durable;

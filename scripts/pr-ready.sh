@@ -54,6 +54,8 @@ target_dir=${CARGO_TARGET_DIR:-target}
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-${dione_version}.crate"
 rendering_version=$(sh scripts/workspace-package-version.sh dione-rendering)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-rendering-${rendering_version}.crate"
+durable_version=$(sh scripts/workspace-package-version.sh dione-durable)
+sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-durable-${durable_version}.crate"
 cargo deny check
 cargo build --release --workspace --bins --locked
 "${target_dir}/release/dione" --version

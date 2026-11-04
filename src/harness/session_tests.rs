@@ -338,8 +338,8 @@ async fn harness_session_errors_preserve_sources_and_teams_capability() {
         if matches!(
             error.downcast_ref::<CodexQueueError>(),
             Some(CodexQueueError {
-                kind: crate::codex::CodexQueueErrorKind::Durable(crate::durable::QueueError {
-                    kind: crate::durable::QueueErrorKind::Locked(_),
+                kind: crate::codex::CodexQueueErrorKind::Durable(dione_durable::QueueError {
+                    kind: dione_durable::QueueErrorKind::Locked(_),
                     ..
                 })
             })

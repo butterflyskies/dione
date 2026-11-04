@@ -6,12 +6,12 @@ use super::{
 use crate::{
     attention::delivery::{AttentionDirective, OwnedAttentionDescriptor},
     delivery::ProviderEventKey,
-    durable::{
-        CodecError, CodecErrorKind, ConsumerId, DeliveryToken, EndpointId, EventId, QueueCodec,
-        QueueSnapshot, ReplayClass, state,
-    },
 };
 use chrono::{DateTime, Utc};
+use dione_durable::{
+    CodecError, CodecErrorKind, ConsumerId, DeliveryToken, EndpointId, EventId, QueueCodec,
+    QueueSnapshot, ReplayClass, state,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serenity::model::id::MessageId;
@@ -85,7 +85,7 @@ pub(crate) enum LegacyCodecErrorKind {
     #[error("failed to encode legacy inbox JSON")]
     Encode(#[source] serde_json::Error),
     #[error("invalid legacy endpoint")]
-    Endpoint(#[source] crate::durable::IdentityError),
+    Endpoint(#[source] dione_durable::IdentityError),
     #[error("legacy snapshot cannot represent repeated replay family")]
     ReplayShape,
 }

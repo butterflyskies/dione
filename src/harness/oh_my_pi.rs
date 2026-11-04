@@ -6,9 +6,9 @@ use super::{
 };
 use crate::{
     core::{MessageRef, delivery::Delivery},
-    durable::DeliveryToken,
     mcp::harness_wire::HarnessProtocol,
 };
+use dione_durable::DeliveryToken;
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};

@@ -7,9 +7,9 @@ use crate::{
     attention::delivery::AttentionDeliveryGuard,
     codex::{CodexDeliveryConfig, CodexEventQueue, CodexThreadId, run_delivery_worker},
     config::DeliveryConfig,
-    durable::EndpointId,
 };
 use camino::{Utf8Path, Utf8PathBuf};
+use dione_durable::EndpointId;
 use std::{env, sync::Arc};
 use tokio::{sync::watch, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
@@ -534,8 +534,8 @@ mod tests {
                 Err(HarnessSessionError {
                     kind: HarnessSessionErrorKind::QueueOpen(crate::codex::CodexQueueError {
                         kind: crate::codex::CodexQueueErrorKind::Durable(
-                            crate::durable::QueueError {
-                                kind: crate::durable::QueueErrorKind::Locked(_),
+                            dione_durable::QueueError {
+                                kind: dione_durable::QueueErrorKind::Locked(_),
                                 ..
                             }
                         )

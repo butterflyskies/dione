@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.87.0"
+version = "0.88.0"
 dependencies = [
  "aho-corasick",
  "arc-swap",
@@ -940,6 +940,7 @@ dependencies = [
  "chrono-tz",
  "clap",
  "color-eyre",
+ "dione-durable",
  "dione-rendering",
  "fs2",
  "futures-util",
@@ -978,6 +979,24 @@ dependencies = [
  "trybuild",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "dione-durable"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "chrono",
+ "fs2",
+ "libc",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml 1.1.6+spec-1.1.0",
+ "tracing",
 ]
 
 [[package]]

@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.88.0]
+
+### Changed
+
+- Extract durable queue ownership and the shared atomic snapshot replacement
+  protocol into the public `dione-durable` workspace crate. Codex and Oh My Pi
+  retain their existing snapshot formats, admission, replay, and lease behavior.
+  Adapter fault and cancellation tests use an opt-in test-support feature.
+
 ## [0.87.0]
 
 ### Changed

@@ -6,18 +6,16 @@ use super::{
         OmpSessionErrorKind, SavedSessionId,
     },
 };
-#[cfg(test)]
-use crate::durable::PersistFailure;
 use crate::{
-    delivery::ProviderEventKey,
-    durable::{
-        AdmissionOutcome, BindingController, DeliveryToken, DurableQueue, LeasedEvent,
-        QueueErrorKind, QueueOptions, ReplayClass, ResidentHandle,
-    },
-    harness::ProtocolOutput,
-    teams::delivery::TeamsResidentEvent,
+    delivery::ProviderEventKey, harness::ProtocolOutput, teams::delivery::TeamsResidentEvent,
 };
 use camino::Utf8Path;
+#[cfg(test)]
+use dione_durable::PersistFailure;
+use dione_durable::{
+    AdmissionOutcome, BindingController, DeliveryToken, DurableQueue, LeasedEvent, QueueErrorKind,
+    QueueOptions, ReplayClass, ResidentHandle,
+};
 use serde_json::{Value, json};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};

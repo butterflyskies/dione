@@ -6,14 +6,14 @@ use super::{
     state::ConsumerKind,
     store::DurableStore,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use super::{QueueSnapshot, store::PersistFailure};
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::{DateTime, Utc};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::Mutex as StdMutex;
 use std::{hash::Hash, sync::Arc, time::Duration};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use tokio::sync::oneshot;
 use tokio::{
     sync::{Mutex, Notify, watch},
@@ -43,13 +43,13 @@ pub enum AdmissionOutcome {
     /// An accepted operation lost its completion response.
     CompletionUnknown(JoinError),
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 struct CompletionGate {
     reached: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
     lose_response: bool,
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 struct BindingGate {
     reached: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
@@ -58,11 +58,11 @@ struct BindingGate {
 pub struct DurableQueue<P, K> {
     store: Arc<Mutex<DurableStore<P, K>>>,
     changed: Arc<Notify>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     completion_gate: Arc<StdMutex<Option<CompletionGate>>>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     binding_gate: Arc<StdMutex<Option<BindingGate>>>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     clock: Arc<StdMutex<Option<DateTime<Utc>>>>,
 }
 impl<P, K> Clone for DurableQueue<P, K> {
@@ -70,11 +70,11 @@ impl<P, K> Clone for DurableQueue<P, K> {
         Self {
             store: Arc::clone(&self.store),
             changed: Arc::clone(&self.changed),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             completion_gate: Arc::clone(&self.completion_gate),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             binding_gate: Arc::clone(&self.binding_gate),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             clock: Arc::clone(&self.clock),
         }
     }
@@ -93,7 +93,7 @@ impl<P, K> Clone for ResidentHandle<P, K> {
     }
 }
 /// Owner-issued binding authority, independent of any consumer registration.
-pub(crate) struct BindingController<P, K> {
+pub struct BindingController<P, K> {
     queue: DurableQueue<P, K>,
 }
 impl<P, K> Clone for BindingController<P, K> {
@@ -130,11 +130,11 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
         Ok(Self {
             store: Arc::new(Mutex::new(store)),
             changed: Arc::new(Notify::new()),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             completion_gate: Arc::new(StdMutex::new(None)),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             binding_gate: Arc::new(StdMutex::new(None)),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             clock: Arc::new(StdMutex::new(None)),
         })
     }
@@ -155,7 +155,7 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
     ) -> Result<R, JoinError> {
         let mut store = Arc::clone(&self.store).lock_owned().await;
         let changed = Arc::clone(&self.changed);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let gate = self
             .completion_gate
             .lock()
@@ -166,7 +166,7 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
             if wakes(&result) {
                 changed.notify_waiters();
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             if let Some(gate) = gate {
                 let _ = gate.reached.send(());
                 let _ = gate.release.blocking_recv();
@@ -180,7 +180,7 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
         .await
     }
     fn now(&self) -> DateTime<Utc> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if let Some(now) = *self
             .clock
             .lock()
@@ -194,13 +194,13 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
     pub async fn drain_owned(&self) {
         drop(self.store.lock().await);
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     /// Inserts a prevalidated test payload through the production preparation path.
     pub async fn enqueue(&self, admission: Admission<P, K>) -> Result<bool, QueueError> {
         self.enqueue_with(move || Ok(admission)).await
     }
     /// Validates an adapter payload under ownership after the prior durability barrier.
-    pub(crate) async fn enqueue_with<E: From<QueueError> + Send + 'static>(
+    pub async fn enqueue_with<E: From<QueueError> + Send + 'static>(
         &self,
         prepare: impl FnOnce() -> Result<Admission<P, K>, E> + Send + 'static,
     ) -> Result<bool, E> {
@@ -239,7 +239,7 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
             .map_err(|source| E::from(completion_error(source)))?;
         result
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     /// Admits a prevalidated test payload through the production resident path.
     pub async fn enqueue_resident(
         &self,
@@ -251,7 +251,7 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
         .await
     }
     /// Suppresses a known replay before adapter validation, retaining legacy ordering.
-    pub(crate) async fn enqueue_resident_with<E: From<QueueError> + Send + 'static>(
+    pub async fn enqueue_resident_with<E: From<QueueError> + Send + 'static>(
         &self,
         replay_key: Option<K>,
         prepare: impl FnOnce() -> Result<(P, bool), E> + Send + 'static,
@@ -498,13 +498,13 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
         .map_err(completion_error)?
     }
     /// Creates binding authority without claiming a consumer or changing stored state.
-    pub(crate) fn binding_controller(&self) -> BindingController<P, K> {
+    pub fn binding_controller(&self) -> BindingController<P, K> {
         BindingController {
             queue: self.clone(),
         }
     }
     /// Creates resident authority for the prepared in-process session owner.
-    pub(crate) async fn register_resident(&self) -> Result<ResidentHandle<P, K>, QueueError> {
+    pub async fn register_resident(&self) -> Result<ResidentHandle<P, K>, QueueError> {
         let queue = self.clone();
         let registration = self
             .run_owned(
@@ -533,8 +533,9 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
             consumer: registration.consumer_id,
         })
     }
-    #[cfg(test)]
-    pub(crate) fn test_pause_owned_completion(
+    #[cfg(any(test, feature = "test-support"))]
+    /// Pauses the next accepted completion until its returned release sender is used.
+    pub fn test_pause_owned_completion(
         &self,
         lose_response: bool,
     ) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
@@ -550,10 +551,9 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
         });
         (reached_rx, release_tx)
     }
-    #[cfg(test)]
-    pub(crate) fn test_pause_binding_publish(
-        &self,
-    ) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+    #[cfg(any(test, feature = "test-support"))]
+    /// Pauses the next binding publication before updating its watcher.
+    pub fn test_pause_binding_publish(&self) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
         let (reached_tx, reached_rx) = oneshot::channel();
         let (release_tx, release_rx) = oneshot::channel();
         *self
@@ -565,32 +565,39 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
         });
         (reached_rx, release_tx)
     }
-    #[cfg(test)]
-    pub(crate) async fn test_set_persist_failure(&self, failure: Option<PersistFailure>) {
+    #[cfg(any(test, feature = "test-support"))]
+    /// Selects a persistence failure stage for a test fixture.
+    pub async fn test_set_persist_failure(&self, failure: Option<PersistFailure>) {
         self.store.lock().await.persist_failure = failure;
     }
-    #[cfg(test)]
-    pub(crate) async fn test_directory_sync_attempts(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    /// Returns the number of test-observed parent-directory synchronization attempts.
+    pub async fn test_directory_sync_attempts(&self) -> usize {
         self.store.lock().await.directory_sync_attempts
     }
-    #[cfg(test)]
-    pub(crate) async fn test_snapshot(&self) -> QueueSnapshot<P, K> {
+    #[cfg(any(test, feature = "test-support"))]
+    /// Clones the retained snapshot for a test assertion.
+    pub async fn test_snapshot(&self) -> QueueSnapshot<P, K> {
         self.store.lock().await.state.clone()
     }
-    #[cfg(test)]
-    pub(crate) async fn test_mutate_snapshot(&self, mutate: impl FnOnce(&mut QueueSnapshot<P, K>)) {
+    #[cfg(any(test, feature = "test-support"))]
+    /// Mutates retained state for an explicitly enabled test fixture.
+    pub async fn test_mutate_snapshot(&self, mutate: impl FnOnce(&mut QueueSnapshot<P, K>)) {
         mutate(&mut self.store.lock().await.state);
     }
-    #[cfg(test)]
-    pub(crate) fn test_changed(&self) -> Arc<Notify> {
+    #[cfg(any(test, feature = "test-support"))]
+    /// Returns the queue wakeup signal for a test fixture.
+    pub fn test_changed(&self) -> Arc<Notify> {
         Arc::clone(&self.changed)
     }
-    #[cfg(test)]
-    pub(crate) async fn test_state(&self) -> (QueueSnapshot<P, K>, bool, usize) {
+    #[cfg(any(test, feature = "test-support"))]
+    /// Returns the retained snapshot, pending-sync flag, and synchronization count.
+    pub async fn test_state(&self) -> (QueueSnapshot<P, K>, bool, usize) {
         self.store.lock().await.test_state()
     }
-    #[cfg(test)]
-    pub(crate) fn test_set_now(&self, now: DateTime<Utc>) {
+    #[cfg(any(test, feature = "test-support"))]
+    /// Sets the clock used by queue transitions in a test fixture.
+    pub fn test_set_now(&self, now: DateTime<Utc>) {
         *self
             .clock
             .lock()
@@ -599,7 +606,7 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
 }
 impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> ResidentHandle<P, K> {
     /// Registration identity for diagnostics; this identity alone grants no authority.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn consumer_id(&self) -> &ConsumerId {
         &self.consumer
     }
@@ -615,7 +622,7 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> ResidentH
             .await
     }
     /// Settles only an unexpired resident lease for the exact captured endpoint.
-    pub(crate) async fn ack_checked(
+    pub async fn ack_checked(
         &self,
         endpoint: &EndpointId,
         token: &DeliveryToken,
@@ -683,12 +690,12 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> ResidentH
             .await
             .map_err(completion_error)?
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     /// Changes the exact endpoint retained for future resident admissions.
     pub async fn bind(&self, endpoint: Option<EndpointId>) -> Result<(), QueueError> {
         self.queue.binding_controller().bind(endpoint).await
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     /// Publishes retained binding through the same accepted operation owner.
     pub async fn bind_and_publish(
         &self,
@@ -703,12 +710,12 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> ResidentH
 }
 impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> BindingController<P, K> {
     /// Renews authority and recovers orphaned private work for the retained endpoint.
-    pub(crate) async fn renew_resident(&self) -> Result<ResidentHandle<P, K>, QueueError> {
+    pub async fn renew_resident(&self) -> Result<ResidentHandle<P, K>, QueueError> {
         self.transition_resident(None).await
     }
 
     /// Atomically renews authority, binds future work, and revokes this endpoint's leases.
-    pub(crate) async fn rebind_resident(
+    pub async fn rebind_resident(
         &self,
         endpoint: EndpointId,
     ) -> Result<ResidentHandle<P, K>, QueueError> {
@@ -744,7 +751,7 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> BindingCo
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     /// Changes the exact endpoint retained for future resident admissions.
     pub async fn bind(&self, endpoint: Option<EndpointId>) -> Result<(), QueueError> {
         self.queue
@@ -766,7 +773,7 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> BindingCo
         endpoint: Option<EndpointId>,
         sender: watch::Sender<Option<EndpointId>>,
     ) -> Result<(), QueueError> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let gate = self
             .queue
             .binding_gate
@@ -780,7 +787,7 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> BindingCo
                         state.endpoint = endpoint;
                         Ok(())
                     });
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-support"))]
                     if let Some(gate) = gate {
                         let _ = gate.reached.send(());
                         let _ = gate.release.blocking_recv();

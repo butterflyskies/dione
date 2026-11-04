@@ -2,13 +2,13 @@
 
 use crate::{
     codex::{CodexEventQueue, LiveAdmissionOutcome, LiveQueueErrorKind},
-    durable::{AdmissionOutcome, QueueErrorKind},
     harness::omp_session::{OmpAdmission, OmpSessionError, OmpSessionErrorKind},
     teams::delivery::{
         TeamsAdmissionOutcome, TeamsDelivery, TeamsDeliveryError, TeamsDeliveryErrorKind,
         TeamsEventSink, TeamsResidentEvent,
     },
 };
+use dione_durable::{AdmissionOutcome, QueueErrorKind};
 use serde_json::json;
 use std::{future::Future, pin::Pin};
 
@@ -174,12 +174,12 @@ mod tests {
             LiveQueueError,
         },
         delivery::ProviderEventKey,
-        durable::{PersistFailure, QueueError, QueueErrorKind, state::ReplayReceipt},
         teams::ReplyHandle,
         timestamp::Timestamp,
     };
     use camino::Utf8PathBuf;
     use chrono::Utc;
+    use dione_durable::{PersistFailure, QueueError, QueueErrorKind, state::ReplayReceipt};
     use std::{error::Error, io};
     use tempfile::TempDir;
 
