@@ -1,28 +1,5 @@
 //! Recipient-local attention execution. Network work never owns the ingress loop.
 
-use super::{
-    admission::JudgmentWork,
-    config::AttentionMode,
-    learning::FixedThresholdPolicy,
-    provider::{JudgmentInput, ProviderFailure, TypeSafeProvider},
-    source::{SourceFailure, SourceResolver, now_ms},
-    store::{AttentionStore, StoreLimits, ValidationFact, ValidationStatus},
-    store_access::{
-        AttentionInitializationError, AttentionInitializationErrorKind, AttentionReceiptError,
-        AttentionStoreAccessError, AttentionStoreAccessErrorKind, LegacyOperationError,
-    },
-    types::*,
-};
-use crate::{
-    attention::delivery::AttentionGuardFailure as Failure,
-    config::{attention_effect_guard, load_config, subscribe_generation},
-    discord::{
-        events::{MessageTargeting, NotificationEvent},
-        messaging::{self, MessagingCtx},
-    },
-    ingress_ledger::SourceDeliveryFailure,
-    no_rly::consent::ConsentGate,
-};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
@@ -31,6 +8,36 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
+};
+use {
+    super::{
+        admission::JudgmentWork,
+        source::{SourceFailure, SourceResolver, now_ms},
+        store_access::LegacyOperationError,
+    },
+    dione_attention::{
+        config::AttentionMode,
+        learning::FixedThresholdPolicy,
+        provider::{JudgmentInput, ProviderFailure, TypeSafeProvider},
+        store::{AttentionStore, StoreLimits, ValidationFact, ValidationStatus},
+        store_access::{
+            AttentionInitializationError, AttentionInitializationErrorKind, AttentionReceiptError,
+            AttentionStoreAccessError, AttentionStoreAccessErrorKind,
+        },
+        types::*,
+    },
+};
+use {
+    crate::{
+        config::{attention_effect_guard, load_config, subscribe_generation},
+        discord::{
+            events::{MessageTargeting, NotificationEvent},
+            messaging::{self, MessagingCtx},
+        },
+        ingress_ledger::SourceDeliveryFailure,
+        no_rly::consent::ConsentGate,
+    },
+    dione_attention::delivery::AttentionGuardFailure as Failure,
 };
 
 /// An inspectable replay baseline, never an implicitly promoted enforcement policy.
@@ -580,7 +587,7 @@ impl AttentionRuntime {
                         if let Some(selected) = store.selected_artifact(&finalized.recipient) {
                             if selected.compatibility != finalized.compatibility {
                                 policy_failure = Some(
-                                    super::learning::LearningError::IncompatibleArtifact
+                                    dione_attention::learning::LearningError::IncompatibleArtifact
                                         .to_string(),
                                 );
                             } else {
@@ -607,7 +614,7 @@ impl AttentionRuntime {
                                     });
                                 if !membership_current {
                                     policy_failure = Some(
-                                        super::learning::LearningError::InvalidMembership
+                                        dione_attention::learning::LearningError::InvalidMembership
                                             .to_string(),
                                     );
                                 } else if finalized.hypothetical != Admission::Unknown {
@@ -1016,11 +1023,11 @@ impl AttentionRuntime {
     }
 }
 
-impl crate::attention::delivery::AttentionDeliveryGuard for AttentionRuntime {
+impl dione_attention::delivery::AttentionDeliveryGuard for AttentionRuntime {
     fn check(
         &self,
-        descriptor: &crate::attention::delivery::AttentionDescriptor<'_>,
-    ) -> Result<(), crate::attention::delivery::AttentionGuardFailure> {
+        descriptor: &dione_attention::delivery::AttentionDescriptor<'_>,
+    ) -> Result<(), dione_attention::delivery::AttentionGuardFailure> {
         let source = descriptor.source();
         let author = descriptor.author();
         if source.conversation().module() != &self.authority_module
@@ -1039,11 +1046,11 @@ impl crate::attention::delivery::AttentionDeliveryGuard for AttentionRuntime {
         // A concurrent durable write must defer this synchronous guard, not block Tokio on fsync.
         let guard = self.store.try_lock().map_err(|_| Failure::Unavailable)?;
         let store = guard.as_ref().map_err(|_| Failure::Unavailable)?;
-        let record = store.state.records.get(id).ok_or(Failure::Invalidated)?;
+        let record = store.record(id).ok_or(Failure::Invalidated)?;
         let config = load_config(&self.resolver.state_dir);
         let expected = match descriptor.directive() {
-            crate::attention::delivery::AttentionDirective::Prompt => Admission::Prompt,
-            crate::attention::delivery::AttentionDirective::NextTurn => Admission::NextTurn,
+            dione_attention::delivery::AttentionDirective::Prompt => Admission::Prompt,
+            dione_attention::delivery::AttentionDirective::NextTurn => Admission::NextTurn,
         };
         if record.actual != expected
             || record.recipient != config.raw.attention.recipient
@@ -1092,15 +1099,15 @@ impl crate::attention::delivery::AttentionDeliveryGuard for AttentionRuntime {
     fn receipt<'a>(
         self: Arc<Self>,
         record: &'a RecordId,
-        outcome: crate::attention::delivery::AttentionDeliveryReceipt,
+        outcome: dione_attention::delivery::AttentionDeliveryReceipt,
     ) -> futures_util::future::BoxFuture<'a, Result<(), AttentionReceiptError>> {
         Box::pin(async move {
             let id = record.clone();
             let state = match outcome {
-                crate::attention::delivery::AttentionDeliveryReceipt::Accepted => {
+                dione_attention::delivery::AttentionDeliveryReceipt::Accepted => {
                     DeliveryState::Dispatched
                 }
-                crate::attention::delivery::AttentionDeliveryReceipt::Uncertain => {
+                dione_attention::delivery::AttentionDeliveryReceipt::Uncertain => {
                     DeliveryState::ReceiptUncertain
                 }
             };
@@ -1110,8 +1117,12 @@ impl crate::attention::delivery::AttentionDeliveryGuard for AttentionRuntime {
 }
 
 impl AttentionHealth {
-    fn notice_text(&mut self, config: &super::config::AttentionConfig, now: u64) -> Option<String> {
-        use super::config::NoticeMode;
+    fn notice_text(
+        &mut self,
+        config: &dione_attention::config::AttentionConfig,
+        now: u64,
+    ) -> Option<String> {
+        use dione_attention::config::NoticeMode;
         if config.notices == NoticeMode::Off {
             self.noticed_failures = self.failures;
             self.noticed_recoveries = self.recoveries;
@@ -1149,16 +1160,6 @@ impl AttentionHealth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        attention::{
-            admission::{AdmissionController, Submission},
-            config::{AttentionBrief, AttentionConfig, NoticeMode, RoomAttention},
-            provider::TypeSafeProvider,
-            source::now_ms,
-        },
-        config::ConfigRuntime,
-        discord::events::NotificationEvent,
-    };
     use camino::Utf8PathBuf;
     use parking_lot::Mutex as SyncMutex;
     use serde_json::{Value, json};
@@ -1170,6 +1171,20 @@ mod tests {
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
+    };
+    use {
+        crate::{
+            attention::{
+                admission::{AdmissionController, Submission},
+                source::now_ms,
+            },
+            config::ConfigRuntime,
+            discord::events::NotificationEvent,
+        },
+        dione_attention::{
+            config::{AttentionBrief, AttentionConfig, NoticeMode, RoomAttention},
+            provider::TypeSafeProvider,
+        },
     };
 
     fn scenario<F: Future<Output = ()>>(run: impl FnOnce() -> F) {
@@ -1513,7 +1528,7 @@ mod tests {
                         message_id: MessageId::new(id),
                     },
                     author_id: UserId::new(7),
-                    author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
+                    author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
                     conversation: "channel:100".into(),
                     content_hash: content_hash(text),
                     observed_at_ms: now_ms(),
@@ -1628,8 +1643,8 @@ mod tests {
                 .unwrap_err();
             assert_eq!(error.record(), &id);
             assert!(
-                matches!(error.kind(), super::super::store_access::AttentionReceiptErrorKind::Store(AttentionStoreAccessError {
-                kind: AttentionStoreAccessErrorKind::Operation(super::super::store::StoreError::RecordNotFound(missing)),
+                matches!(error.kind(), dione_attention::store_access::AttentionReceiptErrorKind::Store(AttentionStoreAccessError {
+                kind: AttentionStoreAccessErrorKind::Operation(dione_attention::store::StoreError::RecordNotFound(missing)),
             }) if missing == &id)
             );
             let resolver = &fixture.runtime.resolver;
@@ -1650,7 +1665,7 @@ mod tests {
                 .mark_delivery(id, DeliveryState::Dispatched)
                 .await
                 .unwrap_err();
-            let super::super::store_access::AttentionReceiptErrorKind::Store(
+            let dione_attention::store_access::AttentionReceiptErrorKind::Store(
                 AttentionStoreAccessError {
                     kind: AttentionStoreAccessErrorKind::Initialization(source),
                 },
@@ -1661,7 +1676,7 @@ mod tests {
             assert!(matches!(
                 &source.kind,
                 AttentionInitializationErrorKind::Store(
-                    super::super::store::StoreError::Locked { .. }
+                    dione_attention::store::StoreError::Locked { .. }
                 )
             ));
         });
@@ -1670,7 +1685,7 @@ mod tests {
     #[test]
     fn delivery_guard_defers_while_a_durable_store_transaction_owns_the_mutex() {
         scenario(|| async {
-            use crate::attention::delivery::{AttentionDeliveryGuard, AttentionGuardFailure};
+            use dione_attention::delivery::{AttentionDeliveryGuard, AttentionGuardFailure};
 
             let fixture = NoticeFixture::new(AttentionMode::Log, NoticeMode::Off, 200).await;
             let held = fixture.runtime.store.lock().unwrap();
@@ -1690,9 +1705,9 @@ mod tests {
                     dione_contracts::ActorId::numeric(7.try_into().unwrap()),
                 );
                 let record = RecordId::new("held-store-record").unwrap();
-                let descriptor = crate::attention::delivery::AttentionDescriptor::new(
+                let descriptor = dione_attention::delivery::AttentionDescriptor::new(
                     &record,
-                    crate::attention::delivery::AttentionDirective::Prompt,
+                    dione_attention::delivery::AttentionDirective::Prompt,
                     &source,
                     &author,
                     "original",

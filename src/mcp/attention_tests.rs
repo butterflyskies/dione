@@ -6,23 +6,6 @@ mod boundary_acceptance;
 mod lifecycle_acceptance;
 
 use super::*;
-use crate::{
-    attention::{
-        admission::{AdmissionController, JudgmentWork, Submission},
-        config::{AttentionBrief, AttentionConfig, AttentionMode, NoticeMode, RoomAttention},
-        control::{AttentionCommand, execute},
-        provider::TypeSafeProvider,
-        runtime::AttentionRuntime,
-        source::{SourceResolver, now_ms},
-        types::{
-            Admission, ArtifactDigest, DecisionRecord, DeliveryState, SourceAuthorKind, SourceKey,
-            SourceVersion, content_hash,
-        },
-    },
-    codex::CodexEventQueue,
-    config::ConfigRuntime,
-    discord::events::{MessageEvent, MessageTargeting},
-};
 use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use parking_lot::Mutex as SyncMutex;
 use serde_json::{Value, json};
@@ -32,6 +15,27 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::Semaphore,
+};
+use {
+    crate::{
+        attention::{
+            admission::{AdmissionController, JudgmentWork, Submission},
+            control::{AttentionCommand, execute},
+            runtime::AttentionRuntime,
+            source::{SourceResolver, now_ms},
+        },
+        codex::CodexEventQueue,
+        config::ConfigRuntime,
+        discord::events::{MessageEvent, MessageTargeting},
+    },
+    dione_attention::{
+        config::{AttentionBrief, AttentionConfig, AttentionMode, NoticeMode, RoomAttention},
+        provider::TypeSafeProvider,
+        types::{
+            Admission, ArtifactDigest, DecisionRecord, DeliveryState, SourceAuthorKind, SourceKey,
+            SourceVersion, content_hash,
+        },
+    },
 };
 
 fn scenario<F: Future<Output = ()>>(run: impl FnOnce() -> F) {
@@ -1157,7 +1161,7 @@ fn source_version_changed_before_evaluation_cannot_emit_the_old_excerpt() {
         let result = fixture.attention.clone().evaluate(work).await;
         assert_eq!(
             result.delivery,
-            crate::attention::types::DeliveryState::Invalidated
+            dione_attention::types::DeliveryState::Invalidated
         );
         fixture.finish(result).await;
         assert_eq!(fixture.drain().await, Vec::<Value>::new());
@@ -1192,7 +1196,7 @@ fn feedback_authority_is_rechecked_after_live_validation_and_silence_is_unlabele
             fixture.attention.clone(),
             AttentionCommand::Feedback {
                 record_id: record.id.clone(),
-                label: crate::attention::types::FeedbackLabel::WantedPromptly,
+                label: dione_attention::types::FeedbackLabel::WantedPromptly,
             },
             true,
         ));
@@ -1247,7 +1251,7 @@ fn feedback_authority_is_rechecked_after_live_validation_and_silence_is_unlabele
         fixture
             .control(AttentionCommand::Feedback {
                 record_id: record.id.clone(),
-                label: crate::attention::types::FeedbackLabel::WantedPromptly,
+                label: dione_attention::types::FeedbackLabel::WantedPromptly,
             })
             .await;
         let id = record.id;
@@ -1296,7 +1300,7 @@ fn context_cycles_are_unknown_without_duplicating_the_trigger() {
 #[test]
 fn recipient_workflow_promotes_only_evaluated_policy_and_recovers_only_unconfirmed_work() {
     scenario(|| async {
-        use crate::attention::{
+        use dione_attention::{
             learning::{EvaluationPlan, FitOptions, FixedThresholdPolicy, PromotionLimits},
             types::{DeliveryState, FeedbackLabel},
         };
@@ -1675,7 +1679,7 @@ fn retrieval_and_feedback_are_withdrawn_when_current_sender_access_is_revoked() 
         fixture
             .control(AttentionCommand::Feedback {
                 record_id: record.id.clone(),
-                label: crate::attention::types::FeedbackLabel::WantedLater,
+                label: dione_attention::types::FeedbackLabel::WantedLater,
             })
             .await;
         assert_eq!(
@@ -1716,7 +1720,7 @@ fn retrieval_and_feedback_are_withdrawn_when_current_sender_access_is_revoked() 
                 fixture.attention.clone(),
                 AttentionCommand::Feedback {
                     record_id: record.id.clone(),
-                    label: crate::attention::types::FeedbackLabel::NotNeeded
+                    label: dione_attention::types::FeedbackLabel::NotNeeded
                 },
                 true
             )

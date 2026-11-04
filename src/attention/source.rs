@@ -1,9 +1,5 @@
 //! Bounded live source recovery. Metadata is not proof that a source still exists.
 
-use super::{
-    provider::SourceExcerpt,
-    types::{DirectAuthorKind, SourceAuthorKind, SourceKey, SourceVersion, content_hash},
-};
 use crate::{
     config::load_config,
     discord::{events::MessageTargeting, verified_action::LifecycleContext},
@@ -12,6 +8,10 @@ use crate::{
     state::State,
 };
 use camino::Utf8PathBuf;
+use dione_attention::{
+    provider::SourceExcerpt,
+    types::{DirectAuthorKind, SourceAuthorKind, SourceKey, SourceVersion, content_hash},
+};
 use serenity::{http::Http, model::channel::Channel};
 use std::{sync::Arc, time::Duration};
 

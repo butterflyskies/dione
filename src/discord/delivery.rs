@@ -1,25 +1,28 @@
 //! Discord ingress conversion into scoped, typed live deliveries.
 
 use super::events::{MessageEvent, MessageTargeting, NotificationEvent};
-use crate::{
-    attention::types::SourceAuthorKind,
-    bell_rings,
-    coordination::CoordinationEvent,
-    core::{
-        delivery::{Delivery, PresentationContext},
-        events::{
-            AuthorOrigin, BellObservation, BellStatus, ByteSize, ControlError, ControlEvent,
-            CoordinationNotice, MessageCreated, MessageEdited, ObservedAttachment, ObservedAuthor,
-            OrdinaryEvent, PermissionDecision, PermissionRequestId, ReplyObservation, Targeting,
-        },
-    },
-    gate::MentionKind,
-};
 use dione_contracts::{
     ActorId, ActorRef, ConversationId, ConversationRef, MessageId, MessageRef, ModuleInstanceId,
 };
 use serenity::model::id::{ChannelId, MessageId as DiscordMessageId, UserId};
 use thiserror::Error;
+use {
+    crate::{
+        bell_rings,
+        coordination::CoordinationEvent,
+        core::{
+            delivery::{Delivery, PresentationContext},
+            events::{
+                AuthorOrigin, BellObservation, BellStatus, ByteSize, ControlError, ControlEvent,
+                CoordinationNotice, MessageCreated, MessageEdited, ObservedAttachment,
+                ObservedAuthor, OrdinaryEvent, PermissionDecision, PermissionRequestId,
+                ReplyObservation, Targeting,
+            },
+        },
+        gate::MentionKind,
+    },
+    dione_attention::types::SourceAuthorKind,
+};
 
 pub(crate) enum ConvertedEvent {
     Ordinary(OrdinaryEvent),

@@ -9,15 +9,19 @@ use std::{fmt::Debug, sync::Arc};
 /// Codex acknowledged the turn/start request, not that the recipient saw it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttentionDeliveryReceipt {
+    /// Codex acknowledged the turn/start request at the transport boundary.
     Accepted,
+    /// The transport cannot establish whether the turn/start request was accepted.
     Uncertain,
 }
 
 /// Final dispatch denial: temporary evidence loss defers work; invalid evidence rejects it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AttentionGuardFailure {
+    /// Temporary evidence loss requires deferring the dispatch.
     #[error("attention evidence is temporarily unavailable")]
     Unavailable,
+    /// Current evidence no longer permits dispatch of the retained work.
     #[error("attention evidence was invalidated")]
     Invalidated,
 }
@@ -95,8 +99,9 @@ impl<'a> AttentionDescriptor<'a> {
     }
 }
 
+/// Owned source evidence for a final guard check; this is not an authorization token.
 #[derive(Debug, Clone)]
-pub(crate) struct OwnedAttentionDescriptor {
+pub struct OwnedAttentionDescriptor {
     record: RecordId,
     directive: AttentionDirective,
     source: MessageRef,
@@ -105,7 +110,8 @@ pub(crate) struct OwnedAttentionDescriptor {
 }
 
 impl OwnedAttentionDescriptor {
-    pub(crate) fn new(
+    /// Retains the source observation and the recorded scheduling directive.
+    pub fn new(
         record: RecordId,
         directive: AttentionDirective,
         source: MessageRef,
@@ -120,7 +126,8 @@ impl OwnedAttentionDescriptor {
             original_text,
         }
     }
-    pub(crate) fn descriptor(&self) -> AttentionDescriptor<'_> {
+    /// Borrows the retained evidence without changing its identity or authority.
+    pub fn descriptor(&self) -> AttentionDescriptor<'_> {
         AttentionDescriptor::new(
             &self.record,
             self.directive,

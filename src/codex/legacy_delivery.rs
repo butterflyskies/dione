@@ -1,21 +1,21 @@
 //! Reads the historical Discord notification format without rewriting payloads.
 
-use crate::{
-    attention::{
-        delivery::{AttentionDirective, OwnedAttentionDescriptor},
-        types::{RecordId, RecordIdError},
-    },
-    core::{
-        delivery::DeliveryKind,
-        events::{ControlEvent, CoordinationNotice, OrdinaryEvent},
-    },
-};
 use dione_contracts::{
     ActorId, ActorRef, ConversationId, ConversationRef, MessageId, MessageRef, ModuleInstanceId,
 };
 use serde_json::Value;
 use std::num::NonZeroU64;
 use thiserror::Error;
+use {
+    crate::core::{
+        delivery::DeliveryKind,
+        events::{ControlEvent, CoordinationNotice, OrdinaryEvent},
+    },
+    dione_attention::{
+        delivery::{AttentionDirective, OwnedAttentionDescriptor},
+        types::{RecordId, RecordIdError},
+    },
+};
 
 /// The explicit configured owner of legacy inbox payloads that predate module identities.
 #[derive(Debug, Clone)]

@@ -4,10 +4,10 @@ use super::{
     CodexEventQueue, CodexQueueError, CodexQueueErrorKind, CodexResidentHandle, CodexThreadId,
     LeasedEvent,
 };
-use crate::attention::delivery::{
+use camino::Utf8PathBuf;
+use dione_attention::delivery::{
     AttentionDeliveryGuard, AttentionDeliveryReceipt, AttentionGuardFailure,
 };
-use camino::Utf8PathBuf;
 use dione_durable::{EndpointId, QueueError, QueueErrorKind};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -266,7 +266,7 @@ enum DeliveryOutcome {
 struct PendingAttentionReceipt {
     guard: Arc<dyn AttentionDeliveryGuard>,
     outcome: AttentionDeliveryReceipt,
-    record: crate::attention::types::RecordId,
+    record: dione_attention::types::RecordId,
 }
 
 struct AppServerClient {
@@ -2112,16 +2112,16 @@ mod tests {
     impl AttentionDeliveryGuard for SettlementGate {
         fn check(
             &self,
-            _: &crate::attention::delivery::AttentionDescriptor<'_>,
+            _: &dione_attention::delivery::AttentionDescriptor<'_>,
         ) -> Result<(), AttentionGuardFailure> {
             Ok(())
         }
 
         fn receipt<'a>(
             self: Arc<Self>,
-            _: &'a crate::attention::types::RecordId,
+            _: &'a dione_attention::types::RecordId,
             _: AttentionDeliveryReceipt,
-        ) -> BoxFuture<'a, Result<(), crate::attention::delivery::AttentionReceiptError>> {
+        ) -> BoxFuture<'a, Result<(), dione_attention::delivery::AttentionReceiptError>> {
             Box::pin(async move {
                 self.reached.notify_one();
                 self.release.notified().await;
@@ -2256,7 +2256,7 @@ mod tests {
     impl AttentionDeliveryGuard for TestGuard {
         fn check(
             &self,
-            _descriptor: &crate::attention::delivery::AttentionDescriptor<'_>,
+            _descriptor: &dione_attention::delivery::AttentionDescriptor<'_>,
         ) -> Result<(), AttentionGuardFailure> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             match self.rejection {
@@ -2267,14 +2267,14 @@ mod tests {
 
         fn receipt<'a>(
             self: Arc<Self>,
-            record: &'a crate::attention::types::RecordId,
+            record: &'a dione_attention::types::RecordId,
             outcome: AttentionDeliveryReceipt,
-        ) -> BoxFuture<'a, Result<(), crate::attention::delivery::AttentionReceiptError>> {
+        ) -> BoxFuture<'a, Result<(), dione_attention::delivery::AttentionReceiptError>> {
             Box::pin(async move {
                 self.receipts.lock().unwrap().push(outcome);
                 match self.receipt_rejection {
-                    Some(reason) => Err(crate::attention::delivery::AttentionReceiptError::store(record.clone(), crate::attention::store_access::AttentionStoreAccessError {
-                        kind: crate::attention::store_access::AttentionStoreAccessErrorKind::Operation(crate::attention::store::StoreError::Invalid(reason)),
+                    Some(reason) => Err(dione_attention::delivery::AttentionReceiptError::store(record.clone(), dione_attention::store_access::AttentionStoreAccessError {
+                        kind: dione_attention::store_access::AttentionStoreAccessErrorKind::Operation(dione_attention::store::StoreError::Invalid(reason)),
                     })),
                     None => Ok(()),
                 }
@@ -2295,7 +2295,7 @@ mod tests {
         });
         event.attention = Some(AttentionScheduling {
             delivery,
-            record_id: crate::attention::types::RecordId::new(record_id).unwrap(),
+            record_id: dione_attention::types::RecordId::new(record_id).unwrap(),
         });
         event
     }

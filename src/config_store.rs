@@ -63,7 +63,7 @@ impl ConfigStore {
     /// Edit attention through the same serialized config publication path.
     pub fn set_attention(
         &mut self,
-        attention: &crate::attention::config::AttentionConfig,
+        attention: &dione_attention::config::AttentionConfig,
     ) -> Result<(), BoxError> {
         attention.validate().map_err(std::io::Error::other)?;
         let table: DocumentMut = toml::to_string(attention)?.parse()?;

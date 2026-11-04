@@ -1,27 +1,4 @@
 use super::observation::PreparedAdmission;
-use crate::{
-    attention::types::{DirectAuthorKind, SourceAuthorKind},
-    bell_rings::BellStatus,
-    discord::{
-        messaging::create_dm_channel,
-        presence::{
-            ActivityType as PresenceActivityType, OnlineStatus as PresenceStatus, PresenceRequest,
-            PresenceSink, SharedPresence, run_presence_commands,
-        },
-        verified_action::{
-            LifecycleContext, LifecycleProvenance, VerifiedActionGate, VerifiedGateVerdict,
-        },
-        verified_action_runtime::{
-            VerifiedUpdateCandidate, fresh_policy_snapshot, resolve_webhook_action,
-        },
-    },
-    gate::{
-        GateDecision, InboundGate, MentionDetector, MentionKind, ReplyParentAction,
-        ReplyParentResolution, classify_reply_parent_ignore_default,
-    },
-    queue::AccessRequest,
-    timestamp::Timestamp,
-};
 use serenity::{
     async_trait,
     builder::{CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage},
@@ -32,6 +9,31 @@ use serenity::{
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
+};
+use {
+    crate::{
+        bell_rings::BellStatus,
+        discord::{
+            messaging::create_dm_channel,
+            presence::{
+                ActivityType as PresenceActivityType, OnlineStatus as PresenceStatus,
+                PresenceRequest, PresenceSink, SharedPresence, run_presence_commands,
+            },
+            verified_action::{
+                LifecycleContext, LifecycleProvenance, VerifiedActionGate, VerifiedGateVerdict,
+            },
+            verified_action_runtime::{
+                VerifiedUpdateCandidate, fresh_policy_snapshot, resolve_webhook_action,
+            },
+        },
+        gate::{
+            GateDecision, InboundGate, MentionDetector, MentionKind, ReplyParentAction,
+            ReplyParentResolution, classify_reply_parent_ignore_default,
+        },
+        queue::AccessRequest,
+        timestamp::Timestamp,
+    },
+    dione_attention::types::{DirectAuthorKind, SourceAuthorKind},
 };
 
 struct GatewayPresenceSink(ShardMessenger);

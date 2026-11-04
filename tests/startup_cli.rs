@@ -2,7 +2,6 @@
 #![cfg(unix)]
 
 use camino::Utf8PathBuf;
-use dione::{attention::store::AttentionStore, codex::CodexEventQueue};
 use serde_json::{Value, json};
 use std::{
     fs::{self, File},
@@ -13,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
+use {dione::codex::CodexEventQueue, dione_attention::store::AttentionStore};
 
 struct CliFixture {
     root: TempDir,

@@ -3,10 +3,6 @@ use super::{
     AttentionDelivery, AttentionScheduling, CodexThreadId, LegacyDiscordScope,
     legacy_delivery::decode_attention,
 };
-use crate::{
-    attention::delivery::{AttentionDirective, OwnedAttentionDescriptor},
-    delivery::ProviderEventKey,
-};
 use chrono::{DateTime, Utc};
 use dione_durable::{
     CodecError, CodecErrorKind, ConsumerId, DeliveryToken, EndpointId, EventId, QueueCodec,
@@ -17,6 +13,10 @@ use serde_json::Value;
 use serenity::model::id::MessageId;
 use std::collections::VecDeque;
 use thiserror::Error;
+use {
+    crate::delivery::ProviderEventKey,
+    dione_attention::delivery::{AttentionDirective, OwnedAttentionDescriptor},
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct LegacyPayload {

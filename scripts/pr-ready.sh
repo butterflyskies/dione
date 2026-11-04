@@ -72,6 +72,8 @@ contracts_version=$(sh scripts/workspace-package-version.sh dione-contracts)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-contracts-${contracts_version}.crate"
 rook_version=$(sh scripts/workspace-package-version.sh dione-rook)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-rook-${rook_version}.crate"
+attention_version=$(sh scripts/workspace-package-version.sh dione-attention)
+sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-attention-${attention_version}.crate"
 cargo deny check
 cargo build --profile "$build_profile" --workspace --bins --locked
 "${target_dir}/${build_profile}/dione" --version

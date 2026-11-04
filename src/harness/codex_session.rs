@@ -3,16 +3,18 @@ use super::{
     HarnessConnection,
     session::{HarnessSessionError, HarnessSessionErrorKind},
 };
-use crate::{
-    attention::delivery::AttentionDeliveryGuard,
-    codex::{CodexDeliveryConfig, CodexEventQueue, CodexThreadId, run_delivery_worker},
-    config::DeliveryConfig,
-};
 use camino::{Utf8Path, Utf8PathBuf};
 use dione_durable::EndpointId;
 use std::{env, sync::Arc};
 use tokio::{sync::watch, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
+use {
+    crate::{
+        codex::{CodexDeliveryConfig, CodexEventQueue, CodexThreadId, run_delivery_worker},
+        config::DeliveryConfig,
+    },
+    dione_attention::delivery::AttentionDeliveryGuard,
+};
 
 /// Optional CLI overrides resolved only when live delivery starts.
 pub struct CodexSessionOptions {

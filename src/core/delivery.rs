@@ -1,11 +1,11 @@
 //! Nonempty ordinary deliveries, source-bound managed work, and separate controls.
 
 use super::events::{ControlEvent, MessageCreated, OrdinaryEvent};
-use crate::attention::{
+use chrono_tz::Tz;
+use dione_attention::{
     delivery::{AttentionDescriptor, AttentionDirective},
     types::RecordId,
 };
-use chrono_tz::Tz;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum EvidenceVisibility {

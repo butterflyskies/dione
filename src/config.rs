@@ -133,10 +133,10 @@ pub struct Config {
     /// Inbound memory-bell shadow evaluation.
     pub bell_rings: BellRingsConfig,
     /// Recipient-controlled TypeSafe attention; separate from provider permissions.
-    #[serde(deserialize_with = "crate::attention::config::deserialize_config")]
-    pub attention: crate::attention::config::AttentionConfig,
+    #[serde(deserialize_with = "dione_attention::config::deserialize_config")]
+    pub attention: dione_attention::config::AttentionConfig,
     /// Operator-owned attention notice audience; recipient tools cannot change this binding.
-    pub attention_notice_route: Option<crate::attention::config::RecipientNoticeRoute>,
+    pub attention_notice_route: Option<dione_attention::config::RecipientNoticeRoute>,
     /// Restart-only, one-shot GAIE archive configuration.
     pub archive: ArchiveConfig,
     /// Pronoun enforcement via PronounDB.

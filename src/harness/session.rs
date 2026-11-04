@@ -4,16 +4,18 @@ use super::{
     codex_session::{CodexSession, CodexSessionOptions, RunningCodexSession},
     omp_session::{OmpAdmission, OmpSession, RunningOmpSession},
 };
-use crate::{
-    attention::delivery::AttentionDeliveryGuard,
-    codex::{CodexDeliveryError, CodexQueueError},
-    config::DeliveryConfig,
-};
 use camino::Utf8Path;
 use std::{error::Error, sync::Arc};
 use thiserror::Error;
 use tokio::task::JoinError;
 use tokio_util::sync::CancellationToken;
+use {
+    crate::{
+        codex::{CodexDeliveryError, CodexQueueError},
+        config::DeliveryConfig,
+    },
+    dione_attention::delivery::AttentionDeliveryGuard,
+};
 
 /// A prepared connection whose delivery worker has not started.
 #[must_use]

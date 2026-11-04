@@ -1,17 +1,18 @@
 //! Typed commands on the authenticated recipient's local control connection.
 //! Discord content is never parsed as one of these commands.
 
-use super::{
-    config::AttentionConfig,
-    learning::{EvaluationPlan, FitOptions, FixedThresholdPolicy, TemporalPartitionSpec},
-    runtime::AttentionRuntime,
-    source::now_ms,
-    types::{ArtifactDigest, DecisionRecord, EvaluationId, Feedback, FeedbackLabel, RecordId},
-};
 use crate::config::{ConfigDurability, ConfigRuntime, attention_effect_guard, load_config};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::Arc;
+use {
+    super::{runtime::AttentionRuntime, source::now_ms},
+    dione_attention::{
+        config::AttentionConfig,
+        learning::{EvaluationPlan, FitOptions, FixedThresholdPolicy, TemporalPartitionSpec},
+        types::{ArtifactDigest, DecisionRecord, EvaluationId, Feedback, FeedbackLabel, RecordId},
+    },
+};
 
 /// Typed operations accepted only through the authenticated local control surface.
 #[derive(Debug, Deserialize)]
@@ -165,7 +166,7 @@ async fn control_write<R, F>(
 ) -> Result<R, String>
 where
     R: Send + 'static,
-    F: FnOnce(&mut super::store::AttentionStore) -> Result<R, String> + Send + 'static,
+    F: FnOnce(&mut dione_attention::store::AttentionStore) -> Result<R, String> + Send + 'static,
 {
     let publication = attention_effect_guard().await;
     let current = load_config(&runtime.resolver.state_dir);
@@ -252,13 +253,13 @@ pub async fn execute(
             let owner = recipient.clone();
             let batch = control_write(&runtime, initial.generation(), move |store| {
                 store
-                    .sample_review_batch(&owner, requested, seed)
+                    .sample_review(&owner, requested, seed)
                     .map_err(|error| error.to_string())
             })
             .await?;
             let mut visible = Vec::new();
             let mut unavailable = 0;
-            for item in &batch.items {
+            for item in &batch {
                 match runtime.retrieve(item.record_id.clone()).await {
                     Ok(source) => visible.push(json!({"selection": item, "source": source})),
                     Err(_) => unavailable += 1,
@@ -266,7 +267,7 @@ pub async fn execute(
             }
             Ok(
                 json!({"items": visible, "unavailable_selected": unavailable,
-                "coverage": {"requested": requested, "selected": batch.items.len(), "returned": visible.len()},
+                "coverage": {"requested": requested, "selected": batch.len(), "returned": visible.len()},
                 "sampling": "stratified; each returned selection carries its actual inclusion probability"}),
             )
         }

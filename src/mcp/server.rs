@@ -12,34 +12,6 @@
 //! - Notification (no id) → `{"jsonrpc":"2.0","method":"...","params":{...}}`
 
 pub use crate::tracing_channel::TraceLevelController;
-use crate::{
-    attention::{
-        delivery::AttentionGuardFailure,
-        types::{Admission, DeliveryState},
-    },
-    bell_rings::{BellEvaluator, render_bells},
-    config::BellMode,
-    core::delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
-    delivery_buffer::BufferResult,
-    discord::{
-        access::AccessCtx,
-        events::{MessageEvent, NotificationEvent},
-        messaging::MessagingCtx,
-        presence::PresenceCapability,
-        scheduling::DeliveryBuffer,
-        typing::TypingCtx,
-    },
-    harness::{AttentionPolicy, HarnessConnection, HarnessError, ProtocolOutput},
-    mcp::{
-        dispatch::call_tool,
-        harness_wire::{PRIVATE_CONTROL_TOOLS, RequestOrigin},
-        protocol::{initialize_response, tools_list},
-        tool_registry::{RegisteredTool, RegistrationError, ToolNameError, ToolRegistry},
-        tools::{diagnostics::DiagnosticsCtx, no_rly::NoRlyCtx},
-    },
-    no_rly::consent::ConsentGate,
-    rate_limiter::{ChannelRef, ParticipantId, RateLimitDecision, RateLimiter},
-};
 use camino::Utf8PathBuf;
 use dione_contracts::ModuleInstanceId;
 #[cfg(test)]
@@ -57,6 +29,36 @@ use tokio::{
     sync::{Mutex, Semaphore, mpsc},
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use {
+    crate::{
+        bell_rings::{BellEvaluator, render_bells},
+        config::BellMode,
+        core::delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
+        delivery_buffer::BufferResult,
+        discord::{
+            access::AccessCtx,
+            events::{MessageEvent, NotificationEvent},
+            messaging::MessagingCtx,
+            presence::PresenceCapability,
+            scheduling::DeliveryBuffer,
+            typing::TypingCtx,
+        },
+        harness::{AttentionPolicy, HarnessConnection, HarnessError, ProtocolOutput},
+        mcp::{
+            dispatch::call_tool,
+            harness_wire::{PRIVATE_CONTROL_TOOLS, RequestOrigin},
+            protocol::{initialize_response, tools_list},
+            tool_registry::{RegisteredTool, RegistrationError, ToolNameError, ToolRegistry},
+            tools::{diagnostics::DiagnosticsCtx, no_rly::NoRlyCtx},
+        },
+        no_rly::consent::ConsentGate,
+        rate_limiter::{ChannelRef, ParticipantId, RateLimitDecision, RateLimiter},
+    },
+    dione_attention::{
+        delivery::AttentionGuardFailure,
+        types::{Admission, DeliveryState},
+    },
+};
 
 /// Failure to construct the server's immutable owner registrations.
 #[derive(Debug, Error)]
@@ -551,7 +553,7 @@ async fn run_with_input(
                     use crate::attention::admission::Submission;
                     if let NotificationEvent::MessageEdit { chat_id, message_id, .. }
                         | NotificationEvent::MessageDelete { chat_id, message_id, .. } = &event {
-                        let source = crate::attention::types::SourceKey { channel_id: *chat_id, message_id: *message_id };
+                        let source = dione_attention::types::SourceKey { channel_id: *chat_id, message_id: *message_id };
                         let ready = admissions.invalidate(source);
                         if let Err(error) = attention.invalidate(source).await { attention.unknown(error.to_string()); }
                         let scoped_source = dione_contracts::MessageRef::new(
@@ -1585,7 +1587,7 @@ mod tests {
             message_id: MessageId::new(1),
             user: "u".into(),
             user_id: UserId::new(1),
-            author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
+            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
             content: "c".into(),
             targeting: crate::discord::events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -1607,7 +1609,7 @@ mod tests {
             message_id: MessageId::new(100 + index),
             user: format!("user-{index}"),
             user_id: UserId::new(200 + index),
-            author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
+            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
             content: format!("claim-{index} [🔍=v1:AAAAAAAAAAw] [🔍=v1:AAAAAAAAACI]"),
             targeting: crate::discord::events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -2123,9 +2125,9 @@ async fn forward_attention_results(
                     )));
                 };
                 let directive = if result.record.actual == Admission::Prompt {
-                    crate::attention::delivery::AttentionDirective::Prompt
+                    dione_attention::delivery::AttentionDirective::Prompt
                 } else {
-                    crate::attention::delivery::AttentionDirective::NextTurn
+                    dione_attention::delivery::AttentionDirective::NextTurn
                 };
                 let notification = Delivery::managed(
                     crate::discord::delivery::message(
@@ -2143,7 +2145,7 @@ async fn forward_attention_results(
                 };
                 // A managed event must remain a source-bound envelope; coalescing
                 // it with an ordinary event would erase its lifecycle fence.
-                match crate::attention::delivery::AttentionDeliveryGuard::check(
+                match dione_attention::delivery::AttentionDeliveryGuard::check(
                     attention.as_ref(),
                     &descriptor,
                 ) {
@@ -2239,7 +2241,7 @@ fn begin_attention(
     use crate::attention::admission::Submission;
     let duplicate = match &event {
         NotificationEvent::Message(message) => {
-            admissions.owns_source(&crate::attention::types::SourceKey {
+            admissions.owns_source(&dione_attention::types::SourceKey {
                 channel_id: message.chat_id,
                 message_id: message.message_id,
             })

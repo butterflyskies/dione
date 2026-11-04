@@ -44,7 +44,9 @@ const CONTEXT_FALSE: &str = "A missing or stale brief, omitted conversation evid
 /// One source-bound excerpt already approved by the caller for provider export.
 #[derive(Clone, Serialize)]
 pub struct SourceExcerpt {
+    /// Exact identity, digest, and observed provenance of the approved source.
     pub source: SourceVersion,
+    /// Authorized UTF-8 source text whose bytes must match the source digest.
     pub text: String,
 }
 
@@ -53,39 +55,59 @@ pub struct SourceExcerpt {
 pub struct JudgmentInput {
     /// An exact, version-pinned Jev model identifier, not a moving alias.
     pub model: String,
+    /// Recipient context already approved for provider export.
     pub brief: String,
+    /// Authorized source excerpt being evaluated.
     pub trigger: SourceExcerpt,
+    /// Authorized preceding excerpts used as conversation context.
     pub antecedents: Vec<SourceExcerpt>,
+    /// Whether the caller knows that relevant context is unavailable.
     pub missing_context: bool,
 }
 
 /// Sanitized failures from the TypeSafe provider boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ProviderFailure {
+    /// The credential, timeout, or endpoint configuration failed validation.
     #[error("invalid TypeSafe provider configuration")]
     InvalidConfiguration,
+    /// The judgment state is malformed or exceeds a request bound.
     #[error("attention judgment input is invalid or exceeds its bound")]
     InvalidInput,
+    /// Evaluation was cancelled or current provider-export permission was withdrawn.
     #[error("provider request was cancelled")]
     Cancelled,
+    /// The total evaluation deadline elapsed.
     #[error("provider request exceeded its total deadline")]
     Timeout,
+    /// The HTTP exchange failed before a usable response was obtained.
     #[error("provider request failed in transport")]
     Transport,
+    /// The provider refused the API credential with HTTP 401.
     #[error("provider rejected the API credential (HTTP 401)")]
     Unauthorized,
+    /// The provider rejected the request shape with HTTP 422.
     #[error("provider rejected the request shape (HTTP 422)")]
     Unprocessable,
+    /// Provider rate limiting prevented evaluation with HTTP 429.
     #[error("provider rate limit prevented evaluation (HTTP 429)")]
     RateLimited,
+    /// The provider reported overload with HTTP 529.
     #[error("provider was overloaded (HTTP 529)")]
     Overloaded,
+    /// The provider returned an unsupported HTTP status.
     #[error("provider returned an unexpected HTTP status ({status})")]
-    UnexpectedStatus { status: u16 },
+    UnexpectedStatus {
+        /// HTTP response status code returned by the provider.
+        status: u16,
+    },
+    /// The response exceeded the bounded response size.
     #[error("provider response exceeded its size bound")]
     ResponseTooLarge,
+    /// The response failed the required typed judgment schema.
     #[error("provider response did not match the required typed judgment shape")]
     MalformedResponse,
+    /// The response model identity differed from the requested identity.
     #[error("provider reported a different model identity than requested")]
     ModelMismatch,
 }
@@ -117,9 +139,9 @@ impl TypeSafeProvider {
     }
 
     /// Creates a provider for a loopback HTTP endpoint used by hermetic tests.
-    /// This constructor is absent from production builds.
-    #[cfg(test)]
-    pub(crate) fn with_test_endpoint(
+    /// Available to member tests and the default-off `test-support` feature.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_test_endpoint(
         api_key: String,
         timeout: Duration,
         endpoint: Url,
@@ -277,7 +299,7 @@ impl TypeSafeProvider {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn is_safe_test_endpoint(endpoint: &Url) -> bool {
     let loopback = endpoint.host_str() == Some("localhost")
         || endpoint
@@ -726,7 +748,7 @@ mod tests {
                     message_id: MessageId::new(message_id),
                 },
                 author_id: UserId::new(9),
-                author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
+                author_kind: crate::types::SourceAuthorKind::DirectHuman,
                 conversation: "channel:7".into(),
                 content_hash: super::super::types::content_hash(text),
                 observed_at_ms: 1_700_000_000_000,

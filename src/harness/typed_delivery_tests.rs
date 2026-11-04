@@ -1,18 +1,6 @@
 //! Adapter behavior for the same typed live records and historical inbox codec.
 
 use super::{HarnessConnection, ProtocolOutput, test_support};
-use crate::{
-    attention::{delivery::AttentionDirective, types::RecordId},
-    codex::{CodexEventQueue, LegacyDiscordScope, legacy_delivery},
-    core::{
-        delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
-        events::{
-            AuthorOrigin, BellObservation, BellStatus, ByteSize, MessageCreated,
-            ObservedAttachment, ObservedAuthor, OrdinaryEvent, ReplyObservation, Targeting,
-        },
-    },
-    timestamp::Timestamp,
-};
 use camino::Utf8PathBuf;
 use dione_contracts::{
     ActorId, ActorRef, ConversationId, ConversationRef, MessageId, MessageRef, ModuleInstanceId,
@@ -23,6 +11,20 @@ use std::time::Duration;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     sync::watch,
+};
+use {
+    crate::{
+        codex::{CodexEventQueue, LegacyDiscordScope, legacy_delivery},
+        core::{
+            delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
+            events::{
+                AuthorOrigin, BellObservation, BellStatus, ByteSize, MessageCreated,
+                ObservedAttachment, ObservedAuthor, OrdinaryEvent, ReplyObservation, Targeting,
+            },
+        },
+        timestamp::Timestamp,
+    },
+    dione_attention::{delivery::AttentionDirective, types::RecordId},
 };
 
 fn conversation(module: &ModuleInstanceId, id: u64) -> ConversationRef {
