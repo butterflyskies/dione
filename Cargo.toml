@@ -1,9 +1,9 @@
 [workspace]
-members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention", "crates/dione-evidence", "crates/dione-messages", "crates/dione-rate-limiter", "crates/dione-vaelii"]
+members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention", "crates/dione-evidence", "crates/dione-messages", "crates/dione-rate-limiter", "crates/dione-vaelii", "crates/dione-gaie"]
 
 [package]
 name = "dione"
-version = "0.95.0"
+version = "0.96.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -14,6 +14,10 @@ keywords = ["discord", "mcp", "claude-code", "codex", "bot"]
 categories = ["command-line-utilities"]
 
 [workspace.dependencies]
+pretty_assertions = "1"
+url = "2"
+test-case = "3"
+dione-gaie = { version = "=0.1.0", path = "crates/dione-gaie" }
 dione-vaelii = { version = "=0.1.0", path = "crates/dione-vaelii" }
 proptest = "1"
 dione-rate-limiter = { version = "=0.1.0", path = "crates/dione-rate-limiter" }
@@ -58,6 +62,7 @@ serenity = { version = "0.12", default-features = false, features = ["client", "
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 [dependencies]
+dione-gaie.workspace = true
 dione-vaelii.workspace = true
 dione-rate-limiter.workspace = true
 dione-messages.workspace = true
@@ -97,7 +102,7 @@ notify = "8"
 reqwest.workspace = true
 jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
 secrecy.workspace = true
-url = "2"
+url.workspace = true
 sha2.workspace = true
 uuid.workspace = true
 rmcp = { version = "1.1", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
@@ -121,8 +126,8 @@ rustls.workspace = true
 tokio-rustls.workspace = true
 insta = { version = "1", features = ["json", "redactions"] }
 proptest.workspace = true
-test-case = "3"
-pretty_assertions = "1"
+test-case.workspace = true
+pretty_assertions.workspace = true
 parking_lot = "0.12"
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util", "process"] }

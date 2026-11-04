@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.96.0]
+
+### Changed
+
+- Extract the complete GAIE archive, origin evidence, backfill, and replay owner
+  into `dione-gaie`. Move the unchanged attachment-budget defaults with it.
+  Keep archive CLI composition, settings, credential loading, and oracle
+  integration fixtures in Dione.
+
 ## [0.95.0]
 
 ### Changed

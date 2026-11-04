@@ -1,4 +1,4 @@
-use crate::gaie::{Event, EventKind};
+use crate::{Event, EventKind};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 

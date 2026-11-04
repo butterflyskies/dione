@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.95.0"
+version = "0.96.0"
 dependencies = [
  "aho-corasick",
  "arc-swap",
@@ -944,6 +944,7 @@ dependencies = [
  "dione-contracts",
  "dione-durable",
  "dione-evidence",
+ "dione-gaie",
  "dione-messages",
  "dione-rate-limiter",
  "dione-rendering",
@@ -1047,6 +1048,29 @@ dependencies = [
  "serde_json",
  "serenity",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "dione-gaie"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "chrono",
+ "fs2",
+ "libc",
+ "pretty_assertions",
+ "proptest",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "test-case",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
 ]
 
 [[package]]

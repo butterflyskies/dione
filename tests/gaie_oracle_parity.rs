@@ -1,5 +1,5 @@
 use camino::Utf8PathBuf;
-use dione::gaie::{
+use dione_gaie::{
     Archive, ArchivePaths, CorpusId, MessageContext, build_latest_state, message_batch,
 };
 use sha2::{Digest as _, Sha256};

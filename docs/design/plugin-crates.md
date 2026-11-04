@@ -169,6 +169,25 @@ clamp, and optional per-request environment-token lookup. Existing tests cover
 exact request bodies and status-only refusal; no additional redirect/token
 runtime coverage is claimed.
 
+## GAIE boundary
+
+`dione-gaie` owns the complete archive, retained origin evidence, backfill client,
+event model, and latest-state replay. The private origin/checkpoint/discovery
+relationships remain within one crate. Existing API visibility and opaque
+representations are preserved. The existing `CorpusIdError` gains a facade
+re-export so callers can name the concrete parse failure.
+
+The unchanged per-attachment and cumulative download defaults move from config
+to the archive facade. Dione imports them directly and keeps settings, credential
+loading, channel allowlists, archive CLI composition, and oracle fixtures. All
+four oracle integration tests remain with the application.
+
+Archive validation, locking, torn-tail recovery, quarantine, exact bytes,
+checkpoint ordering, and HTTP/download policy retain their implementations and
+tests. Retained-origin consistency does not establish external authenticity.
+The member retains the existing `cfg(kani)` lint admission and one test-scoped
+`await_holding_lock` allowance; the normal gate does not execute Kani proofs.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -182,6 +201,7 @@ runtime coverage is claimed.
 7. Shared message events, presentation, and delivery values.
 8. The independent rate-limiter engine.
 9. The optional Vaelii provenance receipt client.
+10. The complete GAIE archive and backfill owner.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -192,7 +212,8 @@ test preparation, and release builds separately before making speed claims.
 
 The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
-`dione-evidence`, `dione-messages`, `dione-rate-limiter`, and `dione-vaelii`.
+`dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`, and
+`dione-gaie`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -212,14 +233,15 @@ later application commits; every other archived byte remains protected.
 The already-published path remains mandatory.
 Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
-`dione-evidence`, `dione-messages`, `dione-rate-limiter`, and `dione-vaelii`,
+`dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`, and
+`dione-gaie`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all nine capabilities. Messages publishing waits for
+publishing waits for all ten capabilities. Messages publishing waits for
 contracts, attention, and evidence reconciliation. Attention publishing waits for
 contracts reconciliation. Each reconciliation verifies the
 archive contents after registry resolution.

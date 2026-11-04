@@ -1,4 +1,4 @@
-use crate::gaie::{Attachment, Event, EventKind};
+use crate::{Attachment, Event, EventKind};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
@@ -9,24 +9,42 @@ use thiserror::Error;
 pub enum ReplayError {
     /// A reaction-add event exceeded the representable aggregate count.
     #[error("reaction count overflow for message `{message_id}` and emoji `{emoji}`")]
-    ReactionCountOverflow { message_id: String, emoji: String },
+    ReactionCountOverflow {
+        /// Message whose reaction count overflowed.
+        message_id: String,
+        /// Reaction identifier whose count overflowed.
+        emoji: String,
+    },
 }
 
 /// The Python-v11-compatible latest view of one Discord message.
 #[derive(Debug, Clone, Serialize)]
 pub struct LatestMessage {
+    /// Source message identifier.
     pub message_id: String,
+    /// Supplied author identifier when known.
     pub author_id: Option<String>,
+    /// Latest observed message content when present.
     pub content: Option<String>,
+    /// Source creation timestamp when available.
     pub created_at: Option<String>,
+    /// Latest source edit timestamp when available.
     pub edited_at: Option<String>,
+    /// Source channel identifier.
     pub channel_id: String,
+    /// Source thread identifier when present.
     pub thread_id: Option<String>,
+    /// Latest observed attachment descriptors.
     pub attachments: Vec<Attachment>,
+    /// Referenced message identifier when present.
     pub reply_to: Option<String>,
+    /// Latest aggregate counts keyed by reaction identifier.
     pub reactions: BTreeMap<String, u64>,
+    /// Whether a deletion was observed.
     pub deleted: bool,
+    /// Number of captured versions applied to this message.
     pub versions: u64,
+    /// Description of known history completeness.
     pub history_status: String,
 }
 
@@ -139,7 +157,7 @@ fn reaction_count_after(current: u64, add: bool) -> Option<Option<u64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gaie::{Ingest, Lineage, Payload, Relations, Source};
+    use crate::{Ingest, Lineage, Payload, Relations, Source};
     use proptest::prelude::*;
 
     fn event(kind: EventKind, sequence: u64) -> Event {

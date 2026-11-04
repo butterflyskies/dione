@@ -1,0 +1,35 @@
+[package]
+name = "dione-gaie"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Durable GAIE archives, retained origin evidence, backfill, and replay"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["gaie", "archive", "provenance"]
+categories = ["filesystem", "data-structures"]
+
+[dependencies]
+camino.workspace = true
+chrono.workspace = true
+fs2.workspace = true
+libc.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+proptest.workspace = true
+tempfile.workspace = true
+test-case.workspace = true
+url = { workspace = true, features = ["serde"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
