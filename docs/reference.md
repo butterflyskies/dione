@@ -168,9 +168,10 @@ Vaelii's atomic write boundary.
 When `delivery.evidence_markers_enabled` is true, `reply` and `send_dm` accept
 up to four total `claim_handles` and `citation_handles`. Handles are canonical
 positive-decimal `u64` strings; JSON numbers are rejected. Dione appends
-role-bearing terminal v3 locators after pre-send hooks, such as
-`[🔍=v3:claim:CRY]` for handle 2326, and exposes them as `claim_locators` and
-`citation_locators` on receive surfaces. A v3 token is the handle's
+role-bearing terminal locators in the selected grammar after pre-send hooks.
+With the concrete V3 default, handle 2326 becomes `[🔍=v3:claim:CRY]`.
+Locators are exposed as `claim_locators` and `citation_locators` on receive
+surfaces. A v3 token is the handle's
 minimal-width big-endian bytes in unpadded base64url; decoding rejects empty
 tokens, padding, non-base64url characters, a leading zero byte and zero.
 Locators are author-offered metadata, not verification or truth.
