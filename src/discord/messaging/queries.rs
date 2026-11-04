@@ -23,12 +23,10 @@ use std::io;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use {
-    crate::{
-        config::LoadedConfig,
-        vaelii::{GetMessageReceipt, VaeliiError},
-    },
+    crate::config::LoadedConfig,
     dione_evidence::{OfferedSentex, parse_offered_sentexes},
     dione_messages::timestamp::Timestamp,
+    dione_vaelii::{GetMessageReceipt, VaeliiError},
 };
 
 /// A provider observation that cannot satisfy a requested read.
@@ -642,7 +640,7 @@ pub async fn get_message(
     check_exact_target(&message, channel_id, message_id)?;
     let message = MessageView::from_discord(&ctx.config, &message, ObservationOrigin::Exact)?;
     let receipt = if ctx.config.vaelii.is_enabled() {
-        match crate::vaelii::write_get_message_receipt(
+        match dione_vaelii::write_get_message_receipt(
             &ctx.config.vaelii,
             message_id.get(),
             ctx.construct_id.as_str(),

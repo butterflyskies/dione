@@ -53,8 +53,8 @@ requires exact agreement with its context edit timestamp. Borrowed identity
 projections expose the existing numeric or opaque form without string conversion.
 
 The crate has no application, attention, platform, or Rook dependency. Display,
-events, and delivery remain in Dione because they have presentation or application
-ownership. Rook keeps its wire schemas, validation, and authorization. Common
+event, and delivery values belong to `dione-messages`; application adapters and
+current authorization remain in Dione. Rook keeps its wire schemas and validation. Common
 observations are descriptive data, not proof of current access or action authority.
 
 All callers use the new crate directly. Its identity/context unit tests, branded
@@ -156,6 +156,19 @@ edit/delete bypass, and denial handling. The MCP loop still supplies no sender
 classes and drops denied `Buffer` results. This extraction does not implement
 those existing unfinished integrations.
 
+## Vaelii boundary
+
+`dione-vaelii` owns the existing optional receipt client, its configuration and
+public receipt/error values, private sentex helpers, and seven tests. It records
+six provenance-only sentexes for supplied identifiers. The caller must establish
+the read and its authority. Discord keeps access checks, lookup, exact-target
+validation, message projection, receipt failure handling, and both wire protocols.
+
+The move preserves endpoint/symbol validation, rustls, no redirects, the timeout
+clamp, and optional per-request environment-token lookup. Existing tests cover
+exact request bodies and status-only refusal; no additional redirect/token
+runtime coverage is claimed.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -168,6 +181,7 @@ those existing unfinished integrations.
 6. Evidence and Markdown grammar, independent of attention-bound delivery.
 7. Shared message events, presentation, and delivery values.
 8. The independent rate-limiter engine.
+9. The optional Vaelii provenance receipt client.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -178,7 +192,7 @@ test preparation, and release builds separately before making speed claims.
 
 The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
-`dione-evidence`, `dione-messages`, and `dione-rate-limiter`.
+`dione-evidence`, `dione-messages`, `dione-rate-limiter`, and `dione-vaelii`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -198,14 +212,14 @@ later application commits; every other archived byte remains protected.
 The already-published path remains mandatory.
 Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
-`dione-evidence`, `dione-messages`, and `dione-rate-limiter`,
+`dione-evidence`, `dione-messages`, `dione-rate-limiter`, and `dione-vaelii`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all eight capabilities. Messages publishing waits for
+publishing waits for all nine capabilities. Messages publishing waits for
 contracts, attention, and evidence reconciliation. Attention publishing waits for
 contracts reconciliation. Each reconciliation verifies the
 archive contents after registry resolution.

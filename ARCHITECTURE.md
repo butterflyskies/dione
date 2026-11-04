@@ -28,7 +28,7 @@ retain their adapter-specific codecs and payload validation. Rook uses the same
 atomic replacement primitive while retaining its private-directory admission.
 The public `dione-contracts` package owns source-qualified provider identities,
 context records, and checked message occurrences. Display formatting and
-attention-dependent delivery remain in the application; Rook retains its own
+attention-dependent delivery values belong to `dione-messages`; Rook retains its own
 serialized observation model and authorization checks.
 The public `dione-rook` package owns durable recipients, callback scheduling,
 context reads, and publication slots. Its private snapshot keeps claim and
@@ -49,6 +49,10 @@ values describe supplied observations rather than granting access or permission.
 The public `dione-rate-limiter` package owns scoped configuration resolution and
 explicit-time token buckets for participant/channel pairs. Dione retains admission,
 key construction, live reload scheduling, and the action taken after denial.
+The public `dione-vaelii` package owns the optional provenance receipt client.
+Discord retains message authorization, lookup, exact-target checking, projection,
+and receipt failure handling. The client records supplied identifiers without
+message content or an authority claim.
 See the [crate split plan](docs/design/plugin-crates.md) for the next boundaries
 and the package release requirements.
 
@@ -84,7 +88,7 @@ the CLI selects the concrete adapter during construction. The
 [Claude adapter](src/harness/claude.rs) shares one serialized output with MCP
 responses. The [Codex adapter](src/harness/codex.rs) owns the queue-tool schemas,
 argument handling, queue delivery, and live binding publisher. Attention's
-[delivery contracts](src/attention/delivery.rs) belong to the neutral attention
+[delivery contracts](crates/dione-attention/src/delivery.rs) belong to the attention
 module and are consumed by the concrete worker.
 
 The [Oh My Pi adapter](src/harness/oh_my_pi.rs) validates rendered events and
@@ -264,7 +268,7 @@ not imply that all writes have the same durability guarantee.
 | Access requests | [AccessQueue](src/queue.rs) keeps requests in memory and writes `queue.json` through a temporary file and rename. Persistence errors are logged after memory changes. |
 | Codex delivery | [CodexEventQueue](src/codex/queue.rs) adapts the shared [durable owner](crates/dione-durable/src/queue.rs); its [legacy codec](src/codex/queue_codec.rs) preserves pending events, leases, consumers, and bindings in `codex-inbox.json`. The [store](crates/dione-durable/src/store.rs) holds `codex-inbox.lock` for its lifetime to exclude a second owner. |
 | Guild mutes | [MuteStore](src/mute_store.rs) rebuilds state from `guild_mute_receipts.jsonl`. Receipt append precedes snapshot publication. |
-| Attention | [AttentionRuntime](src/attention/runtime.rs) uses `attention/records.json` through the [attention store](src/attention/store.rs), plus `attention-status.json` for health reporting. |
+| Attention | [AttentionRuntime](src/attention/runtime.rs) uses `attention/records.json` through the [attention store](crates/dione-attention/src/store.rs), plus `attention-status.json` for health reporting. |
 | Consent outcomes | [JournalHandle](src/no_rly/journal.rs) serializes writes to `no_rly_journal.jsonl`. Pending consent handles are owned by [HoldQueue](src/no_rly/queue.rs). |
 | Attachments | [Discord queries](src/discord/messaging/queries.rs) download Discord attachments into the state directory's `inbox/`. |
 | Transient Discord state | [SharedState](src/state.rs) holds entity caches, DM indexes, sent-message identities, and permission requests. The [ingress ledger](src/ingress_ledger.rs), delivery buffer, and rate limiter are also process-local. |
@@ -288,8 +292,8 @@ Publishing a new snapshot does not reconstruct those captured values.
 | PluralKit | [Identity resolver](src/pluralkit.rs) resolves supported proxy identity. |
 | Pronouns and nameplates | [Pronoun service](src/pronouns.rs) and [nameplate service](src/nameplates.rs) enrich display metadata when enabled. |
 | Memory MCP providers | [Bell evaluator](src/bell_rings.rs) uses `rmcp` Streamable HTTP clients for configured recall providers. This is separate from Dione's stdio MCP server. |
-| TypeSafe System One | [Attention provider](src/attention/provider.rs) scores eligible ambient text with bounded requests. It does not replace the agent host's generative inference. |
-| Vaelii | [Receipt bridge](src/vaelii.rs) writes provenance for explicit message reads when configured. Sentex locators are handled by [dione-evidence](crates/dione-evidence/src/lib.rs). |
+| TypeSafe System One | [Attention provider](crates/dione-attention/src/provider.rs) scores eligible ambient text with bounded requests. It does not replace the agent host's generative inference. |
+| Vaelii | [Receipt bridge](crates/dione-vaelii/src/lib.rs) writes provenance for explicit message reads when configured. Sentex locators are handled by [dione-evidence](crates/dione-evidence/src/lib.rs). |
 
 [Cargo.toml](Cargo.toml) is the dependency inventory. The main runtime uses
 Tokio, Serenity, serde, ArcSwap, and tracing. Reqwest supports HTTP integrations.

@@ -131,7 +131,7 @@ pub struct Config {
     /// `coordinate` field references (`[coordination.<name>]` in TOML).
     pub coordination: HashMap<String, CoordinationConfig>,
     /// Optional Vaelii receipt writer for explicit message reads.
-    pub vaelii: crate::vaelii::VaeliiConfig,
+    pub vaelii: dione_vaelii::VaeliiConfig,
     /// Inbound memory-bell shadow evaluation.
     pub bell_rings: BellRingsConfig,
     /// Recipient-controlled TypeSafe attention; separate from provider permissions.

@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.95.0]
+
+### Changed
+
+- Extract the optional Vaelii provenance receipt client into `dione-vaelii`.
+  Preserve the complete client and its tests. Keep Discord authorization, message
+  retrieval, exact-target checks, and receipt response handling in Dione.
+
 ## [0.94.0]
 
 ### Changed
