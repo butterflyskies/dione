@@ -462,7 +462,12 @@ After every code change, run these steps in order:
 1. `cargo xfmt` — format all code.
 2. `cargo clippy -- -W clippy::all` — fix all warnings.
 3. `cargo nextest run` — all tests must pass.
-4. `cargo build --release` — confirm release build succeeds.
+4. Build with `cargo build --profile review --workspace --bins --locked`, then
+   launch `target/review/dione --version`.
 5. Commit and push.
+
+Use `sh scripts/pr-ready.sh <base-ref>` for the complete native Linux PR gate.
+It defaults to `review`; pass `release` as its second argument when a full local
+release check is needed. Main CI and tagged distributions still build `release`.
 
 Do **not** consider a change complete until all steps pass.

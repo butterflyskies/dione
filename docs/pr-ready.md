@@ -9,7 +9,8 @@ cannot run this gate.
 1. Fetch the current base with `git fetch origin main`.
 2. Commit the proposed change. The gate rejects an uncommitted worktree so its
    result identifies one reproducible commit.
-3. Run `sh scripts/pr-ready.sh origin/main`.
+3. Run `sh scripts/pr-ready.sh origin/main`, or use the current target branch as
+   the base for a stacked PR. The gate builds and launches the `review` profile.
 4. Review that commit with the group's pinned design principles and review
    lenses linked below. Resolve actionable findings before opening the PR.
 5. Attach the commit ID and command result to the PR. Wait for CI at the same
@@ -17,10 +18,14 @@ cannot run this gate.
    approval of the final commit.
    A member of `lacuna-blinkers` performs the final merge.
 
+The default `review` profile uses thin LTO and 16 codegen units. For an explicit
+full release check, run `sh scripts/pr-ready.sh origin/main release`. Main CI and
+tagged distributions continue to use the full `release` profile.
+
 The command requires Rust 1.98, `cargo-nextest`, `cargo-deny`, and Python 3.9 or newer. It
 fails if a tool is missing. It runs release hygiene, formatting, both Clippy feature
 sets, both Nextest runs, the minimum Rust version check, the public package
-boundary, review receipt tests, dependency policy, a release build, and a binary launch check. CI
+boundary, review receipt tests, dependency policy, the selected build profile, and a binary launch check. CI
 remains the authoritative check because its PR base and build
 environment may differ from the local worktree.
 

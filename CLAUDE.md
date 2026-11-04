@@ -12,7 +12,7 @@ See [AGENTS.md](AGENTS.md) for the full knowledge index.
 
 - **Coding standards**: [CODING_STANDARDS.md](CODING_STANDARDS.md)
 - **Architecture**: [ARCHITECTURE.md](ARCHITECTURE.md)
-- **Task completion**: format → clippy → nextest → release build → commit+push
+- **Task completion**: format → clippy → nextest → review build → commit+push
 
 ## Commands
 
@@ -20,8 +20,14 @@ See [AGENTS.md](AGENTS.md) for the full knowledge index.
 cargo xfmt                     # format (custom import grouping)
 cargo clippy -- -W clippy::all # lint
 cargo nextest run              # test
-cargo build --release          # release build
+cargo build --profile review --workspace --bins --locked # PR build
+cargo build --release          # full distribution build
 ```
+
+For the full native Linux PR gate, run `sh scripts/pr-ready.sh <base-ref>`.
+It defaults to the review profile. Pass `release` as the second argument for an
+explicit full release check. Main CI and tagged distributions retain release
+builds.
 
 ## Serena memories
 
