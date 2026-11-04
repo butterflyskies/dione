@@ -1,17 +1,19 @@
 //! Domain outcomes for Discord publication and typed preparation failures.
 use super::queries::ObservationError;
-use crate::{
-    contradictionary::AutoRewrite,
-    evidence::SentexLocator,
-    no_rly::{
-        consent::{BounceTicket, RejectedHandle},
-        delivery::{DeliveryCause, PostedMessages},
-    },
-    pre_send::PipelineError,
-};
 use serenity::model::id::{ChannelId, MessageId};
 use std::{fmt, io};
 use thiserror::Error;
+use {
+    crate::{
+        contradictionary::AutoRewrite,
+        no_rly::{
+            consent::{BounceTicket, RejectedHandle},
+            delivery::{DeliveryCause, PostedMessages},
+        },
+        pre_send::PipelineError,
+    },
+    dione_evidence::SentexLocator,
+};
 
 /// Delivery-stage outcome and the rewrites applied before that stage.
 #[derive(Debug)]

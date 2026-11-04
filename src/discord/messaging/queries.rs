@@ -1,12 +1,6 @@
 //! Authorized Discord reads, message observations, and attachment downloads.
 
 use super::{MessagingCtx, MessagingError, MessagingErrorKind, check_outbound};
-use crate::{
-    config::LoadedConfig,
-    evidence::{OfferedSentex, parse_offered_sentexes},
-    timestamp::Timestamp,
-    vaelii::{GetMessageReceipt, VaeliiError},
-};
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::Utc;
 use dione_contracts::{
@@ -28,6 +22,14 @@ use serenity::{
 use std::io;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
+use {
+    crate::{
+        config::LoadedConfig,
+        timestamp::Timestamp,
+        vaelii::{GetMessageReceipt, VaeliiError},
+    },
+    dione_evidence::{OfferedSentex, parse_offered_sentexes},
+};
 
 /// A provider observation that cannot satisfy a requested read.
 #[derive(Debug, Error)]

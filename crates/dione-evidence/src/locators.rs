@@ -16,13 +16,22 @@ const MARKER_SUFFIX: &str = "]";
 const FIXED_LOCATOR_TOKEN_LEN: usize = 11;
 
 /// Maximum total number of claim and citation handles accepted on one message.
-pub(crate) const MAX_SENTEX_REFS: usize = 4;
+pub const MAX_SENTEX_REFS: usize = 4;
 /// Maximum UTF-8 bytes occupied by the complete appended v3 marker suffix.
-pub(crate) const MAX_SENTEX_MARKER_BYTES: usize = 124;
+pub const MAX_SENTEX_MARKER_BYTES: usize = 124;
 
 /// An opaque, nonzero handle naming one Vaelii sentex.
+///
+/// The numeric representation cannot be constructed directly by callers.
+///
+/// ```compile_fail
+/// use dione_evidence::VaeliiSentexHandle;
+/// use std::num::NonZeroU64;
+///
+/// let _ = VaeliiSentexHandle(NonZeroU64::new(1).unwrap());
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct VaeliiSentexHandle(pub(super) NonZeroU64);
+pub struct VaeliiSentexHandle(pub(super) NonZeroU64);
 
 impl VaeliiSentexHandle {
     pub(super) fn parse_decimal(value: &str) -> Result<Self, HandleError> {
@@ -118,8 +127,10 @@ impl LocatorVersion {
 
 /// The role a sentex plays in the containing Discord message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SentexRole {
+pub enum SentexRole {
+    /// A claim offered by the message author.
     Claim,
+    /// A citation supplied as a reference rather than an offered claim.
     Citation,
 }
 
@@ -133,29 +144,45 @@ impl SentexRole {
 }
 
 /// Validated, bounded Vaelii handles partitioned by message role.
+///
+/// Callers use checked tool-argument parsing or an empty collection instead of
+/// replacing the role partitions directly.
+///
+/// ```compile_fail
+/// use dione_evidence::SentexHandles;
+///
+/// let _ = SentexHandles {
+///     claims: Vec::new(),
+///     citations: Vec::new(),
+/// };
+/// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct SentexHandles {
+pub struct SentexHandles {
     pub(super) claims: Vec<VaeliiSentexHandle>,
     pub(super) citations: Vec<VaeliiSentexHandle>,
 }
 
 impl SentexHandles {
-    pub(crate) const fn empty() -> Self {
+    /// Creates a valid collection with no claim or citation handles.
+    pub const fn empty() -> Self {
         Self {
             claims: Vec::new(),
             citations: Vec::new(),
         }
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    /// Returns whether both role partitions contain no handles.
+    pub fn is_empty(&self) -> bool {
         self.claims.is_empty() && self.citations.is_empty()
     }
 
-    pub(crate) fn claims(&self) -> &[VaeliiSentexHandle] {
+    /// Borrows claim handles in their original argument order.
+    pub fn claims(&self) -> &[VaeliiSentexHandle] {
         &self.claims
     }
 
-    pub(crate) fn citations(&self) -> &[VaeliiSentexHandle] {
+    /// Borrows citation handles in their original argument order.
+    pub fn citations(&self) -> &[VaeliiSentexHandle] {
         &self.citations
     }
 
@@ -166,12 +193,14 @@ impl SentexHandles {
 
 /// The visible sentex transport emitted by current Dione versions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SentexTransport {
+pub enum SentexTransport {
+    /// Current role-bearing v3 suffixes appended after rewrite hooks complete.
     TerminalVisibleRoleSuffixV3AfterHooks,
 }
 
 impl SentexTransport {
-    pub(crate) const fn as_str(self) -> &'static str {
+    /// Returns the exact transport identifier used in tool and audit metadata.
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::TerminalVisibleRoleSuffixV3AfterHooks => {
                 "terminal-visible-role-suffix-v3-after-hooks"
@@ -182,7 +211,7 @@ impl SentexTransport {
 
 /// A canonical, versioned, role-bearing locator projected to Dione consumers.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SentexLocator {
+pub struct SentexLocator {
     role: SentexRole,
     encoded: String,
 }
@@ -207,11 +236,13 @@ impl SentexLocator {
         Self { role, encoded }
     }
 
-    pub(crate) fn as_str(&self) -> &str {
+    /// Borrows the canonical versioned locator text without visible marker brackets.
+    pub fn as_str(&self) -> &str {
         &self.encoded
     }
 
-    pub(crate) const fn role(&self) -> SentexRole {
+    /// Returns the parsed claim or citation role.
+    pub const fn role(&self) -> SentexRole {
         self.role
     }
 }
@@ -224,7 +255,7 @@ impl fmt::Display for SentexLocator {
 
 /// Whether content ends in unquoted sentex marker syntax, including malformed
 /// or over-limit sequences that the read-side parser intentionally ignores.
-pub(crate) fn has_terminal_sentex_syntax(content: &str) -> bool {
+pub fn has_terminal_sentex_syntax(content: &str) -> bool {
     if !content.ends_with(MARKER_SUFFIX) {
         return false;
     }
@@ -242,7 +273,7 @@ pub(crate) fn has_terminal_sentex_syntax(content: &str) -> bool {
 }
 
 /// Canonical comma-separated role-bearing locators for hook/audit metadata.
-pub(crate) fn locator_metadata(handles: &[VaeliiSentexHandle], role: SentexRole) -> String {
+pub fn locator_metadata(handles: &[VaeliiSentexHandle], role: SentexRole) -> String {
     let mut metadata = String::new();
     for (index, handle) in handles.iter().enumerate() {
         if index > 0 {
@@ -254,7 +285,7 @@ pub(crate) fn locator_metadata(handles: &[VaeliiSentexHandle], role: SentexRole)
 }
 
 /// Appends exact terminal markers after all rewrite hooks have run.
-pub(crate) fn append_markers(content: &str, handles: &SentexHandles) -> String {
+pub fn append_markers(content: &str, handles: &SentexHandles) -> String {
     if handles.is_empty() {
         return content.to_owned();
     }
@@ -285,7 +316,7 @@ pub(crate) fn append_markers(content: &str, handles: &SentexHandles) -> String {
 /// Parses only a complete, bounded sequence of exact terminal sentex locators.
 /// Legacy v1 evidence markers remain readable and project as citations, and
 /// fixed-width v2 markers remain readable alongside current v3 markers.
-pub(crate) fn parse_sentex_locators(content: &str) -> Vec<SentexLocator> {
+pub fn parse_sentex_locators(content: &str) -> Vec<SentexLocator> {
     let mut end = content.len();
     let mut reversed = Vec::new();
     let mut suffix_start = end;

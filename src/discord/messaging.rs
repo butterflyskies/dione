@@ -5,33 +5,6 @@ pub mod queries;
 mod rook_publication;
 pub(crate) mod search;
 mod types;
-use crate::{
-    config::{ChunkMode, DmPolicy, LoadedConfig},
-    contradictionary::{
-        Action, AutoRewrite, AutoRewritten, BlockOutcome, DiaryRecord, append_diary_record,
-    },
-    coordination::{ClaimOutcome, Coordinator},
-    discord::{chunk, chunk_preserving_fences_with_context, events::NotificationEvent},
-    evidence::{
-        SentexHandles, SentexRole, SentexTransport, append_markers, has_terminal_sentex_syntax,
-        locator_metadata, parse_sentex_locators,
-    },
-    gate::OutboundGate,
-    ingress_ledger::{IngressLedger, VerifyResult},
-    no_rly::{
-        consent::{
-            ConsentGate, DeliverError, DeliverReply, DeliveryCause, PostedMessages, RejectedHandle,
-            Released, Rephrased, Replacement, ReplyRequest,
-        },
-        judge::{AlwaysClear, OutboundJudge, Verdict},
-        queue::HoldHandle,
-    },
-    pre_send::{
-        ChannelType as HookChannelType, ConstructId, HookContext, HookDecision, HookName,
-        OutboundDestination, PreSendPipeline,
-    },
-    state::State,
-};
 use camino::Utf8PathBuf;
 pub use rook_publication::{DiscordPublicationInitError, DiscordPublicationProvider};
 use serde::Deserialize;
@@ -50,6 +23,35 @@ pub use types::{
     DeliveryReceipt, DmDeliveryRoute, DmOutcome, LinkPreviews, MessagingError, MessagingErrorKind,
     PartialReceipt, RedirectRestrictedSurface, ReplyOutcome, ReplyPing, Report, TargetError,
     TargetOperation,
+};
+use {
+    crate::{
+        config::{ChunkMode, DmPolicy, LoadedConfig},
+        contradictionary::{
+            Action, AutoRewrite, AutoRewritten, BlockOutcome, DiaryRecord, append_diary_record,
+        },
+        coordination::{ClaimOutcome, Coordinator},
+        discord::{chunk, chunk_preserving_fences_with_context, events::NotificationEvent},
+        gate::OutboundGate,
+        ingress_ledger::{IngressLedger, VerifyResult},
+        no_rly::{
+            consent::{
+                ConsentGate, DeliverError, DeliverReply, DeliveryCause, PostedMessages,
+                RejectedHandle, Released, Rephrased, Replacement, ReplyRequest,
+            },
+            judge::{AlwaysClear, OutboundJudge, Verdict},
+            queue::HoldHandle,
+        },
+        pre_send::{
+            ChannelType as HookChannelType, ConstructId, HookContext, HookDecision, HookName,
+            OutboundDestination, PreSendPipeline,
+        },
+        state::State,
+    },
+    dione_evidence::{
+        SentexHandles, SentexRole, SentexTransport, append_markers, has_terminal_sentex_syntax,
+        locator_metadata, parse_sentex_locators,
+    },
 };
 
 /// Preserve wire bits that the installed SDK's typed message flags would truncate.
@@ -3102,7 +3104,7 @@ mod tests {
         });
         let ctx =
             messaging_ctx(LoadedConfig::from_raw(raw)).with_pre_send_pipeline(Arc::new(pipeline));
-        let handles = crate::evidence::parse_tool_sentex_handles(&json!({
+        let handles = dione_evidence::parse_tool_sentex_handles(&json!({
             "claim_handles": ["34"],
             "citation_handles": ["12"]
         }))
@@ -3329,7 +3331,7 @@ mod tests {
         raw.delivery.text_chunk_limit = 8;
         let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
         let handles =
-            crate::evidence::parse_tool_sentex_handles(&json!({ "claim_handles": ["12"] }))
+            dione_evidence::parse_tool_sentex_handles(&json!({ "claim_handles": ["12"] }))
                 .expect("valid sentex handle");
 
         let response = crate::discord::messaging_wire::reply(
@@ -3363,8 +3365,7 @@ mod tests {
         });
         let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
         let handles =
-            crate::evidence::parse_tool_sentex_handles(&json!({ "claim_handles": ["12"] }))
-                .unwrap();
+            dione_evidence::parse_tool_sentex_handles(&json!({ "claim_handles": ["12"] })).unwrap();
 
         let prepared = prepare_outbound(
             &ctx,
@@ -3389,7 +3390,7 @@ mod tests {
     #[tokio::test]
     async fn sentex_bearing_reply_cannot_enter_held_lifecycle() {
         let ctx = messaging_ctx(blocking_test_config());
-        let handles = crate::evidence::parse_tool_sentex_handles(&json!({
+        let handles = dione_evidence::parse_tool_sentex_handles(&json!({
             "citation_handles": ["12"]
         }))
         .expect("valid sentex handle");
@@ -3747,7 +3748,7 @@ mod tests {
         let mut raw = auto_test_config();
         raw.delivery.evidence_markers_enabled = true;
         let (ctx, requests, server, _dir) = auto_test_ctx_with(raw).await;
-        let handles = crate::evidence::parse_tool_sentex_handles(&json!({
+        let handles = dione_evidence::parse_tool_sentex_handles(&json!({
             "claim_handles": ["34"]
         }))
         .unwrap();
@@ -3796,7 +3797,7 @@ mod tests {
             reason: None,
         });
         let (ctx, requests, server, _dir) = auto_test_ctx_with(raw).await;
-        let handles = crate::evidence::parse_tool_sentex_handles(&json!({
+        let handles = dione_evidence::parse_tool_sentex_handles(&json!({
             "citation_handles": ["12"]
         }))
         .unwrap();
@@ -3906,7 +3907,7 @@ mod tests {
         raw.delivery.text_chunk_limit = 24;
         let (ctx, requests, server, _dir) = auto_test_ctx_with(raw).await;
         let handles =
-            crate::evidence::parse_tool_sentex_handles(&json!({"claim_handles": ["12"]})).unwrap();
+            dione_evidence::parse_tool_sentex_handles(&json!({"claim_handles": ["12"]})).unwrap();
         let preflight = crate::discord::messaging_wire::dm(
             send_dm_with_evidence_and_hook_overrides(
                 &ctx,
@@ -4201,7 +4202,7 @@ mod tests {
             Arc::new(ConsentGate::new(camino::Utf8Path::new("/tmp"))),
             Arc::new(crate::ingress_ledger::IngressLedger::new()),
         );
-        let handles = crate::evidence::parse_tool_sentex_handles(&json!({
+        let handles = dione_evidence::parse_tool_sentex_handles(&json!({
             "claim_handles": ["34"],
             "citation_handles": ["12"]
         }))
@@ -4601,7 +4602,7 @@ mod tests {
         let (http, requests, server) = fake_discord_http().await;
         let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), http)
             .with_pre_send_pipeline(Arc::new(pipeline));
-        let handles = crate::evidence::parse_tool_sentex_handles(
+        let handles = dione_evidence::parse_tool_sentex_handles(
             &json!({"claim_handles":["34"],"citation_handles":["12"]}),
         )
         .unwrap();

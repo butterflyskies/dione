@@ -179,10 +179,10 @@ impl NotificationEvent {
     pub(crate) fn has_offered_evidence(&self) -> bool {
         match self {
             Self::Message(message) => {
-                !crate::evidence::parse_sentex_locators(&message.content).is_empty()
+                !dione_evidence::parse_sentex_locators(&message.content).is_empty()
             }
             Self::MessageEdit { new_content, .. } => {
-                !crate::evidence::parse_sentex_locators(new_content).is_empty()
+                !dione_evidence::parse_sentex_locators(new_content).is_empty()
             }
             Self::Reaction { .. }
             | Self::PermissionResponse { .. }

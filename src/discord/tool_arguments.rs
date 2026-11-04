@@ -1,12 +1,14 @@
 //! Shared Discord tool argument parsing at the MCP boundary.
-use crate::{
-    discord::ids::Snowflake,
-    evidence::{SentexError, SentexHandles, parse_tool_sentex_handles},
-    pre_send::{HookName, PipelineError},
-};
 use serde_json::{Value, json};
 use std::num::ParseIntError;
 use thiserror::Error;
+use {
+    crate::{
+        discord::ids::Snowflake,
+        pre_send::{HookName, PipelineError},
+    },
+    dione_evidence::{SentexError, SentexHandles, parse_tool_sentex_handles},
+};
 
 #[derive(Debug, Error)]
 #[error("{kind}")]
@@ -143,7 +145,7 @@ pub(crate) fn parse_hook_overrides(args: &Value) -> Result<Vec<HookName>, Argume
 pub(crate) fn sentex_handles_schema(role_description: &str) -> Value {
     json!({
         "type": "array",
-        "maxItems": crate::evidence::MAX_SENTEX_REFS,
+        "maxItems": dione_evidence::MAX_SENTEX_REFS,
         "items": {
             "type": "string",
             "pattern": "^[1-9][0-9]*$",
@@ -151,8 +153,8 @@ pub(crate) fn sentex_handles_schema(role_description: &str) -> Value {
         },
         "description": format!(
             "{role_description}. Canonical positive decimal u64 strings naming opaque Vaelii sentex handles; JSON numbers are rejected to avoid precision loss. Dione transports the role and handle in terminal [🔍=v3:<role>:<token>] locators after pre-send hooks, where the token is the minimal-width big-endian handle bytes in unpadded base64url. At most {} claim and citation handles combined and {} aggregate marker bytes. A locator is author-offered metadata, not verification or truth.",
-            crate::evidence::MAX_SENTEX_REFS,
-            crate::evidence::MAX_SENTEX_MARKER_BYTES,
+            dione_evidence::MAX_SENTEX_REFS,
+            dione_evidence::MAX_SENTEX_MARKER_BYTES,
         )
     })
 }

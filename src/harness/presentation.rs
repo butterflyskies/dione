@@ -12,10 +12,10 @@ use {
                 PermissionDecision,
             },
         },
-        evidence::locators::SentexRole,
         timestamp::format_compact,
     },
     dione_attention::delivery::AttentionDirective,
+    dione_evidence::locators::SentexRole,
 };
 
 #[derive(Debug)]

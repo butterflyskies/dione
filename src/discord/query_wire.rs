@@ -1,19 +1,5 @@
 //! MCP response shapes for typed Discord query results.
 
-use crate::{
-    discord::{
-        messaging::{
-            MessagingError, MessagingErrorKind,
-            queries::{
-                DiscordNativeObservation, FetchedMessages, MessageView, NewMessages,
-                PinnedMessages, RetrievedMessage,
-            },
-        },
-        messaging_wire,
-    },
-    evidence::project_offered_sentexes,
-    vaelii::{GetMessageReceipt, VaeliiError},
-};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use camino::Utf8PathBuf;
 use dione_contracts::{
@@ -26,6 +12,22 @@ use dione_contracts::{
 };
 use serde_json::{Value, json};
 use serenity::http::HttpError;
+use {
+    crate::{
+        discord::{
+            messaging::{
+                MessagingError, MessagingErrorKind,
+                queries::{
+                    DiscordNativeObservation, FetchedMessages, MessageView, NewMessages,
+                    PinnedMessages, RetrievedMessage,
+                },
+            },
+            messaging_wire,
+        },
+        vaelii::{GetMessageReceipt, VaeliiError},
+    },
+    dione_evidence::project_offered_sentexes,
+};
 
 /// Projects an exact read with explicit observation and receipt states.
 pub(crate) fn retrieved_v2(

@@ -38,6 +38,10 @@ The public `dione-attention` package owns judgments, source-bound metadata,
 feedback, replay, evaluation, and learning. Dione retains attention admission,
 current source policy, runtime scheduling, and controls. The engine preserves
 its existing Serenity identity types and provider HTTP implementation.
+The public `dione-evidence` package owns terminal sentex syntax, checked handle
+arguments, supplied-author JSON projection, and the Markdown scanner shared by
+chunking, status lint, and filtering. It has no attention or delivery dependency.
+Discord still supplies authenticated authorship and enforces current policy.
 See the [crate split plan](docs/design/plugin-crates.md) for the next boundaries
 and the package release requirements.
 
@@ -278,7 +282,7 @@ Publishing a new snapshot does not reconstruct those captured values.
 | Pronouns and nameplates | [Pronoun service](src/pronouns.rs) and [nameplate service](src/nameplates.rs) enrich display metadata when enabled. |
 | Memory MCP providers | [Bell evaluator](src/bell_rings.rs) uses `rmcp` Streamable HTTP clients for configured recall providers. This is separate from Dione's stdio MCP server. |
 | TypeSafe System One | [Attention provider](src/attention/provider.rs) scores eligible ambient text with bounded requests. It does not replace the agent host's generative inference. |
-| Vaelii | [Receipt bridge](src/vaelii.rs) writes provenance for explicit message reads when configured. Sentex locators are handled by [evidence.rs](src/evidence.rs). |
+| Vaelii | [Receipt bridge](src/vaelii.rs) writes provenance for explicit message reads when configured. Sentex locators are handled by [dione-evidence](crates/dione-evidence/src/lib.rs). |
 
 [Cargo.toml](Cargo.toml) is the dependency inventory. The main runtime uses
 Tokio, Serenity, serde, ArcSwap, and tracing. Reqwest supports HTTP integrations.
