@@ -12,7 +12,7 @@ use super::{
     },
 };
 use crate::{
-    config::load_config,
+    config::{EvidenceMarkerVersion, load_config},
     evidence::SentexHandles,
     ingress_ledger::IngressLedger,
     mcp::tool_registry::{
@@ -94,7 +94,7 @@ impl ReplyServices {
 
 const DESCRIPTION: &str = "Send a reply to a Discord channel or DM. A contradictionary block-tier match does not send: the message is held under a single-use handle and the error names the matched pattern(s) plus the handle. Act on it with no_rly (send verbatim), rephrase (replacement, re-checked), or ignore it to let it expire. An auto-tier match is rewritten to its replacement and sent; the result lists each rewrite under auto_rewrites (`auto: <match> → <replace>`).";
 
-pub(crate) fn definition(evidence_markers_enabled: bool) -> Value {
+pub(crate) fn definition(evidence_markers_enabled: bool, version: EvidenceMarkerVersion) -> Value {
     let mut definition = crate::mcp::protocol::tool(
         "reply",
         DESCRIPTION,
@@ -108,8 +108,8 @@ pub(crate) fn definition(evidence_markers_enabled: bool) -> Value {
                 "reply_to_message_id": { "type": "string", "description": "Optional message ID to reply to" },
                 "suppress_ping": { "type": "boolean", "description": "When true, the reply will not ping the user being replied to (default: false)" },
                 "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for this send. Every bypass is audited. This does not bypass the contradictionary; use the no_rly(handle) tool for that." },
-                "claim_handles": sentex_handles_schema("Claims asserted by this message"),
-                "citation_handles": sentex_handles_schema("Claims cited as support or context")
+                "claim_handles": sentex_handles_schema("Claims asserted by this message", version),
+                "citation_handles": sentex_handles_schema("Claims cited as support or context", version)
             }
         }),
     );
@@ -127,7 +127,7 @@ pub(crate) fn registration(services: Arc<ReplyServices>) -> Result<RegisteredToo
         ToolDefinition::new(
             ToolName::new("reply")?,
             DESCRIPTION,
-            definition(true)["inputSchema"].clone(),
+            definition(true, EvidenceMarkerVersion::default())["inputSchema"].clone(),
         ),
         services,
     )
@@ -140,15 +140,22 @@ impl McpTool for ReplyServices {
         _definition: &ToolDefinition,
         context: ToolDiscoveryContext,
     ) -> Value {
-        self::definition(context.evidence_markers_enabled)
+        self::definition(
+            context.evidence_markers_enabled,
+            context.evidence_marker_version,
+        )
     }
     fn call<'a>(&'a self, arguments: &'a Value) -> BoxFuture<'a, Result<Value, ToolCallError>> {
         Box::pin(async move {
             let config = load_config(&self.state_dir);
-            let request = ReplyRequest::parse(arguments, config.delivery.evidence_markers_enabled)
-                .map_err(|message| ToolCallError {
-                    kind: ToolCallErrorKind::OwnerInput(Box::new(message)),
-                })?;
+            let request = ReplyRequest::parse(
+                arguments,
+                config.delivery.evidence_markers_enabled,
+                config.delivery.evidence_marker_version,
+            )
+            .map_err(|message| ToolCallError {
+                kind: ToolCallErrorKind::OwnerInput(Box::new(message)),
+            })?;
             let ctx = self.messaging_ctx(config);
             Ok(messaging_wire::reply(
                 reply_with_evidence_and_hook_overrides(
@@ -179,7 +186,11 @@ struct ReplyRequest<'a> {
     handles: SentexHandles,
 }
 impl<'a> ReplyRequest<'a> {
-    fn parse(arguments: &'a Value, evidence_enabled: bool) -> Result<Self, ArgumentError> {
+    fn parse(
+        arguments: &'a Value,
+        evidence_enabled: bool,
+        version: EvidenceMarkerVersion,
+    ) -> Result<Self, ArgumentError> {
         let channel = parse_id(arguments, "channel_id")?.channel();
         let content = arguments
             .get("content")
@@ -194,7 +205,7 @@ impl<'a> ReplyRequest<'a> {
                 .unwrap_or(false),
         );
         let hooks = parse_hook_overrides(arguments)?;
-        let handles = parse_enabled_sentex_handles(arguments, evidence_enabled)?;
+        let handles = parse_enabled_sentex_handles(arguments, evidence_enabled, version)?;
         let previews = LinkPreviews::from_suppressed(
             parse_optional_bool(arguments, "suppress_embeds")?.unwrap_or(false),
         );
@@ -217,10 +228,34 @@ mod tests {
     use std::error::Error;
 
     #[test]
+    fn selected_evidence_versions_do_not_bypass_the_disabled_handle_gate() {
+        for version in [EvidenceMarkerVersion::V2, EvidenceMarkerVersion::V3] {
+            for field in ["claim_handles", "citation_handles"] {
+                let args = json!({"channel_id":"42", "content":"text", field:["12"]});
+                assert!(ReplyRequest::parse(&args, true, version).is_ok());
+                let error = ReplyRequest::parse(&args, false, version).err().unwrap();
+                assert_eq!(
+                    error.to_string(),
+                    "claim_handles and citation_handles require evidence_markers_enabled"
+                );
+            }
+            let args = json!({"channel_id":"42", "content":"text"});
+            assert!(
+                ReplyRequest::parse(&args, false, version)
+                    .unwrap()
+                    .handles
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
     fn reply_evidence_errors_preserve_typed_parser_cause() {
         let invalid =
             json!({"channel_id":"42", "content":"text", "claim_handles":["18446744073709551616"]});
-        let error = ReplyRequest::parse(&invalid, true).err().unwrap();
+        let error = ReplyRequest::parse(&invalid, true, EvidenceMarkerVersion::V3)
+            .err()
+            .unwrap();
         assert_eq!(
             error.to_string(),
             "claim_handles must contain canonical positive decimal u64 strings"
@@ -243,9 +278,13 @@ mod tests {
             "out-of-range numeric cause must survive the reply boundary"
         );
         let valid = json!({"channel_id":"42", "content":"text", "claim_handles":["18446744073709551615"], "citation_handles":["1"]});
-        let request = ReplyRequest::parse(&valid, true).unwrap();
+        let request = ReplyRequest::parse(&valid, true, EvidenceMarkerVersion::V3).unwrap();
         assert_eq!(
-            crate::evidence::append_markers(request.content, &request.handles),
+            crate::evidence::append_markers(
+                request.content,
+                &request.handles,
+                EvidenceMarkerVersion::V3
+            ),
             "text [🔍=v3:claim:__________8] [🔍=v3:citation:AQ]"
         );
     }
@@ -253,7 +292,9 @@ mod tests {
     #[test]
     fn reply_argument_errors_retain_causes_and_historical_optional_behavior() {
         let bad = json!({"channel_id":"bad", "content":"text"});
-        let error = ReplyRequest::parse(&bad, true).err().unwrap();
+        let error = ReplyRequest::parse(&bad, true, EvidenceMarkerVersion::V3)
+            .err()
+            .unwrap();
         assert_eq!(error.to_string(), "invalid channel_id: not a valid u64");
         assert!(
             error
@@ -264,7 +305,9 @@ mod tests {
                 .is::<std::num::ParseIntError>()
         );
         let bad_hook = json!({"channel_id":"42", "content":"text", "no_rly_hooks":["bad hook"]});
-        let hook_error = ReplyRequest::parse(&bad_hook, true).err().unwrap();
+        let hook_error = ReplyRequest::parse(&bad_hook, true, EvidenceMarkerVersion::V3)
+            .err()
+            .unwrap();
         assert_eq!(
             hook_error.to_string(),
             "invalid pre-send hook name `bad hook`"
@@ -281,7 +324,7 @@ mod tests {
             "invalid pre-send hook name `bad hook`"
         );
         let good = json!({"channel_id":"42", "content":"text", "reply_to_message_id":{}, "suppress_ping":"legacy ignored", "suppress_embeds":true, "no_rly_hooks":["valid-hook"]});
-        let parsed = ReplyRequest::parse(&good, true).unwrap();
+        let parsed = ReplyRequest::parse(&good, true, EvidenceMarkerVersion::V3).unwrap();
         assert_eq!(parsed.channel, ChannelId::new(42));
         assert_eq!(parsed.content, "text");
         assert_eq!(parsed.reply_to, None);
@@ -289,7 +332,7 @@ mod tests {
         assert_eq!(parsed.hooks[0].as_str(), "valid-hook");
         let bad_bool = json!({"channel_id":42,"content":"text","suppress_embeds":"true"});
         assert_eq!(
-            ReplyRequest::parse(&bad_bool, true)
+            ReplyRequest::parse(&bad_bool, true, EvidenceMarkerVersion::V3)
                 .err()
                 .unwrap()
                 .to_string(),

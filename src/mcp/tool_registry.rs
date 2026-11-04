@@ -1,6 +1,7 @@
 //! Immutable MCP adapter registrations, validated before requests are served.
 
 use crate::{
+    config::EvidenceMarkerVersion,
     harness::{HarnessConnection, TOOL_NAMES},
     mcp::{harness_wire::PRIVATE_CONTROL_TOOLS, protocol::tools_list},
 };
@@ -79,6 +80,7 @@ pub(crate) enum ToolExposure {
 #[derive(Clone, Copy)]
 pub(crate) struct ToolDiscoveryContext {
     pub(crate) evidence_markers_enabled: bool,
+    pub(crate) evidence_marker_version: EvidenceMarkerVersion,
 }
 
 pub(crate) trait McpTool: Send + Sync {
@@ -167,7 +169,7 @@ impl ToolRegistry {
         harness: &HarnessConnection,
         registrations: Vec<RegisteredTool>,
     ) -> Result<Self, RegistrationError> {
-        let definitions = tools_list(harness, true);
+        let definitions = tools_list(harness, true, EvidenceMarkerVersion::default());
         let mut reserved: BTreeSet<&str> = TOOL_NAMES.iter().copied().collect();
         if let Some(tools) = definitions["tools"].as_array() {
             reserved.extend(tools.iter().filter_map(|tool| tool["name"].as_str()));

@@ -13,8 +13,8 @@ use crate::{
     coordination::{ClaimOutcome, Coordinator},
     discord::{chunk, chunk_preserving_fences_with_context, events::NotificationEvent},
     evidence::{
-        SentexHandles, SentexRole, SentexTransport, append_markers, has_terminal_sentex_syntax,
-        locator_metadata, parse_sentex_locators,
+        SentexHandles, SentexRole, append_markers, has_terminal_sentex_syntax, locator_metadata,
+        parse_sentex_locators,
     },
     gate::OutboundGate,
     ingress_ledger::{IngressLedger, VerifyResult},
@@ -571,6 +571,7 @@ async fn prepare_outbound(
     ctx: &MessagingCtx,
     draft: OutboundDraft<'_>,
 ) -> Result<PreparedOutbound, MessagingError> {
+    let version = ctx.config.delivery.evidence_marker_version;
     reject_raw_sentex_locators(draft.text)?;
     let disabled_handles = SentexHandles::empty();
     let sentex_handles = if ctx.config.delivery.evidence_markers_enabled {
@@ -614,7 +615,7 @@ async fn prepare_outbound(
     let Some((pipeline, no_rly)) = prepared_pipeline else {
         return Ok(PreparedOutbound {
             destination: draft.destination,
-            text: append_markers(text, sentex_handles),
+            text: append_markers(text, sentex_handles, version),
             reply_to: draft.reply_to,
             surface: draft.pre_send.surface,
             auto,
@@ -648,18 +649,16 @@ async fn prepare_outbound(
     .with_reply_to(draft.reply_to)
     .with_metadata("outbound_surface", draft.pre_send.surface.as_str());
     if !sentex_handles.is_empty() {
-        let claim_locators = locator_metadata(sentex_handles.claims(), SentexRole::Claim);
-        let citation_locators = locator_metadata(sentex_handles.citations(), SentexRole::Citation);
+        let claim_locators = locator_metadata(sentex_handles.claims(), SentexRole::Claim, version);
+        let citation_locators =
+            locator_metadata(sentex_handles.citations(), SentexRole::Citation, version);
         if !claim_locators.is_empty() {
             hook_context = hook_context.with_metadata("claim_locators", claim_locators);
         }
         if !citation_locators.is_empty() {
             hook_context = hook_context.with_metadata("citation_locators", citation_locators);
         }
-        hook_context = hook_context.with_metadata(
-            "sentex_transport",
-            SentexTransport::TerminalVisibleRoleSuffixV3AfterHooks.as_str(),
-        );
+        hook_context = hook_context.with_metadata("sentex_transport", version.transport());
     }
     let outcome =
         match tokio::task::spawn_blocking(move || pipeline.run(&hook_context, &no_rly)).await {
@@ -712,7 +711,7 @@ async fn prepare_outbound(
     reject_raw_sentex_locators(final_text)?;
     Ok(PreparedOutbound {
         destination,
-        text: append_markers(final_text, sentex_handles),
+        text: append_markers(final_text, sentex_handles, version),
         reply_to,
         surface: draft.pre_send.surface,
         auto,
@@ -1978,7 +1977,7 @@ fn parse_reaction_type(
 mod tests {
     use super::*;
     use crate::{
-        config::{ChannelConfig, Config},
+        config::{ChannelConfig, Config, EvidenceMarkerVersion},
         contradictionary::{Action, Entry, MatchMode},
         mute_store::{GuildMute, MuteState, MuteStore},
         pre_send::{
@@ -3081,80 +3080,137 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ordered_sentex_metadata_and_transport_reach_hooks_and_final_audit_context() {
-        let hook_context = Arc::new(std::sync::Mutex::new(None));
-        let audit_context = Arc::new(std::sync::Mutex::new(None));
-        let pipeline = PreSendPipeline::new(vec![Box::new(MetadataRewriteHook(Arc::clone(
-            &hook_context,
-        )))])
-        .unwrap()
-        .with_mode(PipelineMode::Enforce)
-        .with_sinks(
-            Box::new(QuietFeedbackSink),
-            Box::new(ContextAuditSink(Arc::clone(&audit_context))),
-            SinkFailurePolicy::FailClosed,
-        );
-        let mut raw = Config::default();
-        raw.delivery.evidence_markers_enabled = true;
-        raw.channels.push(ChannelConfig {
-            id: "42".into(),
-            ..Default::default()
-        });
-        let ctx =
-            messaging_ctx(LoadedConfig::from_raw(raw)).with_pre_send_pipeline(Arc::new(pipeline));
-        let handles = crate::evidence::parse_tool_sentex_handles(&json!({
-            "claim_handles": ["34"],
-            "citation_handles": ["12"]
-        }))
-        .unwrap();
-
-        let prepared = prepare_outbound(
-            &ctx,
-            OutboundDraft::channel(
-                ChannelId::new(42),
-                "original",
-                None,
-                PreSendOptions {
-                    surface: OutboundSurface::Reply,
-                    bypasses: &[],
-                },
+    async fn selected_evidence_versions_reach_no_hook_reply_and_dm_with_disabled_and_raw_guards() {
+        for (version, expected) in [
+            (EvidenceMarkerVersion::V2, "text [🔍=v2:claim:AAAAAAAAAAw]"),
+            (EvidenceMarkerVersion::V3, "text [🔍=v3:claim:DA]"),
+        ] {
+            let handles = crate::evidence::parse_tool_sentex_handles(
+                &json!({"claim_handles":["12"]}),
+                version,
             )
-            .with_sentex_handles(&handles),
-        )
-        .await
-        .map_err(crate::discord::messaging_wire::error)
-        .unwrap();
+            .unwrap();
+            for enabled in [false, true] {
+                let mut raw = Config::default();
+                raw.delivery.evidence_markers_enabled = enabled;
+                raw.delivery.evidence_marker_version = version;
+                raw.channels.push(ChannelConfig {
+                    id: "42".into(),
+                    ..Default::default()
+                });
+                let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
+                for surface in [OutboundSurface::Reply, OutboundSurface::SendDm] {
+                    let draft = OutboundDraft::channel(
+                        ChannelId::new(42),
+                        "text",
+                        None,
+                        PreSendOptions {
+                            surface,
+                            bypasses: &[],
+                        },
+                    )
+                    .with_sentex_handles(&handles);
+                    let prepared = prepare_outbound(&ctx, draft).await.unwrap();
+                    assert_eq!(prepared.text, if enabled { expected } else { "text" });
+                    for raw_tag in [
+                        "raw [🔍=v1:AAAAAAAAAAw]",
+                        "raw [🔍=v2:claim:AAAAAAAAAAw]",
+                        "raw [🔍=v3:claim:DA]",
+                    ] {
+                        let draft = OutboundDraft::channel(
+                            ChannelId::new(42),
+                            raw_tag,
+                            None,
+                            PreSendOptions {
+                                surface,
+                                bypasses: &[],
+                            },
+                        );
+                        assert!(prepare_outbound(&ctx, draft).await.is_err());
+                    }
+                }
+            }
+        }
+    }
 
-        let hook_context = hook_context.lock().unwrap().clone().unwrap();
-        assert_eq!(hook_context.text(), "original");
-        assert_eq!(hook_context.metadata("claim_locators"), Some("v3:claim:Ig"));
-        assert_eq!(
-            hook_context.metadata("citation_locators"),
-            Some("v3:citation:DA")
-        );
-        assert_eq!(
-            hook_context.metadata("sentex_transport"),
-            Some("terminal-visible-role-suffix-v3-after-hooks")
-        );
+    #[tokio::test]
+    async fn ordered_sentex_metadata_and_transport_reach_hooks_and_final_audit_context() {
+        for (version, claim, citation, transport, suffix) in [
+            (
+                EvidenceMarkerVersion::V2,
+                "v2:claim:AAAAAAAAACI",
+                "v2:citation:AAAAAAAAAAw",
+                "terminal-visible-role-suffix-v2-after-hooks",
+                "rewritten [🔍=v2:claim:AAAAAAAAACI] [🔍=v2:citation:AAAAAAAAAAw]",
+            ),
+            (
+                EvidenceMarkerVersion::V3,
+                "v3:claim:Ig",
+                "v3:citation:DA",
+                "terminal-visible-role-suffix-v3-after-hooks",
+                "rewritten [🔍=v3:claim:Ig] [🔍=v3:citation:DA]",
+            ),
+        ] {
+            let hook_context = Arc::new(std::sync::Mutex::new(None));
+            let audit_context = Arc::new(std::sync::Mutex::new(None));
+            let pipeline = PreSendPipeline::new(vec![Box::new(MetadataRewriteHook(Arc::clone(
+                &hook_context,
+            )))])
+            .unwrap()
+            .with_mode(PipelineMode::Enforce)
+            .with_sinks(
+                Box::new(QuietFeedbackSink),
+                Box::new(ContextAuditSink(Arc::clone(&audit_context))),
+                SinkFailurePolicy::FailClosed,
+            );
+            let mut raw = Config::default();
+            raw.delivery.evidence_markers_enabled = true;
+            raw.delivery.evidence_marker_version = version;
+            raw.channels.push(ChannelConfig {
+                id: "42".into(),
+                ..Default::default()
+            });
+            let ctx = messaging_ctx(LoadedConfig::from_raw(raw))
+                .with_pre_send_pipeline(Arc::new(pipeline));
+            let handles = crate::evidence::parse_tool_sentex_handles(
+                &json!({
+                    "claim_handles": ["34"],
+                    "citation_handles": ["12"]
+                }),
+                version,
+            )
+            .unwrap();
 
-        let audit_context = audit_context.lock().unwrap().clone().unwrap();
-        assert_eq!(audit_context.text(), "rewritten");
-        assert_eq!(
-            audit_context.metadata("claim_locators"),
-            Some("v3:claim:Ig")
-        );
-        assert_eq!(
-            audit_context.metadata("citation_locators"),
-            Some("v3:citation:DA")
-        );
-        assert_eq!(
-            audit_context.metadata("sentex_transport"),
-            Some(SentexTransport::TerminalVisibleRoleSuffixV3AfterHooks.as_str())
-        );
-        assert_eq!(
-            prepared.text,
-            "rewritten [🔍=v3:claim:Ig] [🔍=v3:citation:DA]"
-        );
+            let prepared = prepare_outbound(
+                &ctx,
+                OutboundDraft::channel(
+                    ChannelId::new(42),
+                    "original",
+                    None,
+                    PreSendOptions {
+                        surface: OutboundSurface::Reply,
+                        bypasses: &[],
+                    },
+                )
+                .with_sentex_handles(&handles),
+            )
+            .await
+            .map_err(crate::discord::messaging_wire::error)
+            .unwrap();
+
+            let hook_context = hook_context.lock().unwrap().clone().unwrap();
+            assert_eq!(hook_context.text(), "original");
+            assert_eq!(hook_context.metadata("claim_locators"), Some(claim));
+            assert_eq!(hook_context.metadata("citation_locators"), Some(citation));
+            assert_eq!(hook_context.metadata("sentex_transport"), Some(transport));
+
+            let audit_context = audit_context.lock().unwrap().clone().unwrap();
+            assert_eq!(audit_context.text(), "rewritten");
+            assert_eq!(audit_context.metadata("claim_locators"), Some(claim));
+            assert_eq!(audit_context.metadata("citation_locators"), Some(citation));
+            assert_eq!(audit_context.metadata("sentex_transport"), Some(transport));
+            assert_eq!(prepared.text, suffix);
+        }
     }
 
     #[tokio::test]
@@ -3328,9 +3384,11 @@ mod tests {
         });
         raw.delivery.text_chunk_limit = 8;
         let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
-        let handles =
-            crate::evidence::parse_tool_sentex_handles(&json!({ "claim_handles": ["12"] }))
-                .expect("valid sentex handle");
+        let handles = crate::evidence::parse_tool_sentex_handles(
+            &json!({ "claim_handles": ["12"] }),
+            EvidenceMarkerVersion::V3,
+        )
+        .expect("valid sentex handle");
 
         let response = crate::discord::messaging_wire::reply(
             reply_with_evidence_and_hook_overrides(
@@ -3362,9 +3420,11 @@ mod tests {
             ..Default::default()
         });
         let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
-        let handles =
-            crate::evidence::parse_tool_sentex_handles(&json!({ "claim_handles": ["12"] }))
-                .unwrap();
+        let handles = crate::evidence::parse_tool_sentex_handles(
+            &json!({ "claim_handles": ["12"] }),
+            EvidenceMarkerVersion::V3,
+        )
+        .unwrap();
 
         let prepared = prepare_outbound(
             &ctx,
@@ -3389,9 +3449,12 @@ mod tests {
     #[tokio::test]
     async fn sentex_bearing_reply_cannot_enter_held_lifecycle() {
         let ctx = messaging_ctx(blocking_test_config());
-        let handles = crate::evidence::parse_tool_sentex_handles(&json!({
-            "citation_handles": ["12"]
-        }))
+        let handles = crate::evidence::parse_tool_sentex_handles(
+            &json!({
+                "citation_handles": ["12"]
+            }),
+            EvidenceMarkerVersion::V3,
+        )
         .expect("valid sentex handle");
 
         let response = crate::discord::messaging_wire::reply(
@@ -3744,41 +3807,58 @@ mod tests {
     /// never reaches inside one, and a sentex-bearing reply still sends.
     #[tokio::test]
     async fn auto_rewrite_leaves_evidence_markers_intact() {
-        let mut raw = auto_test_config();
-        raw.delivery.evidence_markers_enabled = true;
-        let (ctx, requests, server, _dir) = auto_test_ctx_with(raw).await;
-        let handles = crate::evidence::parse_tool_sentex_handles(&json!({
-            "claim_handles": ["34"]
-        }))
-        .unwrap();
-
-        let response = crate::discord::messaging_wire::reply(
-            reply_with_evidence_and_hook_overrides(
-                &ctx,
-                ChannelId::new(42),
-                "we utilize it",
-                None,
-                ReplyToolOptions {
-                    suppress_ping: ReplyPing::Allow,
-                    suppress_embeds: LinkPreviews::Allow,
-                    no_rly_hooks: &[],
-                    sentex_handles: &handles,
-                },
+        for (version, claim, citation, expected) in [
+            (
+                EvidenceMarkerVersion::V2,
+                "v2:claim:AAAAAAAAACI",
+                "v2:citation:AAAAAAAAAAw",
+                "we use it [🔍=v2:claim:AAAAAAAAACI] [🔍=v2:citation:AAAAAAAAAAw]",
+            ),
+            (
+                EvidenceMarkerVersion::V3,
+                "v3:claim:Ig",
+                "v3:citation:DA",
+                "we use it [🔍=v3:claim:Ig] [🔍=v3:citation:DA]",
+            ),
+        ] {
+            let mut raw = auto_test_config();
+            raw.delivery.evidence_markers_enabled = true;
+            raw.delivery.evidence_marker_version = version;
+            let (ctx, requests, server, _dir) = auto_test_ctx_with(raw).await;
+            let handles = crate::evidence::parse_tool_sentex_handles(
+                &json!({
+                    "claim_handles": ["34"], "citation_handles": ["12"]
+                }),
+                version,
             )
-            .await,
-        );
+            .unwrap();
 
-        assert_eq!(response["ok"], true, "{response}");
-        assert_eq!(
-            posted_contents(&requests),
-            vec![append_markers("we use it", &handles)]
-        );
-        assert_eq!(
-            response["auto_rewrites"],
-            json!(["auto: utilize \u{2192} use"])
-        );
-        assert!(response["claim_locators"].is_array(), "{response}");
-        server.abort();
+            let response = crate::discord::messaging_wire::reply(
+                reply_with_evidence_and_hook_overrides(
+                    &ctx,
+                    ChannelId::new(42),
+                    "we utilize it",
+                    None,
+                    ReplyToolOptions {
+                        suppress_ping: ReplyPing::Allow,
+                        suppress_embeds: LinkPreviews::Allow,
+                        no_rly_hooks: &[],
+                        sentex_handles: &handles,
+                    },
+                )
+                .await,
+            );
+
+            assert_eq!(response["ok"], true, "{response}");
+            assert_eq!(posted_contents(&requests), vec![expected]);
+            assert_eq!(
+                response["auto_rewrites"],
+                json!(["auto: utilize \u{2192} use"])
+            );
+            assert_eq!(response["claim_locators"], json!([claim]));
+            assert_eq!(response["citation_locators"], json!([citation]));
+            server.abort();
+        }
     }
 
     /// An `auto` pattern that names a marker's own token (`citation`) never
@@ -3796,9 +3876,12 @@ mod tests {
             reason: None,
         });
         let (ctx, requests, server, _dir) = auto_test_ctx_with(raw).await;
-        let handles = crate::evidence::parse_tool_sentex_handles(&json!({
-            "citation_handles": ["12"]
-        }))
+        let handles = crate::evidence::parse_tool_sentex_handles(
+            &json!({
+                "citation_handles": ["12"]
+            }),
+            EvidenceMarkerVersion::V3,
+        )
         .unwrap();
 
         let response = crate::discord::messaging_wire::reply(
@@ -3905,8 +3988,11 @@ mod tests {
         raw.delivery.evidence_markers_enabled = true;
         raw.delivery.text_chunk_limit = 24;
         let (ctx, requests, server, _dir) = auto_test_ctx_with(raw).await;
-        let handles =
-            crate::evidence::parse_tool_sentex_handles(&json!({"claim_handles": ["12"]})).unwrap();
+        let handles = crate::evidence::parse_tool_sentex_handles(
+            &json!({"claim_handles": ["12"]}),
+            EvidenceMarkerVersion::V3,
+        )
+        .unwrap();
         let preflight = crate::discord::messaging_wire::dm(
             send_dm_with_evidence_and_hook_overrides(
                 &ctx,
@@ -4192,60 +4278,84 @@ mod tests {
 
     #[tokio::test]
     async fn first_contact_dm_branch_preserves_role_separated_sentex_receipt() {
-        let (http, requests, server) = fake_discord_http().await;
-        let ctx = MessagingCtx::new(
-            http,
-            new_state(),
-            Arc::new(test_config()),
-            "/tmp".into(),
-            Arc::new(ConsentGate::new(camino::Utf8Path::new("/tmp"))),
-            Arc::new(crate::ingress_ledger::IngressLedger::new()),
-        );
-        let handles = crate::evidence::parse_tool_sentex_handles(&json!({
-            "claim_handles": ["34"],
-            "citation_handles": ["12"]
-        }))
-        .expect("valid sentex handles");
-
-        let result = crate::discord::messaging_wire::dm(
-            send_dm_with_evidence_and_hook_overrides(
-                &ctx,
-                UserId::new(77),
-                "grounded",
-                &[],
-                &handles,
-                LinkPreviews::Allow,
+        for (version, claim, citation, expected) in [
+            (
+                EvidenceMarkerVersion::V2,
+                "v2:claim:AAAAAAAAACI",
+                "v2:citation:AAAAAAAAAAw",
+                "grounded [🔍=v2:claim:AAAAAAAAACI] [🔍=v2:citation:AAAAAAAAAAw]",
+            ),
+            (
+                EvidenceMarkerVersion::V3,
+                "v3:claim:Ig",
+                "v3:citation:DA",
+                "grounded [🔍=v3:claim:Ig] [🔍=v3:citation:DA]",
+            ),
+        ] {
+            let (http, requests, server) = fake_discord_http().await;
+            let mut raw = Config::default();
+            raw.delivery.evidence_markers_enabled = true;
+            raw.delivery.evidence_marker_version = version;
+            let config = LoadedConfig::from_raw(raw);
+            let dir = tempfile::tempdir().unwrap();
+            let state_dir = camino::Utf8Path::from_path(dir.path()).unwrap();
+            let ctx = MessagingCtx::new(
+                http,
+                new_state(),
+                Arc::new(config),
+                state_dir.to_owned(),
+                Arc::new(ConsentGate::new(state_dir)),
+                Arc::new(crate::ingress_ledger::IngressLedger::new()),
+            );
+            let handles = crate::evidence::parse_tool_sentex_handles(
+                &json!({
+                    "claim_handles": ["34"],
+                    "citation_handles": ["12"]
+                }),
+                version,
             )
-            .await,
-        );
-        server.abort();
+            .expect("valid sentex handles");
 
-        assert_eq!(
-            result,
-            json!({
-                "ok": true,
-                "channel_id": "4242",
-                "message_ids": [9001],
-                "claim_locators": ["v3:claim:Ig"],
-                "citation_locators": ["v3:citation:DA"],
-            })
-        );
-        let requests = requests.lock().expect("request capture lock");
-        assert!(
-            requests
+            let result = crate::discord::messaging_wire::dm(
+                send_dm_with_evidence_and_hook_overrides(
+                    &ctx,
+                    UserId::new(77),
+                    "grounded",
+                    &[],
+                    &handles,
+                    LinkPreviews::Allow,
+                )
+                .await,
+            );
+            server.abort();
+
+            assert_eq!(
+                result,
+                json!({
+                    "ok": true,
+                    "channel_id": "4242",
+                    "message_ids": [9001],
+                    "claim_locators": [claim],
+                    "citation_locators": [citation],
+                })
+            );
+            let requests = requests.lock().expect("request capture lock");
+            assert!(
+                requests
+                    .iter()
+                    .any(|(path, _)| path.ends_with("/users/@me/channels")),
+                "the first-contact branch must create the DM channel"
+            );
+            let sent_body = requests
                 .iter()
-                .any(|(path, _)| path.ends_with("/users/@me/channels")),
-            "the first-contact branch must create the DM channel"
-        );
-        let sent_body = requests
-            .iter()
-            .find(|(path, _)| path.ends_with("/messages"))
-            .map(|(_, body)| body)
-            .expect("the first-contact branch must send the prepared message");
-        assert_eq!(
-            serde_json::from_str::<Value>(sent_body).unwrap()["content"],
-            "grounded [🔍=v3:claim:Ig] [🔍=v3:citation:DA]"
-        );
+                .find(|(path, _)| path.ends_with("/messages"))
+                .map(|(_, body)| body)
+                .expect("the first-contact branch must send the prepared message");
+            assert_eq!(
+                serde_json::from_str::<Value>(sent_body).unwrap()["content"],
+                expected
+            );
+        }
     }
 
     // ── Contradictionary self-react notifications ─────────────────────────
@@ -4603,6 +4713,7 @@ mod tests {
             .with_pre_send_pipeline(Arc::new(pipeline));
         let handles = crate::evidence::parse_tool_sentex_handles(
             &json!({"claim_handles":["34"],"citation_handles":["12"]}),
+            EvidenceMarkerVersion::V3,
         )
         .unwrap();
         let result = send_dm_with_evidence_and_hook_overrides(

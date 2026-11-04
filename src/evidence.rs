@@ -1,5 +1,6 @@
 //! Discord author binding and tool-wire projection for sentex locators.
 
+use crate::config::EvidenceMarkerVersion;
 mod error;
 use error::{HandleError, HandleErrorKind, SentexField};
 pub(crate) use error::{SentexError, SentexErrorKind};
@@ -17,7 +18,10 @@ pub(crate) struct OfferedSentex {
 
 /// Parses the role-separated `claim_handles` and `citation_handles` arguments.
 /// The removed `evidence_keys` name is rejected rather than silently ignored.
-pub(crate) fn parse_tool_sentex_handles(args: &Value) -> Result<SentexHandles, SentexError> {
+pub(crate) fn parse_tool_sentex_handles(
+    args: &Value,
+    version: EvidenceMarkerVersion,
+) -> Result<SentexHandles, SentexError> {
     if args.get("evidence_keys").is_some() {
         return Err(SentexError {
             kind: SentexErrorKind::RemovedLegacyField,
@@ -40,7 +44,7 @@ pub(crate) fn parse_tool_sentex_handles(args: &Value) -> Result<SentexHandles, S
         claims: parse_handle_array(claims, SentexField::Claims)?,
         citations: parse_handle_array(citations, SentexField::Citations)?,
     };
-    validate_marker_bytes(&handles)?;
+    validate_marker_bytes(&handles, version)?;
     Ok(handles)
 }
 fn handle_array(args: &Value, field: SentexField) -> Result<&[Value], SentexError> {
@@ -107,6 +111,67 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::num::NonZeroU64;
+
+    #[test]
+    fn selected_evidence_versions_preserve_roles_tokens_metadata_and_budget() {
+        for (version, expected, claims, citations) in [
+            (
+                EvidenceMarkerVersion::V2,
+                "text [🔍=v2:claim:AAAAAAAAAAw] [🔍=v2:citation:AAAAAAAAAAE]",
+                "v2:claim:AAAAAAAAAAw",
+                "v2:citation:AAAAAAAAAAE",
+            ),
+            (
+                EvidenceMarkerVersion::V3,
+                "text [🔍=v3:claim:DA] [🔍=v3:citation:AQ]",
+                "v3:claim:DA",
+                "v3:citation:AQ",
+            ),
+        ] {
+            let handles = parse_tool_sentex_handles(
+                &json!({"claim_handles":["12"], "citation_handles":["1"]}),
+                version,
+            )
+            .unwrap();
+            let actual = append_markers("text", &handles, version);
+            assert_eq!(actual, expected);
+            assert_eq!(marker_bytes(&handles, version), expected.len() - 4);
+            assert_eq!(
+                locator_metadata(handles.claims(), SentexRole::Claim, version),
+                claims
+            );
+            assert_eq!(
+                locator_metadata(handles.citations(), SentexRole::Citation, version),
+                citations
+            );
+            let mut wire = json!({});
+            project_offered_sentexes(&mut wire, &parse_offered_sentexes(&actual, UserId::new(42)));
+            assert_eq!(wire["claim_locators"][0]["locator"], claims);
+            assert_eq!(wire["citation_locators"][0]["locator"], citations);
+            for value in ["1", "12", "255", "256", "18446744073709551615"] {
+                let args = json!({"citation_handles":[value,value,value,value]});
+                let handles = parse_tool_sentex_handles(&args, version).unwrap();
+                let text = append_markers("x", &handles, version);
+                assert_eq!(text.len() - 1, marker_bytes(&handles, version));
+                assert!(marker_bytes(&handles, version) <= 124);
+                assert_eq!(parse_sentex_locators(&text).len(), 4);
+            }
+            assert!(
+                parse_tool_sentex_handles(&json!({"claim_handles":["1","2","3","4","5"]}), version)
+                    .is_err()
+            );
+            let handles = parse_tool_sentex_handles(
+                &json!({"claim_handles":["18446744073709551615"]}),
+                version,
+            )
+            .unwrap();
+            let expected = match version {
+                EvidenceMarkerVersion::V2 => "[🔍=v2:claim:__________8]",
+                EvidenceMarkerVersion::V3 => "[🔍=v3:claim:__________8]",
+            };
+            assert_eq!(append_markers("", &handles, version), expected);
+        }
+    }
 
     #[test]
     fn legacy_terminal_markers_parse_as_citations_with_discord_author() {
@@ -331,8 +396,18 @@ mod tests {
 
     #[test]
     fn tool_input_is_role_separated_canonical_and_combined_bounded() {
-        assert!(parse_tool_sentex_handles(&json!({})).unwrap().is_empty());
-        assert!(parse_tool_sentex_handles(&json!({ "evidence_keys": ["1"] })).is_err());
+        assert!(
+            parse_tool_sentex_handles(&json!({}), EvidenceMarkerVersion::V3)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            parse_tool_sentex_handles(
+                &json!({ "evidence_keys": ["1"] }),
+                EvidenceMarkerVersion::V3
+            )
+            .is_err()
+        );
         for field in ["claim_handles", "citation_handles"] {
             for invalid in [
                 json!([1]),
@@ -345,30 +420,43 @@ mod tests {
                 json!("1"),
             ] {
                 assert!(
-                    parse_tool_sentex_handles(&json!({ field: invalid })).is_err(),
+                    parse_tool_sentex_handles(
+                        &json!({ field: invalid }),
+                        EvidenceMarkerVersion::V3
+                    )
+                    .is_err(),
                     "{field} accepted a noncanonical handle"
                 );
             }
         }
         assert!(
-            parse_tool_sentex_handles(&json!({
-                "claim_handles": ["1", "2"],
-                "citation_handles": ["3", "4"]
-            }))
+            parse_tool_sentex_handles(
+                &json!({
+                    "claim_handles": ["1", "2"],
+                    "citation_handles": ["3", "4"]
+                }),
+                EvidenceMarkerVersion::V3
+            )
             .is_ok()
         );
         assert!(
-            parse_tool_sentex_handles(&json!({
-                "claim_handles": ["1", "2"],
-                "citation_handles": ["3", "4", "5"]
-            }))
+            parse_tool_sentex_handles(
+                &json!({
+                    "claim_handles": ["1", "2"],
+                    "citation_handles": ["3", "4", "5"]
+                }),
+                EvidenceMarkerVersion::V3
+            )
             .is_err()
         );
         let oversized_invalid = vec![Value::Null; MAX_SENTEX_REFS + 1];
         assert_eq!(
-            parse_tool_sentex_handles(&json!({ "claim_handles": oversized_invalid }))
-                .unwrap_err()
-                .to_string(),
+            parse_tool_sentex_handles(
+                &json!({ "claim_handles": oversized_invalid }),
+                EvidenceMarkerVersion::V3
+            )
+            .unwrap_err()
+            .to_string(),
             "claim_handles and citation_handles support at most 4 total references"
         );
     }
@@ -401,13 +489,16 @@ mod tests {
 
     #[test]
     fn appending_markers_uses_role_preserving_v3_minimal_base64url() {
-        let handles = parse_tool_sentex_handles(&json!({
-            "claim_handles": ["12"],
-            "citation_handles": ["34"]
-        }))
+        let handles = parse_tool_sentex_handles(
+            &json!({
+                "claim_handles": ["12"],
+                "citation_handles": ["34"]
+            }),
+            EvidenceMarkerVersion::V3,
+        )
         .unwrap();
         assert_eq!(
-            append_markers("claim", &handles),
+            append_markers("claim", &handles, EvidenceMarkerVersion::V3),
             "claim [🔍=v3:claim:DA] [🔍=v3:citation:Ig]"
         );
     }
@@ -434,10 +525,12 @@ mod tests {
             (0x0102_0304_0506_0708, "AQIDBAUGBwg"),
             (u64::MAX, "__________8"),
         ] {
-            let handles =
-                parse_tool_sentex_handles(&json!({ "citation_handles": [handle.to_string()] }))
-                    .unwrap();
-            let content = append_markers("claim", &handles);
+            let handles = parse_tool_sentex_handles(
+                &json!({ "citation_handles": [handle.to_string()] }),
+                EvidenceMarkerVersion::V3,
+            )
+            .unwrap();
+            let content = append_markers("claim", &handles, EvidenceMarkerVersion::V3);
             assert_eq!(content, format!("claim [🔍=v3:citation:{token}]"));
             let locators = parse_sentex_locators(&content);
             assert_eq!(locators.len(), 1, "{content}");
@@ -526,9 +619,12 @@ mod tests {
 
     #[test]
     fn u64_max_string_round_trips_through_the_canonical_locator() {
-        let handles =
-            parse_tool_sentex_handles(&json!({ "claim_handles": [u64::MAX.to_string()] })).unwrap();
-        let content = append_markers("claim", &handles);
+        let handles = parse_tool_sentex_handles(
+            &json!({ "claim_handles": [u64::MAX.to_string()] }),
+            EvidenceMarkerVersion::V3,
+        )
+        .unwrap();
+        let content = append_markers("claim", &handles, EvidenceMarkerVersion::V3);
         assert_eq!(content, "claim [🔍=v3:claim:__________8]");
         assert_eq!(
             parse_sentex_locators(&content)[0].as_str(),
@@ -538,17 +634,28 @@ mod tests {
 
     #[test]
     fn locator_metadata_is_role_preserving_canonical_and_ordered() {
-        let handles = parse_tool_sentex_handles(&json!({
-            "claim_handles": ["12", "34"],
-            "citation_handles": ["56"]
-        }))
+        let handles = parse_tool_sentex_handles(
+            &json!({
+                "claim_handles": ["12", "34"],
+                "citation_handles": ["56"]
+            }),
+            EvidenceMarkerVersion::V3,
+        )
         .unwrap();
         assert_eq!(
-            locator_metadata(handles.claims(), SentexRole::Claim),
+            locator_metadata(
+                handles.claims(),
+                SentexRole::Claim,
+                EvidenceMarkerVersion::V3
+            ),
             "v3:claim:DA,v3:claim:Ig"
         );
         assert_eq!(
-            locator_metadata(handles.citations(), SentexRole::Citation),
+            locator_metadata(
+                handles.citations(),
+                SentexRole::Citation,
+                EvidenceMarkerVersion::V3
+            ),
             "v3:citation:OA"
         );
     }
@@ -628,15 +735,18 @@ mod tests {
                 vec!["18446744073709551615", "72623859790382856"],
             ),
         ] {
-            let handles = parse_tool_sentex_handles(&json!({
-                "claim_handles": claims,
-                "citation_handles": citations
-            }))
+            let handles = parse_tool_sentex_handles(
+                &json!({
+                    "claim_handles": claims,
+                    "citation_handles": citations
+                }),
+                EvidenceMarkerVersion::V3,
+            )
             .unwrap();
             let content = "claim";
             assert_eq!(
-                append_markers(content, &handles).len() - content.len(),
-                marker_bytes(&handles)
+                append_markers(content, &handles, EvidenceMarkerVersion::V3).len() - content.len(),
+                marker_bytes(&handles, EvidenceMarkerVersion::V3)
             );
         }
     }
@@ -651,8 +761,11 @@ mod tests {
             .take(MAX_SENTEX_REFS)
             .collect(),
         };
-        assert_eq!(marker_bytes(&largest), MAX_SENTEX_MARKER_BYTES);
-        assert!(validate_marker_bytes(&largest).is_ok());
+        assert_eq!(
+            marker_bytes(&largest, EvidenceMarkerVersion::V3),
+            MAX_SENTEX_MARKER_BYTES
+        );
+        assert!(validate_marker_bytes(&largest, EvidenceMarkerVersion::V3).is_ok());
         // Minimal tokens make small handles cheap, so only full-width handles
         // beyond the count limit exceed the byte bound.
         let over_limit = SentexHandles {
@@ -663,7 +776,7 @@ mod tests {
             .take(MAX_SENTEX_REFS + 1)
             .collect(),
         };
-        assert!(validate_marker_bytes(&over_limit).is_err());
+        assert!(validate_marker_bytes(&over_limit, EvidenceMarkerVersion::V3).is_err());
     }
 
     #[test]
@@ -677,12 +790,18 @@ mod tests {
         };
         // Token lengths 11 + 4 + 3 + 3 + 3: exactly the limit, so accepted.
         let at_limit = citations(&[u64::MAX, 0x00ff_ffff, 256, 256, 256]);
-        assert_eq!(marker_bytes(&at_limit), MAX_SENTEX_MARKER_BYTES);
-        assert!(validate_marker_bytes(&at_limit).is_ok());
+        assert_eq!(
+            marker_bytes(&at_limit, EvidenceMarkerVersion::V3),
+            MAX_SENTEX_MARKER_BYTES
+        );
+        assert!(validate_marker_bytes(&at_limit, EvidenceMarkerVersion::V3).is_ok());
         // One token one character longer (3 -> 4): one byte over, so rejected.
         let over_by_one = citations(&[u64::MAX, 0x00ff_ffff, 0x00ff_ffff, 256, 256]);
-        assert_eq!(marker_bytes(&over_by_one), MAX_SENTEX_MARKER_BYTES + 1);
-        assert!(validate_marker_bytes(&over_by_one).is_err());
+        assert_eq!(
+            marker_bytes(&over_by_one, EvidenceMarkerVersion::V3),
+            MAX_SENTEX_MARKER_BYTES + 1
+        );
+        assert!(validate_marker_bytes(&over_by_one, EvidenceMarkerVersion::V3).is_err());
     }
 }
 
@@ -692,8 +811,11 @@ mod error_tests {
     use std::error::Error;
     #[test]
     fn overflowing_tool_handle_retains_numeric_cause_and_literal_message() {
-        let error = parse_tool_sentex_handles(&json!({"claim_handles":["18446744073709551616"]}))
-            .unwrap_err();
+        let error = parse_tool_sentex_handles(
+            &json!({"claim_handles":["18446744073709551616"]}),
+            EvidenceMarkerVersion::V3,
+        )
+        .unwrap_err();
         assert_eq!(
             error.to_string(),
             "claim_handles must contain canonical positive decimal u64 strings"
@@ -712,9 +834,12 @@ mod error_tests {
                 .is::<std::num::ParseIntError>()
         );
         assert!(
-            !parse_tool_sentex_handles(&json!({"claim_handles":["18446744073709551615"]}))
-                .unwrap()
-                .is_empty()
+            !parse_tool_sentex_handles(
+                &json!({"claim_handles":["18446744073709551615"]}),
+                EvidenceMarkerVersion::V3
+            )
+            .unwrap()
+            .is_empty()
         );
     }
 }

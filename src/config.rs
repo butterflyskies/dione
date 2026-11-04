@@ -1,3 +1,4 @@
+pub use crate::evidence::locators::EvidenceMarkerVersion;
 use crate::{
     config_candidate::{compose_candidate, resolve_sidecar_path},
     config_store::{BoxError, ConfigStore},
@@ -946,6 +947,9 @@ pub struct DeliveryConfig {
     ///
     /// Default-off while the tracer bullet is being validated in production.
     pub evidence_markers_enabled: bool,
+    /// Outbound grammar pin; omission stays V3 even when newer codecs are added.
+    /// Incoming supported versions and the enable switch are independent.
+    pub evidence_marker_version: EvidenceMarkerVersion,
     /// When to prepend the preamble to delivered events.
     ///
     /// - `always` (default): every event gets the preamble.
@@ -969,6 +973,7 @@ impl Default for DeliveryConfig {
             chunk_mode: ChunkMode::Paragraph,
             delivery_delay_ms: 0,
             evidence_markers_enabled: false,
+            evidence_marker_version: EvidenceMarkerVersion::default(),
             preamble_mode: PreambleMode::Always,
             preamble_template: PreambleTemplate::default(),
         }
@@ -2694,6 +2699,124 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn evidence_marker_version_is_a_concrete_validated_pin() {
+        assert_eq!(
+            Config::default().delivery.evidence_marker_version,
+            EvidenceMarkerVersion::V3
+        );
+        assert_eq!(
+            toml::from_str::<Config>("[delivery]")
+                .unwrap()
+                .delivery
+                .evidence_marker_version,
+            EvidenceMarkerVersion::V3
+        );
+        for enabled in [false, true] {
+            for (name, expected) in [
+                ("v2", EvidenceMarkerVersion::V2),
+                ("v3", EvidenceMarkerVersion::V3),
+            ] {
+                let text = format!(
+                    "[delivery]\nevidence_markers_enabled = {enabled}\nevidence_marker_version = {name:?}\n"
+                );
+                let config: Config = toml::from_str(&text).unwrap();
+                assert_eq!(config.delivery.evidence_marker_version, expected);
+                assert_eq!(config.delivery.evidence_markers_enabled, enabled);
+                assert_eq!(
+                    LoadedConfig::from_raw(config)
+                        .delivery
+                        .evidence_marker_version,
+                    expected
+                );
+            }
+        }
+        for invalid in [
+            "\"v1\"",
+            "\"v4\"",
+            "\"current\"",
+            "\"latest\"",
+            "\"V3\"",
+            "4",
+            "true",
+            "[]",
+        ] {
+            let error = toml::from_str::<Config>(&format!("[delivery]\nevidence_markers_enabled = false\nevidence_marker_version = {invalid}\n")).unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains("evidence_marker_version"), "{message}");
+            assert!(
+                message.contains("v2") && message.contains("v3"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn evidence_marker_version_reload_preserves_snapshots_and_recovers_invalid_pin() {
+        let _cache = config_cache_guard();
+        let (_dir, state_dir) = temp_state_dir();
+        let path = state_dir.join("config.toml");
+        let runtime = ConfigRuntime::new(state_dir.clone());
+        let mut snapshots = Vec::new();
+        for (name, expected) in [
+            ("v2", EvidenceMarkerVersion::V2),
+            ("v3", EvidenceMarkerVersion::V3),
+            ("v2", EvidenceMarkerVersion::V2),
+        ] {
+            fs::write(&path, format!("[delivery]\nevidence_markers_enabled = true\nevidence_marker_version = {name:?}\n")).unwrap();
+            let (snapshot, error) = reload_now(&runtime);
+            assert!(error.is_none(), "{error:?}");
+            assert_eq!(snapshot.delivery.evidence_marker_version, expected);
+            snapshots.push(snapshot);
+        }
+        assert_eq!(
+            snapshots[0].delivery.evidence_marker_version,
+            EvidenceMarkerVersion::V2
+        );
+        assert_eq!(
+            snapshots[1].delivery.evidence_marker_version,
+            EvidenceMarkerVersion::V3
+        );
+        fs::write(&path, "[delivery]\nevidence_marker_version = \"v4\"\n").unwrap();
+        let (recovered, error) = reload_now(&runtime);
+        assert!(error.is_some());
+        assert_eq!(
+            recovered.delivery.evidence_marker_version,
+            EvidenceMarkerVersion::V2
+        );
+        assert_eq!(
+            try_load_config(&path)
+                .unwrap()
+                .0
+                .delivery
+                .evidence_marker_version,
+            EvidenceMarkerVersion::V2
+        );
+        let fresh_runtime = ConfigRuntime::new(state_dir);
+        assert_eq!(
+            reload_now(&fresh_runtime)
+                .0
+                .delivery
+                .evidence_marker_version,
+            EvidenceMarkerVersion::V2
+        );
+    }
+
+    #[test]
+    fn invalid_evidence_marker_version_fails_fresh_startup_without_lkg() {
+        let _cache = config_cache_guard();
+        let (_dir, state_dir) = temp_state_dir();
+        fs::write(
+            state_dir.join("config.toml"),
+            "[delivery]\nevidence_marker_version = \"v4\"\n",
+        )
+        .unwrap();
+        let error =
+            startup_load_now(&ConfigRuntime::new(state_dir), NoLkgPolicy::FailStartup).unwrap_err();
+        let StartupConfigError::InvalidConfigNoLkg { parse_error, .. } = error;
+        assert!(parse_error.contains("v2") && parse_error.contains("v3"));
+    }
 
     fn temp_state_dir() -> (TempDir, Utf8PathBuf) {
         let dir = TempDir::new().unwrap();

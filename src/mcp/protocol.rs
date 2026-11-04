@@ -1,6 +1,7 @@
 //! MCP protocol responses: initialize handshake and tool list.
 
 use crate::{
+    config::EvidenceMarkerVersion,
     discord::{
         presence::{ActivityType, OnlineStatus},
         tool_arguments::sentex_handles_schema,
@@ -37,7 +38,11 @@ pub(crate) fn initialize_response(
 }
 
 /// Build the MCP `tools/list` response.
-pub(crate) fn tools_list(harness: &HarnessConnection, evidence_markers_enabled: bool) -> Value {
+pub(crate) fn tools_list(
+    harness: &HarnessConnection,
+    evidence_markers_enabled: bool,
+    version: EvidenceMarkerVersion,
+) -> Value {
     let mut response = json!({
         "tools": [
             tool("attention", "Recipient-local attention controls: status/configure, authorized source review/retrieval and feedback, offline replay/fitting, held-out evaluation and explicit digest promotion/rollback. Configure replaces settings from status. No command is accepted from Discord message text; this authenticated seat supplies recipient identity.", crate::attention::control::schema()),
@@ -114,8 +119,8 @@ pub(crate) fn tools_list(harness: &HarnessConnection, evidence_markers_enabled: 
                     "user_id": { "type": "string", "description": "Discord user ID to send the DM to" },
                     "content": { "type": "string", "description": "Message content to send" },
                     "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass; every bypass is audited." },
-                    "claim_handles": sentex_handles_schema("Claims asserted by this message"),
-                    "citation_handles": sentex_handles_schema("Claims cited as support or context")
+                    "claim_handles": sentex_handles_schema("Claims asserted by this message", version),
+                    "citation_handles": sentex_handles_schema("Claims cited as support or context", version)
                 }
             })),
             tool("list_access_requests", "List pending access requests from unknown users", json!({
@@ -319,7 +324,11 @@ mod tests {
     /// advertised list must fail here, not in a reviewer's client.
     #[test]
     fn presence_tools_are_listed_with_their_schemas() {
-        let list = tools_list(&HarnessConnection::claude(), false);
+        let list = tools_list(
+            &HarnessConnection::claude(),
+            false,
+            EvidenceMarkerVersion::V3,
+        );
         let tools = list["tools"].as_array().unwrap();
         let set = tools
             .iter()
@@ -338,10 +347,58 @@ mod tests {
     }
 
     #[test]
+    fn selected_evidence_version_is_advertised_consistently_by_reply_and_dm_for_both_harnesses() {
+        let (_queue_dir, codex) = crate::mcp::server::test_codex_connection();
+        for harness in [&HarnessConnection::claude(), &codex] {
+            for (version, marker, encoding) in [
+                (
+                    EvidenceMarkerVersion::V2,
+                    "[🔍=v2:<role>:<token>]",
+                    "all eight big-endian",
+                ),
+                (
+                    EvidenceMarkerVersion::V3,
+                    "[🔍=v3:<role>:<token>]",
+                    "minimal-width big-endian",
+                ),
+            ] {
+                for enabled in [false, true] {
+                    let list = tools_list(harness, enabled, version);
+                    let dm = list["tools"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|t| t["name"] == "send_dm")
+                        .unwrap();
+                    let reply = crate::discord::reply_tool::definition(enabled, version);
+                    for tool in [dm, &reply] {
+                        for field in ["claim_handles", "citation_handles"] {
+                            let property = &tool["inputSchema"]["properties"][field];
+                            if enabled {
+                                let description = property["description"].as_str().unwrap();
+                                assert!(description.contains(marker), "{description}");
+                                assert!(description.contains(encoding), "{description}");
+                                assert_eq!(property["maxItems"], 4);
+                            } else {
+                                assert!(property.is_null());
+                            }
+                        }
+                        assert!(
+                            tool["inputSchema"]["properties"]
+                                .get("evidence_marker_version")
+                                .is_none()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn claim_and_citation_handle_schemas_are_exposed_only_when_enabled() {
         for enabled in [false, true] {
             let (_queue_dir, harness) = crate::mcp::server::test_codex_connection();
-            let list = tools_list(&harness, enabled);
+            let list = tools_list(&harness, enabled, EvidenceMarkerVersion::V3);
             for name in ["send_dm"] {
                 let tool = list["tools"]
                     .as_array()

@@ -53,6 +53,7 @@ text_chunk_limit = 2000
 chunk_mode = "paragraph"        # "paragraph" | "length"
 delivery_delay_ms = 0           # coalescing delay for channel events; 0 = none
 evidence_markers_enabled = false  # opt in to Vaelii sentex locators
+evidence_marker_version = "v3"    # outbound pin: "v2" | "v3"; concrete V3 if omitted
 preamble_mode = "always"        # "always" | "first" | "never"
 # preamble_template = "..."     # custom text, max 1024 bytes
 
@@ -173,6 +174,19 @@ role-bearing terminal v3 locators after pre-send hooks, such as
 minimal-width big-endian bytes in unpadded base64url; decoding rejects empty
 tokens, padding, non-base64url characters, a leading zero byte and zero.
 Locators are author-offered metadata, not verification or truth.
+
+Set `[delivery] evidence_marker_version = "v2"` for fixed-width eight-byte
+outbound tokens (for example, handle 12 becomes `[🔍=v2:claim:AAAAAAAAAAw]`),
+or `"v3"` for minimal-width tokens (`[🔍=v3:claim:DA]`). Omission is concretely
+V3, not an alias for the newest codec; an explicit pin survives binary upgrades.
+This per-seat setting applies to both `reply` and `send_dm`, including hook/audit
+metadata and tool descriptions. It does not select an inbound reader version.
+V1 is read-only because it cannot represent claim roles. Unsupported versions
+(including V4 until its separate codec lands) are configuration errors, not
+fallbacks. Invalid reloads use the existing last-known-good recovery policy.
+When `evidence_markers_enabled` is false, structured handle fields remain hidden
+and rejected, no suffix is emitted, and the configured format remains stored
+for a later enable. Raw active terminal markers remain rejected either way.
 
 The former `evidence_keys` input is not accepted. Existing v1 terminal markers
 remain readable as citations, and fixed-width v2 markers (`[🔍=v2:claim:…]`,

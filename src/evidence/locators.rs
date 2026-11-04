@@ -3,6 +3,7 @@
 use super::error::{HandleError, HandleErrorKind, SentexError, SentexErrorKind};
 use crate::markdown::BlockScanner;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use serde::{Deserialize, Deserializer, de};
 use std::{fmt, num::NonZeroU64};
 
 const LEGACY_CITATION_MARKER_PREFIX: &str = "[🔍=v1:";
@@ -17,7 +18,7 @@ const FIXED_LOCATOR_TOKEN_LEN: usize = 11;
 
 /// Maximum total number of claim and citation handles accepted on one message.
 pub(crate) const MAX_SENTEX_REFS: usize = 4;
-/// Maximum UTF-8 bytes occupied by the complete appended v3 marker suffix.
+/// Maximum UTF-8 bytes occupied by the complete appended marker suffix.
 pub(crate) const MAX_SENTEX_MARKER_BYTES: usize = 124;
 
 /// An opaque, nonzero handle naming one Vaelii sentex.
@@ -103,7 +104,7 @@ enum LocatorVersion {
     V1,
     /// Role-bearing, fixed-width eight-byte tokens.
     V2,
-    /// Role-bearing, minimal-width tokens; the only version emitted.
+    /// Role-bearing, minimal-width tokens; also available for outbound emission.
     V3,
 }
 
@@ -124,10 +125,12 @@ pub(crate) enum SentexRole {
 }
 
 impl SentexRole {
-    const fn marker_prefix(self) -> &'static str {
-        match self {
-            Self::Claim => CLAIM_MARKER_PREFIX,
-            Self::Citation => CITATION_MARKER_PREFIX,
+    const fn marker_prefix(self, version: EvidenceMarkerVersion) -> &'static str {
+        match (version, self) {
+            (EvidenceMarkerVersion::V2, Self::Claim) => V2_CLAIM_MARKER_PREFIX,
+            (EvidenceMarkerVersion::V2, Self::Citation) => V2_CITATION_MARKER_PREFIX,
+            (EvidenceMarkerVersion::V3, Self::Claim) => CLAIM_MARKER_PREFIX,
+            (EvidenceMarkerVersion::V3, Self::Citation) => CITATION_MARKER_PREFIX,
         }
     }
 }
@@ -164,18 +167,78 @@ impl SentexHandles {
     }
 }
 
-/// The visible sentex transport emitted by current Dione versions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SentexTransport {
-    TerminalVisibleRoleSuffixV3AfterHooks,
+/// Per-seat outbound grammar, independent of the running binary version.
+/// V1 remains read-only because it cannot represent claim roles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EvidenceMarkerVersion {
+    /// Role-bearing, fixed-width eight-byte tokens.
+    V2,
+    /// Role-bearing, minimal-width tokens. The concrete omission default.
+    #[default]
+    V3,
 }
 
-impl SentexTransport {
-    pub(crate) const fn as_str(self) -> &'static str {
+struct EvidenceMarkerVersionVisitor;
+
+impl<'de> de::Visitor<'de> for EvidenceMarkerVersionVisitor {
+    type Value = EvidenceMarkerVersion;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("an outbound evidence marker version: `v2` or `v3`")
+    }
+
+    fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+        match value {
+            "v2" => Ok(EvidenceMarkerVersion::V2),
+            "v3" => Ok(EvidenceMarkerVersion::V3),
+            _ => Err(E::unknown_variant(value, &["v2", "v3"])),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for EvidenceMarkerVersion {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_str(EvidenceMarkerVersionVisitor)
+    }
+}
+
+impl EvidenceMarkerVersion {
+    pub(crate) const fn transport(self) -> &'static str {
         match self {
-            Self::TerminalVisibleRoleSuffixV3AfterHooks => {
-                "terminal-visible-role-suffix-v3-after-hooks"
+            Self::V2 => "terminal-visible-role-suffix-v2-after-hooks",
+            Self::V3 => "terminal-visible-role-suffix-v3-after-hooks",
+        }
+    }
+
+    pub(crate) const fn grammar_description(self) -> &'static str {
+        match self {
+            Self::V2 => {
+                "[🔍=v2:<role>:<token>] locators after pre-send hooks, where the token is all eight big-endian handle bytes in unpadded base64url"
             }
+            Self::V3 => {
+                "[🔍=v3:<role>:<token>] locators after pre-send hooks, where the token is the minimal-width big-endian handle bytes in unpadded base64url"
+            }
+        }
+    }
+
+    const fn read_version(self) -> LocatorVersion {
+        match self {
+            Self::V2 => LocatorVersion::V2,
+            Self::V3 => LocatorVersion::V3,
+        }
+    }
+
+    fn token(self, handle: &VaeliiSentexHandle) -> String {
+        match self {
+            Self::V2 => handle.fixed_locator_token(),
+            Self::V3 => handle.locator_token(),
+        }
+    }
+
+    fn token_len(self, handle: &VaeliiSentexHandle) -> usize {
+        match self {
+            Self::V2 => FIXED_LOCATOR_TOKEN_LEN,
+            Self::V3 => handle.locator_token_len(),
         }
     }
 }
@@ -188,8 +251,12 @@ pub(crate) struct SentexLocator {
 }
 
 impl SentexLocator {
-    fn current(role: SentexRole, handle: &VaeliiSentexHandle) -> Self {
-        Self::written(LocatorVersion::V3, role, handle)
+    fn selected(
+        role: SentexRole,
+        handle: &VaeliiSentexHandle,
+        version: EvidenceMarkerVersion,
+    ) -> Self {
+        Self::written(version.read_version(), role, handle)
     }
 
     /// Re-renders a decoded locator in its own version's canonical form, which
@@ -242,23 +309,31 @@ pub(crate) fn has_terminal_sentex_syntax(content: &str) -> bool {
 }
 
 /// Canonical comma-separated role-bearing locators for hook/audit metadata.
-pub(crate) fn locator_metadata(handles: &[VaeliiSentexHandle], role: SentexRole) -> String {
+pub(crate) fn locator_metadata(
+    handles: &[VaeliiSentexHandle],
+    role: SentexRole,
+    version: EvidenceMarkerVersion,
+) -> String {
     let mut metadata = String::new();
     for (index, handle) in handles.iter().enumerate() {
         if index > 0 {
             metadata.push(',');
         }
-        metadata.push_str(SentexLocator::current(role, handle).as_str());
+        metadata.push_str(SentexLocator::selected(role, handle, version).as_str());
     }
     metadata
 }
 
 /// Appends exact terminal markers after all rewrite hooks have run.
-pub(crate) fn append_markers(content: &str, handles: &SentexHandles) -> String {
+pub(crate) fn append_markers(
+    content: &str,
+    handles: &SentexHandles,
+    version: EvidenceMarkerVersion,
+) -> String {
     if handles.is_empty() {
         return content.to_owned();
     }
-    let mut output = String::with_capacity(content.len() + marker_bytes(handles));
+    let mut output = String::with_capacity(content.len() + marker_bytes(handles, version));
     output.push_str(content);
     for (index, (role, handle)) in handles
         .claims()
@@ -275,8 +350,8 @@ pub(crate) fn append_markers(content: &str, handles: &SentexHandles) -> String {
         if index > 0 || !content.is_empty() {
             output.push(' ');
         }
-        output.push_str(role.marker_prefix());
-        output.push_str(&handle.locator_token());
+        output.push_str(role.marker_prefix(version));
+        output.push_str(&version.token(handle));
         output.push_str(MARKER_SUFFIX);
     }
     output
@@ -371,8 +446,11 @@ fn marker_is_in_quote_or_code(content: &str, suffix_start: usize) -> bool {
     scanner.inside_quote_or_code()
 }
 
-pub(super) fn validate_marker_bytes(handles: &SentexHandles) -> Result<(), SentexError> {
-    let bytes = marker_bytes(handles);
+pub(super) fn validate_marker_bytes(
+    handles: &SentexHandles,
+    version: EvidenceMarkerVersion,
+) -> Result<(), SentexError> {
+    let bytes = marker_bytes(handles, version);
     if bytes > MAX_SENTEX_MARKER_BYTES {
         return Err(SentexError {
             kind: SentexErrorKind::MarkerBytes,
@@ -382,7 +460,7 @@ pub(super) fn validate_marker_bytes(handles: &SentexHandles) -> Result<(), Sente
 }
 
 /// Exact UTF-8 bytes [`append_markers`] adds to non-empty content.
-pub(super) fn marker_bytes(handles: &SentexHandles) -> usize {
+pub(super) fn marker_bytes(handles: &SentexHandles, version: EvidenceMarkerVersion) -> usize {
     let marker_content: usize = handles
         .claims()
         .iter()
@@ -394,7 +472,7 @@ pub(super) fn marker_bytes(handles: &SentexHandles) -> usize {
                 .map(|handle| (SentexRole::Citation, handle)),
         )
         .map(|(role, handle)| {
-            role.marker_prefix().len() + handle.locator_token_len() + MARKER_SUFFIX.len()
+            role.marker_prefix(version).len() + version.token_len(handle) + MARKER_SUFFIX.len()
         })
         .sum();
     marker_content + handles.len().saturating_sub(1) + usize::from(!handles.is_empty())

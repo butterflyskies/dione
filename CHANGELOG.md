@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.87.0]
+
+### Added
+
+- Pin outbound evidence locators per seat with `[delivery] evidence_marker_version`
+  (`"v2"` or `"v3"`). Omission remains concretely V3; reading older formats and
+  the independent evidence enable switch are unchanged.
+
 ## [0.86.1]
 
 ### Added

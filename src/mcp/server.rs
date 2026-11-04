@@ -20,7 +20,7 @@ use crate::{
         types::{Admission, DeliveryState},
     },
     bell_rings::{BellEvaluator, render_bells},
-    config::BellMode,
+    config::{BellMode, EvidenceMarkerVersion},
     core::{
         ModuleInstanceId,
         delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
@@ -980,12 +980,16 @@ async fn dispatch(
         }
         "tools/list" => {
             let config = crate::config::load_config(server.state_dir());
-            let mut response =
-                tools_list(&server.harness, config.delivery.evidence_markers_enabled);
+            let mut response = tools_list(
+                &server.harness,
+                config.delivery.evidence_markers_enabled,
+                config.delivery.evidence_marker_version,
+            );
             server.module_tools.append_definitions(
                 &mut response,
                 crate::mcp::tool_registry::ToolDiscoveryContext {
                     evidence_markers_enabled: config.delivery.evidence_markers_enabled,
+                    evidence_marker_version: config.delivery.evidence_marker_version,
                 },
             );
             Ok(response)
@@ -1238,11 +1242,11 @@ pub mod test_helpers {
     }
 
     fn complete_tools_list(harness: &HarnessConnection, evidence: bool) -> Value {
-        let mut response = crate::mcp::protocol::tools_list(harness, evidence);
-        response["tools"]
-            .as_array_mut()
-            .expect("tools array")
-            .push(crate::discord::reply_tool::definition(evidence));
+        let mut response =
+            crate::mcp::protocol::tools_list(harness, evidence, EvidenceMarkerVersion::V3);
+        response["tools"].as_array_mut().expect("tools array").push(
+            crate::discord::reply_tool::definition(evidence, EvidenceMarkerVersion::V3),
+        );
         response["tools"]
             .as_array_mut()
             .expect("tools array")
