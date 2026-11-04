@@ -2,7 +2,9 @@
 
 `dione-durable` owns generic durable admission, replay suppression, leases,
 consumer registration, and resident binding. It retains accepted operations
-through asynchronous caller cancellation. Adapter-selected codecs preserve
+through asynchronous caller cancellation. Draining waits until accepted workers
+release their storage resources, including after caller cancellation or worker
+panic. Adapter-selected codecs preserve
 their own payload and snapshot formats.
 
 `QueueSnapshot` and the records in `state` are detached codec transfer values.

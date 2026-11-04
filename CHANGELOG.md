@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   retain their existing snapshot formats, admission, replay, and lease behavior.
   Adapter fault and cancellation tests use an opt-in test-support feature.
 
+### Fixed
+
+- Wait for accepted durable workers to release storage ownership during drain,
+  including after caller cancellation or worker panic, before reopening an inbox.
+
 ## [0.87.0]
 
 ### Changed

@@ -16,7 +16,7 @@ use std::{hash::Hash, sync::Arc, time::Duration};
 #[cfg(any(test, feature = "test-support"))]
 use tokio::sync::oneshot;
 use tokio::{
-    sync::{Mutex, Notify, watch},
+    sync::{Mutex, Notify, OwnedMutexGuard, watch},
     task::{JoinError, spawn_blocking},
     time::{Instant, timeout},
 };
@@ -54,9 +54,60 @@ struct BindingGate {
     reached: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
 }
+#[cfg(test)]
+struct ReleaseGate {
+    reached: oneshot::Sender<()>,
+    release: oneshot::Receiver<()>,
+}
+#[cfg(test)]
+struct RetainedStore<P, K> {
+    _store: Arc<Mutex<DurableStore<P, K>>>,
+    gate: Option<ReleaseGate>,
+}
+#[cfg(test)]
+impl<P, K> Drop for RetainedStore<P, K> {
+    fn drop(&mut self) {
+        if let Some(gate) = self.gate.take() {
+            let _ = gate.reached.send(());
+            let _ = gate.release.blocking_recv();
+        }
+    }
+}
+struct OwnedOperation<P, K> {
+    store: OwnedMutexGuard<DurableStore<P, K>>,
+    #[cfg(test)]
+    _retained_store: Option<RetainedStore<P, K>>,
+    #[cfg(any(test, feature = "test-support"))]
+    completion_gate: Option<CompletionGate>,
+    _completion: OwnedMutexGuard<()>,
+}
+impl<P, K> OwnedOperation<P, K> {
+    fn run<R>(
+        mut self,
+        operation: impl FnOnce(&mut DurableStore<P, K>) -> R,
+        wakes: impl FnOnce(&R) -> bool,
+        changed: Arc<Notify>,
+    ) -> R {
+        let result = operation(&mut self.store);
+        if wakes(&result) {
+            changed.notify_waiters();
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(gate) = self.completion_gate.take() {
+            let _ = gate.reached.send(());
+            let _ = gate.release.blocking_recv();
+            assert!(
+                !gate.lose_response,
+                "injected owned-operation response loss"
+            );
+        }
+        result
+    }
+}
 /// One generic queue owner serializes durable transitions and accepted operations.
 pub struct DurableQueue<P, K> {
     store: Arc<Mutex<DurableStore<P, K>>>,
+    completion: Arc<Mutex<()>>,
     changed: Arc<Notify>,
     #[cfg(any(test, feature = "test-support"))]
     completion_gate: Arc<StdMutex<Option<CompletionGate>>>,
@@ -64,11 +115,14 @@ pub struct DurableQueue<P, K> {
     binding_gate: Arc<StdMutex<Option<BindingGate>>>,
     #[cfg(any(test, feature = "test-support"))]
     clock: Arc<StdMutex<Option<DateTime<Utc>>>>,
+    #[cfg(test)]
+    release_gate: Arc<StdMutex<Option<ReleaseGate>>>,
 }
 impl<P, K> Clone for DurableQueue<P, K> {
     fn clone(&self) -> Self {
         Self {
             store: Arc::clone(&self.store),
+            completion: Arc::clone(&self.completion),
             changed: Arc::clone(&self.changed),
             #[cfg(any(test, feature = "test-support"))]
             completion_gate: Arc::clone(&self.completion_gate),
@@ -76,6 +130,8 @@ impl<P, K> Clone for DurableQueue<P, K> {
             binding_gate: Arc::clone(&self.binding_gate),
             #[cfg(any(test, feature = "test-support"))]
             clock: Arc::clone(&self.clock),
+            #[cfg(test)]
+            release_gate: Arc::clone(&self.release_gate),
         }
     }
 }
@@ -129,6 +185,7 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
         let store = DurableStore::load(directory, codec, options)?;
         Ok(Self {
             store: Arc::new(Mutex::new(store)),
+            completion: Arc::new(Mutex::new(())),
             changed: Arc::new(Notify::new()),
             #[cfg(any(test, feature = "test-support"))]
             completion_gate: Arc::new(StdMutex::new(None)),
@@ -136,6 +193,8 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
             binding_gate: Arc::new(StdMutex::new(None)),
             #[cfg(any(test, feature = "test-support"))]
             clock: Arc::new(StdMutex::new(None)),
+            #[cfg(test)]
+            release_gate: Arc::new(StdMutex::new(None)),
         })
     }
     /// Opens the store without blocking an async executor worker.
@@ -153,31 +212,34 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
         operation: impl FnOnce(&mut DurableStore<P, K>) -> R + Send + 'static,
         wakes: impl FnOnce(&R) -> bool + Send + 'static,
     ) -> Result<R, JoinError> {
-        let mut store = Arc::clone(&self.store).lock_owned().await;
+        let completion = Arc::clone(&self.completion).lock_owned().await;
+        let store = Arc::clone(&self.store).lock_owned().await;
         let changed = Arc::clone(&self.changed);
         #[cfg(any(test, feature = "test-support"))]
-        let gate = self
+        let completion_gate = self
             .completion_gate
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .take();
-        spawn_blocking(move || {
-            let result = operation(&mut store);
-            if wakes(&result) {
-                changed.notify_waiters();
-            }
+        #[cfg(test)]
+        let retained_store = self
+            .release_gate
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .take()
+            .map(|gate| RetainedStore {
+                _store: Arc::clone(&self.store),
+                gate: Some(gate),
+            });
+        let owned = OwnedOperation {
+            store,
+            #[cfg(test)]
+            _retained_store: retained_store,
             #[cfg(any(test, feature = "test-support"))]
-            if let Some(gate) = gate {
-                let _ = gate.reached.send(());
-                let _ = gate.release.blocking_recv();
-                assert!(
-                    !gate.lose_response,
-                    "injected owned-operation response loss"
-                );
-            }
-            result
-        })
-        .await
+            completion_gate,
+            _completion: completion,
+        };
+        spawn_blocking(move || owned.run(operation, wakes, changed)).await
     }
     fn now(&self) -> DateTime<Utc> {
         #[cfg(any(test, feature = "test-support"))]
@@ -192,7 +254,7 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
     }
     /// Waits until previously accepted operations release ownership.
     pub async fn drain_owned(&self) {
-        drop(self.store.lock().await);
+        drop(self.completion.lock().await);
     }
     #[cfg(any(test, feature = "test-support"))]
     /// Inserts a prevalidated test payload through the production preparation path.
@@ -550,6 +612,19 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
             lose_response,
         });
         (reached_rx, release_tx)
+    }
+    #[cfg(test)]
+    pub(crate) fn test_pause_owned_release(&self) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (reached, entered) = oneshot::channel();
+        let (release, released) = oneshot::channel();
+        *self
+            .release_gate
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(ReleaseGate {
+            reached,
+            release: released,
+        });
+        (entered, release)
     }
     #[cfg(any(test, feature = "test-support"))]
     /// Pauses the next binding publication before updating its watcher.
