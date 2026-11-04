@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.94.0]
+
+### Changed
+
+- Extract the existing scoped token-bucket engine into `dione-rate-limiter`.
+  Preserve configuration resolution, explicit-time transitions, public API, and
+  unit/property tests. Keep admission, key selection, reload, and denial handling
+  in Dione.
+
 ## [0.93.0]
 
 ### Changed

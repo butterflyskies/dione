@@ -46,6 +46,9 @@ The public `dione-messages` package owns observed events, nonempty ordinary
 deliveries, managed source descriptors, identity presentation, and timestamps.
 Dione retains timezone configuration and current dispatch authority. Message
 values describe supplied observations rather than granting access or permission.
+The public `dione-rate-limiter` package owns scoped configuration resolution and
+explicit-time token buckets for participant/channel pairs. Dione retains admission,
+key construction, live reload scheduling, and the action taken after denial.
 See the [crate split plan](docs/design/plugin-crates.md) for the next boundaries
 and the package release requirements.
 

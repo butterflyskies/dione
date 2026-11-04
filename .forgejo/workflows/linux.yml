@@ -171,6 +171,8 @@ jobs:
           scripts/verify-public-package-privacy.sh "target/package/dione-evidence-${evidence_version}.crate"
           messages_version="$(scripts/workspace-package-version.sh dione-messages)"
           scripts/verify-public-package-privacy.sh "target/package/dione-messages-${messages_version}.crate"
+          rate_limiter_version="$(scripts/workspace-package-version.sh dione-rate-limiter)"
+          scripts/verify-public-package-privacy.sh "target/package/dione-rate-limiter-${rate_limiter_version}.crate"
 
   msrv:
     name: Rust 1.98 minimum supported version

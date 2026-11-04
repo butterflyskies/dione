@@ -19,12 +19,12 @@ use {
             scheduling::DeliveryBuffer,
         },
         mcp::server::test_helpers,
-        rate_limiter::{
-            ChannelRef, OverflowPolicy, ParticipantId, RateLimitConfig, RateLimitDecision,
-            RateLimiter, ScopeConfig,
-        },
     },
     dione_messages::timestamp::Timestamp,
+    dione_rate_limiter::{
+        ChannelRef, OverflowPolicy, ParticipantId, RateLimitConfig, RateLimitDecision, RateLimiter,
+        ScopeConfig,
+    },
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

@@ -1,9 +1,9 @@
 [workspace]
-members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention", "crates/dione-evidence", "crates/dione-messages"]
+members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention", "crates/dione-evidence", "crates/dione-messages", "crates/dione-rate-limiter"]
 
 [package]
 name = "dione"
-version = "0.93.0"
+version = "0.94.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -14,6 +14,8 @@ keywords = ["discord", "mcp", "claude-code", "codex", "bot"]
 categories = ["command-line-utilities"]
 
 [workspace.dependencies]
+proptest = "1"
+dione-rate-limiter = { version = "=0.1.0", path = "crates/dione-rate-limiter" }
 chrono-tz = "0.10"
 dione-messages = { version = "=0.1.0", path = "crates/dione-messages" }
 base64 = "0.22"
@@ -55,6 +57,7 @@ serenity = { version = "0.12", default-features = false, features = ["client", "
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 [dependencies]
+dione-rate-limiter.workspace = true
 dione-messages.workspace = true
 dione-evidence.workspace = true
 dione-attention.workspace = true
@@ -115,7 +118,7 @@ rcgen = "0.13"
 rustls.workspace = true
 tokio-rustls.workspace = true
 insta = { version = "1", features = ["json", "redactions"] }
-proptest = "1"
+proptest.workspace = true
 test-case = "3"
 pretty_assertions = "1"
 parking_lot = "0.12"

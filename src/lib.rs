@@ -25,7 +25,6 @@ pub mod pre_send;
 pub mod principal_policy;
 pub mod pronouns;
 pub mod queue;
-pub mod rate_limiter;
 #[expect(
     dead_code,
     reason = "standalone receipt-gate fixture is runtime-wired in a follow-up PR"
