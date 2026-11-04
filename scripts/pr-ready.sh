@@ -19,7 +19,19 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 
+if [ "$#" -gt 2 ]; then
+  echo "usage: pr-ready.sh [base-ref] [review|release]" >&2
+  exit 2
+fi
 base_ref=${1:-origin/main}
+build_profile=${2:-review}
+case "$build_profile" in
+  review|release) ;;
+  *)
+    echo "unknown verification profile: ${build_profile}; choose review or release" >&2
+    exit 2
+    ;;
+esac
 base_commit=$(git rev-parse --verify "${base_ref}^{commit}")
 head_commit=$(git rev-parse --verify HEAD)
 echo "Checking PR head $head_commit against $base_ref ($base_commit)"
@@ -55,7 +67,7 @@ sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-${dione
 rendering_version=$(sh scripts/workspace-package-version.sh dione-rendering)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-rendering-${rendering_version}.crate"
 cargo deny check
-cargo build --release --workspace --bins --locked
-"${target_dir}/release/dione" --version
+cargo build --profile "$build_profile" --workspace --bins --locked
+"${target_dir}/${build_profile}/dione" --version
 
-echo "PR head $head_commit passed the local checks. CI and final review are still required."
+echo "PR head $head_commit passed the local checks (${build_profile} build). CI and final review are still required."
