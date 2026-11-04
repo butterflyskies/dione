@@ -293,7 +293,7 @@ impl Default for NameplateConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            url: crate::nameplates::DEFAULT_NAMEPLATES_URL.to_string(),
+            url: dione_identity_display::nameplates::DEFAULT_NAMEPLATES_URL.to_string(),
             exclude_for: Vec::new(),
             deadline_ms: 500,
             cache_ttl_seconds: 3600,

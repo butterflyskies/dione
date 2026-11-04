@@ -5,6 +5,7 @@ use std::{
 };
 use tokio::sync::RwLock;
 
+/// Default construct-nameplates YAML location used by application configuration.
 pub const DEFAULT_NAMEPLATES_URL: &str =
     "https://raw.githubusercontent.com/butterflyskies/construct-nameplates/main/nameplates.yaml";
 
@@ -12,11 +13,15 @@ const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_PRONOUN_LEN: usize = 32;
 
 #[derive(Debug, Clone, Deserialize)]
+/// Parsed nameplate data supplied by the configured file.
 pub struct Nameplate {
+    /// Parsed name; display resolution keeps the caller's supplied display name.
     pub name: String,
     #[serde(default)]
+    /// Supplied pronoun labels, sanitized when appended by the service.
     pub pronouns: Vec<String>,
     #[serde(default)]
+    /// Optional parsed biography, unused by display resolution.
     pub bio: Option<String>,
 }
 
@@ -55,6 +60,11 @@ fn sanitize_nameplate_string(s: &str, max_len: usize) -> String {
 }
 
 impl NameplateProvider {
+    /// Construct a provider with the supplied URL, deadline, and cache lifetime.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the underlying HTTP client cannot be built.
     pub fn new(url: &str, deadline_ms: u64, cache_ttl: Duration) -> Self {
         let client = reqwest::Client::builder()
             .use_rustls_tls()
@@ -179,6 +189,11 @@ pub struct NameplateService {
 }
 
 impl NameplateService {
+    /// Construct a service and retain the supplied exclusion set for caller checks.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the underlying HTTP client cannot be built.
     pub fn new(url: &str, deadline_ms: u64, cache_ttl: Duration, exclude_for: &[u64]) -> Self {
         Self {
             provider: NameplateProvider::new(url, deadline_ms, cache_ttl),
@@ -186,12 +201,15 @@ impl NameplateService {
         }
     }
 
+    /// Return whether the caller should exclude this user from a lookup.
     pub fn is_excluded(&self, user_id: u64) -> bool {
         self.excluded_users.contains(&user_id)
     }
 
     /// Returns the display name with pronouns appended for a bot user, if a
     /// nameplate exists.
+    /// The caller enforces exclusions and chooses whether this user is a bot.
+    /// An explicit pronoun suffix is preserved after lookup; it does not bypass lookup.
     pub async fn resolve_display_name(&self, user_id: u64, display_name: &str) -> String {
         match self.provider.get_or_fetch(user_id).await {
             Some(plate) => {
@@ -207,7 +225,7 @@ impl NameplateService {
                     if pronouns.is_empty() {
                         display_name.to_string()
                     } else {
-                        dione_messages::identity_display::display_name_with_pronouns(
+                        crate::display_name_with_pronouns(
                             display_name,
                             Some(&pronouns.join(" or ")),
                         )

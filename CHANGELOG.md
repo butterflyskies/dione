@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.97.0]
+
+### Changed
+
+- Extract identity formatting, nameplate lookup, and PronounDB enrichment into
+  `dione-identity-display`. Migrate every caller directly and preserve existing
+  routing, exclusion, cache, HTTP, and formatting behavior. Advance
+  `dione-messages` to 0.2.0 for removing its former `identity_display` module.
+
 ## [0.96.0]
 
 ### Changed

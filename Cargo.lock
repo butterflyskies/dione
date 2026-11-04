@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.96.0"
+version = "0.97.0"
 dependencies = [
  "aho-corasick",
  "arc-swap",
@@ -945,6 +945,7 @@ dependencies = [
  "dione-durable",
  "dione-evidence",
  "dione-gaie",
+ "dione-identity-display",
  "dione-messages",
  "dione-rate-limiter",
  "dione-rendering",
@@ -970,7 +971,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_path_to_error",
- "serde_yaml_ng",
  "serenity",
  "sha2",
  "tempfile",
@@ -1074,8 +1074,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "dione-messages"
+name = "dione-identity-display"
 version = "0.1.0"
+dependencies = [
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "dione-messages"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "chrono-tz",

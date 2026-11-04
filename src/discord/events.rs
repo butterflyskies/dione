@@ -210,9 +210,9 @@ pub struct Handler {
     /// current shard messenger, replayed on reconnect.
     pub presence: SharedPresence,
     /// Pronoun resolution service (PronounDB v2 adapter with cache).
-    pub pronoun_service: Option<Arc<crate::pronouns::PronounService>>,
+    pub pronoun_service: Option<Arc<dione_identity_display::pronouns::PronounService>>,
     /// Construct nameplate service (construct-nameplates repo adapter with cache).
-    pub nameplate_service: Option<Arc<crate::nameplates::NameplateService>>,
+    pub nameplate_service: Option<Arc<dione_identity_display::nameplates::NameplateService>>,
     /// Ingress ledger — records messages admitted by the gateway for egress verification.
     pub ingress_ledger: Arc<crate::ingress_ledger::IngressLedger>,
     /// PluralKit identity resolver for proxy webhook messages.

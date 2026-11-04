@@ -11,8 +11,9 @@ cannot run this gate.
    result identifies one reproducible commit.
 3. Run `sh scripts/pr-ready.sh origin/main`, or use the current target branch as
    the base for a stacked PR. The gate builds and launches the `review` profile.
-4. Review that commit with the group's pinned design principles and review
-   lenses linked below. Resolve actionable findings before opening the PR.
+4. Review intermediate stack changes with focused source/package checks.
+   Run the full six-lens review on the final PR targeting `main`, using the
+   pinned principles and lenses below. Resolve findings before opening the PR.
 5. Attach the commit ID and command result to the PR. Wait for CI at the same
    head commit, then obtain independent review and
    approval of the final commit.

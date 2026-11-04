@@ -45,6 +45,7 @@ pub struct PronounCache {
 }
 
 impl PronounCache {
+    /// Construct an empty cache with the supplied lifetime.
     pub fn new(ttl: Duration) -> Self {
         Self {
             entries: RwLock::new(HashMap::new()),
@@ -52,6 +53,8 @@ impl PronounCache {
         }
     }
 
+    /// Return a fresh cached result. Outer None means missing or expired.
+    /// Some(None) means a fresh cached absence, including a prior lookup failure.
     pub async fn get(&self, user_id: u64) -> Option<Option<String>> {
         let entries = self.entries.read().await;
         let entry = entries.get(&user_id)?;
@@ -62,6 +65,7 @@ impl PronounCache {
         }
     }
 
+    /// Cache supplied pronouns or absence with the current insertion time.
     pub async fn insert(&self, user_id: u64, pronouns: Option<String>) {
         let mut entries = self.entries.write().await;
         entries.insert(
@@ -82,6 +86,11 @@ pub struct PronounProvider {
 }
 
 impl PronounProvider {
+    /// Construct a PronounDB client and cache with the supplied timing.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the underlying HTTP client cannot be built.
     pub fn new(deadline_ms: u64, cache_ttl: Duration) -> Self {
         let client = reqwest::Client::builder()
             .use_rustls_tls()
@@ -98,6 +107,8 @@ impl PronounProvider {
 
     /// Look up pronouns for a single Discord user ID.
     /// Returns `None` if not found, not configured, provider error, or timeout.
+    /// An uncached lookup sends the supplied Discord user identifier to PronounDB.
+    /// Lookup failure is cached as absence for the configured lifetime.
     pub async fn lookup(&self, user_id: u64) -> Option<String> {
         if let Some(cached) = self.cache.get(user_id).await {
             return cached;
@@ -160,6 +171,11 @@ pub struct PronounService {
 }
 
 impl PronounService {
+    /// Construct a service with the supplied exclusion set and provider timing.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the underlying HTTP client cannot be built.
     pub fn new(
         excluded_users: std::collections::HashSet<u64>,
         deadline_ms: u64,
@@ -173,18 +189,17 @@ impl PronounService {
 
     /// Returns the display name with pronouns appended, if available.
     /// Queries PronounDB for all users except those in the exclude list.
+    /// An explicit pronoun suffix is preserved after lookup; it does not bypass lookup.
     pub async fn resolve_display_name(&self, user_id: u64, display_name: &str) -> String {
         if self.excluded_users.contains(&user_id) {
             return display_name.to_string();
         }
 
         let pronouns = self.provider.lookup(user_id).await;
-        dione_messages::identity_display::display_name_with_pronouns(
-            display_name,
-            pronouns.as_deref(),
-        )
+        crate::display_name_with_pronouns(display_name, pronouns.as_deref())
     }
 
+    /// Return whether this service excludes the supplied user identifier.
     pub fn is_excluded(&self, user_id: u64) -> bool {
         self.excluded_users.contains(&user_id)
     }
