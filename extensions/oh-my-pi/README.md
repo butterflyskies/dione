@@ -51,6 +51,20 @@ Session-change hooks cancel promptly while delivery or binding work remains acti
 
 `teams.test.ts` exercises the bridge using real OMP `SessionManager` files and recording control/submission boundaries. It covers saved-file admission, receipt ACKs, duplicate replay, renewed leases, silent submission, malformed identities, incomplete/altered transcripts, and late bind shutdown. It does not prove a Unix socket exchange, a Dione child, inference, or a live Teams round trip. Those require the separate native integration gate and an authorized live check.
 
+### Diagnose rejected Teams deliveries
+
+Set `DIONE_LOG_FILE` in the Dione child environment to a persistent log file owned by the service user. Use a private directory and file permissions, and configure file retention. Apply the environment change through the OMP owner's normal child restart. A running child does not inherit later environment changes.
+
+Teams ingress emits a `Teams ingress rejected` warning for every HTTP 401 it returns. The existing `dione=warn` log filter includes these events. Each warning contains:
+
+- `arr_request_id`: the incoming `X-ARR-LOG-ID`, parsed as a UUID. Missing or invalid IDs appear as `None`.
+- `reason` and `stage`: the rejection code and the component that rejected the activity, such as `invalid_token_audience` at `connector_authentication`, or `conversation_denied` at `conversation_policy`.
+- `remediation`: the specific setting or protocol boundary to inspect, such as `TEAMS_APP_ID` or `teams.allowed_conversations`.
+
+Find the request's ARR ID in the IIS site log, then search for that UUID in the Dione log. These diagnostics contain no authorization values, token contents, activity bodies, or original error strings. HTTP rejection responses remain unchanged.
+
+Diagnose Teams and Web Chat separately. Production ingress admits the `msteams` channel and expects the Teams activity schema. A Web Chat rejection does not establish a Teams token-validation failure. If a Teams send has no matching IIS request, investigate app access and channel delivery before changing backend authentication.
+
 ## Verify with the published runner
 
 `dione.test.ts` is original offline test code. It uses the actual OMP loader and `ExtensionRunner`, local empty authentication storage, and recording runtime actions. It makes no model or Discord call. Keep dependencies in a separate proof directory outside Dione.

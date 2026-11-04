@@ -380,6 +380,17 @@ pub(crate) async fn messages<P: BotTokenProvider + 'static>(
         .get("authorization")
         .and_then(|value| value.to_str().ok())
     else {
+        let reason = if headers.contains_key("authorization") {
+            "invalid_authorization_header"
+        } else {
+            "missing_authorization_header"
+        };
+        log_ingress_rejection(
+            &headers,
+            reason,
+            "authorization_header",
+            "check that IIS and intermediate proxies forward a valid Authorization header unchanged",
+        );
         return StatusCode::UNAUTHORIZED;
     };
     let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
@@ -390,14 +401,42 @@ pub(crate) async fn messages<P: BotTokenProvider + 'static>(
         Err(TeamsRuntimeError {
             kind:
                 TeamsRuntimeErrorKind::Edge(TeamsEdgeError {
-                    kind: crate::teams::TeamsEdgeErrorKind::Probe(_),
+                    kind: crate::teams::TeamsEdgeErrorKind::Probe(error),
                 }),
-        }) => StatusCode::UNAUTHORIZED,
+        }) => {
+            log_ingress_rejection(
+                &headers,
+                error.rejection_code(),
+                error.rejection_stage(),
+                error.rejection_guidance(),
+            );
+            StatusCode::UNAUTHORIZED
+        }
         Err(error) => {
             tracing::error!(%error, "Teams resident ingress failed");
             StatusCode::SERVICE_UNAVAILABLE
         }
     }
+}
+
+fn log_ingress_rejection(
+    headers: &HeaderMap,
+    reason: &'static str,
+    stage: &'static str,
+    remediation: &'static str,
+) {
+    let arr_request_id = headers
+        .get("x-arr-log-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| uuid::Uuid::parse_str(value).ok());
+    tracing::warn!(
+        component = "teams_ingress",
+        ?arr_request_id,
+        reason,
+        stage,
+        remediation,
+        "Teams ingress rejected"
+    );
 }
 
 fn resident_event(
@@ -597,16 +636,241 @@ mod tests {
     use crate::{
         codex::CodexEventQueue,
         teams::{
-            AdmissionPolicy, AuthenticatedConversationReference,
+            AdmissionPolicy, AuthenticatedConversationReference, ProbeError, ProbeErrorKind,
+            delivery::TeamsEventSink,
             edge::{BotAccessToken, TeamsEdgeError},
         },
     };
+    use axum::{
+        extract::Request,
+        middleware::{Next, from_fn},
+    };
     use std::{
         collections::BTreeSet,
+        io::{self, Write},
         sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
     };
     use tempfile::TempDir;
+    use tracing::instrument::WithSubscriber;
+
+    #[derive(Clone)]
+    struct CapturedLog(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for CapturedLog {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn capture_rejection(headers: &HeaderMap, error: ProbeError) -> String {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let writer = CapturedLog(Arc::clone(&bytes));
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            log_ingress_rejection(
+                headers,
+                error.rejection_code(),
+                error.rejection_stage(),
+                error.rejection_guidance(),
+            );
+        });
+        let captured = bytes.lock().unwrap().clone();
+        String::from_utf8(captured).unwrap()
+    }
+
+    #[test]
+    fn ingress_rejection_log_correlates_arr_without_logging_credentials() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            "Bearer private-token-sentinel".parse().unwrap(),
+        );
+        headers.insert(
+            "x-arr-log-id",
+            "f1170039-ed04-48ab-b9a1-f4ee8ed07377".parse().unwrap(),
+        );
+        let log = capture_rejection(
+            &headers,
+            ProbeErrorKind::InvalidToken(jsonwebtoken::errors::ErrorKind::InvalidAudience.into())
+                .into(),
+        );
+        assert!(log.contains("Teams ingress rejected"), "{log}");
+        assert!(
+            log.contains("f1170039-ed04-48ab-b9a1-f4ee8ed07377"),
+            "{log}"
+        );
+        assert!(log.contains("invalid_token_audience"), "{log}");
+        assert!(log.contains("TEAMS_APP_ID"), "{log}");
+        assert!(log.contains("connector_authentication"), "{log}");
+        assert!(!log.contains("private-token-sentinel"), "{log}");
+    }
+
+    #[test]
+    fn ingress_rejection_log_discards_untrusted_arr_and_error_values() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-arr-log-id", "private-header-sentinel".parse().unwrap());
+        let log = capture_rejection(
+            &headers,
+            ProbeErrorKind::InvalidToken(
+                jsonwebtoken::errors::ErrorKind::MissingRequiredClaim(
+                    "private-error-sentinel".to_owned(),
+                )
+                .into(),
+            )
+            .into(),
+        );
+        assert!(log.contains("missing_token_claim"), "{log}");
+        assert!(log.contains("arr_request_id=None"), "{log}");
+        assert!(!log.contains("private-header-sentinel"), "{log}");
+        assert!(!log.contains("private-error-sentinel"), "{log}");
+    }
+
+    struct RecordedDelivery(Arc<AtomicUsize>);
+
+    impl TeamsEventSink for RecordedDelivery {
+        fn deliver<'a>(
+            &'a self,
+            _event: TeamsResidentEvent,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<TeamsAdmissionOutcome, TeamsDeliveryError>> + Send + 'a>,
+        > {
+            Box::pin(async {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(TeamsAdmissionOutcome::Committed)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn http_ingress_logs_rejections_without_changing_scoped_admission() {
+        let fixture = crate::teams::edge::tests::ConnectorFixture::start().await;
+        let deliveries = Arc::new(AtomicUsize::new(0));
+        let bridge = Arc::new(TeamsResidentBridge::new(
+            fixture.edge.clone(),
+            TeamsDelivery::new(RecordedDelivery(deliveries.clone())),
+        ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let writer = CapturedLog(bytes.clone());
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let dispatch = tracing::Dispatch::new(subscriber);
+        let app = Router::new()
+            .route("/api/messages", post(messages))
+            .layer(from_fn(move |request: Request, next: Next| {
+                let dispatch = dispatch.clone();
+                async move { next.run(request).with_subscriber(dispatch).await }
+            }))
+            .with_state(bridge.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let valid_authorization = fixture.authorization();
+        let cases = [
+            (None, "missing_authorization_header"),
+            (
+                Some(axum::http::HeaderValue::from_bytes(&[0xff]).unwrap()),
+                "invalid_authorization_header",
+            ),
+            (
+                Some("Bearer private-token-sentinel".parse().unwrap()),
+                "invalid_token_header",
+            ),
+            (
+                Some(valid_authorization.parse().unwrap()),
+                "invalid_activity_json",
+            ),
+        ];
+        for (authorization, reason) in cases {
+            let mut request = client
+                .post(format!("http://{address}/api/messages"))
+                .header("x-arr-log-id", "f1170039-ed04-48ab-b9a1-f4ee8ed07377")
+                .body(r#"{"private-field-sentinel":"private-body-sentinel"}"#);
+            if let Some(authorization) = authorization {
+                request = request.header("authorization", authorization);
+            }
+            let response = request.send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{reason}");
+            assert_eq!(response.text().await.unwrap(), "");
+            let captured = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+            assert!(captured.contains(reason), "{captured}");
+        }
+        let captured = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        assert_eq!(
+            captured.matches("Teams ingress rejected").count(),
+            4,
+            "{captured}"
+        );
+        assert!(
+            captured.contains("f1170039-ed04-48ab-b9a1-f4ee8ed07377"),
+            "{captured}"
+        );
+        for private in [
+            "private-token-sentinel",
+            "private-field-sentinel",
+            "private-body-sentinel",
+            &valid_authorization,
+        ] {
+            assert!(!captured.contains(private), "{captured}");
+        }
+        assert!(bridge.pending.lock().unwrap().is_empty());
+        assert_eq!(deliveries.load(Ordering::SeqCst), 0);
+        assert_eq!(fixture.token_requests(), 0);
+        assert!(fixture.replies().is_empty());
+
+        let accepted = client
+            .post(format!("http://{address}/api/messages"))
+            .header("authorization", valid_authorization)
+            .body(fixture.activity("accepted-activity"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+        assert_eq!(deliveries.load(Ordering::SeqCst), 1);
+        assert_eq!(bridge.pending.lock().unwrap().len(), 1);
+        assert_eq!(fixture.token_requests(), 0);
+        let handle = bridge
+            .pending
+            .lock()
+            .unwrap()
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+        let receipt = bridge.reply(&handle, "accepted reply").await.unwrap();
+        assert_eq!(receipt.incoming_activity_id.as_str(), "accepted-activity");
+        assert_eq!(
+            receipt.outgoing_activity_id.as_str(),
+            "outgoing-activity-id"
+        );
+        assert_eq!(fixture.replies().len(), 1);
+        assert_eq!(fixture.replies()[0].1["text"], "accepted reply");
+        assert!(matches!(
+            bridge.reply(&handle, "duplicate reply").await,
+            Err(TeamsRuntimeError {
+                kind: TeamsRuntimeErrorKind::UnknownReplyHandle
+            })
+        ));
+        assert_eq!(fixture.replies().len(), 1);
+        server.abort();
+    }
 
     #[test]
     fn teams_error_display_fragments_start_lowercase() {

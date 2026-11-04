@@ -1,0 +1,29 @@
+{
+  "type": "message",
+  "id": "activity/with space",
+  "timestamp": "2026-10-16T21:39:40Z",
+  "localTimestamp": "2026-10-16T16:39:40-05:00",
+  "locale": "en-US",
+  "serviceUrl": "https://smba.trafficmanager.net/amer/",
+  "channelId": "msteams",
+  "from": {
+    "id": "teams-user-7",
+    "name": "Fixture user"
+  },
+  "recipient": {
+    "id": "teams-bot-9",
+    "name": "Fixture bot"
+  },
+  "conversation": {
+    "id": "conversation/with space",
+    "conversationType": "personal",
+    "tenantId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+  },
+  "channelData": {
+    "tenant": {
+      "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    }
+  },
+  "text": "hello from Teams",
+  "textFormat": "plain"
+}

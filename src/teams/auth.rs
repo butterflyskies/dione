@@ -213,6 +213,131 @@ impl From<ProbeErrorKind> for ProbeError {
     }
 }
 
+impl ProbeError {
+    pub(crate) fn rejection_stage(&self) -> &'static str {
+        match &self.kind {
+            ProbeErrorKind::InvalidMetadata(_) | ProbeErrorKind::InvalidKey(_) => {
+                "connector_metadata"
+            }
+            ProbeErrorKind::MissingBearer
+            | ProbeErrorKind::InvalidHeader(_)
+            | ProbeErrorKind::UnsupportedAlgorithm
+            | ProbeErrorKind::MissingKeyId
+            | ProbeErrorKind::UnknownKeyId
+            | ProbeErrorKind::InvalidToken(_)
+            | ProbeErrorKind::Expired
+            | ProbeErrorKind::NotYetValid => "connector_authentication",
+            ProbeErrorKind::Identity(_)
+            | ProbeErrorKind::InvalidActivity(_)
+            | ProbeErrorKind::UnsupportedActivity
+            | ProbeErrorKind::MissingText => "activity_schema",
+            ProbeErrorKind::ChannelDenied | ProbeErrorKind::ChannelNotEndorsed => "channel_policy",
+            ProbeErrorKind::ServiceUrlMismatch
+            | ProbeErrorKind::ServiceUrl(_)
+            | ProbeErrorKind::InvalidServiceUrl
+            | ProbeErrorKind::ServiceHostDenied
+            | ProbeErrorKind::InvalidReplyUrl => "service_url_policy",
+            ProbeErrorKind::TenantDenied => "tenant_policy",
+            ProbeErrorKind::ConversationDenied => "conversation_policy",
+        }
+    }
+
+    pub(crate) fn rejection_guidance(&self) -> &'static str {
+        match &self.kind {
+            ProbeErrorKind::InvalidToken(error) => match error.kind() {
+                jsonwebtoken::errors::ErrorKind::InvalidAudience => {
+                    "compare TEAMS_APP_ID with the Microsoft App ID on the Azure Bot resource"
+                }
+                jsonwebtoken::errors::ErrorKind::InvalidIssuer => {
+                    "check the bot cloud and the issuer advertised by trusted Bot Connector OpenID metadata"
+                }
+                jsonwebtoken::errors::ErrorKind::InvalidSignature => {
+                    "check the token signing key against current trusted Bot Connector JWKS; preserve signature validation"
+                }
+                _ => {
+                    "check required Bot Connector claims and token format against the trusted connector metadata"
+                }
+            },
+            ProbeErrorKind::MissingBearer | ProbeErrorKind::InvalidHeader(_) => {
+                "check that IIS and intermediate proxies forward a valid Authorization Bearer header unchanged"
+            }
+            ProbeErrorKind::InvalidMetadata(_) | ProbeErrorKind::InvalidKey(_) => {
+                "check trusted Bot Connector OpenID and JWKS retrieval and parsing"
+            }
+            ProbeErrorKind::MissingKeyId
+            | ProbeErrorKind::UnknownKeyId
+            | ProbeErrorKind::UnsupportedAlgorithm => {
+                "compare the incoming token key identifier and algorithm with current trusted Bot Connector metadata"
+            }
+            ProbeErrorKind::ChannelDenied | ProbeErrorKind::ChannelNotEndorsed => {
+                "check the msteams channel policy and the signing key's msteams endorsement; Web Chat is not enabled here"
+            }
+            ProbeErrorKind::Expired | ProbeErrorKind::NotYetValid => {
+                "check the backend UTC clock and incoming token lifetime; preserve expiry validation"
+            }
+            ProbeErrorKind::InvalidActivity(_) | ProbeErrorKind::Identity(_) => {
+                "check the Teams activity schema, native identifiers, and channelData.tenant.id; do not log the activity body"
+            }
+            ProbeErrorKind::ServiceUrlMismatch => {
+                "check that the authenticated token serviceurl matches the activity serviceUrl without proxy rewriting"
+            }
+            ProbeErrorKind::ServiceUrl(_)
+            | ProbeErrorKind::InvalidServiceUrl
+            | ProbeErrorKind::InvalidReplyUrl => {
+                "check that the activity serviceUrl is valid HTTPS without credentials, query, fragment, or a nonstandard port"
+            }
+            ProbeErrorKind::ServiceHostDenied => {
+                "compare the authenticated serviceUrl host with TEAMS_ALLOWED_SERVICE_HOST before changing the allowlist"
+            }
+            ProbeErrorKind::UnsupportedActivity => {
+                "check the activity type; this ingress currently admits message activities only"
+            }
+            ProbeErrorKind::TenantDenied => {
+                "compare TEAMS_TENANT_ID with the activity channelData.tenant.id and the intended Teams tenant"
+            }
+            ProbeErrorKind::ConversationDenied => {
+                "compare the authenticated conversation.id with teams.allowed_conversations in Dione config; retain explicit access restrictions"
+            }
+            ProbeErrorKind::MissingText => "check that the Teams message activity contains text",
+        }
+    }
+
+    pub(crate) fn rejection_code(&self) -> &'static str {
+        match &self.kind {
+            ProbeErrorKind::Identity(_) => "invalid_activity_identity",
+            ProbeErrorKind::InvalidMetadata(_) => "invalid_connector_metadata",
+            ProbeErrorKind::MissingBearer => "missing_bearer",
+            ProbeErrorKind::InvalidHeader(_) => "invalid_token_header",
+            ProbeErrorKind::UnsupportedAlgorithm => "unsupported_token_algorithm",
+            ProbeErrorKind::MissingKeyId => "missing_token_key_id",
+            ProbeErrorKind::UnknownKeyId => "unknown_token_key_id",
+            ProbeErrorKind::ChannelDenied => "channel_denied",
+            ProbeErrorKind::ChannelNotEndorsed => "channel_not_endorsed",
+            ProbeErrorKind::InvalidKey(_) => "invalid_signing_key",
+            ProbeErrorKind::InvalidToken(error) => match error.kind() {
+                jsonwebtoken::errors::ErrorKind::InvalidAudience => "invalid_token_audience",
+                jsonwebtoken::errors::ErrorKind::InvalidIssuer => "invalid_token_issuer",
+                jsonwebtoken::errors::ErrorKind::InvalidSignature => "invalid_token_signature",
+                jsonwebtoken::errors::ErrorKind::MissingRequiredClaim(_) => "missing_token_claim",
+                jsonwebtoken::errors::ErrorKind::Json(_) => "invalid_token_claims_json",
+                _ => "invalid_connector_token",
+            },
+            ProbeErrorKind::Expired => "token_expired",
+            ProbeErrorKind::NotYetValid => "token_not_yet_valid",
+            ProbeErrorKind::InvalidActivity(_) => "invalid_activity_json",
+            ProbeErrorKind::ServiceUrlMismatch => "service_url_mismatch",
+            ProbeErrorKind::ServiceUrl(_) => "invalid_service_url_syntax",
+            ProbeErrorKind::InvalidServiceUrl => "invalid_service_url",
+            ProbeErrorKind::ServiceHostDenied => "service_host_denied",
+            ProbeErrorKind::UnsupportedActivity => "unsupported_activity_type",
+            ProbeErrorKind::TenantDenied => "tenant_denied",
+            ProbeErrorKind::ConversationDenied => "conversation_denied",
+            ProbeErrorKind::MissingText => "missing_message_text",
+            ProbeErrorKind::InvalidReplyUrl => "invalid_reply_url",
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 /// A failed connector metadata, token, Activity, or reply-correlation check.
 pub enum ProbeErrorKind {
@@ -661,6 +786,60 @@ fn authenticated_activity_preserves_every_value_needed_for_a_correlated_reply() 
     assert_eq!(reply.body.reply_to_id, "activity/with space");
     assert_eq!(reply.body.from.id, "teams-bot-9");
     assert_eq!(reply.body.recipient.id, "teams-user-7");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sdk_v2_1_1_personal_message_retains_current_authentication_and_reply_contract() {
+        let activity: Value = serde_json::from_slice(include_bytes!(
+            "../../tests/fixtures/teams/sdk-v2.1.1-personal-message.json"
+        ))
+        .unwrap();
+        let envelope = authenticate_fixture(&fixture_claims(), &activity).unwrap();
+        assert_eq!(envelope.text, "hello from Teams");
+        assert_eq!(envelope.reference.channel_id, "msteams");
+        assert_eq!(
+            envelope.reference.dione_authorized_tenant_id.as_str(),
+            TENANT_ID
+        );
+        let request = correlated_reply(&envelope, "hello back").unwrap();
+        assert_eq!(request.method, Method::POST);
+        assert_eq!(
+            request.url.as_str(),
+            "https://smba.trafficmanager.net/amer/v3/conversations/conversation%2Fwith%20space/activities/activity%2Fwith%20space"
+        );
+        assert_eq!(
+            serde_json::to_value(request.body).unwrap(),
+            json!({
+                "type": "message",
+                "from": { "id": "teams-bot-9" },
+                "recipient": { "id": "teams-user-7" },
+                "conversation": { "id": "conversation/with space" },
+                "replyToId": "activity/with space",
+                "text": "hello back"
+            })
+        );
+
+        let mut wrong_tenant = activity.clone();
+        wrong_tenant["channelData"]["tenant"]["id"] = json!("another-tenant");
+        assert!(matches!(
+            authenticate_fixture(&fixture_claims(), &wrong_tenant),
+            Err(ProbeError {
+                kind: ProbeErrorKind::TenantDenied
+            })
+        ));
+        let mut wrong_conversation = activity;
+        wrong_conversation["conversation"]["id"] = json!("another-conversation");
+        assert!(matches!(
+            authenticate_fixture(&fixture_claims(), &wrong_conversation),
+            Err(ProbeError {
+                kind: ProbeErrorKind::ConversationDenied
+            })
+        ));
+    }
 }
 
 #[test]

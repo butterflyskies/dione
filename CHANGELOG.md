@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.86.1]
+
+### Added
+
+- Log Teams ingress rejection categories, remediation and validated IIS request
+  correlation IDs without credentials, Activity content or raw error values.
+- Pin the Teams SDK v2.1.1 compatibility target and a synthetic personal-message
+  fixture that protects the current scoped authentication and reply contract.
+
 ## [0.86.0]
 
 ### Added
