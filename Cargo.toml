@@ -89,5 +89,11 @@ lto = true
 strip = true
 codegen-units = 1
 
+# Faster PR builds; the shipped binaries still use [profile.release].
+[profile.review]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
