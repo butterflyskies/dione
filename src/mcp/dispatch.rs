@@ -22,8 +22,8 @@ use crate::{
         },
     },
     no_rly::queue::HoldHandle,
-    rendering,
 };
+use dione_rendering as rendering;
 use serde_json::{Value, json};
 
 fn check_admin_gate(config: &crate::config::LoadedConfig) -> Result<(), String> {

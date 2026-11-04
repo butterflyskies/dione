@@ -721,54 +721,53 @@ fn release_version_helper_reads_dione_package() {
 #[test]
 fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     let workflow = include_str!("../.github/workflows/publish-crate.yml");
-    let (verify_dione, remaining) = workflow
-        .split_once("\n  publish-crate:")
-        .expect("release workflow must separate Dione verification from publication");
-    let (publish_dione, reconcile_dione) = remaining
-        .split_once("\n  reconcile-dione:")
-        .expect("release workflow must reconcile Dione outside the OIDC job");
+    let (verify, remaining) = workflow.split_once("\n  publish-rendering:").unwrap();
+    let (publish_rendering, remaining) = remaining.split_once("\n  reconcile-rendering:").unwrap();
+    let (reconcile_rendering, remaining) = remaining.split_once("\n  publish-crate:").unwrap();
+    let (publish_dione, reconcile_dione) = remaining.split_once("\n  reconcile-dione:").unwrap();
 
     assert_eq!(
         workflow
             .matches("scripts/verify-public-package-privacy.sh")
             .count(),
-        workflow.matches("cargo package -p").count(),
-        "every exact package archive must cross the privacy verifier"
+        workflow.matches("cargo package -p").count()
+            + 2 * workflow.matches("cargo package --workspace").count(),
+        "every workspace archive must cross the privacy verifier"
     );
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione"));
-    assert!(workflow.contains("scripts/verify-crates-io-owners.sh dione"));
+    for job in [verify, reconcile_rendering, reconcile_dione] {
+        assert!(!job.contains("CARGO_REGISTRY_TOKEN"));
+        assert!(!job.contains("id-token: write"));
+    }
+    assert!(verify.contains("cargo package --workspace --locked"));
+    assert!(workflow.contains("scripts/crates-io-package-state.sh dione "));
+    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-rendering "));
     assert!(workflow.contains("github:butterflyskies:lacuna-blinkers"));
     assert!(workflow.contains("github:butterflyskies:superadmins"));
-    assert!(!verify_dione.contains("CARGO_REGISTRY_TOKEN"));
-    assert!(!verify_dione.contains("id-token: write"));
-    assert!(!reconcile_dione.contains("CARGO_REGISTRY_TOKEN"));
-    assert!(!reconcile_dione.contains("id-token: write"));
-    assert!(reconcile_dione.contains("needs: [verify-dione, publish-crate]"));
-    assert!(reconcile_dione.contains(
-        "always() &&\n      needs.verify-dione.result == 'success' &&\n      (needs.publish-crate.result == 'success' || needs.publish-crate.result == 'skipped')"
-    ));
-    assert!(publish_dione.contains("id-token: write"));
+    assert!(publish_dione.contains("needs: [verify-dione, reconcile-rendering]"));
+    assert!(reconcile_dione.contains("needs: [verify-dione, reconcile-rendering, publish-crate]"));
+    assert!(reconcile_dione.contains("needs.reconcile-rendering.result == 'success'"));
+    assert!(reconcile_rendering.contains("needs: [verify-dione, publish-rendering]"));
+    assert!(reconcile_rendering.contains("--ignore-vcs-info"));
+    assert!(!reconcile_dione.contains("--ignore-vcs-info"));
     assert!(workflow.contains("group: publish-crate-${{ inputs.tag }}"));
     assert!(publish_dione.contains("cargo package -p dione --locked --no-verify"));
-    assert!(!publish_dione.contains("cargo package -p dione --locked\n"));
-    assert!(publish_dione.contains("cargo publish -p dione --locked --no-verify"));
-    assert!(reconcile_dione.contains("Reconcile exact Dione registry state"));
     assert!(reconcile_dione.contains("cargo package -p dione --locked\n"));
 
-    let upload_step = publish_dione
-        .split_once("- name: Upload pre-verified")
-        .expect("publish workflow must have a privileged upload step")
-        .1;
-    let (upload_command, upload_env) = upload_step
-        .split_once("\n        env:")
-        .expect("upload step must scope its token in an env block");
-    assert!(upload_command.contains("continue-on-error: true"));
-    assert!(upload_command.contains("run: cargo publish"));
-    assert!(upload_env.contains("CARGO_REGISTRY_TOKEN"));
-    assert!(!upload_command.contains("scripts/crates-io-package-state.sh"));
-    assert!(!upload_command.contains("cargo package"));
-    assert!(!upload_env.contains("scripts/crates-io-package-state.sh"));
-    assert!(!upload_env.contains("cargo package"));
+    for upload_job in [publish_rendering, publish_dione] {
+        assert!(upload_job.contains("id-token: write"));
+        let upload_step = upload_job
+            .split_once("- name: Upload pre-verified")
+            .unwrap()
+            .1;
+        let (command, environment) = upload_step.split_once("\n        env:").unwrap();
+        assert!(command.contains("continue-on-error: true"));
+        assert!(command.contains("run: cargo publish"));
+        assert!(environment.contains("CARGO_REGISTRY_TOKEN"));
+        assert!(!command.contains("scripts/crates-io-package-state.sh"));
+        assert!(!command.contains("cargo package"));
+        assert!(!environment.contains("scripts/crates-io-package-state.sh"));
+        assert!(!environment.contains("cargo package"));
+    }
 }
 
 #[test]
@@ -829,22 +828,24 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
         .expect("the package boundary must remain separate from MSRV")
         .0;
     assert_eq!(
-        package.matches("cargo package -p dione --locked\n").count(),
+        package
+            .matches("cargo package --workspace --locked\n")
+            .count(),
         1
     );
     let package_lines = package.lines().map(str::trim).collect::<Vec<_>>();
     let archive_package_calls = package_lines
         .iter()
         .enumerate()
-        .filter(|(_, line)| line.starts_with("cargo package -p ") && !line.contains(" --list"))
+        .filter(|(_, line)| line.starts_with("cargo package ") && !line.contains(" --list"))
         .collect::<Vec<_>>();
     assert_eq!(archive_package_calls.len(), 1);
     assert_eq!(
         package
             .matches("scripts/verify-public-package-privacy.sh")
             .count(),
-        archive_package_calls.len(),
-        "every archive-producing package call must cross the privacy verifier"
+        2 * archive_package_calls.len(),
+        "every archive-producing workspace package call must cross the privacy verifier"
     );
     for (index, _) in archive_package_calls {
         assert!(
@@ -861,7 +862,7 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
         );
     }
     assert!(package.contains(
-        "cargo package -p dione --locked\n          dione_version=\"$(scripts/workspace-package-version.sh dione)\"\n          dione_crate=\"target/package/dione-${dione_version}.crate\"\n          scripts/verify-public-package-privacy.sh \"${dione_crate}\""
+        "cargo package --workspace --locked\n          dione_version=\"$(scripts/workspace-package-version.sh dione)\"\n          dione_crate=\"target/package/dione-${dione_version}.crate\"\n          scripts/verify-public-package-privacy.sh \"${dione_crate}\""
     ));
 
     let required = workflow

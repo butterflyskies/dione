@@ -1,13 +1,11 @@
 //! MCP projections of rendered files and Discord rendering outcomes.
 
-use crate::{
-    discord::{
-        messaging_wire,
-        rendering::{RenderToChannelError, RenderToChannelErrorKind},
-    },
-    rendering::{
-        FileRenderError, FileRenderErrorKind, PersistedImage, RenderError, RenderErrorKind,
-    },
+use crate::discord::{
+    messaging_wire,
+    rendering::{RenderToChannelError, RenderToChannelErrorKind},
+};
+use dione_rendering::{
+    FileRenderError, FileRenderErrorKind, PersistedImage, RenderError, RenderErrorKind,
 };
 use serde_json::{Value, json};
 use serenity::model::id::MessageId;
@@ -170,10 +168,10 @@ mod contract_tests {
             AuditTrail, ConstructFeedback, HookContext, HookDecision, HookName, HookOutput,
             PipelineMode, PreSendHook, PreSendPipeline,
         },
-        rendering::render_file,
         state::new_state,
     };
     use camino::Utf8PathBuf;
+    use dione_rendering::render_file;
     use serenity::model::id::ChannelId;
     use std::{
         sync::{Arc, Mutex},

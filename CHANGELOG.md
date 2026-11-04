@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.87.0]
+
+### Changed
+
+- Extract LaTeX rendering and retained PNG files into the public
+  `dione-rendering` workspace crate. Discord delivery and MCP response formats
+  retain their existing behavior. Package verification covers both crates, and
+  release publication reconciles rendering before publishing Dione.
+
 ## [0.86.1]
 
 ### Added

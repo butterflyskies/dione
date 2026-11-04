@@ -126,6 +126,8 @@ jobs:
       # Production feature set: proves the endpoint-override seam is absent.
       - name: Verify production oneshot behavior
         run: cargo nextest run --workspace --locked --no-fail-fast --test oneshot_send
+      - name: Check rendering public API contracts
+        run: cargo test --workspace --doc --locked
       - name: Record storage after production tests
         if: ${{ always() }}
         run: |
@@ -147,12 +149,14 @@ jobs:
           toolchain: "1.98.0"
       - name: Reject private and git-backed package sources
         run: cargo test --test public_package --locked
-      - name: Verify publishable Dione package
+      - name: Verify publishable workspace packages
         run: |
-          cargo package -p dione --locked
+          cargo package --workspace --locked
           dione_version="$(scripts/workspace-package-version.sh dione)"
           dione_crate="target/package/dione-${dione_version}.crate"
           scripts/verify-public-package-privacy.sh "${dione_crate}"
+          rendering_version="$(scripts/workspace-package-version.sh dione-rendering)"
+          scripts/verify-public-package-privacy.sh "target/package/dione-rendering-${rendering_version}.crate"
 
   msrv:
     name: Rust 1.98 minimum supported version

@@ -45,12 +45,15 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy --workspace --all-targets --locked --features oneshot-test-seam -- -D warnings
 cargo nextest run --workspace --locked --no-fail-fast --features oneshot-test-seam
 cargo nextest run --workspace --locked --no-fail-fast --test oneshot_send
+cargo test --workspace --doc --locked
 python3 -B -m unittest discover -s .forgejo/scripts -p 'test_*.py'
 cargo +1.98.0 check --workspace --all-targets --locked
-cargo package -p dione --locked
+cargo package --workspace --locked
 dione_version=$(sh scripts/workspace-package-version.sh dione)
 target_dir=${CARGO_TARGET_DIR:-target}
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-${dione_version}.crate"
+rendering_version=$(sh scripts/workspace-package-version.sh dione-rendering)
+sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-rendering-${rendering_version}.crate"
 cargo deny check
 cargo build --release --workspace --bins --locked
 "${target_dir}/release/dione" --version

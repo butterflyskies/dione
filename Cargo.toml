@@ -1,9 +1,9 @@
 [workspace]
-members = ["."]
+members = [".", "crates/dione-rendering"]
 
 [package]
 name = "dione"
-version = "0.86.1"
+version = "0.87.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -14,14 +14,25 @@ keywords = ["discord", "mcp", "claude-code", "codex", "bot"]
 categories = ["command-line-utilities"]
 
 [workspace.dependencies]
+dione-rendering = { version = "=0.1.0", path = "crates/dione-rendering" }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 native-tls = { version = "0.2", features = ["vendored"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 serde_path_to_error = "0.1"
 png = "0.17.16"
+thiserror = "2"
+tempfile = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+typst = "0.14.2"
+typst-render = "0.14.2"
+typst-assets = { version = "0.14.2", features = ["fonts"] }
+typst-as-lib = "0.15.4"
+mitex = "0.2.4"
 
 [dependencies]
-png.workspace = true
+dione-rendering.workspace = true
 arc-swap = "1"
 axum = "0.8"
 clap = { version = "4", features = ["derive", "env"] }
@@ -29,15 +40,15 @@ serenity = { version = "0.12", default-features = false, features = ["client", "
 native-tls.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "fs", "io-util", "io-std", "net", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
-serde = { version = "1", features = ["derive"] }
+serde.workspace = true
 serde_path_to_error.workspace = true
-serde_json = "1"
+serde_json.workspace = true
 serde_yaml_ng = "0.10"
 toml = "1"
 toml_edit = "0.25"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
-thiserror = "2"
+thiserror.workspace = true
 color-eyre = "0.6"
 fs2 = "0.4"
 libc = "0.2"
@@ -53,16 +64,11 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
 secrecy = { version = "0.8", features = ["serde"] }
 url = "2"
-sha2 = "0.10"
+sha2.workspace = true
 uuid = { version = "1", features = ["v4"] }
 rmcp = { version = "1.1", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
 tokio-tungstenite = { version = "0.21", default-features = false, features = ["handshake"] }
-typst = "0.14.2"
-typst-render = "0.14.2"
-typst-assets = { version = "0.14.2", features = ["fonts"] }
-typst-as-lib = "0.15.4"
-mitex = "0.2.4"
-tempfile = "3"
+tempfile.workspace = true
 
 [features]
 # Compile-time test seam: lets the one-shot binary and `oneshot::run` be
@@ -71,6 +77,7 @@ tempfile = "3"
 oneshot-test-seam = []
 
 [dev-dependencies]
+png.workspace = true
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 rcgen = "0.13"
 rustls.workspace = true
@@ -80,7 +87,7 @@ proptest = "1"
 test-case = "3"
 pretty_assertions = "1"
 parking_lot = "0.12"
-tempfile = "3"
+tempfile.workspace = true
 tokio = { version = "1", features = ["test-util", "process"] }
 trybuild = "1"
 

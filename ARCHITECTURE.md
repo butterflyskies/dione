@@ -16,6 +16,15 @@ The former design on this page proposed direct Anthropic inference, SQLite,
 Qdrant, and local ONNX embeddings. Those are historical proposals, not the
 runtime or dependencies in [Cargo.toml](Cargo.toml).
 
+## Workspace capabilities
+
+The `dione` package composes platform adapters, harnesses, and MCP tools.
+The public `dione-rendering` package owns LaTeX conversion, Typst compilation,
+PNG encoding, and retained files. Its successful artifact types have private
+fields; compiler and persistence errors retain their concrete causes.
+See the [crate split plan](docs/design/plugin-crates.md) for the next boundaries
+and the package release requirements.
+
 ## Processes and transports
 
 ```mermaid
@@ -256,7 +265,7 @@ Publishing a new snapshot does not reconstruct those captured values.
 
 [Cargo.toml](Cargo.toml) is the dependency inventory. The main runtime uses
 Tokio, Serenity, serde, ArcSwap, and tracing. Reqwest supports HTTP integrations.
-Typst, its renderer and fonts, and mitex support [PNG rendering and retained files](src/rendering.rs).
+Typst, its renderer and fonts, and mitex support [PNG rendering and retained files](crates/dione-rendering/src/lib.rs).
 [Discord rendering](src/discord/rendering.rs) authorizes and sends math attachments;
 [MCP rendering projection](src/mcp/render_wire.rs) formats typed results and failures.
 The package currently requires Rust 1.98 and edition 2024. Unix sockets and Unix

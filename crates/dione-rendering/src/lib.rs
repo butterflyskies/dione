@@ -1,5 +1,7 @@
 //! LaTeX compilation and retained PNG files.
 
+#![warn(missing_docs)]
+
 use std::{
     io,
     path::{Path, PathBuf},
@@ -8,75 +10,113 @@ use thiserror::Error;
 use typst::layout::PagedDocument;
 use typst_as_lib::{TypstAsLibError, TypstEngine};
 
+/// PNG bytes produced by a successful render.
+///
+/// Callers cannot fabricate a successful encoding receipt.
+///
+/// ```compile_fail
+/// let image = dione_rendering::PngImage { bytes: Vec::new() };
+/// ```
 #[derive(Debug)]
-pub(crate) struct PngImage {
+pub struct PngImage {
     bytes: Vec<u8>,
 }
 
 impl PngImage {
-    pub(crate) fn as_bytes(&self) -> &[u8] {
+    /// Borrow the encoded PNG bytes.
+    pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 }
 
+/// A PNG file retained after successful persistence.
+///
+/// Callers cannot fabricate a successful persistence receipt.
+///
+/// ```compile_fail
+/// let image = dione_rendering::PersistedImage {
+///     path: std::path::PathBuf::from("unwritten.png"),
+///     size_bytes: 0,
+/// };
+/// ```
 #[derive(Debug)]
-pub(crate) struct PersistedImage {
+pub struct PersistedImage {
     path: PathBuf,
     size_bytes: usize,
 }
 
 impl PersistedImage {
-    pub(crate) fn path(&self) -> &Path {
+    /// Return the retained file path.
+    pub fn path(&self) -> &Path {
         &self.path
     }
 
-    pub(crate) fn size_bytes(&self) -> usize {
+    /// Return the encoded file size in bytes.
+    pub fn size_bytes(&self) -> usize {
         self.size_bytes
     }
 }
 
+/// A failure to compile or encode a LaTeX expression.
 #[derive(Debug, Error)]
 #[error("{kind}")]
-pub(crate) struct RenderError {
+pub struct RenderError {
+    /// The rendering failure and its original cause.
     #[source]
-    pub(crate) kind: RenderErrorKind,
+    pub kind: RenderErrorKind,
 }
 
+/// Rendering failures with concrete compiler and encoder causes.
 #[derive(Debug, Error)]
-pub(crate) enum RenderErrorKind {
+pub enum RenderErrorKind {
+    /// The expression uses the unsupported conditional.
     #[error("\\iftypst is not supported")]
     IfTypstUnsupported,
+    /// LaTeX conversion failed.
     #[error("latex parse error: {0}")]
     Parse(String),
+    /// Conversion produced an unsafe math delimiter.
     #[error("expression produces unsafe typst output")]
     UnsafeTypstOutput,
+    /// Typst compilation failed.
     #[error("typst compile error: {0}")]
     Compile(#[source] TypstAsLibError),
+    /// Compilation produced no pages.
     #[error("typst produced no pages")]
     NoPages,
+    /// PNG encoding failed.
     #[error("png encode error: {0}")]
     Encode(#[source] png::EncodingError),
 }
 
+/// A failure to render or retain a PNG file.
 #[derive(Debug, Error)]
 #[error("{kind}")]
-pub(crate) struct FileRenderError {
+pub struct FileRenderError {
+    /// The file rendering failure and its original cause.
     #[source]
-    pub(crate) kind: FileRenderErrorKind,
+    pub kind: FileRenderErrorKind,
 }
 
+/// Rendering and persistence failures.
 #[derive(Debug, Error)]
-pub(crate) enum FileRenderErrorKind {
+pub enum FileRenderErrorKind {
+    /// Rendering failed before a file was created.
     #[error(transparent)]
     Render(RenderError),
+    /// Temporary file creation failed.
     #[error("failed to create temp file: {0}")]
     Create(#[source] io::Error),
+    /// Writing the encoded PNG failed.
     #[error("failed to write png to `{path}`: {source}", path = path.display())]
     Write {
+        /// The destination path.
         path: PathBuf,
+        /// The original write failure.
         #[source]
         source: io::Error,
     },
+    /// Retaining the temporary file failed.
     #[error("failed to persist temp file: {0}")]
     Persist(#[source] tempfile::PathPersistError),
 }
@@ -90,7 +130,7 @@ $<<<MATH_CONTENT>>>$
 const PIXEL_PER_PT: f32 = 3.0;
 
 /// Render a LaTeX expression to PNG bytes.
-pub(crate) fn render_png(latex: &str) -> Result<PngImage, RenderError> {
+pub fn render_png(latex: &str) -> Result<PngImage, RenderError> {
     if latex.contains(r"\iftypst") {
         return Err(RenderError {
             kind: RenderErrorKind::IfTypstUnsupported,
@@ -155,7 +195,8 @@ fn render_typst_math_to_png(typst_math: &str) -> Result<PngImage, RenderError> {
         })
 }
 
-pub(crate) fn render_file(latex: &str) -> Result<PersistedImage, FileRenderError> {
+/// Render a LaTeX expression and retain its PNG in a temporary file.
+pub fn render_file(latex: &str) -> Result<PersistedImage, FileRenderError> {
     let png = render_png(latex).map_err(|source| FileRenderError {
         kind: FileRenderErrorKind::Render(source),
     })?;

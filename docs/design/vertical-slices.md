@@ -228,7 +228,7 @@ adapters when a concrete use case supplies the requirements.
 
 ## Rendering ownership
 
-LaTeX compilation and retained PNG creation belong to `src/rendering.rs`. Only successful encoding constructs a PNG value, and only successful tempfile persistence constructs a retained-file receipt. Their private fields prevent callers from fabricating either artifact. Native paths and concrete compiler, encoder, I/O, and persistence causes remain typed until MCP projects them.
+LaTeX compilation and retained PNG creation belong to `crates/dione-rendering/src/lib.rs`. Only successful encoding constructs a PNG value, and only successful tempfile persistence constructs a retained-file receipt. Their private fields prevent callers from fabricating either artifact. Native paths and concrete compiler, encoder, I/O, and persistence causes remain typed until MCP projects them.
 
 `src/discord/rendering.rs` owns the complete authorized render-and-send operation. Captionless overrides and outbound permission are checked before compilation. The existing attachment helper handles caption hooks, redirects, transport, and successful sent-ID registration. Channel errors retain the requested channel and the full messaging error.
 

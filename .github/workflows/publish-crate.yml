@@ -22,6 +22,8 @@ jobs:
     outputs:
       dione-version: ${{ steps.package.outputs.dione-version }}
       publish-dione: ${{ steps.package.outputs.publish-dione }}
+      rendering-version: ${{ steps.package.outputs.rendering-version }}
+      publish-rendering: ${{ steps.package.outputs.publish-rendering }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -30,14 +32,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
         with:
           toolchain: "1.98.0"
-      - name: Verify Dione package and namespace
+      - name: Verify workspace packages and namespaces
         id: package
         run: |
           set -euo pipefail
 
           dione_version="$(scripts/workspace-package-version.sh dione)"
           dione_crate="target/package/dione-${dione_version}.crate"
-          cargo package -p dione --locked
+          cargo package --workspace --locked
           scripts/verify-public-package-privacy.sh "${dione_crate}"
           scripts/verify-crates-io-owners.sh dione \
             butterflysky \
@@ -50,8 +52,116 @@ jobs:
           esac
           echo "dione-version=${dione_version}" >> "${GITHUB_OUTPUT}"
 
-  publish-crate:
+          rendering_version="$(scripts/workspace-package-version.sh dione-rendering)"
+          rendering_crate="target/package/dione-rendering-${rendering_version}.crate"
+          scripts/verify-public-package-privacy.sh "${rendering_crate}"
+          scripts/verify-crates-io-owners.sh dione-rendering \
+            butterflysky \
+            github:butterflyskies:lacuna-blinkers \
+            github:butterflyskies:superadmins
+          case "$(scripts/crates-io-package-state.sh dione-rendering "${rendering_version}" "${rendering_crate}" --ignore-vcs-info)" in
+            published) echo "publish-rendering=false" >> "${GITHUB_OUTPUT}" ;;
+            missing) echo "publish-rendering=true" >> "${GITHUB_OUTPUT}" ;;
+          esac
+          echo "rendering-version=${rendering_version}" >> "${GITHUB_OUTPUT}"
+
+  publish-rendering:
     needs: verify-dione
+    if: needs.verify-dione.outputs.publish-rendering == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: "1.98.0"
+      - name: Recheck rendering package contents
+        id: preflight
+        run: |
+          set -euo pipefail
+
+          rendering_version="$(scripts/workspace-package-version.sh dione-rendering)"
+          test "${rendering_version}" = "${{ needs.verify-dione.outputs.rendering-version }}"
+          cargo package -p dione-rendering --locked --no-verify
+          rendering_crate="target/package/dione-rendering-${rendering_version}.crate"
+          scripts/verify-public-package-privacy.sh "${rendering_crate}"
+          scripts/verify-crates-io-owners.sh dione-rendering \
+            butterflysky \
+            github:butterflyskies:lacuna-blinkers \
+            github:butterflyskies:superadmins
+
+          case "$(scripts/crates-io-package-state.sh dione-rendering "${rendering_version}" "${rendering_crate}" --ignore-vcs-info)" in
+            published)
+              echo "rendering ${rendering_version} was already published with matching contents"
+              echo "upload=false" >> "${GITHUB_OUTPUT}"
+              ;;
+            missing)
+              echo "upload=true" >> "${GITHUB_OUTPUT}"
+              ;;
+          esac
+      - name: Authenticate with crates.io
+        if: steps.preflight.outputs.upload == 'true'
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
+        id: auth
+      - name: Upload pre-verified rendering package
+        if: steps.preflight.outputs.upload == 'true'
+        continue-on-error: true
+        run: cargo publish -p dione-rendering --locked --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  reconcile-rendering:
+    needs: [verify-dione, publish-rendering]
+    if: >-
+      always() &&
+      needs.verify-dione.result == 'success' &&
+      (needs.publish-rendering.result == 'success' || needs.publish-rendering.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: "1.98.0"
+      - name: Reconcile rendering registry contents
+        run: |
+          set -euo pipefail
+
+          rendering_version="${{ needs.verify-dione.outputs.rendering-version }}"
+          for attempt in $(seq 1 20); do
+            if timeout 10s cargo info --registry crates-io "dione-rendering@${rendering_version}" > /dev/null 2>&1; then
+              break
+            fi
+            if [ "${attempt}" = 20 ]; then
+              echo "Cargo could not resolve dione-rendering ${rendering_version} after bounded retries" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          cargo package -p dione-rendering --locked
+          rendering_crate="target/package/dione-rendering-${rendering_version}.crate"
+          scripts/verify-public-package-privacy.sh "${rendering_crate}"
+          test "$(scripts/crates-io-package-state.sh dione-rendering "${rendering_version}" "${rendering_crate}" --ignore-vcs-info)" = published
+          scripts/verify-crates-io-owners.sh dione-rendering \
+            butterflysky \
+            github:butterflyskies:lacuna-blinkers \
+            github:butterflyskies:superadmins
+
+  publish-crate:
+    needs: [verify-dione, reconcile-rendering]
     if: needs.verify-dione.outputs.publish-dione == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -103,10 +213,11 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   reconcile-dione:
-    needs: [verify-dione, publish-crate]
+    needs: [verify-dione, reconcile-rendering, publish-crate]
     if: >-
       always() &&
       needs.verify-dione.result == 'success' &&
+      needs.reconcile-rendering.result == 'success' &&
       (needs.publish-crate.result == 'success' || needs.publish-crate.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 20

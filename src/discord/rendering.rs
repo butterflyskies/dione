@@ -3,8 +3,8 @@
 use crate::{
     discord::messaging::{self, MessagingCtx, MessagingError, OutboundSurface},
     pre_send::HookName,
-    rendering::{self, RenderError},
 };
+use dione_rendering::{self as rendering, RenderError};
 use serenity::{
     builder::CreateAttachment,
     model::id::{ChannelId, MessageId},

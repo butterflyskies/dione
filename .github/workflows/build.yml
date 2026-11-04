@@ -32,9 +32,10 @@ jobs:
             -o /tmp/cargo-nextest.tar.gz
           echo "8e38b16299864c9f597c9a1e2caf25b7e8b598ffc659ec014c2c735a9befd8fa  /tmp/cargo-nextest.tar.gz" | sha256sum -c -
           tar xzf /tmp/cargo-nextest.tar.gz -C /usr/local/bin
-      - run: cargo fmt --check
-      - run: cargo clippy -- -D warnings
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo nextest run --workspace --no-fail-fast
+      - run: cargo test --workspace --doc --locked
 
   native-build:
     name: Native release build (${{ matrix.os }})
