@@ -3,7 +3,6 @@
 use crate::{
     attention::delivery::AttentionDirective,
     core::{
-        ActorRef, ConversationRef, MessageRef,
         delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
         events::{
             ControlEvent, CoordinationNotice, MessageCreated, ObservedText, OrdinaryEvent,
@@ -13,6 +12,7 @@ use crate::{
     evidence::locators::SentexRole,
     timestamp::format_compact,
 };
+use dione_contracts::{ActorRef, ConversationRef, MessageRef};
 use serde::{Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
 

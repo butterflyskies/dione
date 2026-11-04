@@ -26,6 +26,8 @@ jobs:
       publish-rendering: ${{ steps.package.outputs.publish-rendering }}
       durable-version: ${{ steps.package.outputs.durable-version }}
       publish-durable: ${{ steps.package.outputs.publish-durable }}
+      contracts-version: ${{ steps.package.outputs.contracts-version }}
+      publish-contracts: ${{ steps.package.outputs.publish-contracts }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -82,6 +84,20 @@ jobs:
             missing) echo "publish-durable=true" >> "${GITHUB_OUTPUT}" ;;
           esac
           echo "durable-version=${durable_version}" >> "${GITHUB_OUTPUT}"
+
+          contracts_version="$(scripts/workspace-package-version.sh dione-contracts)"
+          contracts_crate="target/package/dione-contracts-${contracts_version}.crate"
+          scripts/verify-public-package-privacy.sh "${contracts_crate}"
+          scripts/verify-crates-io-owners.sh dione-contracts \
+            butterflysky \
+            github:butterflyskies:lacuna-blinkers \
+            github:butterflyskies:superadmins
+          package_state="$(scripts/crates-io-package-state.sh dione-contracts "${contracts_version}" "${contracts_crate}" --ignore-vcs-info)"
+          case "$package_state" in
+            published) echo "publish-contracts=false" >> "${GITHUB_OUTPUT}" ;;
+            missing) echo "publish-contracts=true" >> "${GITHUB_OUTPUT}" ;;
+          esac
+          echo "contracts-version=${contracts_version}" >> "${GITHUB_OUTPUT}"
 
   publish-rendering:
     needs: verify-dione
@@ -275,8 +291,104 @@ jobs:
             github:butterflyskies:lacuna-blinkers \
             github:butterflyskies:superadmins
 
+  publish-contracts:
+    needs: verify-dione
+    if: needs.verify-dione.outputs.publish-contracts == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: "1.98.0"
+      - name: Recheck contracts package contents
+        id: preflight
+        run: |
+          set -euo pipefail
+
+          contracts_version="$(scripts/workspace-package-version.sh dione-contracts)"
+          test "${contracts_version}" = "${{ needs.verify-dione.outputs.contracts-version }}"
+          cargo package -p dione-contracts --locked --no-verify
+          contracts_crate="target/package/dione-contracts-${contracts_version}.crate"
+          scripts/verify-public-package-privacy.sh "${contracts_crate}"
+          scripts/verify-crates-io-owners.sh dione-contracts \
+            butterflysky \
+            github:butterflyskies:lacuna-blinkers \
+            github:butterflyskies:superadmins
+
+          package_state="$(scripts/crates-io-package-state.sh dione-contracts "${contracts_version}" "${contracts_crate}" --ignore-vcs-info)"
+          case "$package_state" in
+            published)
+              echo "contracts ${contracts_version} was already published with matching contents"
+              echo "upload=false" >> "${GITHUB_OUTPUT}"
+              ;;
+            missing)
+              echo "upload=true" >> "${GITHUB_OUTPUT}"
+              ;;
+          esac
+      - name: Authenticate with crates.io
+        if: steps.preflight.outputs.upload == 'true'
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
+        id: auth
+      - name: Upload pre-verified contracts package
+        if: steps.preflight.outputs.upload == 'true'
+        continue-on-error: true
+        run: cargo publish -p dione-contracts --locked --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  reconcile-contracts:
+    needs: [verify-dione, publish-contracts]
+    if: >-
+      always() &&
+      needs.verify-dione.result == 'success' &&
+      (needs.publish-contracts.result == 'success' || needs.publish-contracts.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: "1.98.0"
+      - name: Reconcile contracts registry contents
+        run: |
+          set -euo pipefail
+
+          contracts_version="${{ needs.verify-dione.outputs.contracts-version }}"
+          for attempt in $(seq 1 20); do
+            if timeout 10s cargo info --registry crates-io "dione-contracts@${contracts_version}" > /dev/null 2>&1; then
+              break
+            fi
+            if [ "${attempt}" = 20 ]; then
+              echo "Cargo could not resolve dione-contracts ${contracts_version} after bounded retries" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          cargo package -p dione-contracts --locked
+          contracts_crate="target/package/dione-contracts-${contracts_version}.crate"
+          scripts/verify-public-package-privacy.sh "${contracts_crate}"
+          test "$(scripts/crates-io-package-state.sh dione-contracts "${contracts_version}" "${contracts_crate}" --ignore-vcs-info)" = published
+          scripts/verify-crates-io-owners.sh dione-contracts \
+            butterflysky \
+            github:butterflyskies:lacuna-blinkers \
+            github:butterflyskies:superadmins
+
   publish-crate:
-    needs: [verify-dione, reconcile-rendering, reconcile-durable]
+    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts]
     if: needs.verify-dione.outputs.publish-dione == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -329,12 +441,13 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   reconcile-dione:
-    needs: [verify-dione, reconcile-rendering, reconcile-durable, publish-crate]
+    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, publish-crate]
     if: >-
       always() &&
       needs.verify-dione.result == 'success' &&
       needs.reconcile-rendering.result == 'success' &&
       needs.reconcile-durable.result == 'success' &&
+      needs.reconcile-contracts.result == 'success' &&
       (needs.publish-crate.result == 'success' || needs.publish-crate.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -12,6 +12,7 @@ on:
     branches:
       - main
       - refactor/plugin-crates
+      - "refactor/*-crate"
       - refactor/vertical-slices
       - refactor/teams-identities-publication
       - fix/reply-secure-publication
@@ -160,6 +161,8 @@ jobs:
           scripts/verify-public-package-privacy.sh "target/package/dione-rendering-${rendering_version}.crate"
           durable_version="$(scripts/workspace-package-version.sh dione-durable)"
           scripts/verify-public-package-privacy.sh "target/package/dione-durable-${durable_version}.crate"
+          contracts_version="$(scripts/workspace-package-version.sh dione-contracts)"
+          scripts/verify-public-package-privacy.sh "target/package/dione-contracts-${contracts_version}.crate"
 
   msrv:
     name: Rust 1.98 minimum supported version

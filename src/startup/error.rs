@@ -38,7 +38,7 @@ pub enum StartupErrorKind {
     TeamsIdentity(#[source] crate::teams::IdentityError),
     /// The configured module identity is invalid.
     #[error(transparent)]
-    ModuleIdentity(crate::core::IdentityError),
+    ModuleIdentity(dione_contracts::IdentityError),
     /// A module supplied an invalid MCP tool definition.
     #[error("invalid module tool definition")]
     ModuleToolDefinition(#[source] ToolNameError),

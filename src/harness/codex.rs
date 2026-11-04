@@ -5,9 +5,10 @@ use crate::{
         CodexBindingController, CodexEventQueue, CodexThreadId, ConsumerId, DeliveryToken,
         consumer_ttl, lease_duration, timeout_response, wait_duration,
     },
-    core::{MessageRef, delivery::Delivery},
+    core::delivery::Delivery,
     mcp::{harness_wire::HarnessProtocol, protocol::tool},
 };
+use dione_contracts::MessageRef;
 use dione_durable::EndpointId;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};

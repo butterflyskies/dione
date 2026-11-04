@@ -1,10 +1,8 @@
 //! Literal legacy restoration, exact identities and dual replay proof.
 use super::*;
-use crate::{
-    codex::{CodexEventQueue, CodexQueueErrorKind},
-    core::{ModuleInstanceId, ModuleSlotId, ProviderId},
-};
+use crate::codex::{CodexEventQueue, CodexQueueErrorKind};
 use camino::Utf8PathBuf;
+use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use dione_durable::{QueueErrorKind, SnapshotIssue};
 use serde_json::json;
 use std::{error::Error, time::Duration};

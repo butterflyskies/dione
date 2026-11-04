@@ -6,7 +6,6 @@
 
 use dione::{
     config::{ChannelConfig, Config, DeliveryConfig, LoadedConfig, RateLimitTomlConfig},
-    core::{ModuleInstanceId, ModuleSlotId, ProviderId},
     delivery_buffer::BufferResult,
     discord::{
         events::{MessageEvent, NotificationEvent},
@@ -19,6 +18,7 @@ use dione::{
     },
     timestamp::Timestamp,
 };
+use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use serenity::model::id::{ChannelId, MessageId, UserId};
 use std::{
     collections::HashMap,

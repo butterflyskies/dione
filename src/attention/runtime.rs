@@ -61,7 +61,7 @@ pub struct AttentionHealth {
 /// Coordinates source validation, durable decisions, provider work and guarded delivery.
 pub struct AttentionRuntime {
     pub resolver: SourceResolver,
-    authority_module: crate::core::ModuleInstanceId,
+    authority_module: dione_contracts::ModuleInstanceId,
     store: Mutex<Result<AttentionStore, Arc<AttentionInitializationError>>>,
     health: Mutex<AttentionHealth>,
     health_dirty: AtomicBool,
@@ -106,7 +106,7 @@ enum EvaluationFailure {
 
 impl AttentionRuntime {
     /// Borrows the configured authority instance.
-    pub fn authority_module(&self) -> &crate::core::ModuleInstanceId {
+    pub fn authority_module(&self) -> &dione_contracts::ModuleInstanceId {
         &self.authority_module
     }
 
@@ -114,7 +114,7 @@ impl AttentionRuntime {
     pub async fn new(
         resolver: SourceResolver,
         enforcement_supported: bool,
-        authority_module: crate::core::ModuleInstanceId,
+        authority_module: dione_contracts::ModuleInstanceId,
     ) -> Self {
         let config = load_config(&resolver.state_dir);
         let attention = &config.raw.attention;
@@ -1470,9 +1470,9 @@ mod tests {
                         ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
                     },
                     true,
-                    crate::core::ModuleInstanceId::new(
-                        crate::core::ProviderId::new("discord").unwrap(),
-                        crate::core::ModuleSlotId::new("primary").unwrap(),
+                    dione_contracts::ModuleInstanceId::new(
+                        dione_contracts::ProviderId::new("discord").unwrap(),
+                        dione_contracts::ModuleSlotId::new("primary").unwrap(),
                     ),
                 )
                 .await
@@ -1678,16 +1678,16 @@ mod tests {
             let (sender, receiver) = std::sync::mpsc::sync_channel(1);
             let checker = std::thread::spawn(move || {
                 let module = runtime.authority_module().clone();
-                let source = crate::core::MessageRef::new(
-                    crate::core::ConversationRef::new(
+                let source = dione_contracts::MessageRef::new(
+                    dione_contracts::ConversationRef::new(
                         module.clone(),
-                        crate::core::ConversationId::numeric(100.try_into().unwrap()),
+                        dione_contracts::ConversationId::numeric(100.try_into().unwrap()),
                     ),
-                    crate::core::MessageId::numeric(1.try_into().unwrap()),
+                    dione_contracts::MessageId::numeric(1.try_into().unwrap()),
                 );
-                let author = crate::core::ActorRef::new(
+                let author = dione_contracts::ActorRef::new(
                     module,
-                    crate::core::ActorId::numeric(7.try_into().unwrap()),
+                    dione_contracts::ActorId::numeric(7.try_into().unwrap()),
                 );
                 let record = RecordId::new("held-store-record").unwrap();
                 let descriptor = crate::attention::delivery::AttentionDescriptor::new(

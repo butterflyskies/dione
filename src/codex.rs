@@ -134,7 +134,7 @@ pub struct LeasedEvent {
 #[derive(Debug, Clone, Copy)]
 pub enum AttentionInvalidation<'a> {
     /// Match the complete configured module, conversation, and message identity.
-    Source(&'a crate::core::MessageRef),
+    Source(&'a dione_contracts::MessageRef),
     /// Match a validated decision identity.
     Record(&'a RecordId),
 }

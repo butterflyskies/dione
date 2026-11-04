@@ -20,7 +20,7 @@ pub struct ContextObservation {
 }
 
 impl ContextObservation {
-    pub(crate) fn capture(value: &crate::core::context::ContextObservation) -> Self {
+    pub(crate) fn capture(value: &dione_contracts::context::ContextObservation) -> Self {
         Self {
             reference: value.reference().into(),
             context: ContextFields::capture(value),
@@ -105,7 +105,7 @@ impl<'de> Deserialize<'de> for ContextObservation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{
+    use dione_contracts::{
         ActorId, ActorRef, ConversationId, ConversationRef, MessageId, MessageRef,
         ModuleInstanceId, ModuleSlotId, ProviderId, WorkspaceId, WorkspaceRef,
         context::{
@@ -114,7 +114,7 @@ mod tests {
         },
     };
 
-    fn context() -> crate::core::context::ContextObservation {
+    fn context() -> dione_contracts::context::ContextObservation {
         let source = ModuleInstanceId::new(
             ProviderId::new("provider").unwrap(),
             ModuleSlotId::new("slot").unwrap(),
@@ -122,7 +122,7 @@ mod tests {
         let room = ConversationRef::new(source.clone(), ConversationId::opaque("room").unwrap());
         let created_at = "2026-10-13T12:00:00.123456789Z".parse().unwrap();
         let edited_at = "2026-10-13T13:00:00.987654321Z".parse().unwrap();
-        crate::core::context::ContextObservation::new(
+        dione_contracts::context::ContextObservation::new(
             MessageRef::new(room, MessageId::opaque("message").unwrap()),
             SenderObservation::new(
                 ActorRef::new(source.clone(), ActorId::opaque("sender").unwrap()),

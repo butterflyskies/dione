@@ -10,6 +10,7 @@ on:
     branches:
       - main
       - refactor/plugin-crates
+      - "refactor/*-crate"
       - refactor/vertical-slices
       - refactor/teams-identities-publication
       - fix/reply-secure-publication

@@ -5,8 +5,6 @@ use crate::{
     attention::{delivery::AttentionDirective, types::RecordId},
     codex::{CodexEventQueue, LegacyDiscordScope, legacy_delivery},
     core::{
-        ActorId, ActorRef, ConversationId, ConversationRef, MessageId, MessageRef,
-        ModuleInstanceId, ModuleSlotId, ProviderId,
         delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
         events::{
             AuthorOrigin, BellObservation, BellStatus, ByteSize, MessageCreated,
@@ -16,6 +14,10 @@ use crate::{
     timestamp::Timestamp,
 };
 use camino::Utf8PathBuf;
+use dione_contracts::{
+    ActorId, ActorRef, ConversationId, ConversationRef, MessageId, MessageRef, ModuleInstanceId,
+    ModuleSlotId, ProviderId,
+};
 use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::{

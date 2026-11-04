@@ -1,8 +1,8 @@
 //! Cancellation and completion-loss behavior of the production durable owner.
 
 use super::*;
-use crate::core::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use camino::Utf8PathBuf;
+use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use dione_durable::QueueErrorKind;
 use tempfile::TempDir;
 

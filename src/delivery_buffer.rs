@@ -1,6 +1,6 @@
 //! Provider-independent scheduling with per-conversation FIFO and burst limits.
 
-use crate::core::ConversationRef;
+use dione_contracts::ConversationRef;
 use std::{
     collections::{BTreeMap, VecDeque, btree_map::Entry},
     time::Duration,
@@ -232,7 +232,7 @@ impl<E: BufferedEvent> DeliveryBuffer<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{ConversationId, ModuleInstanceId, ModuleSlotId, ProviderId};
+    use dione_contracts::{ConversationId, ModuleInstanceId, ModuleSlotId, ProviderId};
     use std::num::NonZeroU64;
 
     #[derive(Debug)]

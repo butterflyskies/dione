@@ -1,14 +1,6 @@
 //! MCP response shapes for typed Discord query results.
 
 use crate::{
-    core::{
-        ActorRef, ConversationRef, LocalIdentityRef, MessageRef, ModuleInstanceId, WorkspaceRef,
-        context::{
-            Availability, HistoryDirection, LocalTruncation, ObservationOrigin, PageMetadata,
-            ProviderCompleteness, ReferenceConsistency, ReferenceObservation, ReferenceRelation,
-            UnavailableReason,
-        },
-    },
     discord::{
         messaging::{
             MessagingError, MessagingErrorKind,
@@ -24,6 +16,14 @@ use crate::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use camino::Utf8PathBuf;
+use dione_contracts::{
+    ActorRef, ConversationRef, LocalIdentityRef, MessageRef, ModuleInstanceId, WorkspaceRef,
+    context::{
+        Availability, HistoryDirection, LocalTruncation, ObservationOrigin, PageMetadata,
+        ProviderCompleteness, ReferenceConsistency, ReferenceObservation, ReferenceRelation,
+        UnavailableReason,
+    },
+};
 use serde_json::{Value, json};
 use serenity::http::HttpError;
 
@@ -402,7 +402,7 @@ fn project_message(message: &MessageView, attachments: AttachmentProjection) -> 
 #[cfg(test)]
 mod context_tests {
     use super::*;
-    use crate::core::{ConversationId, MessageId, ModuleSlotId, ProviderId};
+    use dione_contracts::{ConversationId, MessageId, ModuleSlotId, ProviderId};
     use std::time::Duration;
 
     fn source() -> ModuleInstanceId {

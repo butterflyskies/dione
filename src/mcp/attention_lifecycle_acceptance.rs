@@ -187,9 +187,9 @@ async fn runtime_for(path: Utf8PathBuf, network: &Network) -> Arc<AttentionRunti
                 ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
             },
             true,
-            crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             ),
         )
         .await
@@ -463,14 +463,16 @@ fn duplicate_overlap_edit_delete_and_reconnect_never_reintroduce_an_old_excerpt(
         fixture
             .queue
             .invalidate_attention(crate::codex::AttentionInvalidation::Source(
-                &crate::core::MessageRef::new(
-                    crate::core::ConversationRef::new(
+                &dione_contracts::MessageRef::new(
+                    dione_contracts::ConversationRef::new(
                         fixture.attention.authority_module().clone(),
-                        crate::core::ConversationId::numeric(
+                        dione_contracts::ConversationId::numeric(
                             source.channel_id.get().try_into().unwrap(),
                         ),
                     ),
-                    crate::core::MessageId::numeric(source.message_id.get().try_into().unwrap()),
+                    dione_contracts::MessageId::numeric(
+                        source.message_id.get().try_into().unwrap(),
+                    ),
                 ),
             ))
             .await
@@ -514,14 +516,16 @@ fn duplicate_overlap_edit_delete_and_reconnect_never_reintroduce_an_old_excerpt(
         fixture
             .queue
             .invalidate_attention(crate::codex::AttentionInvalidation::Source(
-                &crate::core::MessageRef::new(
-                    crate::core::ConversationRef::new(
+                &dione_contracts::MessageRef::new(
+                    dione_contracts::ConversationRef::new(
                         fixture.attention.authority_module().clone(),
-                        crate::core::ConversationId::numeric(
+                        dione_contracts::ConversationId::numeric(
                             source.channel_id.get().try_into().unwrap(),
                         ),
                     ),
-                    crate::core::MessageId::numeric(source.message_id.get().try_into().unwrap()),
+                    dione_contracts::MessageId::numeric(
+                        source.message_id.get().try_into().unwrap(),
+                    ),
                 ),
             ))
             .await
@@ -552,9 +556,9 @@ fn duplicate_overlap_edit_delete_and_reconnect_never_reintroduce_an_old_excerpt(
         drop(fixture.queue);
         fixture.queue = CodexEventQueue::load(
             &fixture.path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -700,37 +704,37 @@ fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipt
         .unwrap();
         let valid = observed.descriptor();
         let wrong_record = crate::attention::types::RecordId::new("unrelated-decision").unwrap();
-        let wrong_module = crate::core::ModuleInstanceId::new(
-            crate::core::ProviderId::new("discord").unwrap(),
-            crate::core::ModuleSlotId::new("other").unwrap(),
+        let wrong_module = dione_contracts::ModuleInstanceId::new(
+            dione_contracts::ProviderId::new("discord").unwrap(),
+            dione_contracts::ModuleSlotId::new("other").unwrap(),
         );
-        let foreign_source = crate::core::MessageRef::new(
-            crate::core::ConversationRef::new(
+        let foreign_source = dione_contracts::MessageRef::new(
+            dione_contracts::ConversationRef::new(
                 wrong_module.clone(),
                 valid.source().conversation().local().clone(),
             ),
             valid.source().local().clone(),
         );
-        let wrong_conversation = crate::core::MessageRef::new(
-            crate::core::ConversationRef::new(
+        let wrong_conversation = dione_contracts::MessageRef::new(
+            dione_contracts::ConversationRef::new(
                 valid.source().conversation().module().clone(),
-                crate::core::ConversationId::numeric(999.try_into().unwrap()),
+                dione_contracts::ConversationId::numeric(999.try_into().unwrap()),
             ),
             valid.source().local().clone(),
         );
-        let wrong_message = crate::core::MessageRef::new(
+        let wrong_message = dione_contracts::MessageRef::new(
             valid.source().conversation().clone(),
-            crate::core::MessageId::numeric(999.try_into().unwrap()),
+            dione_contracts::MessageId::numeric(999.try_into().unwrap()),
         );
-        let wrong_actor = crate::core::ActorRef::new(
+        let wrong_actor = dione_contracts::ActorRef::new(
             valid.author().module().clone(),
-            crate::core::ActorId::numeric(999.try_into().unwrap()),
+            dione_contracts::ActorId::numeric(999.try_into().unwrap()),
         );
         let foreign_actor =
-            crate::core::ActorRef::new(wrong_module, valid.author().local().clone());
-        let opaque_message = crate::core::MessageRef::new(
+            dione_contracts::ActorRef::new(wrong_module, valid.author().local().clone());
+        let opaque_message = dione_contracts::MessageRef::new(
             valid.source().conversation().clone(),
-            crate::core::MessageId::opaque(
+            dione_contracts::MessageId::opaque(
                 valid.source().local().as_numeric().unwrap().to_string(),
             )
             .unwrap(),
@@ -890,9 +894,9 @@ fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipt
         drop(fixture.queue);
         fixture.queue = CodexEventQueue::load(
             &fixture.path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -1913,14 +1917,16 @@ fn deleted_deferred_source_is_absent_from_serialized_denial_and_sink_transcript(
         fixture
             .queue
             .invalidate_attention(crate::codex::AttentionInvalidation::Source(
-                &crate::core::MessageRef::new(
-                    crate::core::ConversationRef::new(
+                &dione_contracts::MessageRef::new(
+                    dione_contracts::ConversationRef::new(
                         fixture.attention.authority_module().clone(),
-                        crate::core::ConversationId::numeric(
+                        dione_contracts::ConversationId::numeric(
                             source.channel_id.get().try_into().unwrap(),
                         ),
                     ),
-                    crate::core::MessageId::numeric(source.message_id.get().try_into().unwrap()),
+                    dione_contracts::MessageId::numeric(
+                        source.message_id.get().try_into().unwrap(),
+                    ),
                 ),
             ))
             .await

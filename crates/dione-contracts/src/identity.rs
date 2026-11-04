@@ -48,6 +48,15 @@ impl ModuleSlotId {
 }
 
 /// A configured module slot, independent of credentials and display names.
+///
+/// Its components cannot be replaced through public fields.
+///
+/// ```compile_fail
+/// use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
+/// fn forge(provider: ProviderId, instance: ModuleSlotId) -> ModuleInstanceId {
+///     ModuleInstanceId { provider, instance }
+/// }
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct ModuleInstanceId {
     provider: ProviderId,
@@ -82,7 +91,7 @@ enum LocalIdentity {
 
 impl ConversationId {
     /// Borrows the provider-local identity without losing its kind.
-    pub(crate) fn identity(&self) -> LocalIdentityRef<'_> {
+    pub fn identity(&self) -> LocalIdentityRef<'_> {
         self.0.identity()
     }
 
@@ -207,7 +216,7 @@ mod tests {
 pub struct ActorId(LocalIdentity);
 impl ActorId {
     /// Borrows the provider-local identity without losing its kind.
-    pub(crate) fn identity(&self) -> LocalIdentityRef<'_> {
+    pub fn identity(&self) -> LocalIdentityRef<'_> {
         self.0.identity()
     }
 
@@ -247,7 +256,7 @@ impl ActorId {
 pub struct MessageId(LocalIdentity);
 impl MessageId {
     /// Borrows the provider-local identity without losing its kind.
-    pub(crate) fn identity(&self) -> LocalIdentityRef<'_> {
+    pub fn identity(&self) -> LocalIdentityRef<'_> {
         self.0.identity()
     }
 
@@ -360,7 +369,7 @@ pub struct WorkspaceId(LocalIdentity);
 
 impl WorkspaceId {
     /// Borrows the provider-local identity without losing its kind.
-    pub(crate) fn identity(&self) -> LocalIdentityRef<'_> {
+    pub fn identity(&self) -> LocalIdentityRef<'_> {
         self.0.identity()
     }
 
@@ -422,8 +431,10 @@ impl WorkspaceRef {
 
 /// Borrowed provider-local identity preserving its numeric or opaque form.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum LocalIdentityRef<'a> {
+pub enum LocalIdentityRef<'a> {
+    /// A nonzero numeric identity, distinct from numeric-looking opaque text.
     Numeric(NonZeroU64),
+    /// Borrowed opaque text retained without numeric interpretation.
     Opaque(&'a str),
 }
 impl LocalIdentity {

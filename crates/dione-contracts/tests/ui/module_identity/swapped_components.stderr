@@ -7,7 +7,7 @@ error[E0308]: arguments to this function are incorrect
   |                                         expected `ProviderId`, found `ModuleSlotId`
   |
 note: associated function defined here
- --> src/core/identity.rs
+ --> src/identity.rs
   |
   |     pub fn new(provider: ProviderId, instance: ModuleSlotId) -> Self {
   |            ^^^

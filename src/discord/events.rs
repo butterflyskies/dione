@@ -4546,9 +4546,9 @@ mod tests {
             own_actors: HashSet::from([UserId::new(999)]),
             own_webhooks: HashSet::new(),
         }));
-        let source = crate::core::ModuleInstanceId::new(
-            crate::core::ProviderId::new("discord").unwrap(),
-            crate::core::ModuleSlotId::new("observation-test").unwrap(),
+        let source = dione_contracts::ModuleInstanceId::new(
+            dione_contracts::ProviderId::new("discord").unwrap(),
+            dione_contracts::ModuleSlotId::new("observation-test").unwrap(),
         );
         let (observation, observations) = ObservationIngress::enabled(
             source,

@@ -6,11 +6,12 @@ use crate::{
         types::{RecordId, RecordIdError},
     },
     core::{
-        ActorId, ActorRef, ConversationId, ConversationRef, MessageId, MessageRef,
-        ModuleInstanceId,
         delivery::DeliveryKind,
         events::{ControlEvent, CoordinationNotice, OrdinaryEvent},
     },
+};
+use dione_contracts::{
+    ActorId, ActorRef, ConversationId, ConversationRef, MessageId, MessageRef, ModuleInstanceId,
 };
 use serde_json::Value;
 use std::num::NonZeroU64;
