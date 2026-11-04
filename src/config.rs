@@ -2701,6 +2701,30 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn fresh_default_config_omits_operator_marker_pin_but_loads_v3_disabled() {
+        let _cache = config_cache_guard();
+        let (_dir, state_dir) = temp_state_dir();
+        let path = state_dir.join("config.toml");
+        assert!(!path.exists());
+
+        write_default_config(&path).unwrap();
+
+        let written = fs::read_to_string(&path).unwrap();
+        let raw: toml::Value = toml::from_str(&written).unwrap();
+        let delivery = raw["delivery"].as_table().unwrap();
+        assert!(
+            !delivery.contains_key("evidence_marker_version"),
+            "a generated default must not masquerade as an operator-selected format pin"
+        );
+        let (loaded, _) = try_load_config(&path).unwrap();
+        assert_eq!(
+            loaded.delivery.evidence_marker_version,
+            EvidenceMarkerVersion::V3
+        );
+        assert!(!loaded.delivery.evidence_markers_enabled);
+    }
+
+    #[test]
     fn evidence_marker_version_is_a_concrete_validated_pin() {
         assert_eq!(
             Config::default().delivery.evidence_marker_version,

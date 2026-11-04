@@ -1,6 +1,5 @@
 //! Discord author binding and tool-wire projection for sentex locators.
 
-use crate::config::EvidenceMarkerVersion;
 mod error;
 use error::{HandleError, HandleErrorKind, SentexField};
 pub(crate) use error::{SentexError, SentexErrorKind};

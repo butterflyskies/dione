@@ -187,7 +187,8 @@ V1 is read-only because it cannot represent claim roles. Unsupported versions
 fallbacks. Invalid reloads use the existing last-known-good recovery policy.
 When `evidence_markers_enabled` is false, structured handle fields remain hidden
 and rejected, no suffix is emitted, and the configured format remains stored
-for a later enable. Raw active terminal markers remain rejected either way.
+for a later enable. Changing the selected format does not alter the existing
+raw-marker checks.
 
 The former `evidence_keys` input is not accepted. Existing v1 terminal markers
 remain readable as citations, and fixed-width v2 markers (`[🔍=v2:claim:…]`,

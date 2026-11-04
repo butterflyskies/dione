@@ -221,7 +221,7 @@ impl EvidenceMarkerVersion {
         }
     }
 
-    const fn read_version(self) -> LocatorVersion {
+    const fn locator_version(self) -> LocatorVersion {
         match self {
             Self::V2 => LocatorVersion::V2,
             Self::V3 => LocatorVersion::V3,
@@ -256,7 +256,7 @@ impl SentexLocator {
         handle: &VaeliiSentexHandle,
         version: EvidenceMarkerVersion,
     ) -> Self {
-        Self::written(version.read_version(), role, handle)
+        Self::written(version.locator_version(), role, handle)
     }
 
     /// Re-renders a decoded locator in its own version's canonical form, which
