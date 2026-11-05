@@ -6,7 +6,6 @@ pub(crate) mod config_candidate;
 pub mod config_store;
 pub mod config_watcher;
 pub mod contradictionary_diary;
-pub mod coordination;
 pub(crate) mod delivery;
 pub mod discord;
 pub mod drop_ledger;
@@ -38,3 +37,6 @@ pub mod startup;
 
 /// Explicit application composition adapters.
 pub mod composition;
+
+#[cfg(test)]
+mod coordination_consumers;

@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.104.0"
+version = "0.105.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -943,6 +943,7 @@ dependencies = [
  "dione-attention",
  "dione-bell-rings",
  "dione-contracts",
+ "dione-coordination",
  "dione-contradictionary",
  "dione-delivery-scheduler",
  "dione-durable",
@@ -1060,6 +1061,21 @@ dependencies = [
  "dione-evidence",
  "serde",
  "tempfile",
+ "toml 1.1.6+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
+name = "dione-coordination"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "native-tls",
+ "serde",
+ "serde_json",
+ "serenity",
+ "thiserror 2.0.21",
+ "tokio",
  "toml 1.1.6+spec-1.1.0",
  "tracing",
 ]

@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.105.0] - 2026-11-05
+
+### Changed
+
+- Extract checked reply-coordination mechanics into dione-coordination, retaining
+  application authorization and publication policy. Preserve write uncertainty,
+  acknowledged release and shared event delivery across config reloads.
+
 ## [0.104.0]
 
 ### Changed

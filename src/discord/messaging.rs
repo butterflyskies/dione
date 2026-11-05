@@ -6,6 +6,7 @@ mod rook_publication;
 pub(crate) mod search;
 mod types;
 use camino::Utf8PathBuf;
+use dione_coordination::{ClaimOutcome, Coordinator};
 use dione_mutes::MuteStore;
 pub use rook_publication::{DiscordPublicationInitError, DiscordPublicationProvider};
 use serde::Deserialize;
@@ -29,7 +30,6 @@ use {
     crate::{
         config::{ChunkMode, DmPolicy, LoadedConfig},
         contradictionary_diary::{BlockOutcome, DiaryRecord, append_diary_record},
-        coordination::{ClaimOutcome, Coordinator},
         discord::{chunk, chunk_preserving_fences_with_context, events::NotificationEvent},
         gate::OutboundGate,
         ingress_ledger::{IngressLedger, VerifyResult},
@@ -4989,7 +4989,7 @@ mod tests {
         raw.pre_send.author_id = Some(UserId::new(bot_id));
         raw.coordination.insert(
             "claim-once".to_owned(),
-            crate::coordination::CoordinationConfig {
+            dione_coordination::CoordinationConfig {
                 addr: addr.to_owned(),
                 lease_ms: 10_000,
                 connect_timeout_ms: 2_000,
@@ -5406,7 +5406,7 @@ mod tests {
         let mut raw = coordinated_config(&addr, 1).raw.clone();
         raw.pre_send.author_id = None;
         let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
-        crate::coordination::set_gateway_bot_id(424_242);
+        dione_coordination::set_gateway_bot_id(424_242);
         assert!(
             coordinate_reply(&ctx, ChannelId::new(42), MessageId::new(445))
                 .await
@@ -5527,7 +5527,7 @@ mod tests {
             raw.pre_send.author_id = Some(UserId::new(bot_id));
             raw.coordination.insert(
                 "claim-once".to_owned(),
-                crate::coordination::CoordinationConfig {
+                dione_coordination::CoordinationConfig {
                     addr: addr.clone(),
                     lease_ms: 10_000,
                     connect_timeout_ms: 2_000,

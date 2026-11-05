@@ -1,9 +1,9 @@
 [workspace]
-members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention", "crates/dione-evidence", "crates/dione-messages", "crates/dione-rate-limiter", "crates/dione-vaelii", "crates/dione-gaie", "crates/dione-identity-display", "crates/dione-harness", "crates/dione-presentation", "crates/dione-contradictionary", "crates/dione-bell-rings", "crates/dione-delivery-scheduler", "crates/dione-access-requests", "crates/dione-mutes"]
+members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention", "crates/dione-evidence", "crates/dione-messages", "crates/dione-rate-limiter", "crates/dione-vaelii", "crates/dione-gaie", "crates/dione-identity-display", "crates/dione-harness", "crates/dione-presentation", "crates/dione-contradictionary", "crates/dione-bell-rings", "crates/dione-delivery-scheduler", "crates/dione-access-requests", "crates/dione-mutes", "crates/dione-coordination"]
 
 [package]
 name = "dione"
-version = "0.104.0"
+version = "0.105.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -14,6 +14,7 @@ keywords = ["discord", "mcp", "claude-code", "codex", "bot"]
 categories = ["command-line-utilities"]
 
 [workspace.dependencies]
+dione-coordination = { version = "=0.1.0", path = "crates/dione-coordination" }
 arc-swap = "1"
 dione-mutes = { version = "=0.1.0", path = "crates/dione-mutes" }
 dione-access-requests = { version = "=0.1.0", path = "crates/dione-access-requests" }
@@ -74,6 +75,7 @@ serenity = { version = "0.12", default-features = false, features = ["client", "
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 [dependencies]
+dione-coordination.workspace = true
 dione-mutes.workspace = true
 dione-access-requests.workspace = true
 dione-delivery-scheduler.workspace = true

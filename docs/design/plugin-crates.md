@@ -338,6 +338,27 @@ are inherited scoped policy violations. Append errors do not prove no bytes
 reached disk. No torn-tail recovery, cross-instance lock, directory synchronization
 or shutdown redesign is added. The member README records these limits.
 
+## Coordination boundary
+
+dione-coordination owns the claim-once protocol, coordinator configuration shape,
+checked claim progress, acknowledged release, shared push bus and gateway identity.
+The three progress states remain exhaustive. ClaimAttempt has private fields and
+construction; into_parts consumes the result without allowing fabricated outcome
+and progress combinations. Rook checks WriteUncertain before fail-open policy.
+Ordinary claims retain a waiter connection; checked acquisition closes it.
+
+Config assembly, gateway installation, startup subscription, Discord inheritance,
+current authorization/generation checks, publication receipts and after-commit
+bookkeeping remain in Dione. Twenty-two protocol tests move with the owner; two
+real config/harness consumer tests remain in a private application test module.
+No reverse application dependency or compatibility re-export is added.
+
+Existing raw string identities, millisecond config values, mutable config,
+derived deserialization and error/presentation strings remain scoped inherited
+type/error-policy debt. Direct config construction still bypasses the nonzero
+connect-timeout deserializer. Worker lifetime and shared globals are unchanged.
+No new shutdown, authorization or delivery-durability guarantee is claimed.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -360,6 +381,7 @@ or shutdown redesign is added. The member README records these limits.
 16. Generic scoped delivery scheduler, with native evidence classification retained.
 17. Pending access-request storage, with configuration-backed authorization retained.
 18. Mute store and expiry mechanics, with process wiring and authorization retained.
+19. Checked coordination protocol, with publication policy retained.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -372,7 +394,7 @@ The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, and `dione-mutes`.
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, and `dione-coordination`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -394,14 +416,14 @@ Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, and `dione-mutes`,
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, and `dione-coordination`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all eighteen capabilities. Contradictionary publishing waits
+publishing waits for all nineteen capabilities. Contradictionary publishing waits
 for evidence reconciliation. Presentation publishing waits for
 contracts, attention, evidence, messages, and identity-display reconciliation. Harness publishing waits for
 contracts and messages reconciliation. Messages publishing waits for
@@ -418,3 +440,5 @@ Scheduler publishing waits for contracts reconciliation. Dione publishing also w
 Access-request storage has no capability publication prerequisite. Dione publishing waits for its reconciliation.
 
 Mute storage has no capability publication prerequisite. Dione publishing waits for mute reconciliation.
+
+Coordination is a leaf publication. Dione publishing waits for its tokenless reconciliation.

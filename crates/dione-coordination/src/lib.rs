@@ -18,6 +18,8 @@
 //! reported as [`ClaimOutcome::Unavailable`] rather than an error, because
 //! the caller must fail open: when the coordinator is down, reply as usual.
 
+#![warn(missing_docs)]
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use serenity::model::id::{ChannelId, MessageId, UserId};
@@ -147,15 +149,43 @@ pub enum ClaimOutcome {
 
 /// How far the acquisition request reached before the operation returned.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ClaimProgress {
+pub enum ClaimProgress {
+    /// No claim bytes were attempted.
     NotSent,
+    /// The complete claim write and flush succeeded.
     Written,
+    /// A claim write began but its completion is unknown.
     WriteUncertain,
 }
 
-pub(crate) struct ClaimAttempt {
-    pub(crate) outcome: ClaimOutcome,
-    pub(crate) progress: ClaimProgress,
+/// A checked acquisition result constructed only by the coordinator.
+///
+/// Callers cannot fabricate an outcome/progress combination.
+///
+/// ```compile_fail
+/// use dione_coordination::{ClaimAttempt, ClaimOutcome, ClaimProgress};
+/// let attempt = ClaimAttempt {
+///     outcome: ClaimOutcome::Proceed { lease_ms: 1 },
+///     progress: ClaimProgress::NotSent,
+/// };
+/// ```
+///
+/// ```compile_fail
+/// use dione_coordination::{ClaimAttempt, ClaimProgress};
+/// fn change_progress(mut attempt: ClaimAttempt) {
+///     attempt.progress = ClaimProgress::NotSent;
+/// }
+/// ```
+pub struct ClaimAttempt {
+    outcome: ClaimOutcome,
+    progress: ClaimProgress,
+}
+
+impl ClaimAttempt {
+    /// Consume the acquisition result without discarding write uncertainty.
+    pub fn into_parts(self) -> (ClaimOutcome, ClaimProgress) {
+        (self.outcome, self.progress)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -305,11 +335,11 @@ impl Coordinator {
             .outcome
     }
 
-    pub(crate) async fn claim_with_progress(
-        &self,
-        channel_id: &str,
-        message_id: &str,
-    ) -> ClaimAttempt {
+    /// Acquire with write progress and close any waiting claim connection.
+    ///
+    /// Unlike [`Self::claim`], a waiting result does not subscribe to pushes.
+    /// Check [`ClaimProgress::WriteUncertain`] before applying fail-open policy.
+    pub async fn claim_with_progress(&self, channel_id: &str, message_id: &str) -> ClaimAttempt {
         self.acquire(channel_id, message_id, WaiterPolicy::Close)
             .await
     }
@@ -488,7 +518,7 @@ impl Coordinator {
     }
 
     /// Release a known claim and require an affirmative server acknowledgment.
-    pub(crate) async fn release_checked(&self, message_id: &str) -> Result<(), CoordinationError> {
+    pub async fn release_checked(&self, message_id: &str) -> Result<(), CoordinationError> {
         let reply = self
             .simple_inner(json!({ "msg": "release", "message_id": message_id }))
             .await?;
@@ -589,29 +619,44 @@ fn log_server_text(addr: &str, what: &'static str, reply: &Value) {
 }
 
 /// Why a request could not be completed. Public callers receive
-/// [`ClaimOutcome::Unavailable`] or a log line; checked internal cleanup retains it.
+/// [`ClaimOutcome::Unavailable`] or a log line; checked cleanup returns the typed error.
 /// Its message never quotes the server (see [`log_server_text`]).
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CoordinationError {
+pub enum CoordinationError {
     #[error("connect to {addr}: {source}")]
+    /// The TCP connection failed.
     Connect {
+        /// Coordinator address.
         addr: String,
+        /// Underlying connection failure.
         #[source]
         source: std::io::Error,
     },
     #[error("connect to {addr} timed out after {timeout:?}")]
-    ConnectTimeout { addr: String, timeout: Duration },
+    /// The TCP connection exceeded its configured deadline.
+    ConnectTimeout {
+        /// Coordinator address.
+        addr: String,
+        /// Configured connection deadline.
+        timeout: Duration,
+    },
     #[error("io: {0}")]
+    /// Transport I/O failed.
     Io(#[from] std::io::Error),
     #[error("read timed out after {0:?}")]
+    /// No reply arrived within the deadline.
     ReadTimeout(Duration),
     #[error("write timed out after {0:?}")]
+    /// A write or flush exceeded the deadline.
     WriteTimeout(Duration),
     #[error("connection closed by server")]
+    /// The peer closed the connection.
     Closed,
     #[error("bad JSON from server: {0}")]
+    /// The server line was not a valid JSON object.
     BadJson(String),
     #[error("protocol: {0}")]
+    /// The server exchange violated the protocol.
     Protocol(String),
 }
 
@@ -1106,55 +1151,6 @@ mod tests {
         );
     }
 
-    /// `main.rs` subscribes once, at startup; every reload (file watcher,
-    /// `reload_config`, `add_channel`, ...) builds a fresh `LoadedConfig` and
-    /// so fresh coordinators. A push that arrives for a claim made through the
-    /// reloaded coordinator must still reach the startup subscription.
-    #[tokio::test]
-    async fn events_reach_startup_subscriber_after_config_reload() {
-        let addr = spawn_server(10_000).await;
-        let raw = || {
-            let mut raw = crate::config::Config::default();
-            raw.pre_send.author_id = Some(serenity::model::id::UserId::new(222));
-            raw.coordination
-                .insert("claim-once".to_owned(), config(&addr));
-            raw
-        };
-        let startup = crate::config::LoadedConfig::from_raw(raw());
-        let mut events = startup.coordinators["claim-once"].subscribe();
-        let reloaded = crate::config::LoadedConfig::from_raw(raw());
-
-        let owner = coordinator(&addr, "111");
-        let mid = "880001";
-        assert!(matches!(
-            owner.claim(CHANNEL, mid).await,
-            ClaimOutcome::Proceed { .. }
-        ));
-        assert!(matches!(
-            reloaded.coordinators["claim-once"]
-                .claim(CHANNEL, mid)
-                .await,
-            ClaimOutcome::Wait { .. }
-        ));
-        owner.release(mid).await;
-
-        // The subscription may also carry other tests' events.
-        let event = tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                match events.recv().await {
-                    Ok(event) if event.message_id() == mid.parse::<MessageId>().unwrap() => {
-                        return event;
-                    }
-                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => panic!("bus closed"),
-                }
-            }
-        })
-        .await
-        .expect("promoted must reach the startup subscriber after a reload");
-        assert!(matches!(event, CoordinationEvent::Promoted { .. }));
-    }
-
     /// With three seats, the third waits behind two leases (each promotion
     /// re-arms the lease), so its waiter must not give up after one. Lease
     /// 1.5 s: the third seat is promoted at ~3 s, later than a single
@@ -1574,75 +1570,5 @@ mod tests {
         assert_eq!(attempt.progress, ClaimProgress::Written);
         assert!(matches!(attempt.outcome, ClaimOutcome::Wait { .. }));
         assert_eq!(server.await.unwrap(), 0);
-    }
-
-    #[tokio::test]
-    async fn malformed_coordinator_pushes_do_not_interrupt_subsequent_live_delivery() {
-        let mut script =
-            vec![json!({"status":"wait","ahead":[BOT_A],"lease_ms":10_000}).to_string()];
-        for field in ["message_id", "bot_id", "reply_message_id"] {
-            for invalid in ["0", "18446744073709551616", "99999999999999999999"] {
-                let mut push = json!({"event":"done","message_id":MSG,"bot_id":BOT_A,"reply_message_id":REPLY});
-                push[field] = json!(invalid);
-                script.push(push.to_string());
-            }
-        }
-        script.push(
-            json!({"event":"done","message_id":MSG,"bot_id":BOT_A,"reply_message_id":REPLY})
-                .to_string(),
-        );
-        let addr = spawn_scripted_server(script).await;
-        let coordinator = coordinator(&addr, BOT_B);
-        let mut events = coordinator.subscribe();
-        assert!(matches!(
-            coordinator.claim(CHANNEL, MSG).await,
-            ClaimOutcome::Wait { .. }
-        ));
-        let event = recv_event(&mut events, Duration::from_secs(2)).await;
-        let CoordinationEvent::Done {
-            bot_id,
-            reply_message_id,
-            ..
-        } = &event
-        else {
-            panic!("valid done push must survive malformed predecessors");
-        };
-        assert_eq!(
-            bot_id.to_string(),
-            BOT_A,
-            "invalid responder must never enter the event bus"
-        );
-        assert_eq!(
-            reply_message_id.to_string(),
-            REPLY,
-            "invalid reply must never enter the event bus"
-        );
-        assert!(matches!(
-            events.try_recv(),
-            Err(broadcast::error::TryRecvError::Empty)
-        ));
-        let delivery = crate::discord::delivery::single(
-            &crate::harness::test_support::module(),
-            crate::discord::events::NotificationEvent::Coordination(event),
-            crate::harness::test_support::context(),
-        )
-        .unwrap();
-        let (writer, reader) = tokio::io::duplex(4096);
-        let connection =
-            crate::harness::claude_with_output(dione_harness::ProtocolOutput::new(writer));
-        connection.deliver(&delivery).await.unwrap();
-        let output: Value = serde_json::from_str(
-            &BufReader::new(reader)
-                .lines()
-                .next_line()
-                .await
-                .unwrap()
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            output,
-            json!({"jsonrpc":"2.0","method":"notifications/claude/channel","params":{"content":"claim-once: 111 replied to message 1001 in channel 1550955234304466985 (reply 2001); no reply needed","meta":{"type":"coordination","event":"done","chat_id":CHANNEL,"message_id":MSG,"by":BOT_A,"reply_message_id":REPLY}}})
-        );
     }
 }

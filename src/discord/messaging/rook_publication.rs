@@ -8,6 +8,7 @@ use super::{
 use dione_contracts::{
     ConversationId, ConversationRef, MessageRef, ModuleInstanceId, ModuleSlotId, ProviderId,
 };
+use dione_coordination::{ClaimOutcome, ClaimProgress, Coordinator};
 use dione_rook::{
     CanonicalPublication, DispatchOutcome, MentionPolicy, MessageKey, PreparedPublication,
     PublicationCapabilities, PublicationDispatch, PublicationProvider, PublicationReceipt,
@@ -24,7 +25,6 @@ use thiserror::Error;
 use {
     crate::{
         contradictionary_diary::{DiaryRecord, append_diary_record},
-        coordination::{ClaimOutcome, ClaimProgress, Coordinator},
         no_rly::judge::{OutboundJudge, Verdict},
     },
     dione_contradictionary::Action,
@@ -292,10 +292,11 @@ impl DiscordPublicationProvider {
             let attempt = coordinator
                 .claim_with_progress(&channel.get().to_string(), reference)
                 .await;
-            if attempt.progress == ClaimProgress::WriteUncertain {
+            let (outcome, progress) = attempt.into_parts();
+            if progress == ClaimProgress::WriteUncertain {
                 return not_sent(PublicationRejection::CoordinationUncertain);
             }
-            match attempt.outcome {
+            match outcome {
                 ClaimOutcome::Proceed { .. } => claimed = true,
                 ClaimOutcome::Unavailable { claim_sent, .. } if coordinator.config().fail_open => {
                     claimed = claim_sent
@@ -1035,7 +1036,7 @@ mod tests {
 
     mod coordination_tests {
         use super::*;
-        use crate::coordination::CoordinationConfig;
+        use dione_coordination::CoordinationConfig;
         use serenity::model::id::UserId;
 
         #[derive(Clone, Copy)]

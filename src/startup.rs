@@ -333,7 +333,7 @@ pub async fn run() -> Result<(), StartupError> {
         }
     });
 
-    let mut coordination_rx = crate::coordination::subscribe_shared();
+    let mut coordination_rx = dione_coordination::subscribe_shared();
     let coordination_tx = event_tx.clone();
     tokio::spawn(async move {
         loop {

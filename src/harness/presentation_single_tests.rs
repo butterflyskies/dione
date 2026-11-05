@@ -462,7 +462,7 @@ fn message_envelope_has_no_application_transport_tells() {
 
 #[test]
 fn coordination_done_event_serializes_with_metadata() {
-    let event = NotificationEvent::Coordination(crate::coordination::CoordinationEvent::Done {
+    let event = NotificationEvent::Coordination(dione_coordination::CoordinationEvent::Done {
         message_id: "7".parse().unwrap(),
         channel_id: "42".parse().unwrap(),
         bot_id: "111".parse().unwrap(),
@@ -481,7 +481,7 @@ fn coordination_done_event_serializes_with_metadata() {
 
 #[test]
 fn coordination_promoted_event_serializes_without_reply_fields() {
-    let event = NotificationEvent::Coordination(crate::coordination::CoordinationEvent::Promoted {
+    let event = NotificationEvent::Coordination(dione_coordination::CoordinationEvent::Promoted {
         message_id: "7".parse().unwrap(),
         channel_id: "42".parse().unwrap(),
     });

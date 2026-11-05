@@ -179,6 +179,8 @@ jobs:
           scripts/verify-public-package-privacy.sh "target/package/dione-access-requests-${access_requests_version}.crate"
           mutes_version="$(scripts/workspace-package-version.sh dione-mutes)"
           scripts/verify-public-package-privacy.sh "target/package/dione-mutes-${mutes_version}.crate"
+          coordination_version="$(scripts/workspace-package-version.sh dione-coordination)"
+          scripts/verify-public-package-privacy.sh "target/package/dione-coordination-${coordination_version}.crate"
           presentation_version="$(scripts/workspace-package-version.sh dione-presentation)"
           scripts/verify-public-package-privacy.sh "target/package/dione-presentation-${presentation_version}.crate"
           harness_version="$(scripts/workspace-package-version.sh dione-harness)"

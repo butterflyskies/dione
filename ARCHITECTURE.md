@@ -96,6 +96,12 @@ clock and expiry mechanics. Application composition owns the existing global
 handle. Dione retains current authorization, MCP TTL validation, startup ordering,
 and explicit worker abort during normal shutdown.
 
+The public dione-coordination package owns the checked reply-coordination client,
+wire protocol, shared event bus and gateway identity fallback. Checked acquisition
+retains partial-write uncertainty and closes waiting connections; ordinary claims
+subscribe to pushes. Dione retains configuration, current authorization, Rook
+publication policy and bookkeeping.
+
 ## Processes and transports
 
 ```mermaid
