@@ -1,0 +1,19 @@
+[package]
+name = "dione-contracts"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+
+description = "Source-qualified provider identities and context observations for Dione"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["identity", "context", "observations"]
+categories = ["data-structures"]
+
+[dependencies]
+chrono.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+trybuild.workspace = true

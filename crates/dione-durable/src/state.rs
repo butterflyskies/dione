@@ -23,52 +23,88 @@ pub enum EntryVisibility {
 }
 /// Persistent registration role; labels never grant authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) enum ConsumerKind {
+pub enum ConsumerKind {
+    /// Registration available to pull consumers.
     Pull,
+    /// Registration usable only through an owner-created resident capability.
     Resident,
 }
+/// Detached consumer registration passed to and from an adapter codec.
 #[derive(Debug, Clone)]
-pub(crate) struct ConsumerRegistration {
+pub struct ConsumerRegistration {
+    /// Exact retained registration identity.
     pub id: ConsumerId,
+    /// Diagnostic label, never a credential.
     pub label: String,
+    /// Retained registration authority class.
     pub kind: ConsumerKind,
+    /// Registration expiration.
     pub expires_at: DateTime<Utc>,
+    /// Renewal lifetime in seconds.
     pub ttl_seconds: u64,
 }
+/// Detached lease passed to and from an adapter codec.
 #[derive(Debug, Clone)]
-pub(crate) struct Lease {
+pub struct Lease {
+    /// Exact token required to settle this lease.
     pub token: DeliveryToken,
+    /// Registration assigned to the lease, if retained by the format.
     pub consumer_id: Option<ConsumerId>,
+    /// Expiration after which the lease may be replaced.
     pub expires_at: DateTime<Utc>,
 }
+/// Detached queued entry passed to and from an adapter codec.
 #[derive(Debug, Clone)]
-pub(crate) struct Entry<P, K> {
+pub struct Entry<P, K> {
+    /// Stable event identity.
     pub id: EventId,
+    /// Adapter-owned immutable payload.
     pub payload: P,
+    /// Replay identities retained for this entry.
     pub replay_keys: Vec<K>,
+    /// Registration currently assigned to the entry.
     pub consumer_id: Option<ConsumerId>,
+    /// Exact retained delivery endpoint.
     pub endpoint: Option<EndpointId>,
+    /// Whether a pull consumer may acquire the entry.
     pub visibility: EntryVisibility,
+    /// Whether admission permits temporary delivery deferral.
     pub deferrable: bool,
+    /// Earliest permitted delivery time when deferred.
     pub deferred_until: Option<DateTime<Utc>>,
+    /// Current lease, if one is retained.
     pub lease: Option<Lease>,
 }
+/// Detached acknowledged replay fence passed to and from an adapter codec.
 #[derive(Debug, Clone)]
-pub(crate) struct ReplayReceipt<K> {
+pub struct ReplayReceipt<K> {
+    /// Exact replay identity.
     pub key: K,
+    /// Time the owner acknowledged this identity.
     pub acknowledged_at: DateTime<Utc>,
 }
-/// Codec transfer value. Fields are crate-private to prevent arbitrary public restoration.
+/// Detached codec transfer value; decoded snapshots are validated before installation.
+///
+/// Public fields let adapter codecs preserve their own complete disk schemas.
+/// Editing this value does not mutate a live queue.
 #[derive(Debug, Clone)]
 pub struct QueueSnapshot<P, K> {
-    pub(crate) next_id: u64,
-    pub(crate) next_lease_generation: u64,
-    pub(crate) next_consumer_generation: u64,
-    pub(crate) primary_consumer: Option<ConsumerId>,
-    pub(crate) endpoint: Option<EndpointId>,
-    pub(crate) consumers: Vec<ConsumerRegistration>,
-    pub(crate) acknowledged: VecDeque<ReplayReceipt<K>>,
-    pub(crate) entries: VecDeque<Entry<P, K>>,
+    /// Next event allocation counter, including the exhausted sentinel.
+    pub next_id: u64,
+    /// Next lease allocation counter, including the exhausted sentinel.
+    pub next_lease_generation: u64,
+    /// Next registration allocation counter, including the exhausted sentinel.
+    pub next_consumer_generation: u64,
+    /// Retained primary registration.
+    pub primary_consumer: Option<ConsumerId>,
+    /// Retained resident delivery endpoint.
+    pub endpoint: Option<EndpointId>,
+    /// Retained registrations.
+    pub consumers: Vec<ConsumerRegistration>,
+    /// Retained acknowledged replay fences in insertion order.
+    pub acknowledged: VecDeque<ReplayReceipt<K>>,
+    /// Retained queue entries in admission order.
+    pub entries: VecDeque<Entry<P, K>>,
 }
 impl<P, K> Default for QueueSnapshot<P, K> {
     fn default() -> Self {

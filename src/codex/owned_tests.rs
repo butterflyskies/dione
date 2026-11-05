@@ -1,11 +1,9 @@
 //! Cancellation and completion-loss behavior of the production durable owner.
 
 use super::*;
-use crate::{
-    core::{ModuleInstanceId, ModuleSlotId, ProviderId},
-    durable::QueueErrorKind,
-};
 use camino::Utf8PathBuf;
+use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
+use dione_durable::QueueErrorKind;
 use tempfile::TempDir;
 
 fn scope() -> LegacyDiscordScope {
@@ -138,7 +136,7 @@ async fn lost_owned_response_preserves_original_cause_and_retained_event() {
     release.send(()).unwrap();
     let error = admission.await.unwrap().unwrap_err();
     assert!(
-        matches!(error.kind, CodexQueueErrorKind::Durable(crate::durable::QueueError {kind:QueueErrorKind::CompletionUnknown(source),..}) if source.is_panic())
+        matches!(error.kind, CodexQueueErrorKind::Durable(dione_durable::QueueError {kind:QueueErrorKind::CompletionUnknown(source),..}) if source.is_panic())
     );
     assert_eq!(queue.status().await.queued, 1);
     assert!(

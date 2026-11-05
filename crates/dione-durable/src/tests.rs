@@ -58,7 +58,7 @@ async fn private_snapshots_remain_owner_only_across_replacement_in_a_traversable
     command
         .args([
             "--exact",
-            "durable::tests::private_snapshot_creation_child_022",
+            "tests::private_snapshot_creation_child_022",
             "--ignored",
             "--nocapture",
             "--test-threads=1",
@@ -649,6 +649,52 @@ async fn accepted_admission_outlives_cancel_and_drain_then_reopens() {
         item()
     );
     assert!(!queue.enqueue(admission(WorkKey::Batch(22))).await.unwrap());
+}
+
+#[tokio::test]
+async fn drain_waits_for_cancelled_and_panicking_worker_resource_release() {
+    use std::{
+        future::{Future, poll_fn},
+        task::Poll,
+    };
+
+    for lose_response in [false, true] {
+        let dir = TempDir::new().unwrap();
+        let queue = open(&dir);
+        let (released_store, release_store) = queue.test_pause_owned_release();
+        let completion = lose_response.then(|| queue.test_pause_owned_completion(true));
+        let producer = queue.clone();
+        let task =
+            tokio::spawn(async move { producer.enqueue(admission(WorkKey::Batch(23))).await });
+        if let Some((entered, release)) = completion {
+            entered.await.unwrap();
+            release.send(()).unwrap();
+        }
+        released_store.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let mut draining = Box::pin(queue.drain_owned());
+        let pending = poll_fn(|cx| Poll::Ready(draining.as_mut().poll(cx).is_pending())).await;
+        release_store.send(()).unwrap();
+        assert!(
+            pending,
+            "drain returned while accepted work still owned the store"
+        );
+        draining.await;
+        drop(queue);
+        let queue = open(&dir);
+        let consumer = worker(&queue).await;
+        assert_eq!(
+            queue
+                .next_event(&consumer, Duration::ZERO, LEASE)
+                .await
+                .unwrap()
+                .unwrap()
+                .payload,
+            item()
+        );
+        assert!(!queue.enqueue(admission(WorkKey::Batch(23))).await.unwrap());
+    }
 }
 
 #[tokio::test]

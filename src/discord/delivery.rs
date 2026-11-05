@@ -6,8 +6,6 @@ use crate::{
     bell_rings,
     coordination::CoordinationEvent,
     core::{
-        ActorId, ActorRef, ConversationId, ConversationRef, MessageId, MessageRef,
-        ModuleInstanceId,
         delivery::{Delivery, PresentationContext},
         events::{
             AuthorOrigin, BellObservation, BellStatus, ByteSize, ControlError, ControlEvent,
@@ -16,6 +14,9 @@ use crate::{
         },
     },
     gate::MentionKind,
+};
+use dione_contracts::{
+    ActorId, ActorRef, ConversationId, ConversationRef, MessageId, MessageRef, ModuleInstanceId,
 };
 use serenity::model::id::{ChannelId, MessageId as DiscordMessageId, UserId};
 use thiserror::Error;

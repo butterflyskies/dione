@@ -7,9 +7,9 @@ use crate::{
     attention::delivery::AttentionDeliveryGuard,
     codex::{CodexDeliveryConfig, CodexEventQueue, CodexThreadId, run_delivery_worker},
     config::DeliveryConfig,
-    durable::EndpointId,
 };
 use camino::{Utf8Path, Utf8PathBuf};
+use dione_durable::EndpointId;
 use std::{env, sync::Arc};
 use tokio::{sync::watch, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
@@ -166,9 +166,9 @@ mod tests {
         CodexSessionOptions::new(
             Some(path),
             Some(CodexThreadId::parse("registration-thread").unwrap()),
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
     }
@@ -327,9 +327,9 @@ mod tests {
             CodexSessionOptions::new(
                 Some(path),
                 None,
-                crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                    crate::core::ProviderId::new("discord").unwrap(),
-                    crate::core::ModuleSlotId::new("primary").unwrap(),
+                crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                    dione_contracts::ProviderId::new("discord").unwrap(),
+                    dione_contracts::ModuleSlotId::new("primary").unwrap(),
                 )),
             ),
         )
@@ -383,9 +383,9 @@ mod tests {
             CodexSessionOptions::new(
                 Some(path),
                 None,
-                crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                    crate::core::ProviderId::new("discord").unwrap(),
-                    crate::core::ModuleSlotId::new("primary").unwrap(),
+                crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                    dione_contracts::ProviderId::new("discord").unwrap(),
+                    dione_contracts::ModuleSlotId::new("primary").unwrap(),
                 )),
             ),
         )
@@ -534,8 +534,8 @@ mod tests {
                 Err(HarnessSessionError {
                     kind: HarnessSessionErrorKind::QueueOpen(crate::codex::CodexQueueError {
                         kind: crate::codex::CodexQueueErrorKind::Durable(
-                            crate::durable::QueueError {
-                                kind: crate::durable::QueueErrorKind::Locked(_),
+                            dione_durable::QueueError {
+                                kind: dione_durable::QueueErrorKind::Locked(_),
                                 ..
                             }
                         )

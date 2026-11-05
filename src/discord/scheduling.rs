@@ -1,10 +1,10 @@
 //! Discord scheduling classification and scoped payload ownership.
 
 use crate::{
-    core::{ConversationId, ConversationRef, ModuleInstanceId},
     delivery_buffer::{BufferResult, BufferedEvent, DeliveryBuffer as Scheduler},
     discord::events::NotificationEvent,
 };
+use dione_contracts::{ConversationId, ConversationRef, ModuleInstanceId};
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -140,11 +140,9 @@ impl DeliveryBuffer {
 mod tests {
     use super::*;
     use crate::{
-        core::{ModuleSlotId, ProviderId},
-        delivery_buffer::IMMEDIATE_BURST_LIMIT,
-        discord::events::MessageEvent,
-        timestamp::Timestamp,
+        delivery_buffer::IMMEDIATE_BURST_LIMIT, discord::events::MessageEvent, timestamp::Timestamp,
     };
+    use dione_contracts::{ModuleSlotId, ProviderId};
     use serenity::model::id::{ChannelId, MessageId, UserId};
 
     fn msg_event(chat_id: ChannelId) -> NotificationEvent {
@@ -771,11 +769,8 @@ mod tests {
 #[cfg(test)]
 mod proptests {
     use super::*;
-    use crate::{
-        core::{ModuleSlotId, ProviderId},
-        discord::events::MessageEvent,
-        timestamp::Timestamp,
-    };
+    use crate::{discord::events::MessageEvent, timestamp::Timestamp};
+    use dione_contracts::{ModuleSlotId, ProviderId};
     use proptest::prelude::*;
     use serenity::model::id::{ChannelId, MessageId, UserId};
 

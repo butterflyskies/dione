@@ -1,6 +1,6 @@
 //! Independent workshop queue format used by the common owner's integration tests.
 
-use crate::durable::{
+use crate::{
     codec::QueueCodec,
     error::{CodecError, CodecErrorKind},
     identity::{ConsumerId, DeliveryToken, EndpointId, EventId},

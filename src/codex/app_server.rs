@@ -4,13 +4,11 @@ use super::{
     CodexEventQueue, CodexQueueError, CodexQueueErrorKind, CodexResidentHandle, CodexThreadId,
     LeasedEvent,
 };
-use crate::{
-    attention::delivery::{
-        AttentionDeliveryGuard, AttentionDeliveryReceipt, AttentionGuardFailure,
-    },
-    durable::{EndpointId, QueueError, QueueErrorKind},
+use crate::attention::delivery::{
+    AttentionDeliveryGuard, AttentionDeliveryReceipt, AttentionGuardFailure,
 };
 use camino::Utf8PathBuf;
+use dione_durable::{EndpointId, QueueError, QueueErrorKind};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::{env, io, sync::Arc, time::Duration};
@@ -1307,9 +1305,9 @@ mod tests {
 
         let queue = CodexEventQueue::load(
             &state_path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -1395,9 +1393,9 @@ mod tests {
         drop(queue);
         let reopened = CodexEventQueue::load(
             &state_path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -1427,9 +1425,9 @@ mod tests {
         let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
         let queue = CodexEventQueue::load(
             &state_path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -1489,9 +1487,9 @@ mod tests {
         let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
         let queue = CodexEventQueue::load(
             &state_path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -1610,9 +1608,9 @@ mod tests {
         let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
         let queue = CodexEventQueue::load(
             &state_path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -1732,9 +1730,9 @@ mod tests {
         let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
         let queue = CodexEventQueue::load(
             &state_path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -1877,9 +1875,9 @@ mod tests {
         let listener = UnixListener::bind(socket_path.as_std_path()).unwrap();
         let queue = CodexEventQueue::load(
             &state_path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -2092,9 +2090,9 @@ mod tests {
         let defaults = crate::config::DeliveryConfig::default();
         CodexDeliveryConfig {
             legacy_scope: crate::codex::LegacyDiscordScope::new(
-                crate::core::ModuleInstanceId::new(
-                    crate::core::ProviderId::new("discord").unwrap(),
-                    crate::core::ModuleSlotId::new("primary").unwrap(),
+                dione_contracts::ModuleInstanceId::new(
+                    dione_contracts::ProviderId::new("discord").unwrap(),
+                    dione_contracts::ModuleSlotId::new("primary").unwrap(),
                 ),
             ),
             socket_path,
@@ -3499,9 +3497,9 @@ mod tests {
 
         let queue = CodexEventQueue::load(
             &state_path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -3631,9 +3629,9 @@ mod tests {
 
         let queue = CodexEventQueue::load(
             &state_path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -3741,9 +3739,9 @@ mod tests {
 
         let queue = CodexEventQueue::load(
             &state_path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -3845,9 +3843,9 @@ mod tests {
         });
         let queue = CodexEventQueue::load(
             &state_path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -3927,9 +3925,9 @@ mod tests {
         let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         let queue = CodexEventQueue::load(
             &path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -3972,9 +3970,9 @@ mod tests {
         let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
         let queue = CodexEventQueue::load(
             &state_path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -4038,9 +4036,9 @@ mod tests {
         };
         let config = CodexDeliveryConfig::resolve(
             None,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -4287,9 +4285,9 @@ mod tests {
 
         let queue = CodexEventQueue::load(
             &state_path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();

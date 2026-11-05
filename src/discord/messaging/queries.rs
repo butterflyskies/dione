@@ -3,21 +3,21 @@
 use super::{MessagingCtx, MessagingError, MessagingErrorKind, check_outbound};
 use crate::{
     config::LoadedConfig,
-    core::{
-        self, ModuleInstanceId,
-        context::{
-            AttachmentSummary, Availability, ContextMetadata, ContextObservation, HistoryDirection,
-            HistoryQuery, ObservationExtent, ObservationOrigin, PageMetadata, ReferenceConsistency,
-            ReferenceObservation, ReferenceRelation, ResolvedReference, SenderObservation,
-            UnavailableReason,
-        },
-    },
     evidence::{OfferedSentex, parse_offered_sentexes},
     timestamp::Timestamp,
     vaelii::{GetMessageReceipt, VaeliiError},
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::Utc;
+use dione_contracts::{
+    ModuleInstanceId,
+    context::{
+        AttachmentSummary, Availability, ContextMetadata, ContextObservation, HistoryDirection,
+        HistoryQuery, ObservationExtent, ObservationOrigin, PageMetadata, ReferenceConsistency,
+        ReferenceObservation, ReferenceRelation, ResolvedReference, SenderObservation,
+        UnavailableReason,
+    },
+};
 use serenity::{
     http::MessagePagination,
     model::{
@@ -769,24 +769,30 @@ impl DiscordNativeObservation {
     }
 }
 
-fn conversation_ref(source: &ModuleInstanceId, channel_id: ChannelId) -> core::ConversationRef {
-    core::ConversationRef::new(
+fn conversation_ref(
+    source: &ModuleInstanceId,
+    channel_id: ChannelId,
+) -> dione_contracts::ConversationRef {
+    dione_contracts::ConversationRef::new(
         source.clone(),
-        core::ConversationId::numeric(channel_id.into()),
+        dione_contracts::ConversationId::numeric(channel_id.into()),
     )
 }
 fn message_ref(
     source: &ModuleInstanceId,
     channel_id: ChannelId,
     message_id: MessageId,
-) -> core::MessageRef {
-    core::MessageRef::new(
+) -> dione_contracts::MessageRef {
+    dione_contracts::MessageRef::new(
         conversation_ref(source, channel_id),
-        core::MessageId::numeric(message_id.into()),
+        dione_contracts::MessageId::numeric(message_id.into()),
     )
 }
-fn actor_ref(source: &ModuleInstanceId, user_id: UserId) -> core::ActorRef {
-    core::ActorRef::new(source.clone(), core::ActorId::numeric(user_id.into()))
+fn actor_ref(source: &ModuleInstanceId, user_id: UserId) -> dione_contracts::ActorRef {
+    dione_contracts::ActorRef::new(
+        source.clone(),
+        dione_contracts::ActorId::numeric(user_id.into()),
+    )
 }
 
 impl DiscordNativeObservation {
@@ -890,7 +896,10 @@ impl MessageView {
             .native
             .guild_id
             .map(|id| {
-                core::WorkspaceRef::new(source.clone(), core::WorkspaceId::numeric(id.into()))
+                dione_contracts::WorkspaceRef::new(
+                    source.clone(),
+                    dione_contracts::WorkspaceId::numeric(id.into()),
+                )
             })
             .map_or(
                 Availability::Unavailable(UnavailableReason::NotReported),
@@ -2311,8 +2320,8 @@ mod context_tests {
 
     fn source() -> ModuleInstanceId {
         ModuleInstanceId::new(
-            core::ProviderId::new("discord").unwrap(),
-            core::ModuleSlotId::new("secondary").unwrap(),
+            dione_contracts::ProviderId::new("discord").unwrap(),
+            dione_contracts::ModuleSlotId::new("secondary").unwrap(),
         )
     }
 

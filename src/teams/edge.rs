@@ -652,9 +652,9 @@ pub(crate) mod tests {
             .expect("UTF-8 queue path");
         let queue = crate::codex::CodexEventQueue::load(
             &queue_path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .expect("load resident queue");
@@ -922,9 +922,9 @@ pub(crate) mod tests {
             .expect("UTF-8 legacy state path");
         let legacy_queue = crate::codex::CodexEventQueue::load(
             &legacy_path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .expect("create legacy fixture inbox");
@@ -955,9 +955,9 @@ pub(crate) mod tests {
             .expect("write local pre-kind fixture");
         let legacy_queue = crate::codex::CodexEventQueue::load(
             &legacy_path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .expect("reload pre-kind fixture");
@@ -1017,8 +1017,8 @@ pub(crate) mod tests {
         assert!(matches!(
             legacy_queue.register_live_consumer().await,
             Err(crate::codex::CodexQueueError {
-                kind: crate::codex::CodexQueueErrorKind::Durable(crate::durable::QueueError {
-                    kind: crate::durable::QueueErrorKind::PrimaryConsumerExists,
+                kind: crate::codex::CodexQueueErrorKind::Durable(dione_durable::QueueError {
+                    kind: dione_durable::QueueErrorKind::PrimaryConsumerExists,
                     ..
                 })
             })
@@ -1035,9 +1035,9 @@ pub(crate) mod tests {
             .expect("expire local fixture registration");
         let recovered_queue = crate::codex::CodexEventQueue::load(
             &legacy_path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .expect("reload expired legacy fixture");
@@ -1271,10 +1271,11 @@ pub(crate) mod tests {
         for lose_response in [false, true] {
             let directory = TempDir::new().unwrap();
             let path = camino::Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
-            let scope = crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
-            ));
+            let scope =
+                crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                    dione_contracts::ProviderId::new("discord").unwrap(),
+                    dione_contracts::ModuleSlotId::new("primary").unwrap(),
+                ));
             let queue = crate::codex::CodexEventQueue::open(&path, scope.clone())
                 .await
                 .unwrap();

@@ -8,15 +8,15 @@ use super::{
 use crate::{
     contradictionary::{Action, DiaryRecord, append_diary_record},
     coordination::{ClaimOutcome, ClaimProgress, Coordinator},
-    core::{
-        ConversationId, ConversationRef, MessageRef, ModuleInstanceId, ModuleSlotId, ProviderId,
-    },
     no_rly::judge::{OutboundJudge, Verdict},
     rook::{
         CanonicalPublication, DispatchOutcome, MentionPolicy, MessageKey, PreparedPublication,
         PublicationCapabilities, PublicationDispatch, PublicationProvider, PublicationReceipt,
         PublicationRejection, PublicationTarget, PublicationUncertainty,
     },
+};
+use dione_contracts::{
+    ConversationId, ConversationRef, MessageRef, ModuleInstanceId, ModuleSlotId, ProviderId,
 };
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -352,7 +352,7 @@ impl DiscordPublicationProvider {
                 let receipt = PublicationReceipt {
                     message: MessageKey::from(&MessageRef::new(
                         room,
-                        crate::core::MessageId::numeric(id),
+                        dione_contracts::MessageId::numeric(id),
                     )),
                 };
                 PublicationDispatch::with_after_commit(
@@ -759,7 +759,7 @@ mod tests {
                     self.provider.source.clone(),
                     ConversationId::numeric(NonZeroU64::new(10).unwrap()),
                 ),
-                crate::core::MessageId::numeric(NonZeroU64::new(30).unwrap()),
+                dione_contracts::MessageId::numeric(NonZeroU64::new(30).unwrap()),
             ));
             serde_json::from_value(json!({"version":1, "event":{"message":message,"occurrence":{"kind":"created"}},"target":{"kind":"reply","target":message}, "text":text, "mentions":{"kind":"suppress_all"}})).unwrap()
         }

@@ -12,13 +12,11 @@ use super::{
     messaging::{MessagingCtx, MessagingError, MessagingErrorKind, queries},
     rook_observation::native_supplement,
 };
-use crate::{
-    core::{ModuleInstanceId, ModuleSlotId, ProviderId},
-    rook::{
-        ContextCapabilities, ContextDirection, ContextError, ContextErrorKind, ContextObservation,
-        ContextPage, ContextProvider, ContextQuery, ContextResponse, ConversationKey,
-    },
+use crate::rook::{
+    ContextCapabilities, ContextDirection, ContextError, ContextErrorKind, ContextObservation,
+    ContextPage, ContextProvider, ContextQuery, ContextResponse, ConversationKey,
 };
+use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 
 /// Discord context reader bound to one configured module slot.
 ///
@@ -194,9 +192,9 @@ mod tests {
     use super::*;
     use crate::{
         config::{ChannelConfig, Config, LoadedConfig},
-        core::{ConversationId, ConversationRef, MessageRef},
         rook::{MessageKey, PageLimit},
     };
+    use dione_contracts::{ConversationId, ConversationRef, MessageRef};
     use serde_json::{Value, json};
     use std::sync::Mutex;
     use tokio::{
@@ -292,7 +290,7 @@ mod tests {
                     self.provider.source.clone(),
                     ConversationId::numeric(std::num::NonZeroU64::new(10).unwrap()),
                 ),
-                crate::core::MessageId::numeric(std::num::NonZeroU64::new(id).unwrap()),
+                dione_contracts::MessageId::numeric(std::num::NonZeroU64::new(id).unwrap()),
             ))
         }
     }
@@ -453,7 +451,7 @@ mod tests {
                 other_source,
                 ConversationId::numeric(std::num::NonZeroU64::new(10).unwrap()),
             ),
-            crate::core::MessageId::numeric(std::num::NonZeroU64::new(30).unwrap()),
+            dione_contracts::MessageId::numeric(std::num::NonZeroU64::new(30).unwrap()),
         ));
         assert!(matches!(
             fixture
@@ -469,7 +467,7 @@ mod tests {
                 fixture.provider.source.clone(),
                 ConversationId::numeric(std::num::NonZeroU64::new(10).unwrap()),
             ),
-            crate::core::MessageId::opaque("30").unwrap(),
+            dione_contracts::MessageId::opaque("30").unwrap(),
         ));
         assert!(matches!(
             fixture

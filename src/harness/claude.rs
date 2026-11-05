@@ -4,9 +4,10 @@ use super::{
     codex::{ToolArgumentError, recognizes},
 };
 use crate::{
-    core::{MessageRef, delivery::Delivery, events::PermissionDecision},
+    core::{delivery::Delivery, events::PermissionDecision},
     mcp::harness_wire::HarnessProtocol,
 };
+use dione_contracts::MessageRef;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 pub(super) const ATTENTION_POLICY: AttentionPolicy = AttentionPolicy::Direct;

@@ -2,12 +2,12 @@
 
 use crate::{
     core::{
-        ModuleInstanceId, ModuleSlotId, ProviderId,
         delivery::{Delivery, EvidenceVisibility, PresentationContext},
         events::{ControlEvent, TraceLevel},
     },
     discord::{delivery, events::NotificationEvent},
 };
+use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use serde_json::Value;
 
 pub(crate) fn module() -> ModuleInstanceId {

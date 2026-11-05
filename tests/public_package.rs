@@ -723,7 +723,11 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     let workflow = include_str!("../.github/workflows/publish-crate.yml");
     let (verify, remaining) = workflow.split_once("\n  publish-rendering:").unwrap();
     let (publish_rendering, remaining) = remaining.split_once("\n  reconcile-rendering:").unwrap();
-    let (reconcile_rendering, remaining) = remaining.split_once("\n  publish-crate:").unwrap();
+    let (reconcile_rendering, remaining) = remaining.split_once("\n  publish-durable:").unwrap();
+    let (publish_durable, remaining) = remaining.split_once("\n  reconcile-durable:").unwrap();
+    let (reconcile_durable, remaining) = remaining.split_once("\n  publish-contracts:").unwrap();
+    let (publish_contracts, remaining) = remaining.split_once("\n  reconcile-contracts:").unwrap();
+    let (reconcile_contracts, remaining) = remaining.split_once("\n  publish-crate:").unwrap();
     let (publish_dione, reconcile_dione) = remaining.split_once("\n  reconcile-dione:").unwrap();
 
     assert_eq!(
@@ -731,10 +735,16 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
             .matches("scripts/verify-public-package-privacy.sh")
             .count(),
         workflow.matches("cargo package -p").count()
-            + 2 * workflow.matches("cargo package --workspace").count(),
+            + 4 * workflow.matches("cargo package --workspace").count(),
         "every workspace archive must cross the privacy verifier"
     );
-    for job in [verify, reconcile_rendering, reconcile_dione] {
+    for job in [
+        verify,
+        reconcile_rendering,
+        reconcile_durable,
+        reconcile_contracts,
+        reconcile_dione,
+    ] {
         assert!(!job.contains("CARGO_REGISTRY_TOKEN"));
         assert!(!job.contains("id-token: write"));
     }
@@ -743,17 +753,36 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     assert!(workflow.contains("scripts/crates-io-package-state.sh dione-rendering "));
     assert!(workflow.contains("github:butterflyskies:lacuna-blinkers"));
     assert!(workflow.contains("github:butterflyskies:superadmins"));
-    assert!(publish_dione.contains("needs: [verify-dione, reconcile-rendering]"));
-    assert!(reconcile_dione.contains("needs: [verify-dione, reconcile-rendering, publish-crate]"));
+    assert!(publish_dione.contains(
+        "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts]"
+    ));
+    assert!(
+        reconcile_dione.contains(
+            "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, publish-crate]"
+        )
+    );
     assert!(reconcile_dione.contains("needs.reconcile-rendering.result == 'success'"));
     assert!(reconcile_rendering.contains("needs: [verify-dione, publish-rendering]"));
     assert!(reconcile_rendering.contains("--ignore-vcs-info"));
+    assert!(reconcile_durable.contains("needs: [verify-dione, publish-durable]"));
+    assert!(reconcile_durable.contains("--ignore-vcs-info"));
+    assert!(reconcile_contracts.contains("needs: [verify-dione, publish-contracts]"));
+    assert!(reconcile_contracts.contains("--ignore-vcs-info"));
+    assert!(reconcile_dione.contains("needs.reconcile-contracts.result == 'success'"));
+    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-contracts "));
+    assert!(reconcile_dione.contains("needs.reconcile-durable.result == 'success'"));
+    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-durable "));
     assert!(!reconcile_dione.contains("--ignore-vcs-info"));
     assert!(workflow.contains("group: publish-crate-${{ inputs.tag }}"));
     assert!(publish_dione.contains("cargo package -p dione --locked --no-verify"));
     assert!(reconcile_dione.contains("cargo package -p dione --locked\n"));
 
-    for upload_job in [publish_rendering, publish_dione] {
+    for upload_job in [
+        publish_rendering,
+        publish_durable,
+        publish_contracts,
+        publish_dione,
+    ] {
         assert!(upload_job.contains("id-token: write"));
         let upload_step = upload_job
             .split_once("- name: Upload pre-verified")
@@ -779,14 +808,14 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
     let github_ci = include_str!("../.github/workflows/build.yml");
     let github_release = include_str!("../.github/workflows/release.yml");
 
-    let forgejo_triggers = "on:\n  push:\n    branches: [main]\n  pull_request:\n    branches:\n      - main\n      - refactor/vertical-slices\n      - refactor/teams-identities-publication\n      - fix/reply-secure-publication\n      - publication/secure-management-tools\n      - publication/secure-query-tools\n      - publication/secure-reply-teams-base\n      - refactor/owned-durable-admission\n      - refactor/discord-query-observation-errors\n      - refactor/generic-durable-store\n      - feat/rook-event-ingress\n";
+    let forgejo_triggers = "on:\n  push:\n    branches: [main]\n  pull_request:\n    branches:\n      - main\n      - refactor/plugin-crates\n      - \"refactor/*-crate\"\n      - refactor/vertical-slices\n      - refactor/teams-identities-publication\n      - fix/reply-secure-publication\n      - publication/secure-management-tools\n      - publication/secure-query-tools\n      - publication/secure-reply-teams-base\n      - refactor/owned-durable-admission\n      - refactor/discord-query-observation-errors\n      - refactor/generic-durable-store\n      - feat/rook-event-ingress\n";
     assert!(workflow.contains(forgejo_triggers));
     assert!(!workflow.contains("\n  workflow_dispatch:"));
     assert_eq!(workflow.matches("toolchain: \"1.98.0\"").count(), 7);
     assert!(!workflow.contains("1.95.0"));
     assert!(workflow.contains("cargo +1.98.0 check --workspace --all-targets --locked"));
     assert!(!workflow.contains("toolchain: stable"));
-    assert!(workflow.contains("run: cargo fmt -- --check"));
+    assert!(workflow.contains("run: cargo fmt --all -- --check"));
     assert!(!workflow.contains("--config imports_granularity"));
     assert!(rust_toolchain.contains("channel = \"1.98.0\""));
     assert!(rust_toolchain.contains("components = [\"clippy\", \"rustfmt\"]"));
@@ -844,7 +873,7 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
         package
             .matches("scripts/verify-public-package-privacy.sh")
             .count(),
-        2 * archive_package_calls.len(),
+        4 * archive_package_calls.len(),
         "every archive-producing workspace package call must cross the privacy verifier"
     );
     for (index, _) in archive_package_calls {

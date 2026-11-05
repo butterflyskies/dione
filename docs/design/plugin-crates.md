@@ -25,6 +25,42 @@ Application tests continue checking protocol text, cleanup, authorization,
 caption hooks, and HTTP delivery. This extraction establishes an independently
 compiled capability; no build-time improvement has been measured.
 
+## Durable queue boundary
+
+`dione-durable` owns the generic queue engine, store, checked identities,
+admission operations, replay suppression, leasing, and resident binding.
+Codex and Oh My Pi keep their disk schemas, payload validation, and runtime
+adapters. Both implement `QueueCodec` over public detached snapshot records;
+decoded state still passes the engine's existing validation before installation.
+The live store, engine, and resident-handle construction remain private.
+
+The shared atomic snapshot replacement primitive moves with durable storage.
+Rook consumes that primitive directly and retains its own directory admission
+policy. No compatibility module remains in Dione.
+
+The default-off `test-support` feature preserves adapter-level clock, persistence
+fault, completion-pause, and snapshot fixtures through Dione's dev-dependency.
+The feature is additive Cargo functionality, not a security boundary. Production
+dependencies do not opt in. Member tests and application adapter tests retain
+the existing cancellation, crash-durability, codec, and private-file contracts.
+
+## Provider contracts boundary
+
+`dione-contracts` owns provider and module identities, context records, and
+checked source-observation identity. Numeric identities and opaque numeric-looking
+text remain distinct. Owned fields stay private, and an edited occurrence still
+requires exact agreement with its context edit timestamp. Borrowed identity
+projections expose the existing numeric or opaque form without string conversion.
+
+The crate has no application, attention, platform, or Rook dependency. Display,
+events, and delivery remain in Dione because they have presentation or application
+ownership. Rook keeps its wire schemas, validation, and authorization. Common
+observations are descriptive data, not proof of current access or action authority.
+
+All callers use the new crate directly. Its identity/context unit tests, branded
+identity UI fixtures, and private-field doctests live with the contract. No old
+identity or context re-export remains in Dione's core module.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -41,9 +77,10 @@ test preparation, and release builds separately before making speed claims.
 
 ## Package and release requirements
 
-The application uses a versioned path dependency on `dione-rendering`.
-`cargo package --workspace --locked` verifies both interdependent packages
-before either new version exists on crates.io. The gate checks both archives with the existing
+The application uses versioned path dependencies on `dione-rendering`,
+`dione-durable`, and `dione-contracts`.
+`cargo package --workspace --locked` verifies the interdependent packages
+before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
 archive or a private package dependency.
 
@@ -53,13 +90,13 @@ a greater member version. Rust source changes also require a Dione version bump
 and changelog entry. New members may start at their initial version. Release
 hygiene enforces these rules before tagging.
 
-The release workflow verifies both namespace owner allowlists and package
-states. It publishes and reconciles the renderer before publishing Dione.
-Dione retains exact archive checks. Renderer comparisons ignore only the
+The release workflow verifies capability namespace owner allowlists and package
+states. It publishes and reconciles the capabilities before publishing Dione.
+Dione retains exact archive checks. Capability comparisons ignore only the
 root `.cargo_vcs_info.json` receipt so an unchanged renderer version can survive
 later application commits; every other archived byte remains protected.
 The already-published path remains mandatory.
-Before the first release, an authorized operator must reserve `dione-rendering`,
+Before the first release, an authorized operator must reserve `dione-rendering`, `dione-durable`, and `dione-contracts`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This

@@ -68,7 +68,7 @@ impl PrivateStore {
 #[cfg(unix)]
 mod unix {
     use super::{Path, StorageError, StorageErrorKind};
-    use crate::atomic_snapshot::{self, ReplaceError};
+    use dione_durable::atomic_snapshot::{self, ReplaceError};
     use fs2::FileExt;
     use std::{
         ffi::{CStr, CString},
@@ -481,7 +481,7 @@ mod tests {
         let renamed = std::cell::Cell::new(false);
         let synced = std::cell::Cell::new(false);
         let bytes = [b'n'; 512];
-        let result = crate::atomic_snapshot::replace(
+        let result = dione_durable::atomic_snapshot::replace(
             &mut probe,
             &bytes,
             |error| error,
@@ -494,7 +494,7 @@ mod tests {
                 fs::File::open(root.path())?.sync_all()
             },
         );
-        let Err(crate::atomic_snapshot::ReplaceError::BeforeCommit(error)) = result else {
+        let Err(dione_durable::atomic_snapshot::ReplaceError::BeforeCommit(error)) = result else {
             panic!("expected partial regular-file write failure");
         };
         assert_eq!(error.raw_os_error(), Some(libc::EFBIG));

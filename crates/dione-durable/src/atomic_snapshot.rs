@@ -1,14 +1,22 @@
+//! Atomic snapshot replacement with an explicit visibility boundary.
+
 use std::{
     fs::File,
     io::{self, Write},
 };
 
-pub(crate) enum ReplaceError<E> {
+/// Replacement failure classified by whether the new snapshot is visible.
+pub enum ReplaceError<E> {
+    /// The replacement has not reached its visibility boundary.
     BeforeCommit(E),
+    /// The new snapshot is visible, but its directory entry was not synchronized.
     VisibleDurabilityUncertain(E),
 }
 
-pub(crate) fn replace<E>(
+/// Writes and synchronizes a temporary snapshot, then renames and synchronizes its directory.
+///
+/// The caller owns path admission and supplies the rename and directory-sync operations.
+pub fn replace<E>(
     temporary: &mut File,
     bytes: &[u8],
     write_error: impl FnOnce(io::Error) -> E,

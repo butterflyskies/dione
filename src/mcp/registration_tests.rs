@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::{
-    core::{MessageRef, delivery::Delivery},
+    core::delivery::Delivery,
     harness::HarnessDelivery,
     mcp::{
         harness_wire::HarnessProtocol,
@@ -16,6 +16,7 @@ use crate::{
         runtime::{TeamsReplyAuthority, TeamsRuntimeError},
     },
 };
+use dione_contracts::MessageRef;
 use futures_util::future::BoxFuture;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::io::AsyncWriteExt;
@@ -62,8 +63,8 @@ async fn server_with_http(
         Arc::new(ConsentGate::new(&path)),
         Arc::new(crate::ingress_ledger::IngressLedger::new()),
         ModuleInstanceId::new(
-            crate::core::ProviderId::new("discord").unwrap(),
-            crate::core::ModuleSlotId::new("primary").unwrap(),
+            dione_contracts::ProviderId::new("discord").unwrap(),
+            dione_contracts::ModuleSlotId::new("primary").unwrap(),
         ),
         None,
     )

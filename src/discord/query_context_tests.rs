@@ -1,11 +1,8 @@
 //! Registered context reads against synthetic Discord HTTP responses.
 use super::*;
-use crate::{
-    core::{ModuleInstanceId, ModuleSlotId, ProviderId},
-    harness::HarnessConnection,
-    mcp::tool_registry::ToolRegistry,
-};
+use crate::{harness::HarnessConnection, mcp::tool_registry::ToolRegistry};
 use camino::Utf8PathBuf;
+use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use std::{collections::VecDeque, sync::Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 

@@ -22,6 +22,14 @@ The `dione` package composes platform adapters, harnesses, and MCP tools.
 The public `dione-rendering` package owns LaTeX conversion, Typst compilation,
 PNG encoding, and retained files. Its successful artifact types have private
 fields; compiler and persistence errors retain their concrete causes.
+The public `dione-durable` package owns generic queue state transitions,
+accepted-operation lifetime, and atomic snapshot replacement. Codex and Oh My Pi
+retain their adapter-specific codecs and payload validation. Rook uses the same
+atomic replacement primitive while retaining its private-directory admission.
+The public `dione-contracts` package owns source-qualified provider identities,
+context records, and checked message occurrences. Display formatting and
+attention-dependent delivery remain in the application; Rook retains its own
+serialized observation model and authorization checks.
 See the [crate split plan](docs/design/plugin-crates.md) for the next boundaries
 and the package release requirements.
 
@@ -95,12 +103,13 @@ The worker acknowledges an event after the app-server accepts its request.
 Acceptance is a transport outcome, not proof that the agent read or acted on the
 event. The MCP lease and acknowledgement tools also support explicit pull
 consumers. The [Codex queue adapter](src/codex/queue.rs) projects the legacy API onto the
-[durable queue owner](src/durable/queue.rs), which serializes consumer, lease,
-and binding transitions. Its [store](src/durable/store.rs) holds the lifetime
+[durable queue owner](crates/dione-durable/src/queue.rs), which serializes consumer, lease,
+and binding transitions. Its [store](crates/dione-durable/src/store.rs) holds the lifetime
 inbox lock and persists snapshots through the [legacy codec](src/codex/queue_codec.rs). The [Codex setup guide](README.md#codex-mode) describes binding
 and intentional backlog handoff.
 
-The repository contains one package with a library and three executables.
+The workspace contains capability libraries and the Dione application package
+with a library and three executables.
 `dione` runs the bridge. [dione-send](src/bin/dione-send.rs) sends once without
 the gateway. [gaie_archive](src/bin/gaie_archive.rs) owns archive capture and
 replay commands. There is no required Kubernetes or database deployment in
@@ -234,7 +243,7 @@ not imply that all writes have the same durability guarantee.
 |-------|--------------------------|
 | Configuration | [ConfigRuntime](src/config.rs) serializes mutations and publishes immutable snapshots through ArcSwap. TOML, last-known-good, and quarantine files support recovery. [ConfigStore](src/config_store.rs) edits TOML without owning persistence. |
 | Access requests | [AccessQueue](src/queue.rs) keeps requests in memory and writes `queue.json` through a temporary file and rename. Persistence errors are logged after memory changes. |
-| Codex delivery | [CodexEventQueue](src/codex/queue.rs) adapts the shared [durable owner](src/durable/queue.rs); its [legacy codec](src/codex/queue_codec.rs) preserves pending events, leases, consumers, and bindings in `codex-inbox.json`. The [store](src/durable/store.rs) holds `codex-inbox.lock` for its lifetime to exclude a second owner. |
+| Codex delivery | [CodexEventQueue](src/codex/queue.rs) adapts the shared [durable owner](crates/dione-durable/src/queue.rs); its [legacy codec](src/codex/queue_codec.rs) preserves pending events, leases, consumers, and bindings in `codex-inbox.json`. The [store](crates/dione-durable/src/store.rs) holds `codex-inbox.lock` for its lifetime to exclude a second owner. |
 | Guild mutes | [MuteStore](src/mute_store.rs) rebuilds state from `guild_mute_receipts.jsonl`. Receipt append precedes snapshot publication. |
 | Attention | [AttentionRuntime](src/attention/runtime.rs) uses `attention/records.json` through the [attention store](src/attention/store.rs), plus `attention-status.json` for health reporting. |
 | Consent outcomes | [JournalHandle](src/no_rly/journal.rs) serializes writes to `no_rly_journal.jsonl`. Pending consent handles are owned by [HoldQueue](src/no_rly/queue.rs). |

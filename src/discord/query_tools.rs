@@ -12,7 +12,6 @@ use super::{
 };
 use crate::{
     config::load_config,
-    core::ModuleInstanceId,
     mcp::{
         protocol::tool,
         tool_registry::{
@@ -21,6 +20,7 @@ use crate::{
         },
     },
 };
+use dione_contracts::ModuleInstanceId;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use serenity::model::id::{ChannelId, MessageId};

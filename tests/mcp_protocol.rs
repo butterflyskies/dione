@@ -185,9 +185,9 @@ async fn make_server_with_connection(
         harness,
         Arc::new(ConsentGate::new(state_dir)),
         Arc::new(dione::ingress_ledger::IngressLedger::new()),
-        dione::core::ModuleInstanceId::new(
-            dione::core::ProviderId::new("discord").unwrap(),
-            dione::core::ModuleSlotId::new("primary").unwrap(),
+        dione_contracts::ModuleInstanceId::new(
+            dione_contracts::ProviderId::new("discord").unwrap(),
+            dione_contracts::ModuleSlotId::new("primary").unwrap(),
         ),
         None,
     )
@@ -409,9 +409,9 @@ async fn harness_contract_codex_consumer_receives_and_acknowledges_event() {
     let (_dir, state_dir) = temp_state_dir();
     let queue = dione::codex::CodexEventQueue::load(
         &state_dir,
-        dione::codex::LegacyDiscordScope::new(dione::core::ModuleInstanceId::new(
-            dione::core::ProviderId::new("discord").unwrap(),
-            dione::core::ModuleSlotId::new("primary").unwrap(),
+        dione::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            dione_contracts::ProviderId::new("discord").unwrap(),
+            dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
     )
     .unwrap();
@@ -1341,9 +1341,9 @@ async fn test_bind_codex_thread_updates_live_binding() {
         HarnessConnection::codex(
             dione::codex::CodexEventQueue::load(
                 &state_dir,
-                dione::codex::LegacyDiscordScope::new(dione::core::ModuleInstanceId::new(
-                    dione::core::ProviderId::new("discord").unwrap(),
-                    dione::core::ModuleSlotId::new("primary").unwrap(),
+                dione::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                    dione_contracts::ProviderId::new("discord").unwrap(),
+                    dione_contracts::ModuleSlotId::new("primary").unwrap(),
                 )),
             )
             .unwrap(),
@@ -2524,9 +2524,9 @@ fn codex_connection(state_dir: &camino::Utf8Path) -> HarnessConnection {
     HarnessConnection::codex(
         dione::codex::CodexEventQueue::load(
             state_dir,
-            dione::codex::LegacyDiscordScope::new(dione::core::ModuleInstanceId::new(
-                dione::core::ProviderId::new("discord").unwrap(),
-                dione::core::ModuleSlotId::new("primary").unwrap(),
+            dione::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap(),

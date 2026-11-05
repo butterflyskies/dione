@@ -103,9 +103,9 @@ async fn harness_session_delivery_survives_process_cancellation_and_rebinds() {
         CodexSessionOptions::new(
             Some(socket),
             Some("first-thread".parse().unwrap()),
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         ),
     )
@@ -201,9 +201,9 @@ async fn harness_session_delivery_survives_process_cancellation_and_rebinds() {
     assert!(
         crate::codex::CodexEventQueue::load(
             &root,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap()
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap()
             ))
         )
         .is_err()
@@ -213,9 +213,9 @@ async fn harness_session_delivery_survives_process_cancellation_and_rebinds() {
     assert!(
         crate::codex::CodexEventQueue::load(
             &root,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap()
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap()
             ))
         )
         .is_ok()
@@ -234,9 +234,9 @@ async fn harness_session_keeps_lock_after_worker_failure_until_shutdown() {
         CodexSessionOptions::new(
             Some(root.join("unused.sock")),
             Some("thread".parse().unwrap()),
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         ),
     )
@@ -255,9 +255,9 @@ async fn harness_session_keeps_lock_after_worker_failure_until_shutdown() {
     assert!(
         crate::codex::CodexEventQueue::load(
             &moved,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap()
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap()
             ))
         )
         .is_err(),
@@ -267,9 +267,9 @@ async fn harness_session_keeps_lock_after_worker_failure_until_shutdown() {
     assert!(
         crate::codex::CodexEventQueue::load(
             &moved,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap()
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap()
             ))
         )
         .is_ok()
@@ -302,9 +302,9 @@ async fn harness_session_errors_preserve_sources_and_teams_capability() {
         CodexSessionOptions::new(
             None,
             None,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         ),
     )
@@ -315,9 +315,9 @@ async fn harness_session_errors_preserve_sources_and_teams_capability() {
         CodexSessionOptions::new(
             None,
             None,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         ),
     )
@@ -338,8 +338,8 @@ async fn harness_session_errors_preserve_sources_and_teams_capability() {
         if matches!(
             error.downcast_ref::<CodexQueueError>(),
             Some(CodexQueueError {
-                kind: crate::codex::CodexQueueErrorKind::Durable(crate::durable::QueueError {
-                    kind: crate::durable::QueueErrorKind::Locked(_),
+                kind: crate::codex::CodexQueueErrorKind::Durable(dione_durable::QueueError {
+                    kind: dione_durable::QueueErrorKind::Locked(_),
                     ..
                 })
             })
@@ -386,9 +386,9 @@ async fn oh_my_pi_session_is_direct_without_inbox_or_worker() {
             CodexSessionOptions::new(
                 Some(root.join("absent.sock")),
                 None,
-                crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                    crate::core::ProviderId::new("discord").unwrap(),
-                    crate::core::ModuleSlotId::new("primary").unwrap(),
+                crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                    dione_contracts::ProviderId::new("discord").unwrap(),
+                    dione_contracts::ModuleSlotId::new("primary").unwrap(),
                 )),
             ),
             false,
@@ -421,9 +421,9 @@ async fn oh_my_pi_session_is_direct_without_inbox_or_worker() {
         CodexSessionOptions::new(
             None,
             None,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         ),
     )

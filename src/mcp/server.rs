@@ -11,8 +11,6 @@
 //! - Error    → `{"jsonrpc":"2.0","id":N,"error":{"code":-32000,"message":"..."}}`
 //! - Notification (no id) → `{"jsonrpc":"2.0","method":"...","params":{...}}`
 
-#[cfg(test)]
-use crate::core::{ModuleSlotId, ProviderId};
 pub use crate::tracing_channel::TraceLevelController;
 use crate::{
     attention::{
@@ -21,10 +19,7 @@ use crate::{
     },
     bell_rings::{BellEvaluator, render_bells},
     config::BellMode,
-    core::{
-        ModuleInstanceId,
-        delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
-    },
+    core::delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
     delivery_buffer::BufferResult,
     discord::{
         access::AccessCtx,
@@ -46,6 +41,9 @@ use crate::{
     rate_limiter::{ChannelRef, ParticipantId, RateLimitDecision, RateLimiter},
 };
 use camino::Utf8PathBuf;
+use dione_contracts::ModuleInstanceId;
+#[cfg(test)]
+use dione_contracts::{ModuleSlotId, ProviderId};
 use serde_json::{Value, json};
 use std::{
     os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
@@ -556,9 +554,9 @@ async fn run_with_input(
                         let source = crate::attention::types::SourceKey { channel_id: *chat_id, message_id: *message_id };
                         let ready = admissions.invalidate(source);
                         if let Err(error) = attention.invalidate(source).await { attention.unknown(error.to_string()); }
-                        let scoped_source = crate::core::MessageRef::new(
-                            crate::core::ConversationRef::new(attention.authority_module().clone(), crate::core::ConversationId::numeric(source.channel_id.into())),
-                            crate::core::MessageId::numeric(source.message_id.into()),
+                        let scoped_source = dione_contracts::MessageRef::new(
+                            dione_contracts::ConversationRef::new(attention.authority_module().clone(), dione_contracts::ConversationId::numeric(source.channel_id.into())),
+                            dione_contracts::MessageId::numeric(source.message_id.into()),
                         );
                         if let Err(error) = notification_sink.invalidate_attention(scoped_source).await {
                             attention.unknown(error.to_string());
@@ -1201,9 +1199,9 @@ pub mod test_helpers {
     pub fn make_notification(
         event: NotificationEvent,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let module = crate::core::ModuleInstanceId::new(
-            crate::core::ProviderId::new("discord")?,
-            crate::core::ModuleSlotId::new("fixture")?,
+        let module = dione_contracts::ModuleInstanceId::new(
+            dione_contracts::ProviderId::new("discord")?,
+            dione_contracts::ModuleSlotId::new("fixture")?,
         );
         let delivery = crate::discord::delivery::single(&module, event, presentation(None, true))?;
         Ok(crate::codex::legacy_delivery::encode(
@@ -1221,9 +1219,9 @@ pub mod test_helpers {
         let Some(first) = events.next() else {
             return Ok(None);
         };
-        let module = crate::core::ModuleInstanceId::new(
-            crate::core::ProviderId::new("discord")?,
-            crate::core::ModuleSlotId::new("fixture")?,
+        let module = dione_contracts::ModuleInstanceId::new(
+            dione_contracts::ProviderId::new("discord")?,
+            dione_contracts::ModuleSlotId::new("fixture")?,
         );
         let delivery = crate::discord::delivery::batch(
             &module,
@@ -1463,9 +1461,9 @@ mod tests {
             harness,
             Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
             Arc::new(crate::ingress_ledger::IngressLedger::new()),
-            crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             ),
             None,
         )
@@ -1550,9 +1548,9 @@ mod tests {
             HarnessConnection::claude(),
             Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
             Arc::new(crate::ingress_ledger::IngressLedger::new()),
-            crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             ),
             None,
         )
@@ -1673,9 +1671,9 @@ mod tests {
         let state_dir = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         let queue = crate::codex::CodexEventQueue::load(
             &state_dir,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -1765,9 +1763,9 @@ mod tests {
         let state_dir = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         let queue = crate::codex::CodexEventQueue::load(
             &state_dir,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -2284,9 +2282,9 @@ pub(super) fn test_codex_connection() -> (tempfile::TempDir, HarnessConnection) 
     let harness = test_connection_for_queue(
         crate::codex::CodexEventQueue::load(
             &path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap(),

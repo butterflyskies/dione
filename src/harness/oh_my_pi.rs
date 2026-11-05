@@ -4,11 +4,9 @@ use super::{
     codex::{ToolArgumentError, recognizes},
     omp_session::{BindingId, OmpControl, SavedSessionId},
 };
-use crate::{
-    core::{MessageRef, delivery::Delivery},
-    durable::DeliveryToken,
-    mcp::harness_wire::HarnessProtocol,
-};
+use crate::{core::delivery::Delivery, mcp::harness_wire::HarnessProtocol};
+use dione_contracts::MessageRef;
+use dione_durable::DeliveryToken;
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
