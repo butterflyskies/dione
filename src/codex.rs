@@ -5,7 +5,7 @@ pub(crate) mod legacy_delivery;
 mod queue;
 mod queue_codec;
 #[cfg(test)]
-pub(crate) use crate::durable::PersistFailure;
+pub(crate) use dione_durable::PersistFailure;
 #[cfg(test)]
 pub(crate) use queue_codec::LegacyReplayIdentity;
 #[cfg(test)]
@@ -14,16 +14,16 @@ mod legacy_tests;
 mod owned_tests;
 
 use crate::attention::types::RecordId;
-pub use crate::durable::{
+pub use app_server::{
+    CodexDeliveryConfig, CodexDeliveryError, CodexDeliveryErrorKind, run_delivery_worker,
+};
+use chrono::{DateTime, Utc};
+pub use dione_durable::{
     AllocationKind, CodecError, CodecErrorKind, ConsumerId, ConsumerRegistrationResult,
     ConsumerStatus, DeliveryToken, EndpointId, EventId, HandoffResult, IdentityError,
     IdentityErrorKind, QueueError, QueueErrorKind, QueueStatus,
     RemovalResult as AttentionInvalidationResult, SnapshotIssue,
 };
-pub use app_server::{
-    CodexDeliveryConfig, CodexDeliveryError, CodexDeliveryErrorKind, run_delivery_worker,
-};
-use chrono::{DateTime, Utc};
 pub use error::{CodexQueueError, CodexQueueErrorKind};
 pub(crate) use error::{LiveQueueError, LiveQueueErrorKind};
 #[cfg(test)]

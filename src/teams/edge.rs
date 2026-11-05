@@ -1017,8 +1017,8 @@ pub(crate) mod tests {
         assert!(matches!(
             legacy_queue.register_live_consumer().await,
             Err(crate::codex::CodexQueueError {
-                kind: crate::codex::CodexQueueErrorKind::Durable(crate::durable::QueueError {
-                    kind: crate::durable::QueueErrorKind::PrimaryConsumerExists,
+                kind: crate::codex::CodexQueueErrorKind::Durable(dione_durable::QueueError {
+                    kind: dione_durable::QueueErrorKind::PrimaryConsumerExists,
                     ..
                 })
             })

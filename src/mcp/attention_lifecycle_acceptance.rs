@@ -2178,7 +2178,7 @@ fn accepted_live_turn_is_not_replayed_after_real_receipt_write_failure() {
             outcomes: outcomes.clone(),
         }));
         let (_binding, binding_rx) = tokio::sync::watch::channel(Some(
-            crate::durable::EndpointId::new(thread.as_str()).unwrap(),
+            dione_durable::EndpointId::new(thread.as_str()).unwrap(),
         ));
         let cancel = tokio_util::sync::CancellationToken::new();
         let worker = tokio::spawn(crate::codex::run_delivery_worker(

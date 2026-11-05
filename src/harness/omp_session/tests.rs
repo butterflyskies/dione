@@ -1,12 +1,12 @@
 //! Lifecycle regressions exercise the retained command owner and persisted inbox.
 use super::*;
 use crate::{
-    durable::{PersistFailure, QueueCodec},
     teams::{ActivityId, BotId, ConversationId, ReplyHandle, TenantId},
     timestamp::Timestamp,
 };
 use camino::Utf8PathBuf;
 use chrono::Utc;
+use dione_durable::{PersistFailure, QueueCodec};
 use tempfile::TempDir;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -592,10 +592,10 @@ fn notification_keeps_native_ids_and_large_event_id_as_decimal_string() {
             binding_id: BindingId::generate(),
         },
         event: LeasedEvent {
-            event_id: crate::durable::EventId::new(u64::MAX),
+            event_id: dione_durable::EventId::new(u64::MAX),
             delivery_token: DeliveryToken::parse("lease").unwrap(),
             lease_expires_at: Utc::now(),
-            consumer_id: crate::durable::ConsumerId::parse("omp-1").unwrap(),
+            consumer_id: dione_durable::ConsumerId::parse("omp-1").unwrap(),
             payload,
         },
     };
@@ -613,21 +613,21 @@ fn notification_keeps_native_ids_and_large_event_id_as_decimal_string() {
 
 #[test]
 fn codec_rejects_public_records_and_mismatched_native_replay_identity() {
-    let mut snapshot = crate::durable::QueueSnapshot::default();
+    let mut snapshot = dione_durable::QueueSnapshot::default();
     let payload = OmpPayload::from_event(event("one")).unwrap();
-    snapshot.entries.push_back(crate::durable::state::Entry {
-        id: crate::durable::EventId::new(0),
+    snapshot.entries.push_back(dione_durable::state::Entry {
+        id: dione_durable::EventId::new(0),
         replay_keys: vec![payload.key()],
         payload,
-        consumer_id: Some(crate::durable::ConsumerId::parse("omp-1").unwrap()),
-        endpoint: Some(crate::durable::EndpointId::new("saved-one").unwrap()),
-        visibility: crate::durable::EntryVisibility::Public,
+        consumer_id: Some(dione_durable::ConsumerId::parse("omp-1").unwrap()),
+        endpoint: Some(dione_durable::EndpointId::new("saved-one").unwrap()),
+        visibility: dione_durable::EntryVisibility::Public,
         deferrable: false,
         deferred_until: None,
         lease: None,
     });
     assert!(OmpCodec.encode(&snapshot).is_err());
-    snapshot.entries[0].visibility = crate::durable::EntryVisibility::ResidentOnly;
+    snapshot.entries[0].visibility = dione_durable::EntryVisibility::ResidentOnly;
     let valid = OmpCodec.encode(&snapshot).unwrap();
     assert_eq!(OmpCodec.decode(&valid).unwrap().entries.len(), 1);
     snapshot.entries[0].replay_keys = vec![event("different").provider_key];

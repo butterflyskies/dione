@@ -6,9 +6,9 @@ use crate::{
         consumer_ttl, lease_duration, timeout_response, wait_duration,
     },
     core::{MessageRef, delivery::Delivery},
-    durable::EndpointId,
     mcp::{harness_wire::HarnessProtocol, protocol::tool},
 };
+use dione_durable::EndpointId;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -51,23 +51,23 @@ impl HarnessDelivery for CodexAdapter {
                 .map_err(|error| {
                     let completion_unknown = match &error.kind {
                         crate::codex::CodexQueueErrorKind::Durable(error) => match &error.kind {
-                            crate::durable::QueueErrorKind::CompletionUnknown(_) => true,
-                            crate::durable::QueueErrorKind::Io(_)
-                            | crate::durable::QueueErrorKind::Locked(_)
-                            | crate::durable::QueueErrorKind::Codec(_)
-                            | crate::durable::QueueErrorKind::PriorSync(_)
-                            | crate::durable::QueueErrorKind::DurabilityUncertain(_)
-                            | crate::durable::QueueErrorKind::Identity(_)
-                            | crate::durable::QueueErrorKind::Integrity(_)
-                            | crate::durable::QueueErrorKind::AllocationExhausted { .. }
-                            | crate::durable::QueueErrorKind::InvalidStorageLayout
-                            | crate::durable::QueueErrorKind::UnknownConsumer
-                            | crate::durable::QueueErrorKind::NotPrimaryConsumer
-                            | crate::durable::QueueErrorKind::PrimaryConsumerExists
-                            | crate::durable::QueueErrorKind::UnknownDeliveryToken
-                            | crate::durable::QueueErrorKind::NotDeferrable
-                            | crate::durable::QueueErrorKind::ResidentUnavailable
-                            | crate::durable::QueueErrorKind::ReplayCapacity => false,
+                            dione_durable::QueueErrorKind::CompletionUnknown(_) => true,
+                            dione_durable::QueueErrorKind::Io(_)
+                            | dione_durable::QueueErrorKind::Locked(_)
+                            | dione_durable::QueueErrorKind::Codec(_)
+                            | dione_durable::QueueErrorKind::PriorSync(_)
+                            | dione_durable::QueueErrorKind::DurabilityUncertain(_)
+                            | dione_durable::QueueErrorKind::Identity(_)
+                            | dione_durable::QueueErrorKind::Integrity(_)
+                            | dione_durable::QueueErrorKind::AllocationExhausted { .. }
+                            | dione_durable::QueueErrorKind::InvalidStorageLayout
+                            | dione_durable::QueueErrorKind::UnknownConsumer
+                            | dione_durable::QueueErrorKind::NotPrimaryConsumer
+                            | dione_durable::QueueErrorKind::PrimaryConsumerExists
+                            | dione_durable::QueueErrorKind::UnknownDeliveryToken
+                            | dione_durable::QueueErrorKind::NotDeferrable
+                            | dione_durable::QueueErrorKind::ResidentUnavailable
+                            | dione_durable::QueueErrorKind::ReplayCapacity => false,
                         },
                         crate::codex::CodexQueueErrorKind::LegacyAttention(_)
                         | crate::codex::CodexQueueErrorKind::InvalidThreadId => false,

@@ -1,5 +1,5 @@
 use super::{DurableStore, PersistFailure};
-use crate::durable::{
+use crate::{
     CodecError, CodecErrorKind, QueueCodec, QueueError, QueueErrorKind, QueueOptions,
     QueueSnapshot, ReplayClass,
 };

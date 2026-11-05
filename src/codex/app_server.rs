@@ -4,13 +4,11 @@ use super::{
     CodexEventQueue, CodexQueueError, CodexQueueErrorKind, CodexResidentHandle, CodexThreadId,
     LeasedEvent,
 };
-use crate::{
-    attention::delivery::{
-        AttentionDeliveryGuard, AttentionDeliveryReceipt, AttentionGuardFailure,
-    },
-    durable::{EndpointId, QueueError, QueueErrorKind},
+use crate::attention::delivery::{
+    AttentionDeliveryGuard, AttentionDeliveryReceipt, AttentionGuardFailure,
 };
 use camino::Utf8PathBuf;
+use dione_durable::{EndpointId, QueueError, QueueErrorKind};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::{env, io, sync::Arc, time::Duration};

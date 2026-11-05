@@ -9,6 +9,7 @@ on:
   pull_request:
     branches:
       - main
+      - refactor/plugin-crates
       - refactor/vertical-slices
       - refactor/teams-identities-publication
       - fix/reply-secure-publication

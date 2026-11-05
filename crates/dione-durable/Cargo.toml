@@ -1,0 +1,31 @@
+[package]
+name = "dione-durable"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Durable admission, replay, and leased queues for Dione"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["queue", "durable", "lease"]
+categories = ["data-structures"]
+
+[features]
+test-support = []
+
+[dependencies]
+camino.workspace = true
+chrono.workspace = true
+fs2.workspace = true
+libc.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util", "process"] }
+toml.workspace = true

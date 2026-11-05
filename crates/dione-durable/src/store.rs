@@ -23,11 +23,15 @@ use std::{
     sync::Arc,
 };
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PersistFailure {
+/// Persistence stage rejected by an explicitly enabled test fixture.
+pub enum PersistFailure {
+    /// Reject the write before any replacement becomes visible.
     BeforeWrite,
+    /// Reject the rename after writing the temporary snapshot.
     BeforeRename,
+    /// Reject directory synchronization after the replacement becomes visible.
     AfterRename,
 }
 
@@ -40,9 +44,9 @@ pub(super) struct DurableStore<P, K> {
     directory: Utf8PathBuf,
     directory_sync_pending: bool,
     _lock_file: File,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) persist_failure: Option<PersistFailure>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) directory_sync_attempts: usize,
 }
 
@@ -168,9 +172,9 @@ impl<P: Clone, K: Clone + Eq + Hash> DurableStore<P, K> {
             directory: directory.to_owned(),
             directory_sync_pending,
             _lock_file: lock_file,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             persist_failure: None,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             directory_sync_attempts: 0,
         })
     }
@@ -217,7 +221,7 @@ impl<P: Clone, K: Clone + Eq + Hash> DurableStore<P, K> {
                 QueueErrorKind::Codec(source),
             )
         })?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.fail_persist_at(PersistFailure::BeforeWrite)
             .map_err(|source| self.temporary_error(source))?;
         // Do not truncate a stale inode before checking its private boundary.
@@ -239,9 +243,9 @@ impl<P: Clone, K: Clone + Eq + Hash> DurableStore<P, K> {
             .map_err(|source| self.temporary_error(source))?;
         let temporary_path = self.temporary_path.clone();
         let path = self.path.clone();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let before_rename = self.fail_persist_at(PersistFailure::BeforeRename);
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-support")))]
         let before_rename: io::Result<()> = Ok(());
         crate::atomic_snapshot::replace(
             &mut temporary,
@@ -293,7 +297,7 @@ impl<P: Clone, K: Clone + Eq + Hash> DurableStore<P, K> {
         if !self.directory_sync_pending {
             return Ok(());
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             self.directory_sync_attempts += 1;
             self.fail_persist_at(PersistFailure::AfterRename)?;
@@ -303,7 +307,7 @@ impl<P: Clone, K: Clone + Eq + Hash> DurableStore<P, K> {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn test_state(&self) -> (QueueSnapshot<P, K>, bool, usize) {
         (
             self.state.clone(),
@@ -311,7 +315,7 @@ impl<P: Clone, K: Clone + Eq + Hash> DurableStore<P, K> {
             self.directory_sync_attempts,
         )
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn fail_persist_at(&self, stage: PersistFailure) -> io::Result<()> {
         if self.persist_failure == Some(stage) {
             Err(io::Error::other("injected persistence failure"))

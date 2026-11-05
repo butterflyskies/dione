@@ -3,9 +3,9 @@ use super::*;
 use crate::{
     codex::{CodexEventQueue, CodexQueueErrorKind},
     core::{ModuleInstanceId, ModuleSlotId, ProviderId},
-    durable::{QueueErrorKind, SnapshotIssue},
 };
 use camino::Utf8PathBuf;
+use dione_durable::{QueueErrorKind, SnapshotIssue};
 use serde_json::json;
 use std::{error::Error, time::Duration};
 use tempfile::TempDir;
@@ -56,7 +56,7 @@ fn exact_stored_identities_reject_without_normalizing_or_rewriting() {
             };
             assert!(matches!(
                 error.kind,
-                CodexQueueErrorKind::Durable(crate::durable::QueueError {
+                CodexQueueErrorKind::Durable(dione_durable::QueueError {
                     kind: QueueErrorKind::Codec(_),
                     ..
                 })
@@ -147,7 +147,7 @@ fn absent_counters_reconstruct_canonical_generated_identities_but_explicit_confl
     };
     assert!(matches!(
         error.kind,
-        CodexQueueErrorKind::Durable(crate::durable::QueueError {
+        CodexQueueErrorKind::Durable(dione_durable::QueueError {
             kind: QueueErrorKind::Integrity(SnapshotIssue::StaleCounter),
             ..
         })
@@ -287,7 +287,7 @@ fn two_entries_cannot_share_a_restored_replay_identity() {
     };
     assert!(matches!(
         error.kind,
-        CodexQueueErrorKind::Durable(crate::durable::QueueError {
+        CodexQueueErrorKind::Durable(dione_durable::QueueError {
             kind: QueueErrorKind::Integrity(SnapshotIssue::DuplicateReplay),
             ..
         })
@@ -317,7 +317,7 @@ async fn dual_replay_invalidation_rolls_back_then_removes_both_indices() {
     let codec = LegacyQueueCodec::new(scope());
     let before = codec.encode(&queue.test_snapshot().await).unwrap();
     queue
-        .test_set_persist_failure(Some(crate::durable::PersistFailure::BeforeRename))
+        .test_set_persist_failure(Some(dione_durable::PersistFailure::BeforeRename))
         .await;
     assert!(
         queue
@@ -364,7 +364,7 @@ async fn prior_durability_barrier_precedes_malformed_payload_validation() {
     let root = Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
     let queue = CodexEventQueue::open(&root, scope()).await.unwrap();
     queue
-        .test_set_persist_failure(Some(crate::durable::PersistFailure::AfterRename))
+        .test_set_persist_failure(Some(dione_durable::PersistFailure::AfterRename))
         .await;
     assert!(matches!(
         queue
@@ -372,7 +372,7 @@ async fn prior_durability_barrier_precedes_malformed_payload_validation() {
             .await
             .unwrap_err()
             .kind,
-        CodexQueueErrorKind::Durable(crate::durable::QueueError {
+        CodexQueueErrorKind::Durable(dione_durable::QueueError {
             kind: QueueErrorKind::DurabilityUncertain(_),
             ..
         })
@@ -380,7 +380,7 @@ async fn prior_durability_barrier_precedes_malformed_payload_validation() {
     let malformed = json!({"params":{"meta":{"attention_delivery":"broken"}}});
     assert!(matches!(
         queue.enqueue(malformed.clone()).await.unwrap_err().kind,
-        CodexQueueErrorKind::Durable(crate::durable::QueueError {
+        CodexQueueErrorKind::Durable(dione_durable::QueueError {
             kind: QueueErrorKind::PriorSync(_),
             ..
         })
