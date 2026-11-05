@@ -1507,7 +1507,7 @@ mod tests {
             if id == 0 {
                 prop_assert!(result.is_err(), "zero must be rejected, got: {:?}", result);
             } else {
-                prop_assert_eq!(result.unwrap().get(), id);
+                prop_assert_eq!(result.unwrap().message().get(), id);
             }
         }
 
@@ -1532,7 +1532,7 @@ mod tests {
                     result
                 );
             } else {
-                prop_assert_eq!(result.unwrap().map(|s| s.get()), Some(id));
+                prop_assert_eq!(result.unwrap().map(|s| s.message().get()), Some(id));
             }
         }
 

@@ -37,7 +37,7 @@ proptest! {
 fn strict_optional_id_absent_yields_none() {
     assert_eq!(
         parse_strict_optional_id(&json!({}), "id")
-            .map(|o| o.map(|s| s.get()))
+            .map(|o| o.map(|s| s.message().get()))
             .map_err(|error| error.to_string()),
         Ok(None)
     );
@@ -48,7 +48,7 @@ fn strict_optional_id_valid_snowflake() {
     let result = parse_strict_optional_id(&json!({"id": "1234567890"}), "id");
     assert_eq!(
         result
-            .map(|o| o.map(|s| s.get()))
+            .map(|o| o.map(|s| s.message().get()))
             .map_err(|error| error.to_string()),
         Ok(Some(1234567890))
     );
@@ -56,7 +56,7 @@ fn strict_optional_id_valid_snowflake() {
     let result = parse_strict_optional_id(&json!({"id": 1234567890u64}), "id");
     assert_eq!(
         result
-            .map(|o| o.map(|s| s.get()))
+            .map(|o| o.map(|s| s.message().get()))
             .map_err(|error| error.to_string()),
         Ok(Some(1234567890))
     );
