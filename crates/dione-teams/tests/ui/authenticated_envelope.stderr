@@ -1,0 +1,11 @@
+error[E0603]: struct `AuthenticatedTeamsEnvelope` is private
+ --> tests/ui/authenticated_envelope.rs:1:18
+  |
+1 | use dione_teams::AuthenticatedTeamsEnvelope;
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^ private struct
+  |
+note: the struct `AuthenticatedTeamsEnvelope` is defined here
+ --> src/lib.rs
+  |
+  |     AuthenticatedConversationReference, AuthenticatedTeamsEnvelope, CorrelatedReplyRequest,
+  |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^

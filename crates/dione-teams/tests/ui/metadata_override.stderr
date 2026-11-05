@@ -1,0 +1,5 @@
+error[E0599]: no associated function or constant named `with_openid_url` found for struct `TeamsEdge<P>` in the current scope
+ --> tests/ui/metadata_override.rs:2:32
+  |
+2 | fn main() { let _ = TeamsEdge::with_openid_url; }
+  |                                ^^^^^^^^^^^^^^^ associated function or constant not found in `TeamsEdge<_>`

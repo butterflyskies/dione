@@ -143,6 +143,15 @@ Teams retains private authentication, sealed authority, current policy and
 prepare/consume/send sequencing. Typed UUID conversion formats syntax; random
 handle generation stays private to its runtime.
 
+The [dione-teams owner](crates/dione-teams/src/lib.rs) contains native JWT and
+scope validation, metadata retrieval, sealed reply authority, durable storage,
+HTTP ingress, owned replies, listener lifecycle and Teams MCP handling. Native
+authenticated values, tokens, prepared requests and fault hooks remain private.
+Root [admission composition](src/composition/teams_admission.rs) connects the
+shared descriptive sink to actual Codex and OMP queues. Startup still assembles
+and stops these services. Private test-process fixtures preserve actual composed
+queue/tool/native HTTP cases without exporting authority constructors.
+
 ## Processes and transports
 
 ```mermaid

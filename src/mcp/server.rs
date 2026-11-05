@@ -1420,7 +1420,7 @@ mod tests {
             settled: Arc<AtomicBool>,
         }
 
-        impl crate::teams::runtime::TeamsReplyAuthority for HeldReply {
+        impl dione_teams::runtime::TeamsReplyAuthority for HeldReply {
             fn reply<'a>(
                 &'a self,
                 handle: &'a ReplyHandle,
@@ -1429,8 +1429,8 @@ mod tests {
                 Box<
                     dyn std::future::Future<
                             Output = Result<
-                                crate::teams::edge::LiveReplyReceipt,
-                                crate::teams::runtime::TeamsRuntimeError,
+                                dione_teams::edge::LiveReplyReceipt,
+                                dione_teams::runtime::TeamsRuntimeError,
                             >,
                         > + Send
                         + 'a,
@@ -1457,7 +1457,7 @@ mod tests {
                         .expect("single release");
                     release.await.expect("test releases settlement");
                     self.settled.store(true, Ordering::SeqCst);
-                    Ok(crate::teams::edge::LiveReplyReceipt {
+                    Ok(dione_teams::edge::LiveReplyReceipt {
                         incoming_activity_id: "inbound".parse().unwrap(),
                         outgoing_activity_id: "outbound".parse().unwrap(),
                         conversation_id: "conversation".parse().unwrap(),
@@ -1502,7 +1502,7 @@ mod tests {
         )
         .await
         .expect("Discord reply registration")
-        .with_module_tools(crate::teams::mcp_tools(Some(authority)).expect("valid Teams tool"))
+        .with_module_tools(dione_teams::mcp_tools(Some(authority)).expect("valid Teams tool"))
         .expect("disjoint tool registrations");
         let cancel = CancellationToken::new();
         let mut listener = tokio::spawn(run_resident_control(

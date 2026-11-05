@@ -16,9 +16,7 @@ use std::{
 use thiserror::Error;
 use uuid::Uuid;
 use {
-    crate::teams::{
-        AdmissionPolicy, AuthenticatedConversationReference, AuthenticatedTeamsEnvelope,
-    },
+    crate::{AdmissionPolicy, AuthenticatedConversationReference, AuthenticatedTeamsEnvelope},
     dione_provider_delivery::ReplyHandle,
 };
 
@@ -742,7 +740,7 @@ fn read_no_follow(path: &Utf8Path) -> Result<Vec<u8>, ReplyStoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::teams::ChannelPolicy;
+    use crate::ChannelPolicy;
     use std::collections::{BTreeMap, BTreeSet};
     use tempfile::TempDir;
 
@@ -873,7 +871,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let path = state_dir(&temp);
         let file = path.join(FILE_NAME);
-        let fixture = include_str!("../../tests/fixtures/teams/reply-authorities-v1.json");
+        let fixture = include_str!("../tests/fixtures/teams/reply-authorities-v1.json");
         std::fs::write(&file, fixture.replace("\"sender\"", "\"\"")).unwrap();
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
         let error = TeamsReplyStore::load(&path, policy()).err().unwrap();
@@ -896,7 +894,7 @@ mod tests {
     fn literal_v1_handles_restore_exact_spelling_and_consume_once() {
         let temp = TempDir::new().unwrap();
         let path = state_dir(&temp);
-        let fixture = include_bytes!("../../tests/fixtures/teams/reply-authorities-v1.json");
+        let fixture = include_bytes!("../tests/fixtures/teams/reply-authorities-v1.json");
         let file = path.join(FILE_NAME);
         std::fs::write(&file, fixture).unwrap();
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
@@ -930,7 +928,7 @@ mod tests {
     fn persisted_malformed_handle_is_rejected_before_authority_is_exposed() {
         let temp = TempDir::new().unwrap();
         let path = state_dir(&temp);
-        let fixture = include_str!("../../tests/fixtures/teams/reply-authorities-v1.json");
+        let fixture = include_str!("../tests/fixtures/teams/reply-authorities-v1.json");
         let file = path.join(FILE_NAME);
         std::fs::write(
             &file,
@@ -948,7 +946,7 @@ mod tests {
 
     #[test]
     fn literal_v1_identity_fields_reject_malformed_values_without_rewriting_store() {
-        let fixture = include_str!("../../tests/fixtures/teams/reply-authorities-v1.json");
+        let fixture = include_str!("../tests/fixtures/teams/reply-authorities-v1.json");
         let prefix = "/pending/teams-ABCDEF0123456789ABCDEF0123456789";
         for field in [
             "event_key/tenant_id",

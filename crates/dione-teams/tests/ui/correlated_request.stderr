@@ -1,0 +1,11 @@
+error[E0603]: struct `CorrelatedReplyRequest` is private
+ --> tests/ui/correlated_request.rs:1:18
+  |
+1 | use dione_teams::CorrelatedReplyRequest;
+  |                  ^^^^^^^^^^^^^^^^^^^^^^ private struct
+  |
+note: the struct `CorrelatedReplyRequest` is defined here
+ --> src/lib.rs
+  |
+  |     AuthenticatedConversationReference, AuthenticatedTeamsEnvelope, CorrelatedReplyRequest,
+  |                                                                     ^^^^^^^^^^^^^^^^^^^^^^

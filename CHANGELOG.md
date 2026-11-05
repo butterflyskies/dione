@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.114.0] - 2026-11-05
+
+### Changed
+
+- Extract the complete native Teams runtime into dione-teams, retaining private authentication and reply authority with direct application composition.
+
 ## [0.113.0] - 2026-11-05
 
 ### Changed

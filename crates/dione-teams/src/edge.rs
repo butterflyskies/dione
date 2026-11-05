@@ -1,6 +1,6 @@
 //! Minimal live Microsoft Bot Connector edge used by the Teams canary.
 
-use crate::teams::{
+use crate::{
     AdmissionPolicy, AuthenticatedTeamsEnvelope, CorrelatedReplyRequest, ProbeError,
     authenticate_activity, correlated_reply, parse_connector_metadata,
 };
@@ -20,6 +20,7 @@ const MAX_JWKS_BYTES: usize = 256 * 1024;
 /// An acquired Bot Connector token, kept secret until an outbound request is prepared.
 pub struct BotAccessToken {
     value: SecretString,
+    /// Lifetime advertised by the OAuth token endpoint.
     pub expires_in: Duration,
 }
 
@@ -314,8 +315,11 @@ struct ConnectorReceipt {
 #[derive(Debug, PartialEq, Eq)]
 /// Connector identifiers returned after an outbound reply is accepted.
 pub struct LiveReplyReceipt {
+    /// Authenticated activity to which the reply was correlated.
     pub incoming_activity_id: ActivityId,
+    /// Activity identifier returned by the Connector.
     pub outgoing_activity_id: ActivityId,
+    /// Authenticated conversation receiving the reply.
     pub conversation_id: ConversationId,
 }
 
@@ -397,7 +401,6 @@ pub enum TeamsEdgeErrorKind {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::teams::runtime::TeamsRuntimeError;
     use axum::{
         Form, Json, Router,
         body::Bytes,
@@ -421,8 +424,8 @@ pub(crate) mod tests {
     const APP_ID: &str = "00000000-1111-2222-3333-444444444444";
     const TENANT_ID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     const NOW: u64 = 1_800_000_000;
-    const PRIVATE_KEY: &[u8] = include_bytes!("../../tests/fixtures/teams/connector-private.pem");
-    const JWKS_DOCUMENT: &[u8] = include_bytes!("../../tests/fixtures/teams/connector-jwks.json");
+    const PRIVATE_KEY: &[u8] = include_bytes!("../tests/fixtures/teams/connector-private.pem");
+    const JWKS_DOCUMENT: &[u8] = include_bytes!("../tests/fixtures/teams/connector-jwks.json");
 
     #[derive(Clone, Default)]
     struct FixtureState {
@@ -637,123 +640,61 @@ pub(crate) mod tests {
         server.abort();
     }
 
+    struct NativeCapture(mpsc::UnboundedSender<dione_provider_delivery::TeamsResidentEvent>);
+
+    impl dione_provider_delivery::TeamsEventSink for NativeCapture {
+        fn deliver<'a>(
+            &'a self,
+            event: dione_provider_delivery::TeamsResidentEvent,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            dione_provider_delivery::TeamsAdmissionOutcome,
+                            dione_provider_delivery::TeamsDeliveryError,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                self.0.send(event).unwrap();
+                Ok(dione_provider_delivery::TeamsAdmissionOutcome::Committed)
+            })
+        }
+    }
+
     #[tokio::test]
-    async fn composed_edge_confines_reply_and_stops_before_token_on_failed_admission() {
+    async fn native_reply_preserves_oauth_http_uncertainty_and_scope_checks() {
         let connector_fixture = ConnectorFixture::start().await;
         let fixture = connector_fixture.state.clone();
-        let edge = connector_fixture.edge.clone();
-        let edge_for_legacy = edge.clone();
-        let edge_for_poison = edge.clone();
-        let edge_for_failures = edge.clone();
         let authorization = signed_authorization("https://connector.test/");
-
-        let queue_dir = TempDir::new().expect("create queue directory");
-        let queue_path = camino::Utf8PathBuf::from_path_buf(queue_dir.path().to_owned())
-            .expect("UTF-8 queue path");
-        let queue = crate::codex::CodexEventQueue::load(
-            &queue_path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-                dione_contracts::ProviderId::new("discord").unwrap(),
-                dione_contracts::ModuleSlotId::new("primary").unwrap(),
-            )),
-        )
-        .expect("load resident queue");
-        let resident_thread =
-            crate::codex::CodexThreadId::parse("thread-janus").expect("parse resident thread");
-        let bridge = crate::teams::runtime::TeamsResidentBridge::new_durable(
-            edge.clone(),
-            crate::composition::teams_admission::from_codex(queue.clone()),
+        let directory = TempDir::new().unwrap();
+        let queue_path = camino::Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let delivery = || dione_provider_delivery::TeamsDelivery::new(NativeCapture(tx.clone()));
+        let bridge = crate::runtime::TeamsResidentBridge::new_durable(
+            connector_fixture.edge.clone(),
+            delivery(),
             &queue_path,
         )
         .await
-        .expect("restore production reply authority");
-
-        let unavailable = bridge
-            .admit(&authorization, &activity(TENANT_ID), NOW)
-            .await
-            .expect_err("admission fails without a bound live resident");
-        assert!(matches!(
-            unavailable,
-            crate::teams::runtime::TeamsRuntimeError { kind: crate::teams::TeamsRuntimeErrorKind::Resident(message) }
-                if matches!(message.kind, dione_provider_delivery::TeamsDeliveryErrorKind::RouteUnavailable(_))
-        ));
-        assert_eq!(queue.status().await.queued, 0);
-
-        queue
-            .binding_controller()
-            .bind_live_thread(Some(resident_thread.clone()))
-            .await
-            .expect("bind resident thread");
-        let unavailable = bridge
-            .admit(&authorization, &activity(TENANT_ID), NOW)
-            .await
-            .expect_err("admission fails before the live consumer registers");
-        assert!(matches!(
-            unavailable,
-            crate::teams::runtime::TeamsRuntimeError { kind: crate::teams::TeamsRuntimeErrorKind::Resident(message) }
-                if matches!(message.kind, dione_provider_delivery::TeamsDeliveryErrorKind::RouteUnavailable(_))
-        ));
-        assert_eq!(queue.status().await.queued, 0);
-
-        let consumer = queue
-            .register_live_consumer()
-            .await
-            .expect("register live resident");
-
+        .unwrap();
         bridge
             .admit(&authorization, &activity(TENANT_ID), NOW)
             .await
-            .expect("admit authenticated Activity");
-        assert!(
-            consumer
-                .next_event(
-                    &crate::codex::CodexThreadId::parse("thread-other").unwrap(),
-                    Duration::ZERO,
-                    Duration::from_secs(30),
-                )
-                .await
-                .expect("check other thread")
-                .is_none(),
-            "Teams event must not cross into another resident thread"
-        );
-        let delivered = consumer
-            .next_event(&resident_thread, Duration::ZERO, Duration::from_secs(30))
-            .await
-            .expect("lease resident event")
-            .expect("event reaches exact resident thread");
-        assert_eq!(delivered.event["params"]["content"], "hello");
-        assert_eq!(delivered.event["params"]["meta"]["provider"], "teams");
-        assert_eq!(delivered.event["params"]["meta"]["tenant_id"], TENANT_ID);
-        bridge
-            .admit(&authorization, &activity(TENANT_ID), NOW)
-            .await
-            .expect("replayed valid Activity is recognized");
-        assert!(
-            consumer
-                .next_event(&resident_thread, Duration::ZERO, Duration::from_secs(30),)
-                .await
-                .expect("inspect duplicate admission")
-                .is_none(),
-            "replayed signed Activity must not create a second deliverable event"
-        );
-        let reply_handle = delivered.event["params"]["meta"]["reply_handle"]
-            .as_str()
-            .expect("opaque reply handle");
-        assert!(reply_handle.starts_with("teams-"));
-        assert!(!reply_handle.contains("conversation/id"));
-
-        // A durable queue lease can outlive its original process. Reopening
-        // authority under the same current admission policy must preserve the
-        // exact handle carried by that event.
+            .unwrap();
+        let delivered = rx.recv().await.unwrap();
+        let handle = delivered.reply_handle;
+        let reply_handle = handle.as_str();
         drop(bridge);
-        let bridge = crate::teams::runtime::TeamsResidentBridge::new_durable(
-            edge,
-            crate::composition::teams_admission::from_codex(queue.clone()),
+        let bridge = crate::runtime::TeamsResidentBridge::new_durable(
+            connector_fixture.edge.clone(),
+            delivery(),
             &queue_path,
         )
         .await
-        .expect("restore leased Activity reply authority");
-
+        .unwrap();
         let receipt = bridge
             .reply(
                 &dione_provider_delivery::ReplyHandle::parse(reply_handle).unwrap(),
@@ -813,21 +754,10 @@ pub(crate) mod tests {
             .expect_err("reply handle is single-use");
         assert!(matches!(
             replay,
-            crate::teams::runtime::TeamsRuntimeError {
-                kind: crate::teams::TeamsRuntimeErrorKind::UnknownReplyHandle
+            crate::runtime::TeamsRuntimeError {
+                kind: crate::TeamsRuntimeErrorKind::UnknownReplyHandle
             }
         ));
-
-        consumer
-            .acknowledge(&delivered.delivery_token)
-            .await
-            .expect("acknowledge accepted resident event");
-        bridge
-            .admit(&authorization, &activity(TENANT_ID), NOW)
-            .await
-            .expect("acknowledged Activity remains a duplicate");
-        assert_eq!(queue.status().await.queued, 0);
-        assert_eq!(fixture.replies.lock().expect("replies lock").len(), 1);
 
         bridge
             .admit(
@@ -836,15 +766,9 @@ pub(crate) mod tests {
                 NOW,
             )
             .await
-            .expect("admit a distinct Activity");
-        let second = consumer
-            .next_event(&resident_thread, Duration::ZERO, Duration::from_secs(30))
-            .await
-            .expect("lease second event")
-            .expect("distinct Activity is delivered");
-        let second_handle = second.event["params"]["meta"]["reply_handle"]
-            .as_str()
-            .expect("second opaque reply handle");
+            .unwrap();
+        let second = rx.recv().await.unwrap();
+        let second_handle = second.reply_handle.as_str();
         let uncertain = bridge
             .reply(
                 &dione_provider_delivery::ReplyHandle::parse(second_handle).unwrap(),
@@ -854,8 +778,8 @@ pub(crate) mod tests {
             .expect_err("fixture Connector returns an error after recording POST");
         assert!(matches!(
             uncertain,
-            crate::teams::runtime::TeamsRuntimeError {
-                kind: crate::teams::TeamsRuntimeErrorKind::ReplyOutcomeUncertain(TeamsEdgeError {
+            crate::runtime::TeamsRuntimeError {
+                kind: crate::TeamsRuntimeErrorKind::ReplyOutcomeUncertain(TeamsEdgeError {
                     kind: TeamsEdgeErrorKind::Http(_)
                 })
             }
@@ -867,8 +791,8 @@ pub(crate) mod tests {
                     "must not resend"
                 )
                 .await,
-            Err(crate::teams::runtime::TeamsRuntimeError {
-                kind: crate::teams::TeamsRuntimeErrorKind::UnknownReplyHandle
+            Err(crate::runtime::TeamsRuntimeError {
+                kind: crate::TeamsRuntimeErrorKind::UnknownReplyHandle
             })
         ));
         assert_eq!(fixture.replies.lock().expect("replies lock").len(), 2);
@@ -879,10 +803,10 @@ pub(crate) mod tests {
             .expect_err("tenant denial stops the edge");
         assert!(matches!(
             error,
-            crate::teams::runtime::TeamsRuntimeError {
-                kind: crate::teams::TeamsRuntimeErrorKind::Edge(TeamsEdgeError {
+            crate::runtime::TeamsRuntimeError {
+                kind: crate::TeamsRuntimeErrorKind::Edge(TeamsEdgeError {
                     kind: TeamsEdgeErrorKind::Probe(ProbeError {
-                        kind: crate::teams::ProbeErrorKind::TenantDenied
+                        kind: crate::ProbeErrorKind::TenantDenied
                     })
                 })
             }
@@ -893,7 +817,7 @@ pub(crate) mod tests {
         );
         assert_eq!(fixture.replies.lock().expect("replies lock").len(), 2);
 
-        let queued_before = queue.status().await.queued;
+        let queued_before = rx.len();
         let mut excluded: serde_json::Value = serde_json::from_slice(&activity(TENANT_ID)).unwrap();
         excluded["conversation"]["id"] = serde_json::json!("excluded/native room");
         let error = bridge
@@ -902,218 +826,18 @@ pub(crate) mod tests {
             .expect_err("conversation denial stops admission");
         assert!(matches!(
             error,
-            crate::teams::runtime::TeamsRuntimeError {
-                kind: crate::teams::TeamsRuntimeErrorKind::Edge(TeamsEdgeError {
+            crate::runtime::TeamsRuntimeError {
+                kind: crate::TeamsRuntimeErrorKind::Edge(TeamsEdgeError {
                     kind: TeamsEdgeErrorKind::Probe(ProbeError {
-                        kind: crate::teams::ProbeErrorKind::ConversationDenied
+                        kind: crate::ProbeErrorKind::ConversationDenied
                     })
                 })
             }
         ));
-        assert_eq!(queue.status().await.queued, queued_before);
+        assert_eq!(rx.len(), queued_before);
         assert_eq!(fixture.token_forms.lock().unwrap().len(), 2);
         assert_eq!(fixture.replies.lock().unwrap().len(), 2);
 
-        // Local snapshot of a pre-kind inbox whose public pull consumer had
-        // claimed the old resident label. It must not authenticate a Teams
-        // route or expose a reply handle until a genuine live registration.
-        let legacy_dir = TempDir::new().expect("create legacy state directory");
-        let legacy_path = camino::Utf8PathBuf::from_path_buf(legacy_dir.path().to_owned())
-            .expect("UTF-8 legacy state path");
-        let legacy_queue = crate::codex::CodexEventQueue::load(
-            &legacy_path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-                dione_contracts::ProviderId::new("discord").unwrap(),
-                dione_contracts::ModuleSlotId::new("primary").unwrap(),
-            )),
-        )
-        .expect("create legacy fixture inbox");
-        let legacy_thread = crate::codex::CodexThreadId::parse("legacy-thread").unwrap();
-        legacy_queue
-            .binding_controller()
-            .bind_live_thread(Some(legacy_thread.clone()))
-            .await
-            .expect("persist fixture thread binding");
-        drop(legacy_queue);
-        let inbox_path = legacy_path.join("codex-inbox.json");
-        let mut disk: serde_json::Value = serde_json::from_slice(
-            &tokio::fs::read(&inbox_path)
-                .await
-                .expect("read local fixture inbox"),
-        )
-        .expect("parse fixture inbox");
-        disk["next_consumer_generation"] = json!(1);
-        disk["primary_consumer"] = json!("codex-consumer-0");
-        disk["consumers"] = json!([{
-            "id": "codex-consumer-0",
-            "label": "dione-live-app-server",
-            "expires_at": chrono::Utc::now() + chrono::TimeDelta::hours(1),
-            "ttl_seconds": 3600
-        }]);
-        tokio::fs::write(&inbox_path, serde_json::to_vec_pretty(&disk).unwrap())
-            .await
-            .expect("write local pre-kind fixture");
-        let legacy_queue = crate::codex::CodexEventQueue::load(
-            &legacy_path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-                dione_contracts::ProviderId::new("discord").unwrap(),
-                dione_contracts::ModuleSlotId::new("primary").unwrap(),
-            )),
-        )
-        .expect("reload pre-kind fixture");
-        let legacy_bridge = crate::teams::runtime::TeamsResidentBridge::new_durable(
-            edge_for_legacy.clone(),
-            crate::composition::teams_admission::from_codex(legacy_queue.clone()),
-            &legacy_path,
-        )
-        .await
-        .expect("load bridge with pre-kind fixture");
-        let denied = legacy_bridge
-            .admit(
-                &authorization,
-                &activity_with_id(TENANT_ID, "legacy/activity"),
-                NOW,
-            )
-            .await
-            .expect_err("ambiguous legacy label cannot be a resident route");
-        assert!(matches!(
-            denied,
-            crate::teams::runtime::TeamsRuntimeError {
-                kind: crate::teams::TeamsRuntimeErrorKind::Resident(_)
-            }
-        ));
-        assert_eq!(legacy_queue.status().await.queued, 0);
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "authorization",
-            authorization.parse().expect("signed Authorization header"),
-        );
-        let response = crate::teams::runtime::messages(
-            State(Arc::new(legacy_bridge.clone())),
-            headers,
-            Bytes::from(activity_with_id(TENANT_ID, "legacy/activity")),
-        )
-        .await
-        .into_response();
-        assert_eq!(
-            response.status(),
-            StatusCode::SERVICE_UNAVAILABLE,
-            "blocked legacy registration must tell Teams to retry"
-        );
-        assert_eq!(legacy_queue.status().await.queued, 0);
-        let authority_state: serde_json::Value = serde_json::from_slice(
-            &tokio::fs::read(legacy_path.join("teams-reply-authorities.json"))
-                .await
-                .expect("read local authority fixture"),
-        )
-        .expect("parse local authority fixture");
-        assert_eq!(
-            authority_state["pending"]
-                .as_object()
-                .map(|pending| pending.len()),
-            Some(0),
-            "rejected Activity must not leave an exposed reply authority"
-        );
-        assert!(matches!(
-            legacy_queue.register_live_consumer().await,
-            Err(crate::codex::CodexQueueError {
-                kind: crate::codex::CodexQueueErrorKind::Durable(dione_durable::QueueError {
-                    kind: dione_durable::QueueErrorKind::PrimaryConsumerExists,
-                    ..
-                })
-            })
-        ));
-        drop(legacy_bridge);
-        drop(legacy_queue);
-
-        // The fixture has no old-ID pending work. Expiring its ambiguous
-        // record permits a new Live-kind registration without promoting it.
-        disk["consumers"][0]["expires_at"] =
-            json!(chrono::Utc::now() - chrono::TimeDelta::seconds(1));
-        tokio::fs::write(&inbox_path, serde_json::to_vec_pretty(&disk).unwrap())
-            .await
-            .expect("expire local fixture registration");
-        let recovered_queue = crate::codex::CodexEventQueue::load(
-            &legacy_path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-                dione_contracts::ProviderId::new("discord").unwrap(),
-                dione_contracts::ModuleSlotId::new("primary").unwrap(),
-            )),
-        )
-        .expect("reload expired legacy fixture");
-        let resident = recovered_queue
-            .register_live_consumer()
-            .await
-            .expect("register genuine live resident");
-        let recovered_bridge = crate::teams::runtime::TeamsResidentBridge::new_durable(
-            edge_for_legacy,
-            crate::composition::teams_admission::from_codex(recovered_queue.clone()),
-            &legacy_path,
-        )
-        .await
-        .expect("restore recovered bridge");
-        recovered_bridge
-            .admit(
-                &authorization,
-                &activity_with_id(TENANT_ID, "legacy/activity"),
-                NOW,
-            )
-            .await
-            .expect("fresh signed Activity reaches real resident");
-        let recovered_event = resident
-            .next_event(&legacy_thread, Duration::ZERO, Duration::from_secs(30))
-            .await
-            .expect("lease recovered resident event")
-            .expect("real resident receives Teams notification");
-        assert_eq!(
-            recovered_event.event["params"]["meta"]["message_id"],
-            "legacy/activity"
-        );
-
-        let poisoned = crate::teams::runtime::TeamsResidentBridge::new(
-            edge_for_poison,
-            crate::composition::teams_admission::from_codex(queue.clone()),
-        );
-        poisoned.poison_pending_for_test();
-        let token_count = fixture.token_forms.lock().expect("token forms lock").len();
-        let reply_error = poisoned
-            .reply(
-                &dione_provider_delivery::ReplyHandle::parse(
-                    "teams-00000000-0000-4000-8000-000000000099",
-                )
-                .unwrap(),
-                "reply",
-            )
-            .await
-            .expect_err("poisoned registry must return a tool error");
-        assert!(matches!(
-            reply_error,
-            crate::teams::runtime::TeamsRuntimeError {
-                kind: crate::teams::TeamsRuntimeErrorKind::RegistryPoisoned
-            }
-        ));
-        assert_eq!(
-            fixture.token_forms.lock().expect("token forms lock").len(),
-            token_count,
-            "registry poison must fail before token acquisition"
-        );
-        let queued_before = queue.status().await.queued;
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "authorization",
-            authorization.parse().expect("signed Authorization header"),
-        );
-        let response = crate::teams::runtime::messages(
-            State(Arc::new(poisoned)),
-            headers,
-            Bytes::from(activity_with_id(TENANT_ID, "poisoned/activity")),
-        )
-        .await
-        .into_response();
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(queue.status().await.queued, queued_before);
-
-        consumer.acknowledge(&second.delivery_token).await.unwrap();
         bridge
             .admit(
                 &authorization,
@@ -1122,23 +846,13 @@ pub(crate) mod tests {
             )
             .await
             .unwrap();
-        let invalid_receipt_event = consumer
-            .next_event(&resident_thread, Duration::ZERO, Duration::from_secs(30))
-            .await
-            .unwrap()
-            .unwrap();
-        let invalid_receipt_handle = dione_provider_delivery::ReplyHandle::parse(
-            invalid_receipt_event.event["params"]["meta"]["reply_handle"]
-                .as_str()
-                .unwrap(),
-        )
-        .unwrap();
+        let invalid_receipt_handle = rx.recv().await.unwrap().reply_handle;
         let malformed_receipt = bridge
             .reply(&invalid_receipt_handle, "simulate malformed receipt")
             .await
             .unwrap_err();
         assert!(
-            matches!(malformed_receipt, crate::teams::runtime::TeamsRuntimeError { kind: crate::teams::TeamsRuntimeErrorKind::ReplyOutcomeUncertain(TeamsEdgeError { kind: TeamsEdgeErrorKind::Http(error) }) } if error.is_decode())
+            matches!(malformed_receipt, crate::runtime::TeamsRuntimeError { kind: crate::TeamsRuntimeErrorKind::ReplyOutcomeUncertain(TeamsEdgeError { kind: TeamsEdgeErrorKind::Http(error) }) } if error.is_decode())
         );
         assert_eq!(fixture.replies.lock().unwrap().len(), 3);
         assert_eq!(
@@ -1150,8 +864,8 @@ pub(crate) mod tests {
             bridge
                 .reply(&invalid_receipt_handle, "must not retry malformed receipt")
                 .await,
-            Err(crate::teams::runtime::TeamsRuntimeError {
-                kind: crate::teams::TeamsRuntimeErrorKind::UnknownReplyHandle
+            Err(crate::runtime::TeamsRuntimeError {
+                kind: crate::TeamsRuntimeErrorKind::UnknownReplyHandle
             })
         ));
         assert_eq!(fixture.replies.lock().unwrap().len(), 3);
@@ -1167,6 +881,64 @@ pub(crate) mod tests {
                 .get(invalid_receipt_handle.as_str())
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn poisoned_registry_fails_before_tokens_or_delivery() {
+        let connector_fixture = ConnectorFixture::start().await;
+        let fixture = connector_fixture.state.clone();
+        let authorization = signed_authorization("https://connector.test/");
+        let (tx, rx) = mpsc::unbounded_channel();
+        let poisoned = crate::runtime::TeamsResidentBridge::new(
+            connector_fixture.edge.clone(),
+            dione_provider_delivery::TeamsDelivery::new(NativeCapture(tx)),
+        );
+        poisoned.poison_pending_for_test();
+        let token_count = fixture.token_forms.lock().expect("token forms lock").len();
+        let reply_error = poisoned
+            .reply(
+                &dione_provider_delivery::ReplyHandle::parse(
+                    "teams-00000000-0000-4000-8000-000000000099",
+                )
+                .unwrap(),
+                "reply",
+            )
+            .await
+            .expect_err("poisoned registry must return a tool error");
+        assert!(matches!(
+            reply_error,
+            crate::runtime::TeamsRuntimeError {
+                kind: crate::TeamsRuntimeErrorKind::RegistryPoisoned
+            }
+        ));
+        assert_eq!(
+            fixture.token_forms.lock().expect("token forms lock").len(),
+            token_count,
+            "registry poison must fail before token acquisition"
+        );
+        let queued_before = rx.len();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            authorization.parse().expect("signed Authorization header"),
+        );
+        let response = crate::runtime::messages(
+            State(Arc::new(poisoned)),
+            headers,
+            Bytes::from(activity_with_id(TENANT_ID, "poisoned/activity")),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(rx.len(), queued_before);
+    }
+
+    #[tokio::test]
+    async fn classified_admission_preserves_causes_and_authority_cleanup() {
+        let connector_fixture = ConnectorFixture::start().await;
+        let fixture = connector_fixture.state.clone();
+        let edge_for_failures = connector_fixture.edge.clone();
+        let authorization = signed_authorization("https://connector.test/");
         for outcome in [
             SinkFailure::Duplicate,
             SinkFailure::Rejected,
@@ -1175,7 +947,7 @@ pub(crate) mod tests {
         ] {
             let directory = TempDir::new().unwrap();
             let path = camino::Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
-            let failed_bridge = crate::teams::runtime::TeamsResidentBridge::new_durable(
+            let failed_bridge = crate::runtime::TeamsResidentBridge::new_durable(
                 edge_for_failures.clone(),
                 dione_provider_delivery::TeamsDelivery::new(FailingSink {
                     path: path.clone(),
@@ -1203,7 +975,7 @@ pub(crate) mod tests {
                 SinkFailure::Rejected => {
                     let error = result.unwrap_err();
                     assert!(
-                        matches!(&error.kind, crate::teams::TeamsRuntimeErrorKind::Resident(source) if matches!(&source.kind, dione_provider_delivery::TeamsDeliveryErrorKind::Storage(cause) if cause.downcast_ref::<std::io::Error>().is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied)))
+                        matches!(&error.kind, crate::TeamsRuntimeErrorKind::Resident(source) if matches!(&source.kind, dione_provider_delivery::TeamsDeliveryErrorKind::Storage(cause) if cause.downcast_ref::<std::io::Error>().is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied)))
                     );
                     assert_eq!(error.to_string(), "resident delivery failed");
                     let state: serde_json::Value =
@@ -1214,7 +986,7 @@ pub(crate) mod tests {
                     let error = result.unwrap_err();
                     assert!(matches!(
                         error.kind,
-                        crate::teams::TeamsRuntimeErrorKind::ResidentCommittedUncertain(_)
+                        crate::TeamsRuntimeErrorKind::ResidentCommittedUncertain(_)
                     ));
                     let state: serde_json::Value =
                         serde_json::from_slice(&std::fs::read(state_file).unwrap()).unwrap();
@@ -1236,7 +1008,7 @@ pub(crate) mod tests {
                         error.to_string(),
                         "resident delivery rejected and authority cleanup failed"
                     );
-                    let crate::teams::TeamsRuntimeErrorKind::AdmissionCleanup { delivery, cleanup } =
+                    let crate::TeamsRuntimeErrorKind::AdmissionCleanup { delivery, cleanup } =
                         error.kind
                     else {
                         panic!("both independent failures must survive")
@@ -1246,9 +1018,9 @@ pub(crate) mod tests {
                     );
                     assert!(matches!(
                         cleanup.kind,
-                        crate::teams::runtime::AuthorityCleanupErrorKind::Rejected(
-                            crate::teams::ReplyStoreError {
-                                kind: crate::teams::ReplyStoreErrorKind::Io(_)
+                        crate::runtime::AuthorityCleanupErrorKind::Rejected(
+                            crate::ReplyStoreError {
+                                kind: crate::ReplyStoreErrorKind::Io(_)
                             }
                         )
                     ));
@@ -1260,122 +1032,106 @@ pub(crate) mod tests {
                 }
             }
         }
-        assert_owned_admission_completion(edge_for_failures.clone(), &authorization, &fixture)
-            .await;
-        assert_authority_commit_phases(edge_for_failures, &authorization, &fixture).await;
-        connector_fixture.task.abort();
+
+        assert!(!fixture.replies.lock().unwrap().is_empty());
     }
 
-    async fn assert_owned_admission_completion(
-        edge: TeamsEdge<ClientSecretTokenProvider>,
-        authorization: &str,
-        fixture: &FixtureState,
-    ) {
-        for lose_response in [false, true] {
-            let directory = TempDir::new().unwrap();
-            let path = camino::Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
-            let scope =
-                crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-                    dione_contracts::ProviderId::new("discord").unwrap(),
-                    dione_contracts::ModuleSlotId::new("primary").unwrap(),
-                ));
-            let queue = crate::codex::CodexEventQueue::open(&path, scope.clone())
-                .await
-                .unwrap();
-            let consumer = queue.register_live_consumer().await.unwrap();
-            let consumer_id = consumer.consumer_id().clone();
-            let thread = crate::codex::CodexThreadId::parse("owned-admission").unwrap();
-            consumer
-                .bind_live_thread(Some(thread.clone()))
-                .await
-                .unwrap();
-            let bridge = Arc::new(
-                crate::teams::runtime::TeamsResidentBridge::new_durable(
-                    edge.clone(),
-                    crate::composition::teams_admission::from_codex(queue.clone()),
-                    &path,
-                )
-                .await
-                .unwrap(),
-            );
-            let (reached, release) = queue.pause_owned_completion_for_test(lose_response);
-            let submitter = bridge.clone();
-            let authorization = authorization.to_owned();
-            let admission = tokio::spawn(async move {
-                submitter
-                    .admit(
-                        &authorization,
-                        &activity_with_id(TENANT_ID, "owned/admission"),
-                        NOW,
-                    )
-                    .await
-            });
-            tokio::time::timeout(Duration::from_secs(2), reached)
-                .await
-                .unwrap()
-                .unwrap();
-            if lose_response {
-                release.send(()).unwrap();
-                let error = admission.await.unwrap().unwrap_err();
-                assert!(matches!(error.kind,
-                    crate::teams::TeamsRuntimeErrorKind::ResidentCompletionUnknown(
+    #[tokio::test]
+    async fn authority_commit_phases_preserve_native_http_counts_and_store_ownership() {
+        let connector_fixture = ConnectorFixture::start().await;
+        let fixture = connector_fixture.state.clone();
+        let authorization = signed_authorization("https://connector.test/");
+        assert_authority_commit_phases(connector_fixture.edge.clone(), &authorization, &fixture)
+            .await;
+    }
+
+    struct PanickingCompletion;
+
+    impl dione_provider_delivery::TeamsEventSink for PanickingCompletion {
+        fn deliver<'a>(
+            &'a self,
+            _event: dione_provider_delivery::TeamsResidentEvent,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            dione_provider_delivery::TeamsAdmissionOutcome,
+                            dione_provider_delivery::TeamsDeliveryError,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let source =
+                    tokio::spawn(async { panic!("local native forwarding task sentinel") })
+                        .await
+                        .unwrap_err();
+                Ok(
+                    dione_provider_delivery::TeamsAdmissionOutcome::CompletionUnknown(
                         dione_provider_delivery::TeamsDeliveryError {
-                            kind: dione_provider_delivery::TeamsDeliveryErrorKind::CompletionUnknown(source)
-                        }
-                    ) if source.is_panic()));
-            } else {
-                admission.abort();
-                assert!(admission.await.unwrap_err().is_cancelled());
-                release.send(()).unwrap();
-            }
-            queue.drain_owned().await;
-            drop(bridge);
-            drop(consumer);
-            drop(queue);
-            let queue = crate::codex::CodexEventQueue::open(&path, scope)
-                .await
-                .unwrap();
-            let consumer = queue.register_live_consumer().await.unwrap();
-            assert_eq!(consumer.consumer_id(), &consumer_id);
-            let bridge = crate::teams::runtime::TeamsResidentBridge::new_durable(
-                edge.clone(),
-                crate::composition::teams_admission::from_codex(queue.clone()),
-                &path,
+                            kind:
+                                dione_provider_delivery::TeamsDeliveryErrorKind::CompletionUnknown(
+                                    source,
+                                ),
+                        },
+                    ),
+                )
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn native_completion_unknown_preserves_actual_local_join_cause_and_authority() {
+        let connector_fixture = ConnectorFixture::start().await;
+        let directory = TempDir::new().unwrap();
+        let path = camino::Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
+        let bridge = crate::runtime::TeamsResidentBridge::new_durable(
+            connector_fixture.edge.clone(),
+            dione_provider_delivery::TeamsDelivery::new(PanickingCompletion),
+            &path,
+        )
+        .await
+        .unwrap();
+        let error = bridge
+            .admit(
+                &connector_fixture.authorization(),
+                &connector_fixture.activity("local/unknown"),
+                connector_fixture.now(),
             )
             .await
+            .unwrap_err();
+        assert!(matches!(error.kind,
+            crate::TeamsRuntimeErrorKind::ResidentCompletionUnknown(
+                dione_provider_delivery::TeamsDeliveryError {
+                    kind: dione_provider_delivery::TeamsDeliveryErrorKind::CompletionUnknown(source)
+                }
+            ) if source.is_panic()));
+        drop(bridge);
+        let bridge = crate::runtime::TeamsResidentBridge::new_durable(
+            connector_fixture.edge.clone(),
+            dione_provider_delivery::TeamsDelivery::new(PanickingCompletion),
+            &path,
+        )
+        .await
+        .unwrap();
+        let handle = stored_handle(&path).await;
+        let before_tokens = connector_fixture.token_requests();
+        let before_replies = connector_fixture.replies().len();
+        bridge
+            .reply(&handle, "retained local completion uncertainty")
+            .await
             .unwrap();
-            let event = consumer
-                .next_event(&thread, Duration::ZERO, Duration::from_secs(30))
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(
-                event.event["params"]["meta"]["message_id"],
-                "owned/admission"
-            );
-            let handle = dione_provider_delivery::ReplyHandle::parse(
-                event.event["params"]["meta"]["reply_handle"]
-                    .as_str()
-                    .unwrap(),
-            )
-            .unwrap();
-            let tokens_before = fixture.token_forms.lock().unwrap().len();
-            let replies_before = fixture.replies.lock().unwrap().len();
-            bridge
-                .reply(&handle, "reply after owned admission restart")
-                .await
-                .unwrap();
-            assert_eq!(fixture.replies.lock().unwrap().len(), replies_before + 1);
-            assert_eq!(fixture.token_forms.lock().unwrap().len(), tokens_before + 1);
-            assert!(matches!(
-                bridge.reply(&handle, "must not send twice").await,
-                Err(TeamsRuntimeError {
-                    kind: crate::teams::TeamsRuntimeErrorKind::UnknownReplyHandle
-                })
-            ));
-            assert_eq!(fixture.replies.lock().unwrap().len(), replies_before + 1);
-            assert_eq!(fixture.token_forms.lock().unwrap().len(), tokens_before + 1);
-        }
+        assert_eq!(connector_fixture.token_requests(), before_tokens + 1);
+        assert_eq!(connector_fixture.replies().len(), before_replies + 1);
+        assert!(matches!(
+            bridge.reply(&handle, "must not send twice").await,
+            Err(crate::runtime::TeamsRuntimeError {
+                kind: crate::TeamsRuntimeErrorKind::UnknownReplyHandle
+            })
+        ));
+        assert_eq!(connector_fixture.token_requests(), before_tokens + 1);
+        assert_eq!(connector_fixture.replies().len(), before_replies + 1);
     }
 
     #[derive(Clone, Copy)]
@@ -1444,7 +1200,7 @@ pub(crate) mod tests {
     }
 
     struct StoreFaultSink {
-        store: Arc<std::sync::OnceLock<crate::teams::reply_store::AsyncTeamsReplyStore>>,
+        store: Arc<std::sync::OnceLock<crate::reply_store::AsyncTeamsReplyStore>>,
         outcome: StoreFaultOutcome,
         handle: Arc<std::sync::OnceLock<dione_provider_delivery::ReplyHandle>>,
     }
@@ -1473,7 +1229,7 @@ pub(crate) mod tests {
                     .get()
                     .unwrap()
                     .set_persist_failure_for_test(
-                        Some(crate::teams::reply_store::PersistFailure::AfterRename),
+                        Some(crate::reply_store::PersistFailure::AfterRename),
                         false,
                     )
                     .await;
@@ -1519,7 +1275,7 @@ pub(crate) mod tests {
             let path = camino::Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
             let slot = Arc::new(std::sync::OnceLock::new());
             let captured_handle = Arc::new(std::sync::OnceLock::new());
-            let bridge = crate::teams::runtime::TeamsResidentBridge::new_durable(
+            let bridge = crate::runtime::TeamsResidentBridge::new_durable(
                 edge.clone(),
                 dione_provider_delivery::TeamsDelivery::new(StoreFaultSink {
                     store: slot.clone(),
@@ -1536,7 +1292,7 @@ pub(crate) mod tests {
             if prior_commit {
                 store
                     .set_persist_failure_for_test(
-                        Some(crate::teams::reply_store::PersistFailure::AfterRename),
+                        Some(crate::reply_store::PersistFailure::AfterRename),
                         true,
                     )
                     .await;
@@ -1549,7 +1305,7 @@ pub(crate) mod tests {
                     .await
                     .unwrap_err();
                 assert!(
-                    matches!(mint.kind, crate::teams::TeamsRuntimeErrorKind::AuthorityCommittedUncertain { operation: crate::teams::runtime::ReplyAuthorityOperation::Mint, source } if source.kind() == std::io::ErrorKind::Other)
+                    matches!(mint.kind, crate::TeamsRuntimeErrorKind::AuthorityCommittedUncertain { operation: crate::runtime::ReplyAuthorityOperation::Mint, source } if source.kind() == std::io::ErrorKind::Other)
                 );
             } else {
                 bridge
@@ -1562,7 +1318,7 @@ pub(crate) mod tests {
                     .unwrap();
                 store
                     .set_persist_failure_for_test(
-                        Some(crate::teams::reply_store::PersistFailure::AfterRename),
+                        Some(crate::reply_store::PersistFailure::AfterRename),
                         false,
                     )
                     .await;
@@ -1574,11 +1330,11 @@ pub(crate) mod tests {
                 .unwrap_err();
             if prior_commit {
                 assert!(
-                    matches!(error.kind, crate::teams::TeamsRuntimeErrorKind::ReplyAuthority(crate::teams::ReplyStoreError { kind: crate::teams::ReplyStoreErrorKind::DurabilityUncertain(source) }) if source.kind() == std::io::ErrorKind::Other)
+                    matches!(error.kind, crate::TeamsRuntimeErrorKind::ReplyAuthority(crate::ReplyStoreError { kind: crate::ReplyStoreErrorKind::DurabilityUncertain(source) }) if source.kind() == std::io::ErrorKind::Other)
                 );
             } else {
                 assert!(
-                    matches!(error.kind, crate::teams::TeamsRuntimeErrorKind::AuthorityCommittedUncertain { operation: crate::teams::runtime::ReplyAuthorityOperation::Consume, source } if source.kind() == std::io::ErrorKind::Other)
+                    matches!(error.kind, crate::TeamsRuntimeErrorKind::AuthorityCommittedUncertain { operation: crate::runtime::ReplyAuthorityOperation::Consume, source } if source.kind() == std::io::ErrorKind::Other)
                 );
             }
             assert_eq!(fixture.replies.lock().unwrap().len(), before_sends);
@@ -1595,8 +1351,8 @@ pub(crate) mod tests {
             } else {
                 assert!(matches!(
                     recovered,
-                    Err(crate::teams::runtime::TeamsRuntimeError {
-                        kind: crate::teams::TeamsRuntimeErrorKind::UnknownReplyHandle
+                    Err(crate::runtime::TeamsRuntimeError {
+                        kind: crate::TeamsRuntimeErrorKind::UnknownReplyHandle
                     })
                 ));
                 assert_eq!(fixture.replies.lock().unwrap().len(), before_sends);
@@ -1610,7 +1366,7 @@ pub(crate) mod tests {
             let path = camino::Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
             let slot = Arc::new(std::sync::OnceLock::new());
             let captured_handle = Arc::new(std::sync::OnceLock::new());
-            let bridge = crate::teams::runtime::TeamsResidentBridge::new_durable(
+            let bridge = crate::runtime::TeamsResidentBridge::new_durable(
                 edge.clone(),
                 dione_provider_delivery::TeamsDelivery::new(StoreFaultSink {
                     store: slot.clone(),
@@ -1634,10 +1390,10 @@ pub(crate) mod tests {
                 .unwrap_err();
             match outcome {
                 StoreFaultOutcome::DuplicateAfterRename => assert!(
-                    matches!(error.kind, crate::teams::TeamsRuntimeErrorKind::AuthorityCommittedUncertain { operation: crate::teams::runtime::ReplyAuthorityOperation::Discard, source } if source.kind() == std::io::ErrorKind::Other)
+                    matches!(error.kind, crate::TeamsRuntimeErrorKind::AuthorityCommittedUncertain { operation: crate::runtime::ReplyAuthorityOperation::Discard, source } if source.kind() == std::io::ErrorKind::Other)
                 ),
                 StoreFaultOutcome::RejectedAfterRename => {
-                    let crate::teams::TeamsRuntimeErrorKind::AdmissionCleanup { delivery, cleanup } =
+                    let crate::TeamsRuntimeErrorKind::AdmissionCleanup { delivery, cleanup } =
                         error.kind
                     else {
                         panic!("retain both delivery and cleanup failures")
@@ -1646,7 +1402,7 @@ pub(crate) mod tests {
                         matches!(delivery.kind, dione_provider_delivery::TeamsDeliveryErrorKind::Storage(source) if source.downcast_ref::<std::io::Error>().is_some_and(|cause| cause.kind() == std::io::ErrorKind::PermissionDenied))
                     );
                     assert!(
-                        matches!(cleanup.kind, crate::teams::runtime::AuthorityCleanupErrorKind::CommittedDurabilityUncertain(source) if source.kind() == std::io::ErrorKind::Other)
+                        matches!(cleanup.kind, crate::runtime::AuthorityCleanupErrorKind::CommittedDurabilityUncertain(source) if source.kind() == std::io::ErrorKind::Other)
                     );
                 }
                 StoreFaultOutcome::Pass => unreachable!(),
@@ -1662,26 +1418,25 @@ pub(crate) mod tests {
             store.set_persist_failure_for_test(None, false).await;
             let handle = captured_handle.get().unwrap().clone();
             let still_owned =
-                crate::teams::reply_store::AsyncTeamsReplyStore::load(&path, fixture_policy())
+                crate::reply_store::AsyncTeamsReplyStore::load(&path, fixture_policy())
                     .await
                     .err()
                     .expect("live authority owners must retain the lock");
             assert!(matches!(
                 still_owned.kind,
-                crate::teams::ReplyStoreErrorKind::Owned(ref source)
+                crate::ReplyStoreErrorKind::Owned(ref source)
                     if source.kind() == std::io::ErrorKind::WouldBlock
             ));
             drop(bridge);
             drop(store);
             drop(slot);
-            let reopened =
-                crate::teams::reply_store::AsyncTeamsReplyStore::load(&path, fixture_policy())
-                    .await
-                    .unwrap();
+            let reopened = crate::reply_store::AsyncTeamsReplyStore::load(&path, fixture_policy())
+                .await
+                .unwrap();
             assert!(matches!(
                 reopened.get(handle, chrono::Utc::now()).await,
-                Err(crate::teams::ReplyStoreError {
-                    kind: crate::teams::ReplyStoreErrorKind::UnknownHandle
+                Err(crate::ReplyStoreError {
+                    kind: crate::ReplyStoreErrorKind::UnknownHandle
                 })
             ));
         }
@@ -1695,7 +1450,7 @@ pub(crate) mod tests {
             allowed_service_hosts: BTreeSet::from(["connector.test".to_owned()]),
             channels: BTreeMap::from([(
                 "msteams".to_owned(),
-                crate::teams::ChannelPolicy {
+                crate::ChannelPolicy {
                     requires_key_endorsement: true,
                 },
             )]),

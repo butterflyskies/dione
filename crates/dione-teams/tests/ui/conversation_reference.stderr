@@ -1,0 +1,11 @@
+error[E0603]: struct `AuthenticatedConversationReference` is private
+ --> tests/ui/conversation_reference.rs:1:18
+  |
+1 | use dione_teams::AuthenticatedConversationReference;
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private struct
+  |
+note: the struct `AuthenticatedConversationReference` is defined here
+ --> src/lib.rs
+  |
+  |     AuthenticatedConversationReference, AuthenticatedTeamsEnvelope, CorrelatedReplyRequest,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -35,11 +35,11 @@ const KEY_ID: &str = "fixture-rsa-1";
 const NOW: u64 = 1_800_000_000;
 const CLOCK_SKEW_SECONDS: u64 = 300;
 #[cfg(test)]
-const PRIVATE_KEY: &[u8] = include_bytes!("../../tests/fixtures/teams/connector-private.pem");
+const PRIVATE_KEY: &[u8] = include_bytes!("../tests/fixtures/teams/connector-private.pem");
 #[cfg(test)]
-const OPENID_DOCUMENT: &[u8] = include_bytes!("../../tests/fixtures/teams/connector-openid.json");
+const OPENID_DOCUMENT: &[u8] = include_bytes!("../tests/fixtures/teams/connector-openid.json");
 #[cfg(test)]
-const JWKS_DOCUMENT: &[u8] = include_bytes!("../../tests/fixtures/teams/connector-jwks.json");
+const JWKS_DOCUMENT: &[u8] = include_bytes!("../tests/fixtures/teams/connector-jwks.json");
 
 #[derive(Clone, Deserialize)]
 pub(crate) struct FrozenOpenId {
@@ -102,17 +102,22 @@ struct ConnectorJwks {
 #[derive(Clone)]
 /// The app, tenant, service hosts, channels, and conversations allowed to authenticate Teams Activities.
 pub struct AdmissionPolicy {
+    /// Microsoft application receiving authenticated activities.
     pub app_id: ApplicationId,
+    /// Tenant permitted to submit activities.
     pub tenant_id: TenantId,
+    /// HTTPS Connector hosts permitted for correlated replies.
     pub allowed_service_hosts: BTreeSet<String>,
     /// Native Teams conversations admitted under this policy. Empty denies all.
     pub allowed_conversations: BTreeSet<ConversationId>,
+    /// Admitted channel identifiers and their signing-key requirements.
     pub channels: BTreeMap<String, ChannelPolicy>,
 }
 
 #[derive(Clone)]
 /// Whether a channel requires an endorsement on its connector signing key.
 pub struct ChannelPolicy {
+    /// Require the Connector signing key to endorse this channel.
     pub requires_key_endorsement: bool,
 }
 
@@ -795,7 +800,7 @@ mod tests {
     #[test]
     fn sdk_v2_1_1_personal_message_retains_current_authentication_and_reply_contract() {
         let activity: Value = serde_json::from_slice(include_bytes!(
-            "../../tests/fixtures/teams/sdk-v2.1.1-personal-message.json"
+            "../tests/fixtures/teams/sdk-v2.1.1-personal-message.json"
         ))
         .unwrap();
         let envelope = authenticate_fixture(&fixture_claims(), &activity).unwrap();

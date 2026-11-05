@@ -1,0 +1,5 @@
+error[E0599]: no method named `poison_pending_for_test` found for struct `TeamsResidentBridge<P>` in the current scope
+ --> tests/ui/fault_hook.rs:2:78
+  |
+2 | fn forbidden(bridge:TeamsResidentBridge<ClientSecretTokenProvider>) { bridge.poison_pending_for_test(); }
+  |                                                                              ^^^^^^^^^^^^^^^^^^^^^^^ method not found in `TeamsResidentBridge<ClientSecretTokenProvider>`

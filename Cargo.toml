@@ -1,9 +1,9 @@
 [workspace]
-members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention", "crates/dione-evidence", "crates/dione-messages", "crates/dione-rate-limiter", "crates/dione-vaelii", "crates/dione-gaie", "crates/dione-identity-display", "crates/dione-harness", "crates/dione-presentation", "crates/dione-contradictionary", "crates/dione-bell-rings", "crates/dione-delivery-scheduler", "crates/dione-access-requests", "crates/dione-mutes", "crates/dione-coordination", "crates/dione-pre-send", "crates/dione-teams-identities", "crates/dione-discord-identities", "crates/dione-pluralkit-identities", "crates/dione-config", "crates/dione-outbound-consent", "crates/dione-mcp-tools", "crates/dione-provider-delivery"]
+members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention", "crates/dione-evidence", "crates/dione-messages", "crates/dione-rate-limiter", "crates/dione-vaelii", "crates/dione-gaie", "crates/dione-identity-display", "crates/dione-harness", "crates/dione-presentation", "crates/dione-contradictionary", "crates/dione-bell-rings", "crates/dione-delivery-scheduler", "crates/dione-access-requests", "crates/dione-mutes", "crates/dione-coordination", "crates/dione-pre-send", "crates/dione-teams-identities", "crates/dione-discord-identities", "crates/dione-pluralkit-identities", "crates/dione-config", "crates/dione-outbound-consent", "crates/dione-mcp-tools", "crates/dione-provider-delivery", "crates/dione-teams"]
 
 [package]
 name = "dione"
-version = "0.113.0"
+version = "0.114.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -14,6 +14,11 @@ keywords = ["discord", "mcp", "claude-code", "codex", "bot"]
 categories = ["command-line-utilities"]
 
 [workspace.dependencies]
+dione-teams = { version = "=0.1.0", path = "crates/dione-teams" }
+axum = "0.8"
+jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
+rcgen = "0.13"
 dione-provider-delivery = { version = "=0.1.0", path = "crates/dione-provider-delivery" }
 dione-mcp-tools = { version = "=0.1.0", path = "crates/dione-mcp-tools" }
 insta = { version = "1", features = ["json", "redactions"] }
@@ -86,6 +91,7 @@ serenity = { version = "0.12", default-features = false, features = ["client", "
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 [dependencies]
+dione-teams.workspace = true
 dione-provider-delivery.workspace = true
 dione-mcp-tools.workspace = true
 dione-outbound-consent.workspace = true
@@ -114,7 +120,7 @@ dione-contracts.workspace = true
 dione-durable.workspace = true
 dione-rendering.workspace = true
 arc-swap.workspace = true
-axum = "0.8"
+axum.workspace = true
 clap = { version = "4", features = ["derive", "env"] }
 serenity.workspace = true
 native-tls.workspace = true
@@ -139,7 +145,6 @@ camino.workspace = true
 futures-util.workspace = true
 notify = "8"
 reqwest.workspace = true
-jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
 secrecy.workspace = true
 url.workspace = true
 sha2.workspace = true
@@ -158,8 +163,7 @@ dione-attention = { workspace = true, features = ["test-support"] }
 dione-rook = { workspace = true, features = ["test-support"] }
 dione-durable = { workspace = true, features = ["test-support"] }
 png.workspace = true
-axum-server = { version = "0.8", features = ["tls-rustls"] }
-rcgen = "0.13"
+rcgen.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true
 insta.workspace = true

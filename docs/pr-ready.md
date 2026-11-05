@@ -30,6 +30,16 @@ boundary, review receipt tests, dependency policy, the selected build profile, a
 remains the authoritative check because its PR base and build
 environment may differ from the local worktree.
 
+Application tests that compose native Teams with real resident queues use a private
+member unit-test process. Run targeted selections through
+`python3 scripts/run-tests.py -p dione --lib -E 'test(teams_application_tests)'`.
+The wrapper builds the current workspace feature graph, reads the exact Teams
+unit-test executable from Nextest's Cargo metadata, and passes that path to the
+application tests. It refreshes the artifact for every invocation; tests never
+start nested Cargo or search executable names. The ignored private fixture entry
+is explicitly executed by those application tests, with bounded operation and
+shutdown deadlines. It is separate from the normal skipped-test count.
+
 The Forgejo `main` branch rule must require each individual PR job, the
 `Forgejo Linux CI / Required checks (pull_request)` aggregate, and the
 `Dione review / Six lenses` receipt status once that trusted workflow is on

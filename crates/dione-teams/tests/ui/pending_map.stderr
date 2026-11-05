@@ -1,0 +1,5 @@
+error[E0616]: field `pending` of struct `TeamsResidentBridge` is private
+ --> tests/ui/pending_map.rs:2:86
+  |
+2 | fn forbidden(bridge:TeamsResidentBridge<ClientSecretTokenProvider>) { let _ = bridge.pending; }
+  |                                                                                      ^^^^^^^ private field

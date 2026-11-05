@@ -10,13 +10,13 @@ use futures_util::future::BoxFuture;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::io::AsyncWriteExt;
 use {
-    crate::teams::{
-        edge::LiveReplyReceipt,
-        runtime::{TeamsReplyAuthority, TeamsRuntimeError},
-    },
     dione_harness::{HarnessDelivery, HarnessProtocol},
     dione_messages::delivery::Delivery,
     dione_provider_delivery::ReplyHandle,
+    dione_teams::{
+        edge::LiveReplyReceipt,
+        runtime::{TeamsReplyAuthority, TeamsRuntimeError},
+    },
 };
 
 struct FakeTool;
@@ -104,7 +104,7 @@ impl TeamsReplyAuthority for ReplyAuthority {
                 || self.consumed.swap(true, Ordering::SeqCst)
             {
                 return Err(TeamsRuntimeError {
-                    kind: crate::teams::TeamsRuntimeErrorKind::UnknownReplyHandle,
+                    kind: dione_teams::TeamsRuntimeErrorKind::UnknownReplyHandle,
                 });
             }
             assert_eq!(text, "hello");
@@ -170,9 +170,7 @@ async fn teams_discovery_and_authority_cross_the_request_route() {
             consumed: AtomicBool::new(false),
         });
         let server = server
-            .with_module_tools(
-                crate::teams::mcp_tools(Some(authority.clone())).expect("definition"),
-            )
+            .with_module_tools(dione_teams::mcp_tools(Some(authority.clone())).expect("definition"))
             .expect("registration");
         let after = handle_request(&server, list_request)
             .await
@@ -236,7 +234,7 @@ async fn teams_reply_rejects_non_object_arguments_before_consuming_authority() {
         consumed: AtomicBool::new(false),
     });
     let server = server
-        .with_module_tools(crate::teams::mcp_tools(Some(authority.clone())).expect("definition"))
+        .with_module_tools(dione_teams::mcp_tools(Some(authority.clone())).expect("definition"))
         .expect("registration");
     for arguments in [
         json!(["teams-00000000-0000-4000-8000-000000000001", "hello"]),
@@ -275,7 +273,7 @@ async fn teams_reply_rejects_non_object_arguments_before_consuming_authority() {
 #[tokio::test]
 async fn fake_registration_uses_seat_and_resident_request_routes() {
     let (_dir, server) = server(crate::harness::connect_claude()).await;
-    let mut tools = crate::teams::mcp_tools(Some(Arc::new(ReplyAuthority {
+    let mut tools = dione_teams::mcp_tools(Some(Arc::new(ReplyAuthority {
         calls: AtomicUsize::new(0),
         consumed: AtomicBool::new(false),
     })))
@@ -383,7 +381,7 @@ impl TeamsReplyAuthority for CausalReplyAuthority {
     ) -> BoxFuture<'a, Result<LiveReplyReceipt, TeamsRuntimeError>> {
         Box::pin(async move {
             if text == "fail" {
-                return Err(crate::teams::ReplyStoreError { kind: crate::teams::ReplyStoreErrorKind::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "private-token message tenant actor https://service.example/private teams-00000000-0000-4000-8000-000000000099")) }.into());
+                return Err(dione_teams::ReplyStoreError { kind: dione_teams::ReplyStoreErrorKind::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "private-token message tenant actor https://service.example/private teams-00000000-0000-4000-8000-000000000099")) }.into());
             }
             Ok(LiveReplyReceipt {
                 incoming_activity_id: "in".parse().unwrap(),
@@ -398,7 +396,7 @@ impl TeamsReplyAuthority for CausalReplyAuthority {
 async fn teams_public_mcp_error_does_not_render_retained_internal_causes() {
     let (_dir, server) = server(crate::harness::connect_claude()).await;
     let server = server
-        .with_module_tools(crate::teams::mcp_tools(Some(Arc::new(CausalReplyAuthority))).unwrap())
+        .with_module_tools(dione_teams::mcp_tools(Some(Arc::new(CausalReplyAuthority))).unwrap())
         .unwrap();
     let failure = handle_request(
         &server,

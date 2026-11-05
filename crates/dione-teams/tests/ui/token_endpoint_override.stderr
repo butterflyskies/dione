@@ -1,0 +1,5 @@
+error[E0599]: no associated function or constant named `with_endpoint` found for struct `ClientSecretTokenProvider` in the current scope
+ --> tests/ui/token_endpoint_override.rs:2:48
+  |
+2 | fn main() { let _ = ClientSecretTokenProvider::with_endpoint; }
+  |                                                ^^^^^^^^^^^^^ associated function or constant not found in `ClientSecretTokenProvider`

@@ -34,7 +34,7 @@ jobs:
           tar xzf /tmp/cargo-nextest.tar.gz -C /usr/local/bin
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo nextest run --workspace --no-fail-fast
+      - run: python3 scripts/run-tests.py --workspace --no-fail-fast
       - run: cargo test --workspace --doc --locked
 
   native-build:

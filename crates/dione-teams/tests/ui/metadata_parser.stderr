@@ -1,0 +1,11 @@
+error[E0603]: function `parse_connector_metadata` is private
+ --> tests/ui/metadata_parser.rs:1:18
+  |
+1 | use dione_teams::parse_connector_metadata;
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^ private function
+  |
+note: the function `parse_connector_metadata` is defined here
+ --> src/lib.rs
+  |
+  |     authenticate_activity, correlated_reply, parse_connector_metadata,
+  |                                              ^^^^^^^^^^^^^^^^^^^^^^^^
