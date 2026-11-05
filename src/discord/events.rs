@@ -372,7 +372,7 @@ impl EventHandler for Handler {
     async fn message(&self, ctx: Context, msg: Message) {
         let prepared = self.observation.create(self, &ctx.http, &msg).await;
         prepared.outcome.record(msg.channel_id, msg.id);
-        let config = crate::config::load_config(&self.state_dir);
+        let config = dione_config::load_config(&self.state_dir);
 
         // Quick bot filter for non-webhook bots — no expensive lookups needed.
         let is_webhook = msg.webhook_id.is_some();
@@ -588,7 +588,7 @@ impl EventHandler for Handler {
                             None => resolve_thread_parent(&ctx.http, &self.state, channel_id).await,
                         }
                     },
-                    || crate::config::load_config(&self.state_dir),
+                    || dione_config::load_config(&self.state_dir),
                     |guild_id, _gate_channel_id| {
                         crate::composition::mutes::global()
                             .is_some_and(|store| store.is_guild_muted(guild_id))
@@ -637,7 +637,7 @@ impl EventHandler for Handler {
                 Some(parent) => parent,
                 None => resolve_thread_parent(&ctx.http, &self.state, channel_id).await,
             };
-            let config = crate::config::load_config(&self.state_dir);
+            let config = dione_config::load_config(&self.state_dir);
             let resolved = ResolvedChannel {
                 thread_parent_id,
                 gate_channel_id: select_gate_channel(&config, channel_id, thread_parent_id),
@@ -768,7 +768,7 @@ impl EventHandler for Handler {
         // live serenity Context), same residual class as #334. Do not delete or
         // reorder this block without an integration harness for reaction_add:
         // no unit test will catch its removal.
-        let config = crate::config::load_config(&self.state_dir);
+        let config = dione_config::load_config(&self.state_dir);
         if matches!(
             crate::gate::InboundGate::check_reaction(&config, user_id.get()),
             crate::gate::GateDecision::Drop
@@ -903,7 +903,7 @@ impl EventHandler for Handler {
             return;
         };
 
-        let config = crate::config::load_config(&self.state_dir);
+        let config = dione_config::load_config(&self.state_dir);
 
         // Resolve webhook_id from event, new, or old (P2-2: fallback chain).
         let webhook_id = event
@@ -1031,7 +1031,7 @@ impl EventHandler for Handler {
                         None => resolve_thread_parent(&ctx.http, &self.state, channel_id).await,
                     }
                 },
-                || crate::config::load_config(&self.state_dir),
+                || dione_config::load_config(&self.state_dir),
                 |guild_id, _gate_channel_id| {
                     crate::composition::mutes::global()
                         .is_some_and(|store| store.is_guild_muted(guild_id))
@@ -1047,7 +1047,7 @@ impl EventHandler for Handler {
                 Some(parent) => parent,
                 None => resolve_thread_parent(&ctx.http, &self.state, channel_id).await,
             };
-            let config = crate::config::load_config(&self.state_dir);
+            let config = dione_config::load_config(&self.state_dir);
             let gate_channel_id = select_gate_channel(&config, channel_id, thread_parent_id);
             let message_mentions = event
                 .mentions
@@ -1184,7 +1184,7 @@ impl EventHandler for Handler {
             return;
         };
 
-        let config = crate::config::load_config(&self.state_dir);
+        let config = dione_config::load_config(&self.state_dir);
         let sender_id = component.user.id.get();
         let is_admin = config.is_admin(sender_id);
 
@@ -1345,7 +1345,7 @@ const IGNORE_PARENT_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::fr
 /// consulted in `reaction_add` (#400). "Everywhere" below refers to every
 /// *message* ingress path; reactions are gated in their own handler, not here.
 async fn resolve_reply_parent_ignore(
-    config: &crate::config::LoadedConfig,
+    config: &dione_config::LoadedConfig,
     ingress_ledger: &crate::ingress_ledger::IngressLedger,
     http: &serenity::http::Http,
     msg: &Message,
@@ -1362,7 +1362,7 @@ async fn resolve_reply_parent_ignore(
 /// and report how the parent resolved (kept separate so the pure classifier
 /// stays trivially testable).
 async fn resolve_reply_parent_resolution(
-    config: &crate::config::LoadedConfig,
+    config: &dione_config::LoadedConfig,
     ingress_ledger: &crate::ingress_ledger::IngressLedger,
     http: &serenity::http::Http,
     msg: &Message,
@@ -1507,7 +1507,7 @@ enum DirectGuildAdmission {
 )]
 fn admit_direct_guild_message(
     ledger: &crate::drop_ledger::DropLedger,
-    config: &crate::config::LoadedConfig,
+    config: &dione_config::LoadedConfig,
     gate_scope: ChannelId,
     message_id: MessageId,
     reply_parent_id: Option<MessageId>,
@@ -1579,14 +1579,14 @@ struct ResolvedChannel {
 
 struct VerifiedCreatePlan {
     admission: crate::ingress_ledger::LifecycleSnapshot,
-    config: Arc<crate::config::LoadedConfig>,
+    config: Arc<dione_config::LoadedConfig>,
     thread_parent_id: Option<u64>,
     targeting: MessageTargeting,
 }
 
 struct VerifiedEditPlan {
     admission: crate::ingress_ledger::LifecycleSnapshot,
-    config: Arc<crate::config::LoadedConfig>,
+    config: Arc<dione_config::LoadedConfig>,
 }
 
 #[expect(
@@ -1612,7 +1612,7 @@ where
             >,
         >,
     TF: std::future::Future<Output = Option<u64>>,
-    LF: FnOnce() -> Arc<crate::config::LoadedConfig>,
+    LF: FnOnce() -> Arc<dione_config::LoadedConfig>,
     MF: FnOnce(u64, u64) -> bool,
 {
     msg.guild_id?;
@@ -1724,7 +1724,7 @@ where
             >,
         >,
     TF: std::future::Future<Output = Option<u64>>,
-    LF: FnOnce() -> Arc<crate::config::LoadedConfig>,
+    LF: FnOnce() -> Arc<dione_config::LoadedConfig>,
     MF: FnOnce(u64, u64) -> bool,
 {
     event.guild_id?;
@@ -1808,7 +1808,7 @@ where
 }
 
 pub(super) fn select_gate_channel(
-    config: &crate::config::LoadedConfig,
+    config: &dione_config::LoadedConfig,
     channel_id: u64,
     thread_parent_id: Option<u64>,
 ) -> u64 {
@@ -1821,7 +1821,7 @@ pub(super) fn select_gate_channel(
 
 #[cfg(test)]
 fn fresh_guild_envelope_allows(
-    config: &crate::config::LoadedConfig,
+    config: &dione_config::LoadedConfig,
     gate_channel_id: u64,
     guild_id: Option<u64>,
     mention_kind: Option<MentionKind>,
@@ -1833,7 +1833,7 @@ fn fresh_guild_envelope_allows(
 }
 
 fn fresh_guild_envelope_allows_with_mute(
-    config: &crate::config::LoadedConfig,
+    config: &dione_config::LoadedConfig,
     gate_channel_id: u64,
     mention_kind: Option<MentionKind>,
     muted: bool,
@@ -1848,7 +1848,7 @@ fn fresh_guild_envelope_allows_with_mute(
 }
 
 pub(crate) fn passive_edit_policy_allows(
-    config: &crate::config::LoadedConfig,
+    config: &dione_config::LoadedConfig,
     gate_channel_id: u64,
     guild_id: Option<u64>,
     mention_kind: Option<MentionKind>,
@@ -1907,7 +1907,7 @@ pub(crate) fn passive_edit_policy_allows(
 async fn resolve_guild_channel(
     http: &serenity::http::Http,
     state: &crate::state::State,
-    config: &crate::config::LoadedConfig,
+    config: &dione_config::LoadedConfig,
     channel_id: u64,
     is_dm: bool,
 ) -> ResolvedChannel {
@@ -2085,7 +2085,7 @@ fn reply_preview(content: &str) -> Option<String> {
 
 fn build_message_event(
     msg: &Message,
-    config: &crate::config::LoadedConfig,
+    config: &dione_config::LoadedConfig,
     ingress_ledger: &crate::ingress_ledger::IngressLedger,
     thread_parent_id: Option<u64>,
     targeting: MessageTargeting,
@@ -2114,7 +2114,7 @@ fn build_message_event(
 fn build_verified_message_event(
     admission: &crate::ingress_ledger::LifecycleSnapshot,
     msg: &Message,
-    config: &crate::config::LoadedConfig,
+    config: &dione_config::LoadedConfig,
     ingress_ledger: &crate::ingress_ledger::IngressLedger,
     thread_parent_id: Option<u64>,
     targeting: MessageTargeting,
@@ -2146,7 +2146,7 @@ fn build_message_event_with_coordinates(
     effective_user_id: UserId,
     author_kind: SourceAuthorKind,
     msg: &Message,
-    config: &crate::config::LoadedConfig,
+    config: &dione_config::LoadedConfig,
     ingress_ledger: &crate::ingress_ledger::IngressLedger,
     thread_parent_id: Option<u64>,
     targeting: MessageTargeting,
@@ -2312,7 +2312,7 @@ fn gateway_reactor(user_id: Option<UserId>, bot_id: u64) -> Option<UserId> {
 fn should_drop_bot_message(
     is_bot: bool,
     user_id: u64,
-    config: &crate::config::LoadedConfig,
+    config: &dione_config::LoadedConfig,
 ) -> bool {
     is_bot && !config.is_allowed(user_id)
 }
@@ -2324,10 +2324,13 @@ fn is_direct_dm_transport(is_dm: bool, is_webhook: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AccessConfig, Config, DmPolicy, LoadedConfig};
     use crate::discord::observation::{
         DispatchOutcome, Exclusion, ObservationIngress, ObservationPolicy, RoomScope, SenderFilter,
     };
+    use dione_config::AccessConfig;
+    use dione_config::Config;
+    use dione_config::DmPolicy;
+    use dione_config::LoadedConfig;
     use std::{collections::HashSet, num::NonZeroUsize};
 
     fn mid(raw: u64) -> MessageId {
@@ -2495,13 +2498,13 @@ mod tests {
             },
             ..Default::default()
         };
-        raw.channels.push(crate::config::ChannelConfig {
+        raw.channels.push(dione_config::ChannelConfig {
             id: channel_id.to_string(),
             require_mention,
             allow_from: allow_from.into_iter().map(String::from).collect(),
             ..Default::default()
         });
-        LoadedConfig::from_raw(raw)
+        LoadedConfig::try_from_raw(raw).expect("valid test configuration")
     }
 
     /// An open channel (delivers non-ignored senders ambiently) with an
@@ -2518,13 +2521,13 @@ mod tests {
             },
             ..Default::default()
         };
-        raw.channels.push(crate::config::ChannelConfig {
+        raw.channels.push(dione_config::ChannelConfig {
             id: channel_id.to_string(),
             require_mention: false,
             allow_from: vec![],
             ..Default::default()
         });
-        LoadedConfig::from_raw(raw)
+        LoadedConfig::try_from_raw(raw).expect("valid test configuration")
     }
 
     /// #369: identity-ignore drops resolve to `IdentityIgnored` and are never
@@ -2734,7 +2737,7 @@ mod tests {
             },
             ..Default::default()
         };
-        LoadedConfig::from_raw(raw)
+        LoadedConfig::try_from_raw(raw).expect("valid test configuration")
     }
 
     // ── Bot message filter tests ─────────────────────────────────────────────
@@ -2796,13 +2799,13 @@ mod tests {
     fn fresh_snapshot_controls_thread_mapping_and_mention_classification() {
         let config = |channel_id: &str, require_mention: bool, patterns: Vec<&str>| {
             let mut raw = Config::default();
-            raw.channels.push(crate::config::ChannelConfig {
+            raw.channels.push(dione_config::ChannelConfig {
                 id: channel_id.to_owned(),
                 require_mention,
                 ..Default::default()
             });
             raw.mentions.patterns = patterns.into_iter().map(str::to_owned).collect();
-            LoadedConfig::from_raw(raw)
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration")
         };
         let before_wait = config("20", false, vec!["old-name"]);
         let after_wait = config("30", true, vec!["new-name"]);
@@ -2844,14 +2847,14 @@ mod tests {
         patterns: &[&str],
     ) -> Arc<LoadedConfig> {
         let mut raw = Config::default();
-        raw.channels.push(crate::config::ChannelConfig {
+        raw.channels.push(dione_config::ChannelConfig {
             id: channel_id.to_string(),
             require_mention,
             allow_from: allow_from.iter().map(u64::to_string).collect(),
             ..Default::default()
         });
         raw.mentions.patterns = patterns.iter().map(|value| (*value).to_owned()).collect();
-        Arc::new(LoadedConfig::from_raw(raw))
+        Arc::new(LoadedConfig::try_from_raw(raw).expect("valid test configuration"))
     }
 
     fn represented_test_facts(user_id: u64) -> crate::pluralkit::VerifiedPkFacts {
@@ -3345,13 +3348,13 @@ mod tests {
         use crate::discord::verified_action::{LifecycleProvenance, test_lifecycle_facts};
 
         let mut raw = Config::default();
-        raw.channels.push(crate::config::ChannelConfig {
+        raw.channels.push(dione_config::ChannelConfig {
             id: "100".to_owned(),
             require_mention: true,
             allow_from: vec!["600".to_owned()],
             ..Default::default()
         });
-        let config = LoadedConfig::from_raw(raw);
+        let config = LoadedConfig::try_from_raw(raw).expect("valid test configuration");
         let ledger = crate::ingress_ledger::IngressLedger::new();
         let facts = test_lifecycle_facts(
             MessageId::new(10),
@@ -3588,7 +3591,8 @@ mod tests {
 
     #[tokio::test]
     async fn admitted_message_is_recorded_before_notification_delivery() {
-        let config = LoadedConfig::from_raw(Config::default());
+        let config =
+            LoadedConfig::try_from_raw(Config::default()).expect("valid test configuration");
         let msg = message_from_wire(wire_message_body(
             123,
             wire_author(456, "alice"),
@@ -3778,7 +3782,8 @@ mod tests {
 
     #[test]
     fn build_message_event_populates_reply_context_for_reply() {
-        let config = LoadedConfig::from_raw(Config::default());
+        let config =
+            LoadedConfig::try_from_raw(Config::default()).expect("valid test configuration");
         let ledger = crate::ingress_ledger::IngressLedger::new();
         let msg = wire_reply_message(
             "my reply",
@@ -3837,14 +3842,14 @@ mod tests {
         require_mention: bool,
     ) -> LoadedConfig {
         let mut raw = Config::default();
-        raw.channels.push(crate::config::ChannelConfig {
+        raw.channels.push(dione_config::ChannelConfig {
             id: channel_id.to_string(),
             require_mention,
             allow_from: allow_from.iter().map(u64::to_string).collect(),
             ..Default::default()
         });
         raw.access.ignore_from = ignore_from.iter().map(u64::to_string).collect();
-        LoadedConfig::from_raw(raw)
+        LoadedConfig::try_from_raw(raw).expect("valid test configuration")
     }
 
     /// A live-token-free HTTP handle. The 3-tier resolver only touches HTTP at
@@ -4219,7 +4224,7 @@ mod tests {
         use crate::discord::verified_action::{LifecycleProvenance, test_lifecycle_facts};
 
         let mut raw = Config::default();
-        raw.channels.push(crate::config::ChannelConfig {
+        raw.channels.push(dione_config::ChannelConfig {
             id: "100".to_owned(),
             require_mention: true,
             allow_from: vec!["600".to_owned()],
@@ -4227,7 +4232,7 @@ mod tests {
         });
         // The represented principal 600 is on the ignore blocklist.
         raw.access.ignore_from = vec!["600".to_owned()];
-        let config = LoadedConfig::from_raw(raw);
+        let config = LoadedConfig::try_from_raw(raw).expect("valid test configuration");
         let ledger = crate::ingress_ledger::IngressLedger::new();
         let facts = test_lifecycle_facts(
             MessageId::new(10),
@@ -4281,7 +4286,8 @@ mod tests {
     fn represented_and_direct_messages_share_the_same_construct_envelope_shape() {
         use crate::harness::test_support::FixtureNotification;
 
-        let config = LoadedConfig::from_raw(Config::default());
+        let config =
+            LoadedConfig::try_from_raw(Config::default()).expect("valid test configuration");
         let direct_ledger = crate::ingress_ledger::IngressLedger::new();
         let direct = message_from_wire(wire_message_body(200, wire_author(600, "alice"), "hello"));
         let NotificationEvent::Message(direct_event) = build_message_event(

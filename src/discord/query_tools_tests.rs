@@ -155,7 +155,7 @@ async fn registered_queries_parse_execute_project_and_reload_policy() {
     )
     .await
     .unwrap();
-    let (_, error) = crate::config::reload_config(&state_dir).await;
+    let (_, error) = dione_config::reload_config(&state_dir).await;
     assert!(error.is_none(), "{error:?}");
     let services = Arc::new(ReplyServices::new(
         Arc::new(
@@ -293,7 +293,7 @@ async fn registered_queries_parse_execute_project_and_reload_policy() {
     )
     .await
     .unwrap();
-    let (_, error) = crate::config::reload_config(&state_dir).await;
+    let (_, error) = dione_config::reload_config(&state_dir).await;
     assert!(error.is_none(), "{error:?}");
     let denied = registry
         .find("get_message")
@@ -393,7 +393,7 @@ async fn wrong_observation_exchange() {
     let directory = tempfile::tempdir().unwrap();
     let state_dir = Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
     tokio::fs::write(state_dir.join("config.toml"), format!("[[channels]]\nid = \"42\"\n[vaelii]\nserver_url = \"{base}\"\nactor_term = \"Fixture\"\n")).await.unwrap();
-    let (_, error) = crate::config::reload_config(&state_dir).await;
+    let (_, error) = dione_config::reload_config(&state_dir).await;
     assert!(error.is_none(), "{error:?}");
     let services = Arc::new(ReplyServices::new(
         Arc::new(

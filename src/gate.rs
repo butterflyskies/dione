@@ -1,5 +1,6 @@
-use crate::config::{DmPolicy, LoadedConfig};
 use camino::Utf8Path;
+use dione_config::DmPolicy;
+use dione_config::LoadedConfig;
 use regex::RegexSet;
 use std::fs;
 
@@ -162,7 +163,7 @@ impl InboundGate {
                 tracing::debug!(sender_id, "DM queued: unknown sender");
                 GateDecision::Queue
             }
-            _ => {
+            DmPolicy::Drop | DmPolicy::Disabled => {
                 tracing::debug!(sender_id, "DM dropped: unknown sender, dm_policy=drop");
                 GateDecision::Drop
             }
@@ -463,17 +464,22 @@ pub fn sanitize_filename(name: &str) -> String {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 /// Provider-specific identity selectors cannot authorize a direct Discord author.
-pub(crate) fn direct_sender_allowed(policy: &crate::config::ChannelPolicy, sender_id: u64) -> bool {
+pub(crate) fn direct_sender_allowed(policy: &dione_config::ChannelPolicy, sender_id: u64) -> bool {
     !policy.has_identity_filter() || policy.allow_from.contains(&sender_id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{AccessConfig, ChannelConfig, Config, DmPolicy, MentionConfig},
-        principal_policy::{Admission, Attention, LegacyGuildPolicyInput, LegacyPolicyTranslation},
-    };
+    use crate::principal_policy::Admission;
+    use crate::principal_policy::Attention;
+    use crate::principal_policy::LegacyGuildPolicyInput;
+    use crate::principal_policy::LegacyPolicyTranslation;
+    use dione_config::AccessConfig;
+    use dione_config::ChannelConfig;
+    use dione_config::Config;
+    use dione_config::DmPolicy;
+    use dione_config::MentionConfig;
     use std::collections::HashSet;
 
     fn base_config() -> Config {
@@ -497,7 +503,7 @@ mod tests {
     }
 
     fn loaded(config: Config) -> LoadedConfig {
-        LoadedConfig::from_raw(config)
+        LoadedConfig::try_from_raw(config).expect("valid test configuration")
     }
 
     // ── DM gate tests ─────────────────────────────────────────────────────────

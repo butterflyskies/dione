@@ -152,7 +152,7 @@ async fn real_main() -> i32 {
 
     let config_path = match cli.config {
         Some(path) => path,
-        None => dione::config::config_path(&dione::config::state_dir()),
+        None => dione_config::config_path(&dione_config::state_dir()),
     };
     // Redacted on purpose, on BOTH streams: a raw TOML error echoes the
     // offending source line, which may be the token. Only the redacted

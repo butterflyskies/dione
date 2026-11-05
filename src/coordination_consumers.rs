@@ -281,15 +281,17 @@ async fn spawn_scripted_server(script: Vec<String>) -> String {
 async fn events_reach_startup_subscriber_after_config_reload() {
     let addr = spawn_server(10_000).await;
     let raw = || {
-        let mut raw = crate::config::Config::default();
+        let mut raw = dione_config::Config::default();
         raw.pre_send.author_id = Some(serenity::model::id::UserId::new(222));
         raw.coordination
             .insert("claim-once".to_owned(), config(&addr));
         raw
     };
-    let startup = crate::config::LoadedConfig::from_raw(raw());
+    let startup =
+        dione_config::LoadedConfig::try_from_raw(raw()).expect("valid test configuration");
     let mut events = startup.coordinators["claim-once"].subscribe();
-    let reloaded = crate::config::LoadedConfig::from_raw(raw());
+    let reloaded =
+        dione_config::LoadedConfig::try_from_raw(raw()).expect("valid test configuration");
 
     let owner = coordinator(&addr, "111");
     let mid = "880001";

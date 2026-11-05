@@ -117,6 +117,12 @@ and the official deployment application ID. Configuration imports its private
 validated UUID and typed errors. Verified-action classification imports the
 constant while retaining configured trust and private proof construction.
 
+The public dione-config package owns settings, validated resource assembly,
+comment-preserving editing, candidate/sidecar merge, recovery, and one global
+publication writer/cache/counter/watch channel. Application admission acquires
+that same writer through its narrow guard API. File watching and native process
+lifetimes remain application adapters.
+
 ## Processes and transports
 
 ```mermaid
@@ -319,14 +325,14 @@ The former
 
 ## State and ownership
 
-[config.rs](src/config.rs) resolves `DIONE_STATE_DIR`, defaulting to
+[config.rs](crates/dione-config/src/config.rs) resolves `DIONE_STATE_DIR`, defaulting to
 `~/.claude/channels/dione`. The config path can be overridden separately.
 Stores below have distinct commit and recovery rules; a file named here does
 not imply that all writes have the same durability guarantee.
 
 | State | Owner and representation |
 |-------|--------------------------|
-| Configuration | [ConfigRuntime](src/config.rs) serializes mutations and publishes immutable snapshots through ArcSwap. TOML, last-known-good, and quarantine files support recovery. [ConfigStore](src/config_store.rs) edits TOML without owning persistence. |
+| Configuration | [ConfigRuntime](crates/dione-config/src/config.rs) serializes mutations and publishes immutable snapshots through ArcSwap. TOML, last-known-good, and quarantine files support recovery. [ConfigStore](crates/dione-config/src/config_store.rs) edits TOML without owning persistence. |
 | Access requests | [AccessQueue](crates/dione-access-requests/src/lib.rs) keeps requests in memory and writes `queue.json` through a temporary file and rename. Persistence errors are logged after memory changes. |
 | Codex delivery | [CodexEventQueue](src/codex/queue.rs) adapts the shared [durable owner](crates/dione-durable/src/queue.rs); its [legacy codec](src/codex/queue_codec.rs) preserves pending events, leases, consumers, and bindings in `codex-inbox.json`. The [store](crates/dione-durable/src/store.rs) holds `codex-inbox.lock` for its lifetime to exclude a second owner. |
 | Guild mutes | [MuteStore](crates/dione-mutes/src/lib.rs) rebuilds state from `guild_mute_receipts.jsonl`. Receipt append precedes snapshot publication. |

@@ -12,7 +12,7 @@ pub fn spawn(
     tokio::spawn(async move {
         let (tx, mut rx) = mpsc::channel::<()>(16);
 
-        let cfg_path = crate::config::config_path(&state_dir);
+        let cfg_path = dione_config::config_path(&state_dir);
         let watch_dir = cfg_path
             .parent()
             .unwrap_or(state_dir.as_path())
@@ -61,7 +61,7 @@ pub fn spawn(
                     // config writer and runs its file I/O on the blocking
                     // pool internally.
                     let dir = state_dir.clone();
-                    let (_, error) = crate::config::ConfigRuntime::new(dir).reload().await;
+                    let (_, error) = dione_config::ConfigRuntime::new(dir).reload().await;
                     match error {
                         Some(error) => {
                             let _ = event_tx.send(NotificationEvent::ConfigError { error }).await;

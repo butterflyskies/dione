@@ -1,10 +1,9 @@
 //! The production admission state machine. Network evaluation never owns the ingress loop.
 
-use crate::{
-    config::LoadedConfig,
-    discord::events::{MessageEvent, NotificationEvent},
-};
+use crate::discord::events::MessageEvent;
+use crate::discord::events::NotificationEvent;
 use dione_attention::{config::AttentionMode, types::*};
+use dione_config::LoadedConfig;
 use serenity::model::id::ChannelId;
 use std::collections::{BTreeMap, VecDeque};
 use tokio_util::sync::CancellationToken;

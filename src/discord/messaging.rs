@@ -5,8 +5,45 @@ pub mod queries;
 mod rook_publication;
 pub(crate) mod search;
 mod types;
+use crate::contradictionary_diary::BlockOutcome;
+use crate::contradictionary_diary::DiaryRecord;
+use crate::contradictionary_diary::append_diary_record;
+use crate::discord::chunk;
+use crate::discord::chunk_preserving_fences_with_context;
+use crate::discord::events::NotificationEvent;
+use crate::gate::OutboundGate;
+use crate::ingress_ledger::IngressLedger;
+use crate::ingress_ledger::VerifyResult;
+use crate::no_rly::consent::ConsentGate;
+use crate::no_rly::consent::DeliverError;
+use crate::no_rly::consent::DeliverReply;
+use crate::no_rly::consent::DeliveryCause;
+use crate::no_rly::consent::PostedMessages;
+use crate::no_rly::consent::RejectedHandle;
+use crate::no_rly::consent::Released;
+use crate::no_rly::consent::Rephrased;
+use crate::no_rly::consent::Replacement;
+use crate::no_rly::consent::ReplyRequest;
+use crate::no_rly::judge::AlwaysClear;
+use crate::no_rly::judge::OutboundJudge;
+use crate::no_rly::judge::Verdict;
+use crate::no_rly::queue::HoldHandle;
+use crate::state::State;
 use camino::Utf8PathBuf;
+use dione_config::ChunkMode;
+use dione_config::DmPolicy;
+use dione_config::LoadedConfig;
+use dione_contradictionary::Action;
+use dione_contradictionary::AutoRewrite;
+use dione_contradictionary::AutoRewritten;
 use dione_coordination::{ClaimOutcome, Coordinator};
+use dione_evidence::SentexHandles;
+use dione_evidence::SentexRole;
+use dione_evidence::SentexTransport;
+use dione_evidence::append_markers;
+use dione_evidence::has_terminal_sentex_syntax;
+use dione_evidence::locator_metadata;
+use dione_evidence::parse_sentex_locators;
 use dione_mutes::MuteStore;
 use dione_pre_send::{
     ChannelType as HookChannelType, ConstructId, HookContext, HookDecision, HookName,
@@ -29,29 +66,6 @@ pub use types::{
     DeliveryReceipt, DmDeliveryRoute, DmOutcome, LinkPreviews, MessagingError, MessagingErrorKind,
     PartialReceipt, RedirectRestrictedSurface, ReplyOutcome, ReplyPing, Report, TargetError,
     TargetOperation,
-};
-use {
-    crate::{
-        config::{ChunkMode, DmPolicy, LoadedConfig},
-        contradictionary_diary::{BlockOutcome, DiaryRecord, append_diary_record},
-        discord::{chunk, chunk_preserving_fences_with_context, events::NotificationEvent},
-        gate::OutboundGate,
-        ingress_ledger::{IngressLedger, VerifyResult},
-        no_rly::{
-            consent::{
-                ConsentGate, DeliverError, DeliverReply, DeliveryCause, PostedMessages,
-                RejectedHandle, Released, Rephrased, Replacement, ReplyRequest,
-            },
-            judge::{AlwaysClear, OutboundJudge, Verdict},
-            queue::HoldHandle,
-        },
-        state::State,
-    },
-    dione_contradictionary::{Action, AutoRewrite, AutoRewritten},
-    dione_evidence::{
-        SentexHandles, SentexRole, SentexTransport, append_markers, has_terminal_sentex_syntax,
-        locator_metadata, parse_sentex_locators,
-    },
 };
 
 /// Preserve wire bits that the installed SDK's typed message flags would truncate.
@@ -1319,9 +1333,9 @@ async fn deliver_reply(
 
         // Reply threading.
         let should_reply = match reply_mode {
-            crate::config::ReplyToMode::Off => false,
-            crate::config::ReplyToMode::First => i == 0,
-            crate::config::ReplyToMode::All => true,
+            dione_config::ReplyToMode::Off => false,
+            dione_config::ReplyToMode::First => i == 0,
+            dione_config::ReplyToMode::All => true,
         };
 
         if should_reply {
@@ -1970,7 +1984,13 @@ fn parse_reaction_type(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::new_state;
     use dione_access_requests::AccessQueue;
+    use dione_config::ChannelConfig;
+    use dione_config::Config;
+    use dione_contradictionary::Action;
+    use dione_contradictionary::Entry;
+    use dione_contradictionary::MatchMode;
     use dione_mutes::{GuildMute, MuteState};
     use dione_pre_send::{
         Assessment, AuditSink, AuditTrail, ConstructFeedback, FeedbackSink, HookContext,
@@ -1982,13 +2002,6 @@ mod tests {
     use tokio::{
         io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
-    };
-    use {
-        crate::{
-            config::{ChannelConfig, Config},
-            state::new_state,
-        },
-        dione_contradictionary::{Action, Entry, MatchMode},
     };
 
     #[test]
@@ -2133,7 +2146,7 @@ mod tests {
     pub(super) fn test_config() -> LoadedConfig {
         let mut raw = Config::default();
         raw.delivery.evidence_markers_enabled = true;
-        LoadedConfig::from_raw(raw)
+        LoadedConfig::try_from_raw(raw).expect("valid test configuration")
     }
 
     fn blocking_test_config_with_evidence_markers(enabled: bool) -> LoadedConfig {
@@ -2151,7 +2164,7 @@ mod tests {
             replace: None,
             reason: Some("nothing is ever straightforward".into()),
         });
-        LoadedConfig::from_raw(raw)
+        LoadedConfig::try_from_raw(raw).expect("valid test configuration")
     }
 
     fn blocking_test_config() -> LoadedConfig {
@@ -2166,7 +2179,7 @@ mod tests {
             ..Default::default()
         });
         raw.phantom_canary.alert_channel_id = "99".into();
-        LoadedConfig::from_raw(raw)
+        LoadedConfig::try_from_raw(raw).expect("valid test configuration")
     }
 
     #[test]
@@ -2381,7 +2394,10 @@ mod tests {
             id: "42".into(),
             ..Default::default()
         });
-        let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), http);
+        let ctx = messaging_ctx_with_http(
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+            http,
+        );
         let result = crate::discord::messaging_wire::reply(
             reply(
                 &ctx,
@@ -2445,7 +2461,10 @@ mod tests {
             ..Default::default()
         });
         raw.phantom_canary.alert_channel_id = "99".into();
-        let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), http);
+        let ctx = messaging_ctx_with_http(
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+            http,
+        );
 
         let result = crate::discord::messaging_wire::reply(
             reply(
@@ -2482,7 +2501,10 @@ mod tests {
             ..Default::default()
         });
         raw.access.ignore_from.push("210987654321098765".into());
-        let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), http);
+        let ctx = messaging_ctx_with_http(
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+            http,
+        );
         let result = crate::discord::messaging_wire::reply(
             reply(
                 &ctx,
@@ -2710,7 +2732,7 @@ mod tests {
         let ctx = MessagingCtx::new(
             http,
             new_state(),
-            Arc::new(LoadedConfig::from_raw(raw)),
+            Arc::new(LoadedConfig::try_from_raw(raw).expect("valid test configuration")),
             "/tmp".into(),
             Arc::new(ConsentGate::new(camino::Utf8Path::new("/tmp"))),
             ledger,
@@ -2791,7 +2813,7 @@ mod tests {
         let ctx = MessagingCtx::new(
             http,
             new_state(),
-            Arc::new(LoadedConfig::from_raw(raw)),
+            Arc::new(LoadedConfig::try_from_raw(raw).expect("valid test configuration")),
             "/tmp".into(),
             Arc::new(ConsentGate::new(camino::Utf8Path::new("/tmp"))),
             ledger,
@@ -3099,8 +3121,8 @@ mod tests {
             id: "42".into(),
             ..Default::default()
         });
-        let ctx =
-            messaging_ctx(LoadedConfig::from_raw(raw)).with_pre_send_pipeline(Arc::new(pipeline));
+        let ctx = messaging_ctx(LoadedConfig::try_from_raw(raw).expect("valid test configuration"))
+            .with_pre_send_pipeline(Arc::new(pipeline));
         let handles = dione_evidence::parse_tool_sentex_handles(&json!({
             "claim_handles": ["34"],
             "citation_handles": ["12"]
@@ -3165,7 +3187,8 @@ mod tests {
                 id: "42".into(),
                 ..Default::default()
             });
-            let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
+            let ctx =
+                messaging_ctx(LoadedConfig::try_from_raw(raw).expect("valid test configuration"));
 
             for marker in [
                 "[🔍=v1:AAAAAAAAAAw]",
@@ -3291,8 +3314,9 @@ mod tests {
             let pipeline = PreSendPipeline::new(vec![Box::new(RawSentexRewriteHook(marker))])
                 .expect("pipeline")
                 .with_mode(PipelineMode::Enforce);
-            let ctx = messaging_ctx(LoadedConfig::from_raw(raw))
-                .with_pre_send_pipeline(Arc::new(pipeline));
+            let ctx =
+                messaging_ctx(LoadedConfig::try_from_raw(raw).expect("valid test configuration"))
+                    .with_pre_send_pipeline(Arc::new(pipeline));
 
             let error = prepare_outbound(
                 &ctx,
@@ -3326,7 +3350,7 @@ mod tests {
             ..Default::default()
         });
         raw.delivery.text_chunk_limit = 8;
-        let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
+        let ctx = messaging_ctx(LoadedConfig::try_from_raw(raw).expect("valid test configuration"));
         let handles =
             dione_evidence::parse_tool_sentex_handles(&json!({ "claim_handles": ["12"] }))
                 .expect("valid sentex handle");
@@ -3360,7 +3384,7 @@ mod tests {
             id: "42".into(),
             ..Default::default()
         });
-        let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
+        let ctx = messaging_ctx(LoadedConfig::try_from_raw(raw).expect("valid test configuration"));
         let handles =
             dione_evidence::parse_tool_sentex_handles(&json!({ "claim_handles": ["12"] })).unwrap();
 
@@ -3514,7 +3538,7 @@ mod tests {
         let ctx = MessagingCtx::new(
             http,
             new_state(),
-            Arc::new(LoadedConfig::from_raw(raw)),
+            Arc::new(LoadedConfig::try_from_raw(raw).expect("valid test configuration")),
             state_dir.clone(),
             Arc::new(ConsentGate::new(&state_dir)),
             Arc::new(crate::ingress_ledger::IngressLedger::new()),
@@ -4309,7 +4333,10 @@ mod tests {
             ..Default::default()
         });
         let (tx, mut rx) = mpsc::channel(4);
-        let mut ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), http);
+        let mut ctx = messaging_ctx_with_http(
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+            http,
+        );
         ctx.event_tx = Some(tx);
 
         let result = crate::discord::messaging_wire::unit(
@@ -4363,12 +4390,16 @@ mod tests {
     async fn pre_send_hot_reload_enabled_to_disabled_applies_to_next_context() {
         let installed = dione_pre_send::observe_pipeline(Vec::new()).expect("pipeline");
         crate::composition::pre_send::install_pipeline(Some(installed));
-        let enabled = messaging_ctx(LoadedConfig::from_raw(Config::default()));
+        let enabled = messaging_ctx(
+            LoadedConfig::try_from_raw(Config::default()).expect("valid test configuration"),
+        );
         assert!(enabled.has_pre_send_pipeline());
 
         let mut disabled_config = Config::default();
         disabled_config.pre_send.enabled = false;
-        let disabled = messaging_ctx(LoadedConfig::from_raw(disabled_config));
+        let disabled = messaging_ctx(
+            LoadedConfig::try_from_raw(disabled_config).expect("valid test configuration"),
+        );
         assert!(!disabled.has_pre_send_pipeline());
     }
 
@@ -4378,10 +4409,14 @@ mod tests {
         crate::composition::pre_send::install_pipeline(Some(installed));
         let mut disabled_config = Config::default();
         disabled_config.pre_send.enabled = false;
-        let disabled = messaging_ctx(LoadedConfig::from_raw(disabled_config));
+        let disabled = messaging_ctx(
+            LoadedConfig::try_from_raw(disabled_config).expect("valid test configuration"),
+        );
         assert!(!disabled.has_pre_send_pipeline());
 
-        let enabled = messaging_ctx(LoadedConfig::from_raw(Config::default()));
+        let enabled = messaging_ctx(
+            LoadedConfig::try_from_raw(Config::default()).expect("valid test configuration"),
+        );
         assert!(enabled.has_pre_send_pipeline());
     }
 
@@ -4392,7 +4427,9 @@ mod tests {
             id: "42".to_owned(),
             ..Default::default()
         });
-        let (ctx, surfaces) = messaging_ctx_with_halt_pipeline(LoadedConfig::from_raw(raw));
+        let (ctx, surfaces) = messaging_ctx_with_halt_pipeline(
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+        );
 
         let result = crate::discord::messaging_wire::reply(
             reply(&ctx, ChannelId::new(42), "text", None, ReplyPing::Allow).await,
@@ -4423,7 +4460,9 @@ mod tests {
             "wrong channel",
         );
         let (http, requests, server) = fake_discord_http().await;
-        let (mut ctx, _) = messaging_ctx_with_halt_pipeline(LoadedConfig::from_raw(raw));
+        let (mut ctx, _) = messaging_ctx_with_halt_pipeline(
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+        );
         ctx.http = http;
         ctx.ingress_ledger = Arc::clone(&ledger);
 
@@ -4505,7 +4544,9 @@ mod tests {
             id: "42".to_owned(),
             ..Default::default()
         });
-        let (ctx, surfaces) = messaging_ctx_with_halt_pipeline(LoadedConfig::from_raw(raw));
+        let (ctx, surfaces) = messaging_ctx_with_halt_pipeline(
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+        );
 
         let result = crate::discord::messaging_wire::message(
             edit_message(&ctx, ChannelId::new(42), MessageId::new(7), "text").await,
@@ -4525,7 +4566,9 @@ mod tests {
             id: "42".to_owned(),
             ..Default::default()
         });
-        let (ctx, surfaces) = messaging_ctx_with_halt_pipeline(LoadedConfig::from_raw(raw));
+        let (ctx, surfaces) = messaging_ctx_with_halt_pipeline(
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+        );
         let attachment = CreateAttachment::bytes(b"body".as_slice(), "test.txt");
 
         let result = crate::discord::messaging_wire::message(
@@ -4549,8 +4592,9 @@ mod tests {
 
     #[tokio::test]
     async fn live_dm_path_runs_pre_send_pipeline_before_channel_creation() {
-        let (ctx, surfaces) =
-            messaging_ctx_with_halt_pipeline(LoadedConfig::from_raw(Config::default()));
+        let (ctx, surfaces) = messaging_ctx_with_halt_pipeline(
+            LoadedConfig::try_from_raw(Config::default()).expect("valid test configuration"),
+        );
 
         let result =
             crate::discord::messaging_wire::dm(send_dm(&ctx, UserId::new(77), "text").await);
@@ -4600,8 +4644,11 @@ mod tests {
         .unwrap()
         .with_mode(PipelineMode::Enforce);
         let (http, requests, server) = fake_discord_http().await;
-        let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), http)
-            .with_pre_send_pipeline(Arc::new(pipeline));
+        let ctx = messaging_ctx_with_http(
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+            http,
+        )
+        .with_pre_send_pipeline(Arc::new(pipeline));
         let handles = dione_evidence::parse_tool_sentex_handles(
             &json!({"claim_handles":["34"],"citation_handles":["12"]}),
         )
@@ -4666,7 +4713,9 @@ mod tests {
             id: "42".to_owned(),
             ..Default::default()
         });
-        let (ctx, surfaces) = messaging_ctx_with_halt_pipeline(LoadedConfig::from_raw(raw));
+        let (ctx, surfaces) = messaging_ctx_with_halt_pipeline(
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+        );
 
         let result = prepare_voice_text(&ctx, ChannelId::new(42), "speech", &[])
             .await
@@ -4700,8 +4749,8 @@ mod tests {
         })])
         .unwrap()
         .with_mode(PipelineMode::Enforce);
-        let ctx =
-            messaging_ctx(LoadedConfig::from_raw(raw)).with_pre_send_pipeline(Arc::new(pipeline));
+        let ctx = messaging_ctx(LoadedConfig::try_from_raw(raw).expect("valid test configuration"))
+            .with_pre_send_pipeline(Arc::new(pipeline));
 
         let error = prepare_voice_text(&ctx, ChannelId::new(42), "speech", &[])
             .await
@@ -4729,8 +4778,8 @@ mod tests {
             PreSendPipeline::new(vec![Box::new(ContextCaptureHook(Arc::clone(&captured)))])
                 .expect("valid pipeline")
                 .with_mode(PipelineMode::Enforce);
-        let ctx =
-            messaging_ctx(LoadedConfig::from_raw(raw)).with_pre_send_pipeline(Arc::new(pipeline));
+        let ctx = messaging_ctx(LoadedConfig::try_from_raw(raw).expect("valid test configuration"))
+            .with_pre_send_pipeline(Arc::new(pipeline));
 
         let result = crate::discord::messaging_wire::reply(
             reply(&ctx, ChannelId::new(42), "text", None, ReplyPing::Allow).await,
@@ -4785,7 +4834,7 @@ mod tests {
             id: "42".into(),
             ..Default::default()
         });
-        let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
+        let ctx = messaging_ctx(LoadedConfig::try_from_raw(raw).expect("valid test configuration"));
         assert!(
             check_outbound(&ctx, ChannelId::new(42)).await.is_ok(),
             "channel present in config must be allowed"
@@ -5003,7 +5052,7 @@ mod tests {
             ..Default::default()
         });
         raw.phantom_canary.alert_channel_id = "99".into();
-        LoadedConfig::from_raw(raw)
+        LoadedConfig::try_from_raw(raw).expect("valid test configuration")
     }
 
     /// A thread under an opted-in channel resolves to its parent's policy (as
@@ -5193,7 +5242,10 @@ mod tests {
         let (http, requests, server) = fake_discord_http().await;
         let mut raw = coordinated_config(&addr, 111).raw;
         raw.delivery.text_chunk_limit = 24;
-        let ctx_a = messaging_ctx_with_http(LoadedConfig::from_raw(raw), Arc::clone(&http));
+        let ctx_a = messaging_ctx_with_http(
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+            Arc::clone(&http),
+        );
         let ctx_b = messaging_ctx_with_http(coordinated_config(&addr, 222), http);
 
         let partial = {
@@ -5386,7 +5438,10 @@ mod tests {
 
         let mut raw = coordinated_config(&addr, 111).raw.clone();
         raw.coordination.get_mut("claim-once").unwrap().fail_open = false;
-        let closed = messaging_ctx_with_http(LoadedConfig::from_raw(raw), http);
+        let closed = messaging_ctx_with_http(
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+            http,
+        );
         coordinate_reply(&closed, ChannelId::new(42), MessageId::new(7002))
             .await
             .expect_err("fail_open = false must refuse");
@@ -5405,7 +5460,7 @@ mod tests {
         let (addr, log) = fake_claim_server().await;
         let mut raw = coordinated_config(&addr, 1).raw.clone();
         raw.pre_send.author_id = None;
-        let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
+        let ctx = messaging_ctx(LoadedConfig::try_from_raw(raw).expect("valid test configuration"));
         dione_coordination::set_gateway_bot_id(424_242);
         assert!(
             coordinate_reply(&ctx, ChannelId::new(42), MessageId::new(445))
@@ -5425,7 +5480,7 @@ mod tests {
         let block = raw.coordination.get_mut("claim-once").unwrap();
         block.connect_timeout_ms = 500;
         block.fail_open = fail_open;
-        LoadedConfig::from_raw(raw)
+        LoadedConfig::try_from_raw(raw).expect("valid test configuration")
     }
 
     /// An unreachable coordinator lets the reply through when `fail_open`, and
@@ -5502,7 +5557,7 @@ mod tests {
             require_mention: false,
             ..Default::default()
         });
-        let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
+        let ctx = messaging_ctx(LoadedConfig::try_from_raw(raw).expect("valid test configuration"));
         assert!(
             !coordinate_reply(&ctx, ChannelId::new(43), MessageId::new(7))
                 .await
@@ -5539,7 +5594,7 @@ mod tests {
                 coordinate: Some("claim-once".to_owned()),
                 ..Default::default()
             });
-            LoadedConfig::from_raw(raw)
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration")
         };
 
         let ctx_a = messaging_ctx_with_http(config(111), Arc::clone(&http));
@@ -5595,7 +5650,7 @@ mod tests {
             "[delivery]\nevidence_markers_enabled = false\n",
         )
         .unwrap();
-        assert!(crate::config::reload_config(&path).await.1.is_none());
+        assert!(dione_config::reload_config(&path).await.1.is_none());
         let (http, requests, peer) = fake_discord_http().await;
         let (notifications, _rx) = tokio::sync::mpsc::channel(4);
         let server = crate::mcp::server::DioneServer::new(
@@ -5670,7 +5725,7 @@ mod tests {
         assert!(requests.lock().unwrap().is_empty());
 
         std::fs::write(path.join("config.toml"), "[[channels]]\nid = \"42\"\nrequire_mention = false\n[delivery]\nevidence_markers_enabled = true\n").unwrap();
-        assert!(crate::config::reload_config(&path).await.1.is_none());
+        assert!(dione_config::reload_config(&path).await.1.is_none());
         let enabled = crate::mcp::server::test_helpers::dispatch_request(&server, list)
             .await
             .unwrap();
@@ -5715,7 +5770,7 @@ mod tests {
         );
 
         std::fs::write(path.join("config.toml"), "[[channels]]\nid = \"42\"\nrequire_mention = false\n[contradictionary]\nenabled = true\n[[contradictionary.entries]]\npattern = \"blocked\"\naction = \"block\"\nmatch_mode = \"word\"\n").unwrap();
-        assert!(crate::config::reload_config(&path).await.1.is_none());
+        assert!(dione_config::reload_config(&path).await.1.is_none());
         let before_hold = requests.lock().unwrap().len();
         let held = crate::mcp::server::test_helpers::dispatch_request(
             &server,
@@ -5754,7 +5809,7 @@ mod tests {
             "[delivery]\nevidence_markers_enabled = false\n",
         )
         .unwrap();
-        assert!(crate::config::reload_config(&path).await.1.is_none());
+        assert!(dione_config::reload_config(&path).await.1.is_none());
         let denied = crate::mcp::server::test_helpers::dispatch_request(
             &server,
             call(json!({"channel_id":"42","content":"after revocation"})),

@@ -55,12 +55,12 @@ fn render_error(error: RenderError) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{Config, LoadedConfig},
-        discord::{messaging::MessagingCtx, rendering::render_to_channel},
-        state::new_state,
-    };
+    use crate::discord::messaging::MessagingCtx;
+    use crate::discord::rendering::render_to_channel;
+    use crate::state::new_state;
     use camino::Utf8PathBuf;
+    use dione_config::Config;
+    use dione_config::LoadedConfig;
     use dione_pre_send::HookName;
     use serenity::model::id::ChannelId;
     use std::{io, path::PathBuf, sync::Arc};
@@ -129,7 +129,9 @@ mod tests {
         let ctx = MessagingCtx::new(
             Arc::new(serenity::http::Http::new("fake")),
             new_state(),
-            Arc::new(LoadedConfig::from_raw(Config::default())),
+            Arc::new(
+                LoadedConfig::try_from_raw(Config::default()).expect("valid test configuration"),
+            ),
             Utf8PathBuf::from("/tmp"),
             Arc::new(crate::no_rly::consent::ConsentGate::new(
                 camino::Utf8Path::new("/tmp"),
@@ -159,14 +161,15 @@ mod tests {
 #[cfg(test)]
 mod contract_tests {
     use super::*;
-    use crate::{
-        config::{ChannelConfig, Config, LoadedConfig},
-        discord::{messaging::MessagingCtx, rendering::render_to_channel},
-        ingress_ledger::IngressLedger,
-        no_rly::consent::ConsentGate,
-        state::new_state,
-    };
+    use crate::discord::messaging::MessagingCtx;
+    use crate::discord::rendering::render_to_channel;
+    use crate::ingress_ledger::IngressLedger;
+    use crate::no_rly::consent::ConsentGate;
+    use crate::state::new_state;
     use camino::Utf8PathBuf;
+    use dione_config::ChannelConfig;
+    use dione_config::Config;
+    use dione_config::LoadedConfig;
     use dione_pre_send::{
         AuditTrail, ConstructFeedback, HookContext, HookDecision, HookName, HookOutput,
         PipelineMode, PreSendHook, PreSendPipeline,
@@ -201,7 +204,7 @@ mod contract_tests {
         let ctx = MessagingCtx::new(
             Arc::new(http),
             new_state(),
-            Arc::new(LoadedConfig::from_raw(config)),
+            Arc::new(LoadedConfig::try_from_raw(config).expect("valid test configuration")),
             state_dir.clone(),
             Arc::new(ConsentGate::new(&state_dir)),
             Arc::new(IngressLedger::new()),

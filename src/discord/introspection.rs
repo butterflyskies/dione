@@ -1,6 +1,8 @@
 //! Discord metadata reads with typed observations and failure targets.
 
 use super::visibility::VisibilityRequest;
+use dione_config::LoadedConfig;
+use dione_messages::timestamp::Timestamp;
 use serenity::{
     http::Http,
     model::{
@@ -11,7 +13,6 @@ use serenity::{
 };
 use std::{fmt, num::NonZeroU16, sync::Arc};
 use thiserror::Error;
-use {crate::config::LoadedConfig, dione_messages::timestamp::Timestamp};
 
 /// Dependencies selected at tool-call entry.
 pub(crate) struct IntrospectionCtx {

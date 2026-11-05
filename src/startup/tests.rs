@@ -106,8 +106,8 @@ async fn assert_shutdown_drains(fail: bool) {
     }
 }
 
-fn teams_config() -> crate::config::TeamsConfig {
-    crate::config::TeamsConfig {
+fn teams_config() -> dione_config::TeamsConfig {
+    dione_config::TeamsConfig {
         allowed_conversations: ["conversation/with space".parse().unwrap()].into(),
     }
 }
@@ -131,7 +131,7 @@ async fn startup_teams_absent_and_non_unicode_app_id_skip_configuration() {
         let prepared = prepare_teams(
             &session,
             &state,
-            &crate::config::TeamsConfig::default(),
+            &dione_config::TeamsConfig::default(),
             |key| {
                 assert_eq!(key, "TEAMS_APP_ID");
                 Err(error.clone())
@@ -150,7 +150,7 @@ async fn startup_teams_requires_explicit_nonempty_conversation_scope() {
     let state = Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
     let session = HarnessSession::claude();
     for raw in ["", "[teams]\nallowed_conversations = []"] {
-        let config: crate::config::Config = toml::from_str(raw).unwrap();
+        let config: dione_config::Config = toml::from_str(raw).unwrap();
         let error = prepare_teams(&session, &state, &config.teams, |key| {
             assert_eq!(key, "TEAMS_APP_ID");
             Ok("app".to_owned())
@@ -168,7 +168,7 @@ async fn startup_teams_requires_explicit_nonempty_conversation_scope() {
 
 #[test]
 fn teams_conversation_config_preserves_native_ids_and_rejects_invalid_ids() {
-    let config: crate::config::Config =
+    let config: dione_config::Config =
         toml::from_str("[teams]\nallowed_conversations = ['19:room/with space@thread.v2']")
             .unwrap();
     assert_eq!(
@@ -185,7 +185,7 @@ fn teams_conversation_config_preserves_native_ids_and_rejects_invalid_ids() {
         "[teams]\nallowed_conversations = ['']",
         "[teams]\nallowed_conversations = [42]",
     ] {
-        assert!(toml::from_str::<crate::config::Config>(invalid).is_err());
+        assert!(toml::from_str::<dione_config::Config>(invalid).is_err());
     }
 }
 

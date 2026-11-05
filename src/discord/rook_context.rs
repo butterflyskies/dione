@@ -190,7 +190,9 @@ fn map_error(error: MessagingError) -> ContextError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ChannelConfig, Config, LoadedConfig};
+    use dione_config::ChannelConfig;
+    use dione_config::Config;
+    use dione_config::LoadedConfig;
     use dione_contracts::{ConversationId, ConversationRef, MessageRef};
     use dione_rook::{MessageKey, PageLimit};
     use serde_json::{Value, json};
@@ -254,7 +256,9 @@ mod tests {
                 id: "10".into(),
                 ..Default::default()
             });
-            let config = Arc::new(Mutex::new(LoadedConfig::from_raw(raw)));
+            let config = Arc::new(Mutex::new(
+                LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+            ));
             let current = config.clone();
             let state = crate::state::new_state();
             let shared_state = state.clone();
@@ -326,7 +330,8 @@ mod tests {
         assert_eq!(native["reference"]["message_id"], "29");
         assert_eq!(native["attachments"][0]["filename"], "sample.txt");
         assert!(!native["edited_at"].is_null());
-        *fixture.config.lock().unwrap() = LoadedConfig::from_raw(Config::default());
+        *fixture.config.lock().unwrap() =
+            LoadedConfig::try_from_raw(Config::default()).expect("valid test configuration");
         assert!(matches!(
             fixture.provider.read(&request).await.unwrap_err().kind,
             ContextErrorKind::AccessDenied
@@ -367,7 +372,8 @@ mod tests {
         let calls = std::sync::atomic::AtomicUsize::new(0);
         fixture.provider.context = Arc::new(move || {
             if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 {
-                *config.lock().unwrap() = LoadedConfig::from_raw(Config::default());
+                *config.lock().unwrap() = LoadedConfig::try_from_raw(Config::default())
+                    .expect("valid test configuration");
             }
             factory()
         });

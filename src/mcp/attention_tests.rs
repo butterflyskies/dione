@@ -6,7 +6,33 @@ mod boundary_acceptance;
 mod lifecycle_acceptance;
 
 use super::*;
+use crate::attention::admission::AdmissionController;
+use crate::attention::admission::JudgmentWork;
+use crate::attention::admission::Submission;
+use crate::attention::control::AttentionCommand;
+use crate::attention::control::execute;
+use crate::attention::runtime::AttentionRuntime;
+use crate::attention::source::SourceResolver;
+use crate::attention::source::now_ms;
+use crate::codex::CodexEventQueue;
+use crate::discord::events::MessageEvent;
+use crate::discord::events::MessageTargeting;
 use dione_access_requests::AccessQueue;
+use dione_attention::config::AttentionBrief;
+use dione_attention::config::AttentionConfig;
+use dione_attention::config::AttentionMode;
+use dione_attention::config::NoticeMode;
+use dione_attention::config::RoomAttention;
+use dione_attention::provider::TypeSafeProvider;
+use dione_attention::types::Admission;
+use dione_attention::types::ArtifactDigest;
+use dione_attention::types::DecisionRecord;
+use dione_attention::types::DeliveryState;
+use dione_attention::types::SourceAuthorKind;
+use dione_attention::types::SourceKey;
+use dione_attention::types::SourceVersion;
+use dione_attention::types::content_hash;
+use dione_config::ConfigRuntime;
 use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use parking_lot::Mutex as SyncMutex;
 use serde_json::{Value, json};
@@ -17,30 +43,9 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::Semaphore,
 };
-use {
-    crate::{
-        attention::{
-            admission::{AdmissionController, JudgmentWork, Submission},
-            control::{AttentionCommand, execute},
-            runtime::AttentionRuntime,
-            source::{SourceResolver, now_ms},
-        },
-        codex::CodexEventQueue,
-        config::ConfigRuntime,
-        discord::events::{MessageEvent, MessageTargeting},
-    },
-    dione_attention::{
-        config::{AttentionBrief, AttentionConfig, AttentionMode, NoticeMode, RoomAttention},
-        provider::TypeSafeProvider,
-        types::{
-            Admission, ArtifactDigest, DecisionRecord, DeliveryState, SourceAuthorKind, SourceKey,
-            SourceVersion, content_hash,
-        },
-    },
-};
 
 fn scenario<F: Future<Output = ()>>(run: impl FnOnce() -> F) {
-    let _configuration = crate::config::config_cache_guard();
+    let _configuration = crate::config_test_guard();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -478,7 +483,7 @@ impl Fixture {
     }
 
     async fn begin(&mut self, event: MessageEvent) -> Option<JudgmentWork> {
-        let config = crate::config::load_config(&self.path);
+        let config = dione_config::load_config(&self.path);
         let (ordinary, work) = match begin_attention(
             &mut self.admissions,
             self.attention.as_ref(),
@@ -508,7 +513,7 @@ impl Fixture {
     async fn finish(&mut self, record: DecisionRecord) {
         let ready = self
             .admissions
-            .complete(record, &crate::config::load_config(&self.path));
+            .complete(record, &dione_config::load_config(&self.path));
         forward_attention_results(
             ready,
             &mut self.admissions,
@@ -570,7 +575,7 @@ impl Fixture {
     }
 
     async fn mode(&mut self, mode: AttentionMode) {
-        let mut settings = crate::config::load_config(&self.path).raw.attention.clone();
+        let mut settings = dione_config::load_config(&self.path).raw.attention.clone();
         settings.mode = mode;
         self.control(AttentionCommand::Configure { settings }).await;
         let ready = attention_transition(&mut self.admissions, &self.attention).await;
@@ -587,7 +592,7 @@ impl Fixture {
     }
 
     async fn drain(&mut self) -> Vec<Value> {
-        let config = crate::config::load_config(&self.path);
+        let config = dione_config::load_config(&self.path);
         let pending = self.buffer.flush_all();
         let flushed = deliver_flushed(
             &test_connection_for_queue(self.queue.clone()),
@@ -643,7 +648,7 @@ fn off_and_log_share_actual_forwarding_while_direct_work_bypasses_a_held_judgmen
         assert_eq!(fixture.network.provider_requests().len(), 1);
 
         fixture.mode(AttentionMode::On).await;
-        let mut settings = crate::config::load_config(&fixture.path)
+        let mut settings = dione_config::load_config(&fixture.path)
             .raw
             .attention
             .clone();
@@ -907,11 +912,11 @@ fn provider_faults_use_ordinary_delivery_and_recovery_does_not_override_controls
         assert!(fixture.attention.health().degraded.is_none());
         assert_eq!(fixture.attention.health().recoveries, 1);
         assert_eq!(
-            crate::config::load_config(&fixture.path).raw.attention.mode,
+            dione_config::load_config(&fixture.path).raw.attention.mode,
             AttentionMode::On
         );
         assert_eq!(
-            crate::config::load_config(&fixture.path)
+            dione_config::load_config(&fixture.path)
                 .raw
                 .attention
                 .notices,
@@ -937,7 +942,7 @@ fn provider_faults_use_ordinary_delivery_and_recovery_does_not_override_controls
 fn timeout_and_metadata_failure_leave_direct_and_ambient_baseline_delivery_live() {
     scenario(|| async {
         let mut fixture = Fixture::new(AttentionMode::On).await;
-        let mut settings = crate::config::load_config(&fixture.path)
+        let mut settings = dione_config::load_config(&fixture.path)
             .raw
             .attention
             .clone();
@@ -1058,7 +1063,7 @@ fn missing_evidence_media_and_untrusted_controls_never_become_enforcement() {
             .await
             .unwrap();
         assert_eq!(
-            crate::config::load_config(&fixture.path).raw.attention.mode,
+            dione_config::load_config(&fixture.path).raw.attention.mode,
             AttentionMode::On
         );
         let forged = fixture.rpc(json!({"operation": "feedback", "record_id": "x", "label": "wanted_later", "annotator": "another-recipient"})).await;
@@ -1073,7 +1078,7 @@ fn missing_evidence_media_and_untrusted_controls_never_become_enforcement() {
         )
         .unwrap();
         ConfigRuntime::new(fixture.path.clone()).reload().await;
-        let mut rejected = crate::config::load_config(&fixture.path)
+        let mut rejected = dione_config::load_config(&fixture.path)
             .raw
             .attention
             .clone();
@@ -1109,7 +1114,7 @@ fn missing_evidence_media_and_untrusted_controls_never_become_enforcement() {
             "off"
         );
 
-        let mut settings = crate::config::load_config(&fixture.path)
+        let mut settings = dione_config::load_config(&fixture.path)
             .raw
             .attention
             .clone();
@@ -1450,7 +1455,7 @@ fn recipient_workflow_promotes_only_evaluated_policy_and_recovers_only_unconfirm
             "replay, fitting, and evaluation must reuse captured scores"
         );
 
-        let original_settings = crate::config::load_config(&fixture.path)
+        let original_settings = dione_config::load_config(&fixture.path)
             .raw
             .attention
             .clone();

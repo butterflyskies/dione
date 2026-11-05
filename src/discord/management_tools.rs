@@ -6,13 +6,14 @@ use super::{
     reply_tool::ReplyServices,
     tool_arguments::{ArgumentError, ArgumentErrorKind, parse_id, parse_optional_id},
 };
-use crate::{
-    config::load_config,
-    mcp::tool_registry::{
-        McpTool, RegisteredTool, ToolCallError, ToolCallErrorKind, ToolDefinition, ToolName,
-        ToolNameError,
-    },
-};
+use crate::mcp::tool_registry::McpTool;
+use crate::mcp::tool_registry::RegisteredTool;
+use crate::mcp::tool_registry::ToolCallError;
+use crate::mcp::tool_registry::ToolCallErrorKind;
+use crate::mcp::tool_registry::ToolDefinition;
+use crate::mcp::tool_registry::ToolName;
+use crate::mcp::tool_registry::ToolNameError;
+use dione_config::load_config;
 use dione_discord_identities::Snowflake;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};

@@ -2,6 +2,7 @@ use camino::Utf8Path;
 use serde_json::{Value, json};
 use toml_edit::{Array, DocumentMut, Item, Table, value};
 
+/// A retained editor or persistence error with its concrete cause.
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 // ── DiscordId newtype ────────────────────────────────────────────────────────
@@ -11,6 +12,7 @@ pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 pub struct DiscordId(u64);
 
 impl DiscordId {
+    /// Parses a nonzero numeric Discord ID for editor input.
     pub fn parse(s: &str) -> Result<Self, String> {
         let id = s
             .parse::<u64>()
@@ -108,6 +110,7 @@ impl ConfigStore {
 
     // ── Channel operations ───────────────────────────────────────────────────
 
+    /// Returns the array index of the channel with the exact configured ID.
     pub fn find_channel(&self, id: &str) -> Option<usize> {
         self.doc
             .get("channels")
@@ -118,12 +121,14 @@ impl ConfigStore {
             })
     }
 
+    /// Creates the channels array when it is absent.
     pub fn ensure_channels(&mut self) {
         self.doc
             .entry("channels")
             .or_insert_with(|| Item::ArrayOfTables(toml_edit::ArrayOfTables::new()));
     }
 
+    /// Borrows the editable channels array, rejecting an incompatible value.
     pub fn channels_mut(&mut self) -> Result<&mut toml_edit::ArrayOfTables, BoxError> {
         self.doc
             .get_mut("channels")
@@ -131,6 +136,7 @@ impl ConfigStore {
             .ok_or_else(|| "no channels in config".into())
     }
 
+    /// Adds a channel, rejecting an already configured ID.
     pub fn add_channel_entry(
         &mut self,
         id: &str,
@@ -150,6 +156,7 @@ impl ConfigStore {
         Ok(())
     }
 
+    /// Removes the channel with the exact configured ID.
     pub fn remove_channel_entry(&mut self, id: &str) -> Result<(), BoxError> {
         let idx = self
             .find_channel(id)
@@ -158,6 +165,7 @@ impl ConfigStore {
         Ok(())
     }
 
+    /// Updates the supplied fields of an existing channel.
     pub fn update_channel_entry(
         &mut self,
         id: &str,
@@ -185,6 +193,7 @@ impl ConfigStore {
 
     // ── Access operations ────────────────────────────────────────────────────
 
+    /// Creates the access table and allowlist when they are absent.
     pub fn ensure_access(&mut self) {
         if !self.doc.contains_key("access") {
             self.doc["access"] = Item::Table(Table::new());
@@ -195,6 +204,7 @@ impl ConfigStore {
         }
     }
 
+    /// Borrows the access allowlist, rejecting an incompatible value.
     pub fn allow_from_mut(&mut self) -> Result<&mut Array, BoxError> {
         self.doc
             .get_mut("access")
@@ -204,11 +214,13 @@ impl ConfigStore {
             .ok_or_else(|| "allow_from is not an array".into())
     }
 
+    /// Writes the supplied direct-message policy spelling.
     pub fn set_dm_policy(&mut self, policy: &str) {
         self.ensure_access();
         self.doc["access"]["dm_policy"] = value(policy);
     }
 
+    /// Adds an allowed user, rejecting a duplicate entry.
     pub fn add_to_allow_from(&mut self, user_id: &str) -> Result<(), BoxError> {
         self.ensure_access();
         let allow_from = self.allow_from_mut()?;
@@ -219,6 +231,7 @@ impl ConfigStore {
         Ok(())
     }
 
+    /// Adds an allowed user only when the exact spelling is absent.
     pub fn ensure_in_allow_from(&mut self, user_id: &str) -> Result<(), BoxError> {
         self.ensure_access();
         let allow_from = self.allow_from_mut()?;
@@ -228,6 +241,7 @@ impl ConfigStore {
         Ok(())
     }
 
+    /// Removes an allowed user, rejecting a missing entry.
     pub fn remove_from_allow_from(&mut self, user_id: &str) -> Result<(), BoxError> {
         let access = self
             .doc

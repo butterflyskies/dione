@@ -22,7 +22,7 @@ pub enum PermissionError {
 /// handler in `events.rs` can parse them.
 pub async fn send_permission_request(
     http: &serenity::http::Http,
-    config: &crate::config::LoadedConfig,
+    config: &dione_config::LoadedConfig,
     state: &State,
     request_id: &str,
     tool_name: &str,

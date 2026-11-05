@@ -1,11 +1,11 @@
 //! MCP projections of typed access requests and decisions.
 
-use crate::{
-    config::ConfigDurability,
-    discord::access::{
-        AccessApproval, AccessDenial, AccessError, AccessErrorKind, PendingAccessRequest,
-    },
-};
+use crate::discord::access::AccessApproval;
+use crate::discord::access::AccessDenial;
+use crate::discord::access::AccessError;
+use crate::discord::access::AccessErrorKind;
+use crate::discord::access::PendingAccessRequest;
+use dione_config::ConfigDurability;
 use serde_json::{Value, json};
 
 pub(super) fn requests(requests: Vec<PendingAccessRequest>) -> Value {
@@ -72,12 +72,11 @@ fn access_error(error: AccessError) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{Config, LoadedConfig},
-        discord::access::AccessCtx,
-    };
+    use crate::discord::access::AccessCtx;
     use camino::Utf8PathBuf;
     use dione_access_requests::{AccessQueue, AccessRequest};
+    use dione_config::Config;
+    use dione_config::LoadedConfig;
     use serenity::model::id::UserId;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -171,7 +170,7 @@ mod tests {
             assert!(ctx.queue.lock().await.list().is_empty());
             assert!(AccessQueue::load(&ctx.state_dir).list().is_empty());
             assert_eq!(
-                crate::config::load_config(&ctx.state_dir).access.allow_from,
+                dione_config::load_config(&ctx.state_dir).access.allow_from,
                 vec!["42"]
             );
             assert_eq!(
@@ -205,15 +204,26 @@ mod tests {
     async fn access_contract_unknown_durability_retains_request_and_retry_completes() {
         let (_dir, ctx) = access_fixture("");
         assert!(ctx.queue.lock().await.enqueue(pending(42), 50));
-        let failure =
-            crate::config::fail_mutation_dir_fsync_for_test(ctx.state_dir.join("config.toml"));
-        let mut receipt = approval(ctx.access.approve(UserId::new(42)).await);
+        let request = ctx.queue.lock().await.peek(42).cloned().unwrap();
+        let mut outcome = dione_config::ConfigRuntime::new(ctx.state_dir.clone())
+            .mutate(|editor| editor.ensure_in_allow_from("42"))
+            .await
+            .unwrap();
+        assert_eq!(outcome.durability, ConfigDurability::Durable);
+        outcome.durability = ConfigDurability::Unknown {
+            warning: format!(
+                "application Unknown receipt at generation {}",
+                outcome.generation
+            ),
+        };
+        let mut receipt = approval(Ok(ctx
+            .access
+            .complete_approval(UserId::new(42), request, outcome)
+            .await));
         let first_generation = normalize_generation(&mut receipt);
         assert_eq!(
             receipt["warning"],
-            format!(
-                "config applied at generation {first_generation}, but parent-directory fsync failed: injected mutation parent-directory fsync failure"
-            )
+            format!("application Unknown receipt at generation {first_generation}")
         );
         receipt["warning"] = json!("<warning with verified generation>");
         assert_eq!(
@@ -227,10 +237,9 @@ mod tests {
         assert!(ctx.queue.lock().await.peek(42).is_some());
         assert!(AccessQueue::load(&ctx.state_dir).peek(42).is_some());
         assert_eq!(
-            crate::config::load_config(&ctx.state_dir).access.allow_from,
+            dione_config::load_config(&ctx.state_dir).access.allow_from,
             vec!["42"]
         );
-        drop(failure);
         let mut retry = approval(ctx.access.approve(UserId::new(42)).await);
         assert!(normalize_generation(&mut retry) > first_generation);
         assert_eq!(
@@ -242,7 +251,7 @@ mod tests {
         );
         assert!(AccessQueue::load(&ctx.state_dir).list().is_empty());
         assert_eq!(
-            crate::config::load_config(&ctx.state_dir).access.allow_from,
+            dione_config::load_config(&ctx.state_dir).access.allow_from,
             vec!["42"]
         );
     }
@@ -283,7 +292,7 @@ mod tests {
                     })
                 );
                 assert_eq!(
-                    crate::config::load_config(&ctx.state_dir).access.allow_from,
+                    dione_config::load_config(&ctx.state_dir).access.allow_from,
                     vec!["42"]
                 );
             } else {

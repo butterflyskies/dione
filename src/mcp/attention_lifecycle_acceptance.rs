@@ -241,7 +241,7 @@ fn unavailable_final_guard_retries_committed_fifo_without_replay_or_source_leaka
             records.push(record);
         }
 
-        let config = crate::config::load_config(&fixture.path);
+        let config = dione_config::load_config(&fixture.path);
         assert!(
             fixture
                 .admissions
@@ -477,7 +477,7 @@ fn duplicate_overlap_edit_delete_and_reconnect_never_reintroduce_an_old_excerpt(
             ))
             .await
             .unwrap();
-        let config = crate::config::load_config(&fixture.path);
+        let config = dione_config::load_config(&fixture.path);
         forward_ordinary(
             NotificationEvent::MessageEdit {
                 chat_id: source.channel_id,
@@ -537,7 +537,7 @@ fn duplicate_overlap_edit_delete_and_reconnect_never_reintroduce_an_old_excerpt(
                 message_id: source.message_id,
                 thread_parent_id: None,
             },
-            &crate::config::load_config(&fixture.path),
+            &dione_config::load_config(&fixture.path),
             &mut fixture.buffer,
             &fixture.bells,
             &test_connection_for_queue(fixture.queue.clone()),
@@ -619,7 +619,7 @@ fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipt
         assert!(
             fixture
                 .admissions
-                .complete(stale_result, &crate::config::load_config(&fixture.path))
+                .complete(stale_result, &dione_config::load_config(&fixture.path))
                 .is_empty(),
             "an old-incarnation result cannot enter the restarted controller"
         );
@@ -1028,7 +1028,7 @@ fn reconstruct_prior_compiled_snapshot(
 
 async fn assert_identity_change_race(axis: IdentityAxis, base: u64) {
     let mut fixture = Fixture::new(AttentionMode::Log).await;
-    let current_model = crate::config::load_config(&fixture.path)
+    let current_model = dione_config::load_config(&fixture.path)
         .raw
         .attention
         .model
@@ -1046,7 +1046,7 @@ async fn assert_identity_change_race(axis: IdentityAxis, base: u64) {
         .unwrap();
 
     if matches!(axis, IdentityAxis::Model) {
-        let mut settings = crate::config::load_config(&fixture.path)
+        let mut settings = dione_config::load_config(&fixture.path)
             .raw
             .attention
             .clone();
@@ -1102,7 +1102,7 @@ async fn assert_identity_change_race(axis: IdentityAxis, base: u64) {
     assert_eq!(fixture.network.provider_requests().len(), before + 1);
 
     if matches!(axis, IdentityAxis::Model) {
-        let mut settings = crate::config::load_config(&fixture.path)
+        let mut settings = dione_config::load_config(&fixture.path)
             .raw
             .attention
             .clone();
@@ -1126,7 +1126,7 @@ async fn assert_identity_change_race(axis: IdentityAxis, base: u64) {
 
     fixture.attention = runtime_for(fixture.path.clone(), &fixture.network).await;
     fixture.admissions = AdmissionController::default();
-    let current_compatibility = crate::config::load_config(&fixture.path)
+    let current_compatibility = dione_config::load_config(&fixture.path)
         .raw
         .attention
         .compatibility();
@@ -1315,7 +1315,7 @@ enum KnownLoss {
 async fn assert_known_membership_loss(kind: KnownLoss, base: u64) {
     let mut fixture = Fixture::new(AttentionMode::Log).await;
     let policy = prepare_policy(&mut fixture, base, true).await;
-    let recipient = crate::config::load_config(&fixture.path)
+    let recipient = dione_config::load_config(&fixture.path)
         .raw
         .attention
         .recipient
@@ -1428,7 +1428,7 @@ fn membership_revalidation_is_finite_and_distinguishes_outage_from_known_loss() 
             })
             .await
             .unwrap();
-        let mut settings = crate::config::load_config(&fixture.path)
+        let mut settings = dione_config::load_config(&fixture.path)
             .raw
             .attention
             .clone();
@@ -1471,7 +1471,7 @@ fn membership_revalidation_is_finite_and_distinguishes_outage_from_known_loss() 
         tokio::time::resume();
 
         let digest = policy.digest.clone();
-        let recipient = crate::config::load_config(&fixture.path)
+        let recipient = dione_config::load_config(&fixture.path)
             .raw
             .attention
             .recipient
@@ -1629,7 +1629,7 @@ fn known_deleted_parent_is_withheld_at_provider_capture_even_if_source_http_is_s
         );
         assert_eq!(delivered[0]["params"]["content"], trigger_text);
         assert_eq!(
-            crate::config::load_config(&fixture.path).raw.attention.mode,
+            dione_config::load_config(&fixture.path).raw.attention.mode,
             AttentionMode::Log,
             "message text is evidence, not an attention control command"
         );
@@ -1938,7 +1938,7 @@ fn deleted_deferred_source_is_absent_from_serialized_denial_and_sink_transcript(
                 message_id: source.message_id,
                 thread_parent_id: None,
             },
-            &crate::config::load_config(&fixture.path),
+            &dione_config::load_config(&fixture.path),
             &mut fixture.buffer,
             &fixture.bells,
             &test_connection_for_queue(fixture.queue.clone()),

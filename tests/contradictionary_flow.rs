@@ -7,28 +7,33 @@
 //! a real HTTP layer, so we verify the conditions that trigger the self-react).
 
 use camino::Utf8PathBuf;
+use dione::contradictionary_diary::DIARY_FILE_NAME;
+use dione::discord::messaging;
+use dione::discord::messaging::MessagingCtx;
+use dione::discord::messaging::MessagingError;
+use dione::discord::messaging::MessagingErrorKind;
+use dione::discord::messaging::ReplyOutcome;
+use dione::discord::messaging::Report;
+use dione::no_rly::consent::BounceTicket;
+use dione::no_rly::consent::ConsentGate;
+use dione::no_rly::consent::DeliveryCause;
+use dione::no_rly::consent::DeliveryProgress;
+use dione::no_rly::consent::RejectedHandle;
+use dione::no_rly::consent::Rephrased;
+use dione::no_rly::journal::JOURNAL_FILE_NAME;
+use dione::no_rly::queue::HoldHandle;
+use dione::state::new_state;
+use dione_config::ChannelConfig;
+use dione_config::Config;
+use dione_config::LoadedConfig;
+use dione_config::reload_config;
+use dione_contradictionary::Action;
+use dione_contradictionary::Contradictionary;
+use dione_contradictionary::Entry;
+use dione_contradictionary::MatchMode;
 use serenity::model::id::ChannelId;
 use std::{fs, sync::Arc};
 use tempfile::TempDir;
-use {
-    dione::{
-        config::{ChannelConfig, Config, LoadedConfig, reload_config},
-        contradictionary_diary::DIARY_FILE_NAME,
-        discord::messaging::{
-            self, MessagingCtx, MessagingError, MessagingErrorKind, ReplyOutcome, Report,
-        },
-        no_rly::{
-            consent::{
-                BounceTicket, ConsentGate, DeliveryCause, DeliveryProgress, RejectedHandle,
-                Rephrased,
-            },
-            journal::JOURNAL_FILE_NAME,
-            queue::HoldHandle,
-        },
-        state::new_state,
-    },
-    dione_contradictionary::{Action, Contradictionary, Entry, MatchMode},
-};
 
 // ── Test data: the actual substrate tells and group vocabulary ───────────────
 

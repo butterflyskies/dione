@@ -654,7 +654,7 @@ impl IngressLedger {
         message_id: MessageId,
         channel_id: ChannelId,
         expected_hash: &str,
-        config: &crate::config::LoadedConfig,
+        config: &dione_config::LoadedConfig,
         targeting: crate::discord::events::MessageTargeting,
     ) -> Result<(), SourceDeliveryFailure> {
         let mut state = self

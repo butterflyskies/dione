@@ -1,5 +1,15 @@
 //! Recipient-local attention execution. Network work never owns the ingress loop.
 
+use crate::discord::events::MessageTargeting;
+use crate::discord::events::NotificationEvent;
+use crate::discord::messaging;
+use crate::discord::messaging::MessagingCtx;
+use crate::ingress_ledger::SourceDeliveryFailure;
+use crate::no_rly::consent::ConsentGate;
+use dione_attention::delivery::AttentionGuardFailure as Failure;
+use dione_config::attention_effect_guard;
+use dione_config::load_config;
+use dione_config::subscribe_generation;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
@@ -26,18 +36,6 @@ use {
         },
         types::*,
     },
-};
-use {
-    crate::{
-        config::{attention_effect_guard, load_config, subscribe_generation},
-        discord::{
-            events::{MessageTargeting, NotificationEvent},
-            messaging::{self, MessagingCtx},
-        },
-        ingress_ledger::SourceDeliveryFailure,
-        no_rly::consent::ConsentGate,
-    },
-    dione_attention::delivery::AttentionGuardFailure as Failure,
 };
 
 /// An inspectable replay baseline, never an implicitly promoted enforcement policy.
@@ -438,7 +436,7 @@ impl AttentionRuntime {
 
     fn provider(
         &self,
-        config: &crate::config::LoadedConfig,
+        config: &dione_config::LoadedConfig,
     ) -> Result<Arc<TypeSafeProvider>, ProviderFailure> {
         #[cfg(test)]
         if let Some(provider) = &self.test_provider {
@@ -1160,7 +1158,17 @@ impl AttentionHealth {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::attention::admission::AdmissionController;
+    use crate::attention::admission::Submission;
+    use crate::attention::source::now_ms;
+    use crate::discord::events::NotificationEvent;
     use camino::Utf8PathBuf;
+    use dione_attention::config::AttentionBrief;
+    use dione_attention::config::AttentionConfig;
+    use dione_attention::config::NoticeMode;
+    use dione_attention::config::RoomAttention;
+    use dione_attention::provider::TypeSafeProvider;
+    use dione_config::ConfigRuntime;
     use parking_lot::Mutex as SyncMutex;
     use serde_json::{Value, json};
     use serenity::model::id::{ChannelId, MessageId, UserId};
@@ -1172,23 +1180,9 @@ mod tests {
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
     };
-    use {
-        crate::{
-            attention::{
-                admission::{AdmissionController, Submission},
-                source::now_ms,
-            },
-            config::ConfigRuntime,
-            discord::events::NotificationEvent,
-        },
-        dione_attention::{
-            config::{AttentionBrief, AttentionConfig, NoticeMode, RoomAttention},
-            provider::TypeSafeProvider,
-        },
-    };
 
     fn scenario<F: Future<Output = ()>>(run: impl FnOnce() -> F) {
-        let _configuration = crate::config::config_cache_guard();
+        let _configuration = crate::config_test_guard();
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

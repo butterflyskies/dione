@@ -4,27 +4,29 @@
 //! output, verifying coalescing, rate limiting, bypass behavior, and config
 //! integration.
 
+use dione::discord::events::MessageEvent;
+use dione::discord::events::NotificationEvent;
+use dione::discord::scheduling::DeliveryBuffer;
+use dione::mcp::server::test_helpers;
+use dione_config::ChannelConfig;
+use dione_config::Config;
+use dione_config::DeliveryConfig;
+use dione_config::LoadedConfig;
+use dione_config::RateLimitTomlConfig;
 use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use dione_delivery_scheduler::BufferResult;
+use dione_messages::timestamp::Timestamp;
+use dione_rate_limiter::ChannelRef;
+use dione_rate_limiter::OverflowPolicy;
+use dione_rate_limiter::ParticipantId;
+use dione_rate_limiter::RateLimitConfig;
+use dione_rate_limiter::RateLimitDecision;
+use dione_rate_limiter::RateLimiter;
+use dione_rate_limiter::ScopeConfig;
 use serenity::model::id::{ChannelId, MessageId, UserId};
 use std::{
     collections::HashMap,
     time::{Duration, Instant},
-};
-use {
-    dione::{
-        config::{ChannelConfig, Config, DeliveryConfig, LoadedConfig, RateLimitTomlConfig},
-        discord::{
-            events::{MessageEvent, NotificationEvent},
-            scheduling::DeliveryBuffer,
-        },
-        mcp::server::test_helpers,
-    },
-    dione_messages::timestamp::Timestamp,
-    dione_rate_limiter::{
-        ChannelRef, OverflowPolicy, ParticipantId, RateLimitConfig, RateLimitDecision, RateLimiter,
-        ScopeConfig,
-    },
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -941,7 +943,7 @@ require_mention = true
 "#;
     fs::write(config_path.as_std_path(), toml.as_bytes()).unwrap();
 
-    let (loaded, error) = dione::config::reload_config(&state_dir).await;
+    let (loaded, error) = dione_config::reload_config(&state_dir).await;
     assert!(error.is_none(), "config should parse without errors");
 
     // Rate limit config.

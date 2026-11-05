@@ -11,7 +11,20 @@ use super::{
         parse_id, parse_optional_bool, parse_optional_id, sentex_handles_schema,
     },
 };
+use crate::ingress_ledger::IngressLedger;
+use crate::mcp::tool_registry::McpTool;
+use crate::mcp::tool_registry::RegisteredTool;
+use crate::mcp::tool_registry::ToolCallError;
+use crate::mcp::tool_registry::ToolCallErrorKind;
+use crate::mcp::tool_registry::ToolDefinition;
+use crate::mcp::tool_registry::ToolDiscoveryContext;
+use crate::mcp::tool_registry::ToolName;
+use crate::mcp::tool_registry::ToolNameError;
+use crate::no_rly::consent::ConsentGate;
+use crate::state::State;
 use camino::Utf8PathBuf;
+use dione_config::load_config;
+use dione_evidence::SentexHandles;
 use dione_pre_send::HookName;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -21,19 +34,6 @@ use serenity::{
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use {
-    crate::{
-        config::load_config,
-        ingress_ledger::IngressLedger,
-        mcp::tool_registry::{
-            McpTool, RegisteredTool, ToolCallError, ToolCallErrorKind, ToolDefinition,
-            ToolDiscoveryContext, ToolName, ToolNameError,
-        },
-        no_rly::consent::ConsentGate,
-        state::State,
-    },
-    dione_evidence::SentexHandles,
-};
 
 pub(crate) struct ReplyServices {
     http: Arc<Http>,
@@ -62,7 +62,7 @@ impl ReplyServices {
             event_tx,
         }
     }
-    pub(crate) fn messaging_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> MessagingCtx {
+    pub(crate) fn messaging_ctx(&self, config: Arc<dione_config::LoadedConfig>) -> MessagingCtx {
         let mut ctx = MessagingCtx::new(
             self.http.clone(),
             self.state.clone(),

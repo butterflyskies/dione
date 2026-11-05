@@ -1,12 +1,13 @@
 use camino::Utf8PathBuf;
-use dione::{
-    config::{Config, DmPolicy, LoadedConfig},
-    mcp::server::{DioneServer, test_helpers},
-    no_rly::consent::ConsentGate,
-    state::new_state,
-    tracing_channel::TraceLevelController,
-};
+use dione::mcp::server::DioneServer;
+use dione::mcp::server::test_helpers;
+use dione::no_rly::consent::ConsentGate;
+use dione::state::new_state;
+use dione::tracing_channel::TraceLevelController;
 use dione_access_requests::AccessQueue;
+use dione_config::Config;
+use dione_config::DmPolicy;
+use dione_config::LoadedConfig;
 use serde_json::{Value, json};
 use serenity::http::Http;
 use std::sync::Arc;
@@ -70,7 +71,6 @@ fn config_projection(config: &LoadedConfig) -> Value {
             DmPolicy::Queue => "queue",
             DmPolicy::Drop => "drop",
             DmPolicy::Disabled => "disabled",
-            _ => "unknown",
         },
         "allow_from": config.raw.access.allow_from,
         "admins": config.raw.access.admins,
@@ -83,7 +83,7 @@ async fn call_config_tool(state_dir: &Utf8PathBuf, name: &str, arguments: Value)
     let _config_dispatch = CONFIG_DISPATCH_LOCK.lock().await;
     // Some cases deliberately install invalid sidecars; their production
     // dispatch error is asserted below, not rejected by fixture setup.
-    let _ = dione::config::ConfigRuntime::new(state_dir.clone())
+    let _ = dione_config::ConfigRuntime::new(state_dir.clone())
         .reload()
         .await;
     let server = make_server(state_dir).await;
@@ -115,7 +115,7 @@ async fn call_config_tool(state_dir: &Utf8PathBuf, name: &str, arguments: Value)
             "the ordinary production path must return a typed durability receipt"
         );
         let disk = load_config_from_disk(state_dir);
-        let live = dione::config::load_config(state_dir);
+        let live = dione_config::load_config(state_dir);
         assert_eq!(
             config_projection(&disk),
             config_projection(&live),

@@ -1,11 +1,12 @@
 //! Typed failures from process composition and offline commands.
-use crate::{
-    config::StartupConfigError,
-    harness::HarnessSessionError,
-    mcp::{RegistrationError, ToolNameError, server::ServerConstructionError},
-    teams::{edge::TeamsEdgeError, runtime::TeamsRuntimeError},
-};
+use crate::harness::HarnessSessionError;
+use crate::mcp::RegistrationError;
+use crate::mcp::ToolNameError;
+use crate::mcp::server::ServerConstructionError;
+use crate::teams::edge::TeamsEdgeError;
+use crate::teams::runtime::TeamsRuntimeError;
 use camino::Utf8PathBuf;
+use dione_config::StartupConfigError;
 use dione_pre_send::PipelineError;
 use std::{env::VarError, io, net::AddrParseError};
 use thiserror::Error;

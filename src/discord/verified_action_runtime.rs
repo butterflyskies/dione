@@ -8,12 +8,13 @@ use super::verified_action::{
     RepresentedPrincipal, ResolutionFailure, ResolutionFailureClass, TransportProvider, Unresolved,
     VerifiedAppAction,
 };
-use crate::{
-    config::TrustedWebhookCreators,
-    pluralkit::{PkResolveError, PkResolver, VerifiedPkFacts},
-    state::{State, observe_webhook_creator},
-};
+use crate::pluralkit::PkResolveError;
+use crate::pluralkit::PkResolver;
+use crate::pluralkit::VerifiedPkFacts;
+use crate::state::State;
+use crate::state::observe_webhook_creator;
 use chrono::Utc;
+use dione_config::TrustedWebhookCreators;
 use serenity::{
     http::Http,
     model::{channel::Message, event::MessageUpdateEvent},
@@ -211,7 +212,7 @@ impl DiscordTransportVerifier {
 
 /// Builds the gate input from one already-selected policy in one loaded snapshot.
 pub(crate) fn fresh_policy_snapshot(
-    config: &crate::config::LoadedConfig,
+    config: &dione_config::LoadedConfig,
     gate_channel_id: u64,
 ) -> Option<FreshPolicySnapshot> {
     let policy = config.channel_policy(gate_channel_id)?;
@@ -642,16 +643,17 @@ mod tests {
         use super::super::verified_action::{VerifiedActionGate, VerifiedGateVerdict};
         use dione_pluralkit_identities::PLURALKIT_APPLICATION_ID;
 
-        let mut raw = crate::config::Config::default();
+        let mut raw = dione_config::Config::default();
         raw.access.trusted_webhook_creators =
             vec![PLURALKIT_APPLICATION_ID.to_string(), "1".to_string()];
-        raw.channels.push(crate::config::ChannelConfig {
+        raw.channels.push(dione_config::ChannelConfig {
             id: "20".into(),
             require_mention: false,
             allow_from: vec!["42".into()],
             ..Default::default()
         });
-        let config = crate::config::LoadedConfig::from_raw(raw);
+        let config =
+            dione_config::LoadedConfig::try_from_raw(raw).expect("valid test configuration");
         assert!(config.is_trusted_webhook_creator(1));
 
         let verifier = DiscordTransportVerifier::new();
@@ -738,16 +740,16 @@ mod tests {
         assert!(VerifiedUpdateCandidate::from_gateway(&event, Some(&old), Some(&new)).is_err());
     }
 
-    fn config_with_channel(channel: crate::config::ChannelConfig) -> crate::config::LoadedConfig {
-        let mut raw = crate::config::Config::default();
+    fn config_with_channel(channel: dione_config::ChannelConfig) -> dione_config::LoadedConfig {
+        let mut raw = dione_config::Config::default();
         raw.channels.push(channel);
-        crate::config::LoadedConfig::from_raw(raw)
+        dione_config::LoadedConfig::try_from_raw(raw).expect("valid test configuration")
     }
 
     #[test]
     fn malformed_and_zero_user_selectors_preserve_fail_closed_intent() {
         for selector in ["not-a-snowflake", "0"] {
-            let config = config_with_channel(crate::config::ChannelConfig {
+            let config = config_with_channel(dione_config::ChannelConfig {
                 id: "20".into(),
                 require_mention: false,
                 allow_from: vec![selector.into()],
@@ -768,7 +770,7 @@ mod tests {
             invalid_members in proptest::collection::vec(".{0,24}", 1..6),
         ) {
             let channels = [
-                crate::config::ChannelConfig {
+                dione_config::ChannelConfig {
                     id: "20".into(),
                     allow_from: invalid_users
                         .into_iter()
@@ -776,7 +778,7 @@ mod tests {
                         .collect(),
                     ..Default::default()
                 },
-                crate::config::ChannelConfig {
+                dione_config::ChannelConfig {
                     id: "20".into(),
                     allow_pk_systems: invalid_systems
                         .into_iter()
@@ -784,7 +786,7 @@ mod tests {
                         .collect(),
                     ..Default::default()
                 },
-                crate::config::ChannelConfig {
+                dione_config::ChannelConfig {
                     id: "20".into(),
                     allow_pk_members: invalid_members
                         .into_iter()
@@ -833,7 +835,7 @@ mod tests {
 
     #[test]
     fn fingerprint_is_stable_across_selector_order_but_generation_advances() {
-        let channel = |users: &[&str]| crate::config::ChannelConfig {
+        let channel = |users: &[&str]| dione_config::ChannelConfig {
             id: "20".into(),
             require_mention: false,
             allow_from: users.iter().map(|id| (*id).to_owned()).collect(),

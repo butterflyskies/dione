@@ -1,0 +1,44 @@
+[package]
+name = "dione-config"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Validated configuration, durable editing, and process-wide publication"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["configuration", "toml", "persistence"]
+categories = ["config"]
+
+[dependencies]
+arc-swap.workspace = true
+camino.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serenity.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+tracing.workspace = true
+native-tls.workspace = true
+dione-attention.workspace = true
+dione-bell-rings.workspace = true
+dione-contradictionary.workspace = true
+dione-coordination.workspace = true
+dione-discord-identities.workspace = true
+dione-gaie.workspace = true
+dione-identity-display.workspace = true
+dione-messages.workspace = true
+dione-pluralkit-identities.workspace = true
+dione-pre-send.workspace = true
+dione-rate-limiter.workspace = true
+dione-teams-identities.workspace = true
+dione-vaelii.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+test-case.workspace = true

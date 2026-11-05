@@ -1,7 +1,10 @@
 //! Typed commands on the authenticated recipient's local control connection.
 //! Discord content is never parsed as one of these commands.
 
-use crate::config::{ConfigDurability, ConfigRuntime, attention_effect_guard, load_config};
+use dione_config::ConfigDurability;
+use dione_config::ConfigRuntime;
+use dione_config::attention_effect_guard;
+use dione_config::load_config;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::Arc;

@@ -620,23 +620,24 @@ impl ConsentGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::discord::chunk_preserving_fences;
+    use crate::discord::chunk_preserving_fences_with_context;
+    use crate::no_rly::journal::BounceRecord;
+    use crate::no_rly::journal::JournalRecord;
+    use crate::no_rly::journal::StatsFilter;
+    use crate::no_rly::judge::AlwaysClear;
+    use crate::no_rly::judge::ReasonEntry;
     use camino::Utf8PathBuf;
+    use dione_config::ChunkMode;
+    use dione_contradictionary::Action;
+    use dione_contradictionary::Contradictionary;
+    use dione_contradictionary::Entry;
+    use dione_contradictionary::MatchMode;
     use std::{
         collections::VecDeque,
         sync::{Arc, Mutex as StdMutex},
     };
     use tempfile::TempDir;
-    use {
-        crate::{
-            config::ChunkMode,
-            discord::{chunk_preserving_fences, chunk_preserving_fences_with_context},
-            no_rly::{
-                journal::{BounceRecord, JournalRecord, StatsFilter},
-                judge::{AlwaysClear, ReasonEntry},
-            },
-        },
-        dione_contradictionary::{Action, Contradictionary, Entry, MatchMode},
-    };
 
     const TTL: Duration = Duration::from_secs(180);
     const MAX_PENDING: usize = 32;
