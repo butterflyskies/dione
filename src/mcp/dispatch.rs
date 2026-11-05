@@ -1078,9 +1078,9 @@ mod tests {
             crate::harness::HarnessConnection::claude(),
             std::sync::Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
             std::sync::Arc::new(crate::ingress_ledger::IngressLedger::new()),
-            crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             ),
             None,
         )
@@ -1320,9 +1320,9 @@ mod tests {
             crate::harness::HarnessConnection::claude(),
             std::sync::Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
             std::sync::Arc::new(crate::ingress_ledger::IngressLedger::new()),
-            crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             ),
             None,
         )

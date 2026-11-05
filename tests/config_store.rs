@@ -50,9 +50,9 @@ async fn make_server(state_dir: &Utf8PathBuf) -> DioneServer {
         HarnessConnection::claude(),
         Arc::new(ConsentGate::new(state_dir)),
         Arc::new(dione::ingress_ledger::IngressLedger::new()),
-        dione::core::ModuleInstanceId::new(
-            dione::core::ProviderId::new("discord").unwrap(),
-            dione::core::ModuleSlotId::new("primary").unwrap(),
+        dione_contracts::ModuleInstanceId::new(
+            dione_contracts::ProviderId::new("discord").unwrap(),
+            dione_contracts::ModuleSlotId::new("primary").unwrap(),
         ),
         None,
     )

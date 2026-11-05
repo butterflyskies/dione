@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.89.0]
+
+### Changed
+
+- Extract provider identity, context, and source-observation contracts into the
+  public `dione-contracts` workspace crate. Callers use the shared contract
+  directly, while attention-dependent delivery and Rook's wire projections
+  retain their current owners. The contract crate owns its branded identity
+  compile-time fixtures and private-field API checks.
+
 ## [0.88.0]
 
 ### Changed

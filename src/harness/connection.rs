@@ -1,9 +1,7 @@
 //! A complete harness connection with coupled delivery and protocol facets.
 use super::ProtocolOutput;
-use crate::{
-    core::{MessageRef, delivery::Delivery},
-    mcp::harness_wire::HarnessProtocol,
-};
+use crate::{core::delivery::Delivery, mcp::harness_wire::HarnessProtocol};
+use dione_contracts::MessageRef;
 use futures_util::future::BoxFuture;
 use std::sync::Arc;
 use thiserror::Error;

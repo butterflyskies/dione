@@ -11,15 +11,13 @@ use super::{
         VerifiedUpdateCandidate, fresh_policy_snapshot, resolve_webhook_action,
     },
 };
-use crate::{
-    config::LoadedConfig,
-    core::{
-        ModuleInstanceId,
-        context::ObservationOrigin,
-        observation::{MessageObservation, MessageOccurrence},
-    },
-};
+use crate::config::LoadedConfig;
 use chrono::{DateTime, Utc};
+use dione_contracts::{
+    ModuleInstanceId,
+    context::ObservationOrigin,
+    observation::{MessageObservation, MessageOccurrence},
+};
 use serenity::{
     http::Http,
     model::{event::MessageUpdateEvent, prelude::*},
@@ -792,7 +790,9 @@ fn project(
     let summary_bytes = message.attachments.iter().fold(0usize, |sum, attachment| {
         sum.saturating_add(attachment.filename.len())
             .saturating_add(attachment.content_type.as_ref().map_or(0, String::len))
-            .saturating_add(std::mem::size_of::<crate::core::context::AttachmentSummary>())
+            .saturating_add(std::mem::size_of::<
+                dione_contracts::context::AttachmentSummary,
+            >())
             .saturating_add(std::mem::size_of::<Attachment>())
     });
     if message
@@ -867,9 +867,9 @@ mod tests {
     use super::*;
     use crate::{
         config::{ChannelConfig, Config},
-        core::{ModuleSlotId, ProviderId},
         gate::{GateDecision, InboundGate},
     };
+    use dione_contracts::{ModuleSlotId, ProviderId};
     use std::num::NonZeroUsize;
 
     fn source() -> ModuleInstanceId {

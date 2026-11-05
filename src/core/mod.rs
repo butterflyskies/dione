@@ -1,16 +1,5 @@
-//! Platform-independent scheduling identities.
-
-pub(crate) mod context;
-mod identity;
-pub(crate) mod identity_display;
-pub(crate) mod observation;
-
-pub use identity::{
-    ActorId, ActorRef, ConversationId, ConversationRef, IdentityError, IdentityErrorKind,
-    MessageId, MessageRef, ModuleInstanceId, ModuleSlotId, ProviderId, WorkspaceId, WorkspaceRef,
-};
+//! Application delivery, observed events, and identity presentation.
 
 pub(crate) mod delivery;
 pub(crate) mod events;
-
-pub(crate) use identity::LocalIdentityRef;
+pub(crate) mod identity_display;

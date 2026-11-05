@@ -1,7 +1,7 @@
 //! Final attention delivery fencing and receipts.
 pub use super::store_access::AttentionReceiptError;
 use super::types::RecordId;
-use crate::core::{ActorRef, MessageRef};
+use dione_contracts::{ActorRef, MessageRef};
 use futures_util::future::BoxFuture;
 use std::{fmt::Debug, sync::Arc};
 

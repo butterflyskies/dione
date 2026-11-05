@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::core::{
+use dione_contracts::{
     ActorRef, ConversationRef, LocalIdentityRef, MessageRef, ModuleInstanceId, WorkspaceRef,
     context::{
         Availability, ObservationOrigin, ReferenceConsistency, ReferenceRelation, UnavailableReason,
@@ -484,7 +484,7 @@ pub(super) struct ContextFields {
 }
 
 impl ContextFields {
-    pub(super) fn capture(context: &crate::core::context::ContextObservation) -> Self {
+    pub(super) fn capture(context: &dione_contracts::context::ContextObservation) -> Self {
         let sender = context.sender();
         Self {
             sender: Sender {
@@ -541,10 +541,12 @@ impl ContextFields {
                     ObservationOrigin::Search => Origin::Search,
                 },
                 local_truncation: match context.observation().local_truncation() {
-                    crate::core::context::LocalTruncation::None => Truncation::None,
+                    dione_contracts::context::LocalTruncation::None => Truncation::None,
                 },
                 provider_completeness: match context.observation().provider_completeness() {
-                    crate::core::context::ProviderCompleteness::Unknown => Completeness::Unknown,
+                    dione_contracts::context::ProviderCompleteness::Unknown => {
+                        Completeness::Unknown
+                    }
                 },
             },
         }
@@ -877,7 +879,7 @@ impl<'de> Deserialize<'de> for LocalKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{
+    use dione_contracts::{
         ActorId, ConversationId, MessageId, ModuleSlotId, ProviderId, WorkspaceId,
         context::{
             AttachmentSummary, ContextMetadata, ContextObservation, ObservationExtent,

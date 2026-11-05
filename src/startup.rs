@@ -171,9 +171,9 @@ pub async fn run() -> Result<(), StartupError> {
 
     let (notif_tx, _notif_rx) = mpsc::channel::<serde_json::Value>(64);
 
-    let authority_module = crate::core::ModuleInstanceId::new(
-        crate::core::ProviderId::new("discord").map_err(StartupErrorKind::ModuleIdentity)?,
-        crate::core::ModuleSlotId::new("primary").map_err(StartupErrorKind::ModuleIdentity)?,
+    let authority_module = dione_contracts::ModuleInstanceId::new(
+        dione_contracts::ProviderId::new("discord").map_err(StartupErrorKind::ModuleIdentity)?,
+        dione_contracts::ModuleSlotId::new("primary").map_err(StartupErrorKind::ModuleIdentity)?,
     );
     let teams_enabled = env::var("TEAMS_APP_ID").is_ok();
     validate_teams_control(
@@ -499,10 +499,10 @@ async fn run_attention_command(
                 ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
             },
             policy == AttentionPolicy::SafeTurn,
-            crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord")
+            dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord")
                     .map_err(StartupErrorKind::ModuleIdentity)?,
-                crate::core::ModuleSlotId::new("primary")
+                dione_contracts::ModuleSlotId::new("primary")
                     .map_err(StartupErrorKind::ModuleIdentity)?,
             ),
         )

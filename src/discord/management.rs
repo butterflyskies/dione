@@ -955,9 +955,9 @@ mod tests {
             crate::harness::HarnessConnection::claude(),
             Arc::new(crate::no_rly::consent::ConsentGate::new(&path)),
             ctx.ingress_ledger.clone(),
-            crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             ),
             None,
         )

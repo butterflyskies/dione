@@ -2,13 +2,11 @@
 
 use super::*;
 use crate::{
-    core::{
-        MessageRef, ModuleInstanceId, ModuleSlotId, ProviderId,
-        delivery::{Delivery, DeliveryKind},
-    },
+    core::delivery::{Delivery, DeliveryKind},
     harness::{HarnessDelivery, HarnessError},
     mcp::harness_wire::HarnessProtocol,
 };
+use dione_contracts::{MessageRef, ModuleInstanceId, ModuleSlotId, ProviderId};
 use futures_util::future::BoxFuture;
 use serenity::model::id::MessageId;
 use std::{io, sync::Mutex as StdMutex};

@@ -1,10 +1,11 @@
 //! Exercises a third adapter through common MCP and notification routing.
 use super::*;
 use crate::{
-    core::{MessageRef, delivery::Delivery},
+    core::delivery::Delivery,
     harness::{HarnessDelivery, HarnessError},
     mcp::harness_wire::HarnessProtocol,
 };
+use dione_contracts::MessageRef;
 use futures_util::future::BoxFuture;
 use serenity::model::id::{ChannelId, MessageId};
 use std::sync::Mutex as StdMutex;
@@ -101,9 +102,9 @@ async fn third_adapter_routes_notifications_invalidation_and_protocol() {
         connection.clone(),
         Arc::new(ConsentGate::new(&path)),
         Arc::new(crate::ingress_ledger::IngressLedger::new()),
-        crate::core::ModuleInstanceId::new(
-            crate::core::ProviderId::new("discord").unwrap(),
-            crate::core::ModuleSlotId::new("primary").unwrap(),
+        dione_contracts::ModuleInstanceId::new(
+            dione_contracts::ProviderId::new("discord").unwrap(),
+            dione_contracts::ModuleSlotId::new("primary").unwrap(),
         ),
         None,
     )
@@ -194,11 +195,11 @@ async fn third_adapter_routes_notifications_invalidation_and_protocol() {
         if granted {
             connection
                 .invalidate_attention(MessageRef::new(
-                    crate::core::ConversationRef::new(
+                    dione_contracts::ConversationRef::new(
                         authority_module.clone(),
-                        crate::core::ConversationId::numeric(10.try_into().unwrap()),
+                        dione_contracts::ConversationId::numeric(10.try_into().unwrap()),
                     ),
-                    crate::core::MessageId::numeric(20.try_into().unwrap()),
+                    dione_contracts::MessageId::numeric(20.try_into().unwrap()),
                 ))
                 .await
                 .unwrap();
@@ -243,9 +244,9 @@ async fn notification_loop_invalidates_edits_and_deletes_before_delivery() {
             connection,
             Arc::new(ConsentGate::new(&path)),
             Arc::new(crate::ingress_ledger::IngressLedger::new()),
-            crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             ),
             None,
         )
@@ -336,9 +337,9 @@ async fn oh_my_pi_ordinary_mcp_tools_remain_available() {
         connection.clone(),
         Arc::new(ConsentGate::new(&path)),
         Arc::new(crate::ingress_ledger::IngressLedger::new()),
-        crate::core::ModuleInstanceId::new(
-            crate::core::ProviderId::new("discord").unwrap(),
-            crate::core::ModuleSlotId::new("primary").unwrap(),
+        dione_contracts::ModuleInstanceId::new(
+            dione_contracts::ProviderId::new("discord").unwrap(),
+            dione_contracts::ModuleSlotId::new("primary").unwrap(),
         ),
         None,
     )
@@ -413,21 +414,24 @@ async fn third_adapter_retains_opaque_scoped_records_and_unprojected_observation
         ProtocolOutput::new(tokio::io::sink()),
     );
     let make = |slot: &str, text: &str| {
-        let module = crate::core::ModuleInstanceId::new(
-            crate::core::ProviderId::new("fake").unwrap(),
-            crate::core::ModuleSlotId::new(slot).unwrap(),
+        let module = dione_contracts::ModuleInstanceId::new(
+            dione_contracts::ProviderId::new("fake").unwrap(),
+            dione_contracts::ModuleSlotId::new(slot).unwrap(),
         );
         crate::core::events::OrdinaryEvent::Message(Box::new(
             crate::core::events::MessageCreated::new(
                 MessageRef::new(
-                    crate::core::ConversationRef::new(
+                    dione_contracts::ConversationRef::new(
                         module.clone(),
-                        crate::core::ConversationId::opaque("10").unwrap(),
+                        dione_contracts::ConversationId::opaque("10").unwrap(),
                     ),
-                    crate::core::MessageId::opaque("20").unwrap(),
+                    dione_contracts::MessageId::opaque("20").unwrap(),
                 ),
                 crate::core::events::ObservedAuthor::new(
-                    crate::core::ActorRef::new(module, crate::core::ActorId::opaque("30").unwrap()),
+                    dione_contracts::ActorRef::new(
+                        module,
+                        dione_contracts::ActorId::opaque("30").unwrap(),
+                    ),
                     "same display".into(),
                     crate::core::events::AuthorOrigin::VerifiedWebhook,
                 ),

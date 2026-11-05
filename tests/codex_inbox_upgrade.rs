@@ -37,9 +37,9 @@ fn historical_v048_inbox_loads_and_preserves_entries() {
             };
             let queue = CodexEventQueue::load(
                 &state_dir,
-                dione::codex::LegacyDiscordScope::new(dione::core::ModuleInstanceId::new(
-                    dione::core::ProviderId::new("discord").unwrap(),
-                    dione::core::ModuleSlotId::new("primary").unwrap(),
+                dione::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                    dione_contracts::ProviderId::new("discord").unwrap(),
+                    dione_contracts::ModuleSlotId::new("primary").unwrap(),
                 )),
             )
             .expect("old inbox must open");
@@ -86,9 +86,9 @@ fn historical_v048_inbox_loads_and_preserves_entries() {
 
             let reopened = CodexEventQueue::load(
                 &state_dir,
-                dione::codex::LegacyDiscordScope::new(dione::core::ModuleInstanceId::new(
-                    dione::core::ProviderId::new("discord").unwrap(),
-                    dione::core::ModuleSlotId::new("primary").unwrap(),
+                dione::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                    dione_contracts::ProviderId::new("discord").unwrap(),
+                    dione_contracts::ModuleSlotId::new("primary").unwrap(),
                 )),
             )
             .expect("upgraded inbox must reopen");

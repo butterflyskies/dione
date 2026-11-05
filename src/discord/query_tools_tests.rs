@@ -174,9 +174,9 @@ async fn registered_queries_parse_execute_project_and_reload_policy() {
         &HarnessConnection::claude(),
         registrations_with_search(
             services,
-            crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             ),
             search::SearchTransport::local(format!("{base}/api/v10")),
         )
@@ -412,9 +412,9 @@ async fn wrong_observation_exchange() {
         &HarnessConnection::claude(),
         registrations_with_search(
             services,
-            crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             ),
             search::SearchTransport::local(format!("{base}/api/v10")),
         )

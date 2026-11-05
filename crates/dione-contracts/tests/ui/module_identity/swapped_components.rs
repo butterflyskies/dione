@@ -1,4 +1,4 @@
-use dione::core::{ModuleInstanceId, ModuleSlotId, ProviderId};
+use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 
 fn main() {
     let provider = ProviderId::new("discord").unwrap();

@@ -21,9 +21,9 @@ use crate::{
     },
     codex::CodexEventQueue,
     config::ConfigRuntime,
-    core::{ModuleInstanceId, ModuleSlotId, ProviderId},
     discord::events::{MessageEvent, MessageTargeting},
 };
+use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use parking_lot::Mutex as SyncMutex;
 use serde_json::{Value, json};
 use serenity::model::id::{ChannelId, MessageId, UserId};
@@ -380,9 +380,9 @@ impl Fixture {
                     ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
                 },
                 true,
-                crate::core::ModuleInstanceId::new(
-                    crate::core::ProviderId::new("discord").unwrap(),
-                    crate::core::ModuleSlotId::new("primary").unwrap(),
+                dione_contracts::ModuleInstanceId::new(
+                    dione_contracts::ProviderId::new("discord").unwrap(),
+                    dione_contracts::ModuleSlotId::new("primary").unwrap(),
                 ),
             )
             .await
@@ -390,9 +390,9 @@ impl Fixture {
         );
         let queue = CodexEventQueue::load(
             &path,
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
         .unwrap();
@@ -537,9 +537,9 @@ impl Fixture {
             test_connection_for_queue(self.queue.clone()),
             Arc::new(crate::no_rly::consent::ConsentGate::new(&self.path)),
             self.attention.resolver.ledger.clone(),
-            crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             ),
             None,
         )
@@ -1607,9 +1607,9 @@ fn recipient_workflow_promotes_only_evaluated_policy_and_recovers_only_unconfirm
                     ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
                 },
                 true,
-                crate::core::ModuleInstanceId::new(
-                    crate::core::ProviderId::new("discord").unwrap(),
-                    crate::core::ModuleSlotId::new("primary").unwrap(),
+                dione_contracts::ModuleInstanceId::new(
+                    dione_contracts::ProviderId::new("discord").unwrap(),
+                    dione_contracts::ModuleSlotId::new("primary").unwrap(),
                 ),
             )
             .await

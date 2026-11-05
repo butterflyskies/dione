@@ -166,9 +166,9 @@ mod tests {
         CodexSessionOptions::new(
             Some(path),
             Some(CodexThreadId::parse("registration-thread").unwrap()),
-            crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                crate::core::ProviderId::new("discord").unwrap(),
-                crate::core::ModuleSlotId::new("primary").unwrap(),
+            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
         )
     }
@@ -327,9 +327,9 @@ mod tests {
             CodexSessionOptions::new(
                 Some(path),
                 None,
-                crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                    crate::core::ProviderId::new("discord").unwrap(),
-                    crate::core::ModuleSlotId::new("primary").unwrap(),
+                crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                    dione_contracts::ProviderId::new("discord").unwrap(),
+                    dione_contracts::ModuleSlotId::new("primary").unwrap(),
                 )),
             ),
         )
@@ -383,9 +383,9 @@ mod tests {
             CodexSessionOptions::new(
                 Some(path),
                 None,
-                crate::codex::LegacyDiscordScope::new(crate::core::ModuleInstanceId::new(
-                    crate::core::ProviderId::new("discord").unwrap(),
-                    crate::core::ModuleSlotId::new("primary").unwrap(),
+                crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                    dione_contracts::ProviderId::new("discord").unwrap(),
+                    dione_contracts::ModuleSlotId::new("primary").unwrap(),
                 )),
             ),
         )

@@ -4,7 +4,8 @@ use super::{
     owner::{Authorizer, Clock, EventDisposition, RequiredAction, RookService, WakeTransport},
     private_dir::Failure,
 };
-use crate::core::{
+use chrono::{DateTime, Utc};
+use dione_contracts::{
     ActorId, ActorRef, ConversationId, ConversationRef, MessageId, MessageRef, ModuleInstanceId,
     ModuleSlotId, ProviderId,
     context::{
@@ -13,7 +14,6 @@ use crate::core::{
     },
     observation::{MessageObservation, MessageOccurrence},
 };
-use chrono::{DateTime, Utc};
 use std::{
     collections::BTreeSet,
     future::Future,

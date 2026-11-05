@@ -372,7 +372,7 @@ impl SearchHit {
             message: MessageView::from_discord(
                 config,
                 message,
-                crate::core::context::ObservationOrigin::Search,
+                dione_contracts::context::ObservationOrigin::Search,
             )?,
         })
     }

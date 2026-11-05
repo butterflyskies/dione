@@ -9,10 +9,8 @@ use serenity::model::{
 use thiserror::Error;
 
 use super::{messaging::queries::DiscordNativeObservation, observation::DiscordMessageObservation};
-use crate::{
-    core::context::{Availability, UnavailableReason},
-    rook::{NativeSupplement, ObservationError, RetainedObservation},
-};
+use crate::rook::{NativeSupplement, ObservationError, RetainedObservation};
+use dione_contracts::context::{Availability, UnavailableReason};
 
 #[derive(Serialize)]
 struct NativeMetadata<'a> {
@@ -87,7 +85,7 @@ impl TryFrom<&DiscordMessageObservation> for RetainedObservation {
 }
 
 pub(crate) fn native_supplement(
-    context: &crate::core::context::ContextObservation,
+    context: &dione_contracts::context::ContextObservation,
     native: &DiscordNativeObservation,
     thread_parent: Option<ChannelId>,
 ) -> Result<NativeSupplement, NativeObservationError> {
@@ -161,12 +159,12 @@ mod tests {
     use super::*;
     use crate::{
         config::{Config, LoadedConfig},
-        core::{
-            ModuleInstanceId, ModuleSlotId, ProviderId,
-            context::ObservationOrigin,
-            observation::{MessageObservation, MessageOccurrence},
-        },
         discord::messaging::queries::MessageView,
+    };
+    use dione_contracts::{
+        ModuleInstanceId, ModuleSlotId, ProviderId,
+        context::ObservationOrigin,
+        observation::{MessageObservation, MessageOccurrence},
     };
     use serenity::model::channel::Message;
 
@@ -234,18 +232,18 @@ mod tests {
         let mut observed = fixture();
         let context = observed.common.context();
         let source = context.reference().conversation().module().clone();
-        let altered = crate::core::context::ContextObservation::new(
-            crate::core::MessageRef::new(
-                crate::core::ConversationRef::new(
+        let altered = dione_contracts::context::ContextObservation::new(
+            dione_contracts::MessageRef::new(
+                dione_contracts::ConversationRef::new(
                     source,
-                    crate::core::ConversationId::opaque("wrong").unwrap(),
+                    dione_contracts::ConversationId::opaque("wrong").unwrap(),
                 ),
-                crate::core::MessageId::opaque("wrong").unwrap(),
+                dione_contracts::MessageId::opaque("wrong").unwrap(),
             ),
             context.sender().clone(),
             context.content().into(),
             *context.created_at(),
-            crate::core::context::ContextMetadata::new(
+            dione_contracts::context::ContextMetadata::new(
                 context.workspace().clone(),
                 context.edited_at().clone(),
                 context.relation().clone(),

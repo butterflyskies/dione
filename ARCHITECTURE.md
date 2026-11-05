@@ -26,6 +26,10 @@ The public `dione-durable` package owns generic queue state transitions,
 accepted-operation lifetime, and atomic snapshot replacement. Codex and Oh My Pi
 retain their adapter-specific codecs and payload validation. Rook uses the same
 atomic replacement primitive while retaining its private-directory admission.
+The public `dione-contracts` package owns source-qualified provider identities,
+context records, and checked message occurrences. Display formatting and
+attention-dependent delivery remain in the application; Rook retains its own
+serialized observation model and authorization checks.
 See the [crate split plan](docs/design/plugin-crates.md) for the next boundaries
 and the package release requirements.
 

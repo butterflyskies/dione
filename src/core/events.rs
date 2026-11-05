@@ -1,10 +1,10 @@
 //! Observed provider events before host presentation.
 
-use super::{ActorRef, ConversationRef, MessageRef};
 use crate::{
     evidence::locators::{SentexLocator, parse_sentex_locators},
     timestamp::Timestamp,
 };
+use dione_contracts::{ActorRef, ConversationRef, MessageRef};
 use thiserror::Error;
 
 /// Exact attachment size, including empty files.
