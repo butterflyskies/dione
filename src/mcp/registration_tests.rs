@@ -11,12 +11,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::io::AsyncWriteExt;
 use {
     crate::teams::{
-        ReplyHandle,
         edge::LiveReplyReceipt,
         runtime::{TeamsReplyAuthority, TeamsRuntimeError},
     },
     dione_harness::{HarnessDelivery, HarnessProtocol},
     dione_messages::delivery::Delivery,
+    dione_provider_delivery::ReplyHandle,
 };
 
 struct FakeTool;

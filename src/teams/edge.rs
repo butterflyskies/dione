@@ -675,7 +675,7 @@ pub(crate) mod tests {
         assert!(matches!(
             unavailable,
             crate::teams::runtime::TeamsRuntimeError { kind: crate::teams::TeamsRuntimeErrorKind::Resident(message) }
-                if matches!(message.kind, crate::teams::delivery::TeamsDeliveryErrorKind::RouteUnavailable(_))
+                if matches!(message.kind, dione_provider_delivery::TeamsDeliveryErrorKind::RouteUnavailable(_))
         ));
         assert_eq!(queue.status().await.queued, 0);
 
@@ -691,7 +691,7 @@ pub(crate) mod tests {
         assert!(matches!(
             unavailable,
             crate::teams::runtime::TeamsRuntimeError { kind: crate::teams::TeamsRuntimeErrorKind::Resident(message) }
-                if matches!(message.kind, crate::teams::delivery::TeamsDeliveryErrorKind::RouteUnavailable(_))
+                if matches!(message.kind, dione_provider_delivery::TeamsDeliveryErrorKind::RouteUnavailable(_))
         ));
         assert_eq!(queue.status().await.queued, 0);
 
@@ -756,7 +756,7 @@ pub(crate) mod tests {
 
         let receipt = bridge
             .reply(
-                &crate::teams::ReplyHandle::parse(reply_handle).unwrap(),
+                &dione_provider_delivery::ReplyHandle::parse(reply_handle).unwrap(),
                 "resident reply",
             )
             .await
@@ -806,7 +806,7 @@ pub(crate) mod tests {
 
         let replay = bridge
             .reply(
-                &crate::teams::ReplyHandle::parse(reply_handle).unwrap(),
+                &dione_provider_delivery::ReplyHandle::parse(reply_handle).unwrap(),
                 "must not send twice",
             )
             .await
@@ -847,7 +847,7 @@ pub(crate) mod tests {
             .expect("second opaque reply handle");
         let uncertain = bridge
             .reply(
-                &crate::teams::ReplyHandle::parse(second_handle).unwrap(),
+                &dione_provider_delivery::ReplyHandle::parse(second_handle).unwrap(),
                 "simulate uncertain outcome",
             )
             .await
@@ -863,7 +863,7 @@ pub(crate) mod tests {
         assert!(matches!(
             bridge
                 .reply(
-                    &crate::teams::ReplyHandle::parse(second_handle).unwrap(),
+                    &dione_provider_delivery::ReplyHandle::parse(second_handle).unwrap(),
                     "must not resend"
                 )
                 .await,
@@ -1078,8 +1078,10 @@ pub(crate) mod tests {
         let token_count = fixture.token_forms.lock().expect("token forms lock").len();
         let reply_error = poisoned
             .reply(
-                &crate::teams::ReplyHandle::parse("teams-00000000-0000-4000-8000-000000000099")
-                    .unwrap(),
+                &dione_provider_delivery::ReplyHandle::parse(
+                    "teams-00000000-0000-4000-8000-000000000099",
+                )
+                .unwrap(),
                 "reply",
             )
             .await
@@ -1125,7 +1127,7 @@ pub(crate) mod tests {
             .await
             .unwrap()
             .unwrap();
-        let invalid_receipt_handle = crate::teams::ReplyHandle::parse(
+        let invalid_receipt_handle = dione_provider_delivery::ReplyHandle::parse(
             invalid_receipt_event.event["params"]["meta"]["reply_handle"]
                 .as_str()
                 .unwrap(),
@@ -1175,7 +1177,7 @@ pub(crate) mod tests {
             let path = camino::Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
             let failed_bridge = crate::teams::runtime::TeamsResidentBridge::new_durable(
                 edge_for_failures.clone(),
-                crate::teams::delivery::TeamsDelivery::new(FailingSink {
+                dione_provider_delivery::TeamsDelivery::new(FailingSink {
                     path: path.clone(),
                     outcome,
                 }),
@@ -1201,7 +1203,7 @@ pub(crate) mod tests {
                 SinkFailure::Rejected => {
                     let error = result.unwrap_err();
                     assert!(
-                        matches!(&error.kind, crate::teams::TeamsRuntimeErrorKind::Resident(source) if matches!(&source.kind, crate::teams::delivery::TeamsDeliveryErrorKind::Storage(cause) if cause.downcast_ref::<std::io::Error>().is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied)))
+                        matches!(&error.kind, crate::teams::TeamsRuntimeErrorKind::Resident(source) if matches!(&source.kind, dione_provider_delivery::TeamsDeliveryErrorKind::Storage(cause) if cause.downcast_ref::<std::io::Error>().is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied)))
                     );
                     assert_eq!(error.to_string(), "resident delivery failed");
                     let state: serde_json::Value =
@@ -1219,7 +1221,8 @@ pub(crate) mod tests {
                     let pending = state["pending"].as_object().unwrap();
                     assert_eq!(pending.len(), 1);
                     let handle =
-                        crate::teams::ReplyHandle::parse(pending.keys().next().unwrap()).unwrap();
+                        dione_provider_delivery::ReplyHandle::parse(pending.keys().next().unwrap())
+                            .unwrap();
                     assert!(
                         failed_bridge
                             .reply(&handle, "retained after uncertain admission")
@@ -1239,7 +1242,7 @@ pub(crate) mod tests {
                         panic!("both independent failures must survive")
                     };
                     assert!(
-                        matches!(delivery.kind, crate::teams::delivery::TeamsDeliveryErrorKind::Storage(source) if source.downcast_ref::<std::io::Error>().is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied))
+                        matches!(delivery.kind, dione_provider_delivery::TeamsDeliveryErrorKind::Storage(source) if source.downcast_ref::<std::io::Error>().is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied))
                     );
                     assert!(matches!(
                         cleanup.kind,
@@ -1316,8 +1319,8 @@ pub(crate) mod tests {
                 let error = admission.await.unwrap().unwrap_err();
                 assert!(matches!(error.kind,
                     crate::teams::TeamsRuntimeErrorKind::ResidentCompletionUnknown(
-                        crate::teams::delivery::TeamsDeliveryError {
-                            kind: crate::teams::delivery::TeamsDeliveryErrorKind::CompletionUnknown(source)
+                        dione_provider_delivery::TeamsDeliveryError {
+                            kind: dione_provider_delivery::TeamsDeliveryErrorKind::CompletionUnknown(source)
                         }
                     ) if source.is_panic()));
             } else {
@@ -1350,7 +1353,7 @@ pub(crate) mod tests {
                 event.event["params"]["meta"]["message_id"],
                 "owned/admission"
             );
-            let handle = crate::teams::ReplyHandle::parse(
+            let handle = dione_provider_delivery::ReplyHandle::parse(
                 event.event["params"]["meta"]["reply_handle"]
                     .as_str()
                     .unwrap(),
@@ -1388,16 +1391,16 @@ pub(crate) mod tests {
         outcome: SinkFailure,
     }
 
-    impl crate::teams::delivery::TeamsEventSink for FailingSink {
+    impl dione_provider_delivery::TeamsEventSink for FailingSink {
         fn deliver<'a>(
             &'a self,
-            _event: crate::teams::delivery::TeamsResidentEvent,
+            _event: dione_provider_delivery::TeamsResidentEvent,
         ) -> std::pin::Pin<
             Box<
                 dyn std::future::Future<
                         Output = Result<
-                            crate::teams::delivery::TeamsAdmissionOutcome,
-                            crate::teams::delivery::TeamsDeliveryError,
+                            dione_provider_delivery::TeamsAdmissionOutcome,
+                            dione_provider_delivery::TeamsDeliveryError,
                         >,
                     > + Send
                     + 'a,
@@ -1405,15 +1408,15 @@ pub(crate) mod tests {
         > {
             Box::pin(async move {
                 if matches!(self.outcome, SinkFailure::Duplicate) {
-                    return Ok(crate::teams::delivery::TeamsAdmissionOutcome::Duplicate);
+                    return Ok(dione_provider_delivery::TeamsAdmissionOutcome::Duplicate);
                 }
                 if matches!(self.outcome, SinkFailure::CleanupFailure) {
                     let file = self.path.join("teams-reply-authorities.json");
                     std::fs::rename(&file, file.with_extension("before-cleanup")).unwrap();
                     std::fs::create_dir(&file).unwrap();
                 }
-                let error = crate::teams::delivery::TeamsDeliveryError {
-                    kind: crate::teams::delivery::TeamsDeliveryErrorKind::Storage(Box::new(
+                let error = dione_provider_delivery::TeamsDeliveryError {
+                    kind: dione_provider_delivery::TeamsDeliveryErrorKind::Storage(Box::new(
                         std::io::Error::new(
                             std::io::ErrorKind::PermissionDenied,
                             "private delivery cause sentinel",
@@ -1422,7 +1425,7 @@ pub(crate) mod tests {
                 };
                 if matches!(self.outcome, SinkFailure::CommittedUncertain) {
                     Ok(
-                        crate::teams::delivery::TeamsAdmissionOutcome::CommittedDurabilityUncertain(
+                        dione_provider_delivery::TeamsAdmissionOutcome::CommittedDurabilityUncertain(
                             error,
                         ),
                     )
@@ -1443,19 +1446,19 @@ pub(crate) mod tests {
     struct StoreFaultSink {
         store: Arc<std::sync::OnceLock<crate::teams::reply_store::AsyncTeamsReplyStore>>,
         outcome: StoreFaultOutcome,
-        handle: Arc<std::sync::OnceLock<crate::teams::ReplyHandle>>,
+        handle: Arc<std::sync::OnceLock<dione_provider_delivery::ReplyHandle>>,
     }
 
-    impl crate::teams::delivery::TeamsEventSink for StoreFaultSink {
+    impl dione_provider_delivery::TeamsEventSink for StoreFaultSink {
         fn deliver<'a>(
             &'a self,
-            event: crate::teams::delivery::TeamsResidentEvent,
+            event: dione_provider_delivery::TeamsResidentEvent,
         ) -> std::pin::Pin<
             Box<
                 dyn std::future::Future<
                         Output = Result<
-                            crate::teams::delivery::TeamsAdmissionOutcome,
-                            crate::teams::delivery::TeamsDeliveryError,
+                            dione_provider_delivery::TeamsAdmissionOutcome,
+                            dione_provider_delivery::TeamsDeliveryError,
                         >,
                     > + Send
                     + 'a,
@@ -1464,7 +1467,7 @@ pub(crate) mod tests {
             Box::pin(async move {
                 assert!(self.handle.set(event.reply_handle).is_ok());
                 if matches!(self.outcome, StoreFaultOutcome::Pass) {
-                    return Ok(crate::teams::delivery::TeamsAdmissionOutcome::Committed);
+                    return Ok(dione_provider_delivery::TeamsAdmissionOutcome::Committed);
                 }
                 self.store
                     .get()
@@ -1477,11 +1480,11 @@ pub(crate) mod tests {
                 match self.outcome {
                     StoreFaultOutcome::Pass => unreachable!(),
                     StoreFaultOutcome::DuplicateAfterRename => {
-                        Ok(crate::teams::delivery::TeamsAdmissionOutcome::Duplicate)
+                        Ok(dione_provider_delivery::TeamsAdmissionOutcome::Duplicate)
                     }
                     StoreFaultOutcome::RejectedAfterRename => {
-                        Err(crate::teams::delivery::TeamsDeliveryError {
-                            kind: crate::teams::delivery::TeamsDeliveryErrorKind::Storage(
+                        Err(dione_provider_delivery::TeamsDeliveryError {
+                            kind: dione_provider_delivery::TeamsDeliveryErrorKind::Storage(
                                 Box::new(std::io::Error::new(
                                     std::io::ErrorKind::PermissionDenied,
                                     "retained admission failure",
@@ -1494,7 +1497,7 @@ pub(crate) mod tests {
         }
     }
 
-    async fn stored_handle(path: &camino::Utf8Path) -> crate::teams::ReplyHandle {
+    async fn stored_handle(path: &camino::Utf8Path) -> dione_provider_delivery::ReplyHandle {
         let state: serde_json::Value = serde_json::from_slice(
             &tokio::fs::read(path.join("teams-reply-authorities.json"))
                 .await
@@ -1503,7 +1506,7 @@ pub(crate) mod tests {
         .unwrap();
         let pending = state["pending"].as_object().unwrap();
         assert_eq!(pending.len(), 1);
-        crate::teams::ReplyHandle::parse(pending.keys().next().unwrap()).unwrap()
+        dione_provider_delivery::ReplyHandle::parse(pending.keys().next().unwrap()).unwrap()
     }
 
     async fn assert_authority_commit_phases(
@@ -1518,7 +1521,7 @@ pub(crate) mod tests {
             let captured_handle = Arc::new(std::sync::OnceLock::new());
             let bridge = crate::teams::runtime::TeamsResidentBridge::new_durable(
                 edge.clone(),
-                crate::teams::delivery::TeamsDelivery::new(StoreFaultSink {
+                dione_provider_delivery::TeamsDelivery::new(StoreFaultSink {
                     store: slot.clone(),
                     handle: captured_handle.clone(),
                     outcome: StoreFaultOutcome::Pass,
@@ -1609,7 +1612,7 @@ pub(crate) mod tests {
             let captured_handle = Arc::new(std::sync::OnceLock::new());
             let bridge = crate::teams::runtime::TeamsResidentBridge::new_durable(
                 edge.clone(),
-                crate::teams::delivery::TeamsDelivery::new(StoreFaultSink {
+                dione_provider_delivery::TeamsDelivery::new(StoreFaultSink {
                     store: slot.clone(),
                     handle: captured_handle.clone(),
                     outcome,
@@ -1640,7 +1643,7 @@ pub(crate) mod tests {
                         panic!("retain both delivery and cleanup failures")
                     };
                     assert!(
-                        matches!(delivery.kind, crate::teams::delivery::TeamsDeliveryErrorKind::Storage(source) if source.downcast_ref::<std::io::Error>().is_some_and(|cause| cause.kind() == std::io::ErrorKind::PermissionDenied))
+                        matches!(delivery.kind, dione_provider_delivery::TeamsDeliveryErrorKind::Storage(source) if source.downcast_ref::<std::io::Error>().is_some_and(|cause| cause.kind() == std::io::ErrorKind::PermissionDenied))
                     );
                     assert!(
                         matches!(cleanup.kind, crate::teams::runtime::AuthorityCleanupErrorKind::CommittedDurabilityUncertain(source) if source.kind() == std::io::ErrorKind::Other)

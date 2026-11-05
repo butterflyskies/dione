@@ -3,19 +3,26 @@
 use dione_teams_identities::{ActivityId, BotId, ConversationId, TenantId};
 use serde::{Deserialize, Serialize};
 
+/// A provider-qualified persisted replay identity with validated coordinates.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "provider", content = "id", rename_all = "snake_case")]
-pub(crate) enum ProviderEventKey {
+pub enum ProviderEventKey {
+    /// A Teams activity scoped to tenant, bot and conversation.
     Teams {
+        /// The tenant containing this activity.
         tenant_id: TenantId,
+        /// The bot receiving this activity.
         bot_id: BotId,
+        /// The native conversation containing this activity.
         conversation_id: ConversationId,
+        /// The native activity identity.
         activity_id: ActivityId,
     },
 }
 
 impl ProviderEventKey {
-    pub(crate) fn teams(
+    /// Constructs the existing Teams replay identity without changing spelling.
+    pub fn teams(
         tenant_id: TenantId,
         bot_id: BotId,
         conversation_id: ConversationId,

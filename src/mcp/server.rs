@@ -1320,11 +1320,11 @@ mod tests {
     use super::*;
     use crate::discord::scheduling::DeliveryBuffer;
     use crate::harness::test_support::FixtureNotification;
-    use crate::teams::ReplyHandle;
     use dione_config::ChannelConfig;
     use dione_config::Config;
     use dione_config::LoadedConfig;
     use dione_messages::timestamp::Timestamp;
+    use dione_provider_delivery::ReplyHandle;
     use dione_rate_limiter::OverflowPolicy;
     use dione_rate_limiter::RateLimitConfig;
     use dione_rate_limiter::ScopeConfig;

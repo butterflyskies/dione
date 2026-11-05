@@ -12,15 +12,11 @@ use tokio::{
 };
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use {
-    crate::{
-        delivery::ProviderEventKey,
-        teams::{
-            ReplyHandle,
-            delivery::{TeamsAdmissionOutcome, TeamsResidentEvent},
-        },
-    },
     dione_attention::delivery::{AttentionDeliveryReceipt, AttentionGuardFailure},
     dione_messages::timestamp::Timestamp,
+    dione_provider_delivery::{
+        ProviderEventKey, ReplyHandle, TeamsAdmissionOutcome, TeamsResidentEvent,
+    },
 };
 
 #[derive(Debug)]

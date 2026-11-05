@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.113.0] - 2026-11-05
+
+### Changed
+
+- Extract shared provider replay keys, descriptive Teams resident delivery and
+  reply-handle syntax into dione-provider-delivery. Preserve separate provider
+  codecs and native authority; keep random handle generation in Teams runtime.
+
 ## [0.112.0] - 2026-11-05
 
 ### Changed

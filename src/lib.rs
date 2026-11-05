@@ -2,7 +2,6 @@ pub mod attention;
 mod bell_rings;
 pub mod codex;
 pub mod config_watcher;
-pub(crate) mod delivery;
 pub mod discord;
 pub mod drop_ledger;
 pub mod gate;

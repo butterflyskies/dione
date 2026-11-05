@@ -5,11 +5,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 use {
-    crate::{
-        delivery::ProviderEventKey,
-        teams::{ReplyHandle, delivery::TeamsResidentEvent},
-    },
     dione_messages::timestamp::Timestamp,
+    dione_provider_delivery::{ProviderEventKey, ReplyHandle, TeamsResidentEvent},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

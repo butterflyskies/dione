@@ -6,13 +6,13 @@ use super::{
     MIN_ATTENTION_DEFER, QueueStatus,
     queue_codec::{LegacyPayload, LegacyQueueCodec, LegacyReplayIdentity},
 };
-use crate::delivery::ProviderEventKey;
 use camino::Utf8Path;
 use chrono::TimeDelta;
 use dione_durable::{
     self as durable, Admission, AdmissionOutcome, DurableQueue, EndpointId, QueueErrorKind,
     QueueOptions, ResidentHandle,
 };
+use dione_provider_delivery::ProviderEventKey;
 use serde_json::Value;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::watch;

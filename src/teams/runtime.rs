@@ -8,6 +8,12 @@ use axum::{
     response::IntoResponse,
     routing::post,
 };
+#[cfg(test)]
+use dione_provider_delivery::TeamsEventSink;
+use dione_provider_delivery::{
+    ProviderEventKey, ReplyHandle, TeamsAdmissionOutcome, TeamsDelivery, TeamsDeliveryError,
+    TeamsResidentEvent,
+};
 use std::{
     collections::HashMap,
     future::Future,
@@ -18,22 +24,20 @@ use std::{
 use thiserror::Error;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use {
-    crate::{
-        delivery::ProviderEventKey,
-        teams::{
-            AuthenticatedTeamsEnvelope, ReplyHandle,
-            delivery::{
-                TeamsAdmissionOutcome, TeamsDelivery, TeamsDeliveryError, TeamsResidentEvent,
-            },
-            edge::{BotTokenProvider, LiveReplyReceipt, TeamsEdge, TeamsEdgeError},
-            reply_store::{
-                AsyncTeamsReplyStore, ReplyStoreError, ReplyStoreErrorKind, SealedReplyAuthority,
-                StoreReceipt, TeamsEventKey,
-            },
+    crate::teams::{
+        AuthenticatedTeamsEnvelope,
+        edge::{BotTokenProvider, LiveReplyReceipt, TeamsEdge, TeamsEdgeError},
+        reply_store::{
+            AsyncTeamsReplyStore, ReplyStoreError, ReplyStoreErrorKind, SealedReplyAuthority,
+            StoreReceipt, TeamsEventKey,
         },
     },
     dione_messages::timestamp::Timestamp,
 };
+
+fn new_reply_handle() -> ReplyHandle {
+    uuid::Uuid::new_v4().into()
+}
 
 const DEFAULT_PENDING_LIMIT: usize = 256;
 const REPLY_HANDLE_TTL: Duration = Duration::from_secs(15 * 60);
@@ -123,7 +127,7 @@ impl<P: BotTokenProvider + 'static> TeamsResidentBridge<P> {
                 if let Some(handle) = store.find_handle(key.clone(), now).await? {
                     (handle, false)
                 } else {
-                    let handle = ReplyHandle::generate();
+                    let handle = new_reply_handle();
                     let authority = SealedReplyAuthority::seal(
                         &envelope,
                         &self.edge.admission_policy().app_id,
@@ -198,7 +202,7 @@ impl<P: BotTokenProvider + 'static> TeamsResidentBridge<P> {
                 }
             };
         }
-        let handle = ReplyHandle::generate();
+        let handle = new_reply_handle();
         let event = resident_event(&envelope, &handle, provider_key);
         {
             let mut pending = self.pending_replies()?;
@@ -641,7 +645,6 @@ mod tests {
         codex::CodexEventQueue,
         teams::{
             AdmissionPolicy, AuthenticatedConversationReference, ProbeError, ProbeErrorKind,
-            delivery::TeamsEventSink,
             edge::{BotAccessToken, TeamsEdgeError},
         },
     };
@@ -1219,7 +1222,7 @@ mod tests {
             },
             text: "not stored".to_owned(),
         };
-        let handle = ReplyHandle::generate();
+        let handle = new_reply_handle();
         let now = chrono::Utc::now();
         let bridge = TeamsResidentBridge::new_durable(
             edge.clone(),

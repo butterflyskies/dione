@@ -180,7 +180,7 @@ async fn binding_control_preserves_public_primary_without_registering_a_resident
         .unwrap()
         .unwrap();
     assert_eq!(leased.event, json!({"literal":"public work"}));
-    let key = crate::delivery::ProviderEventKey::teams(
+    let key = dione_provider_delivery::ProviderEventKey::teams(
         "tenant".parse().unwrap(),
         "bot".parse().unwrap(),
         "conversation".parse().unwrap(),
