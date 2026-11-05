@@ -300,6 +300,25 @@ immediate events before buffering, rather than importing the engine constant.
 FIFO, rejected payloads, first deadlines, key ordering, control bypass, and
 failed-tail requeue retain their implementations and tests.
 
+## Access-request storage boundary
+
+dione-access-requests owns AccessQueue, AccessRequest, queue.json loading and
+replacement, preview truncation, expiry, and notification cooldown. Its eight
+unit tests and six persistence consumer tests move with it. Application
+AccessCtx retains configuration-backed authorization and unknown-durability
+handling. Locks, pruning scheduling, native admission, notifications and MCP
+projection remain with application owners. The old queue module is removed.
+
+Stored records remain observations. Zero and maximum IDs and mismatched
+historical map/payload keys remain readable. Preview length is 100 UTF-8 bytes,
+not characters. Memory-first mutation, logged persistence failure, malformed
+state fallback, and synchronous I/O retain their existing behavior.
+
+The unchanged raw identity fields, operation arguments and derived
+deserialization are inherited type-policy violations, scoped to this storage
+API. This extraction does not extend their semantics or establish compliance.
+The crate README records that debt and the existing async blocking-I/O limit.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -320,6 +339,7 @@ failed-tail requeue retain their implementations and tests.
 14. Contradictionary matching, rewrites, and sidecar entry schema.
 15. Bell memory retrieval backend, with native eligibility and publication retained.
 16. Generic scoped delivery scheduler, with native evidence classification retained.
+17. Pending access-request storage, with configuration-backed authorization retained.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -332,7 +352,7 @@ The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, and `dione-delivery-scheduler`.
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, and `dione-access-requests`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -354,14 +374,14 @@ Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, and `dione-delivery-scheduler`,
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, and `dione-access-requests`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all sixteen capabilities. Contradictionary publishing waits
+publishing waits for all seventeen capabilities. Contradictionary publishing waits
 for evidence reconciliation. Presentation publishing waits for
 contracts, attention, evidence, messages, and identity-display reconciliation. Harness publishing waits for
 contracts and messages reconciliation. Messages publishing waits for
@@ -374,3 +394,5 @@ live registry. Local package-state tests mock registry responses; the retry
 fixture proves Cargo dependency resolution with a local registry only.
 
 Scheduler publishing waits for contracts reconciliation. Dione publishing also waits for scheduler reconciliation.
+
+Access-request storage has no capability publication prerequisite. Dione publishing waits for its reconciliation.

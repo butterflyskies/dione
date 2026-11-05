@@ -170,6 +170,7 @@ mod tests {
         discord::management_wire,
         state::new_state,
     };
+    use dione_access_requests::AccessQueue;
     use serde_json::{Value, json};
     use serenity::model::id::{ChannelId, UserId};
     use std::{error::Error as _, sync::Arc, time::Duration};
@@ -945,9 +946,7 @@ mod tests {
         ctx.state.write().await.note_sent(9001);
         let server = crate::mcp::server::DioneServer::new(
             ctx.state.clone(),
-            Arc::new(tokio::sync::Mutex::new(crate::queue::AccessQueue::load(
-                &path,
-            ))),
+            Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&path))),
             ctx.http.clone(),
             path.clone(),
             tokio::sync::mpsc::channel(1).0,

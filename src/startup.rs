@@ -2,6 +2,7 @@
 mod error;
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::Parser;
+use dione_access_requests::AccessQueue;
 pub use error::{SecretEnvironmentError, StartupError, StartupErrorKind};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -162,9 +163,7 @@ pub async fn run() -> Result<(), StartupError> {
 
     let cancel = CancellationToken::new();
     let state = Arc::new(RwLock::new(SharedState::new()));
-    let queue = Arc::new(tokio::sync::Mutex::new(crate::queue::AccessQueue::load(
-        &state_dir,
-    )));
+    let queue = Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&state_dir)));
 
     let (event_tx, event_rx) = mpsc::channel::<NotificationEvent>(256);
 

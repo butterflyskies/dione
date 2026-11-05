@@ -5,7 +5,7 @@
 
 use camino::Utf8PathBuf;
 use chrono::Utc;
-use dione::queue::{AccessQueue, AccessRequest};
+use dione_access_requests::{AccessQueue, AccessRequest};
 use tempfile::TempDir;
 
 fn temp_state() -> (TempDir, Utf8PathBuf) {

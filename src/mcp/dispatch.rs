@@ -556,6 +556,7 @@ fn parse_string_array(args: &Value, key: &str) -> Option<Vec<String>> {
 mod tests {
     use super::*;
     use crate::{discord::tool_arguments::parse_optional_id, pre_send::HookName};
+    use dione_access_requests::AccessQueue;
     use proptest::prelude::*;
 
     #[tokio::test]
@@ -1068,9 +1069,7 @@ mod tests {
         let (notification_tx, _notification_rx) = tokio::sync::mpsc::channel(1);
         let server = DioneServer::new(
             crate::state::new_state(),
-            std::sync::Arc::new(tokio::sync::Mutex::new(crate::queue::AccessQueue::load(
-                &state_dir,
-            ))),
+            std::sync::Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&state_dir))),
             http,
             state_dir.clone(),
             notification_tx,
@@ -1310,9 +1309,7 @@ mod tests {
         assert!(gateway_handle.is_same_authority(server_handle));
         let server = DioneServer::new(
             crate::state::new_state(),
-            std::sync::Arc::new(tokio::sync::Mutex::new(crate::queue::AccessQueue::load(
-                &state_dir,
-            ))),
+            std::sync::Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&state_dir))),
             std::sync::Arc::new(serenity::http::Http::new("fake")),
             state_dir.clone(),
             notification_tx,

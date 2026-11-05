@@ -869,6 +869,7 @@ mod tests {
         config::{ChannelConfig, Config},
         gate::{GateDecision, InboundGate},
     };
+    use dione_access_requests::AccessQueue;
     use dione_contracts::{ModuleSlotId, ProviderId};
     use std::num::NonZeroUsize;
 
@@ -1136,9 +1137,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel(1);
         let handler = Handler {
             state: crate::state::new_state(),
-            queue: Arc::new(tokio::sync::Mutex::new(crate::queue::AccessQueue::load(
-                &state_dir,
-            ))),
+            queue: Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&state_dir))),
             tx,
             state_dir,
             bot_user_id: std::sync::atomic::AtomicU64::new(0),

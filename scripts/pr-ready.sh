@@ -82,6 +82,8 @@ bell_rings_version=$(sh scripts/workspace-package-version.sh dione-bell-rings)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-bell-rings-${bell_rings_version}.crate"
 delivery_scheduler_version=$(sh scripts/workspace-package-version.sh dione-delivery-scheduler)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-delivery-scheduler-${delivery_scheduler_version}.crate"
+access_requests_version=$(sh scripts/workspace-package-version.sh dione-access-requests)
+sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-access-requests-${access_requests_version}.crate"
 presentation_version=$(sh scripts/workspace-package-version.sh dione-presentation)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-presentation-${presentation_version}.crate"
 harness_version=$(sh scripts/workspace-package-version.sh dione-harness)

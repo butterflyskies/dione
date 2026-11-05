@@ -7,6 +7,7 @@ use super::{
 use crate::delivery::ProviderEventKey;
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::TimeDelta;
+use dione_access_requests::AccessQueue;
 use dione_durable::{PersistFailure, QueueCodec, QueueSnapshot};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -1029,7 +1030,7 @@ async fn binding_server(
     let (binding_tx, binding_rx) = tokio::sync::watch::channel(None);
     let server = crate::mcp::server::DioneServer::new(
         crate::state::new_state(),
-        Arc::new(Mutex::new(crate::queue::AccessQueue::load(path))),
+        Arc::new(Mutex::new(AccessQueue::load(path))),
         Arc::new(serenity::http::Http::new("fake")),
         path.to_owned(),
         notification_tx,

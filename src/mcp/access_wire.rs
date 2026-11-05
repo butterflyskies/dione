@@ -75,9 +75,9 @@ mod tests {
     use crate::{
         config::{Config, LoadedConfig},
         discord::access::AccessCtx,
-        queue::{AccessQueue, AccessRequest},
     };
     use camino::Utf8PathBuf;
+    use dione_access_requests::{AccessQueue, AccessRequest};
     use serenity::model::id::UserId;
     use std::sync::Arc;
     use tempfile::TempDir;

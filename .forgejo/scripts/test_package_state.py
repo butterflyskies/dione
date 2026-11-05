@@ -98,6 +98,22 @@ class ReleasePreflightTests(unittest.TestCase):
             self.assertIn("reconcile-delivery-scheduler", jobs[job].splitlines()[0])
         self.assertIn("needs.reconcile-delivery-scheduler.result == 'success'", jobs["reconcile-dione"])
 
+    def test_access_requests_reconciliation_gates_root_publication(self):
+        workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
+        jobs = {}
+        current = None
+        for line in workflow.splitlines():
+            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
+                current = line.strip().removesuffix(":")
+                jobs[current] = ""
+            elif current:
+                jobs[current] += line + "\n"
+        self.assertIn("needs: verify-dione", jobs["publish-access-requests"])
+        self.assertIn("needs: [verify-dione, publish-access-requests]", jobs["reconcile-access-requests"])
+        for job in ("publish-crate", "reconcile-dione"):
+            self.assertIn("reconcile-access-requests", jobs[job].splitlines()[0])
+        self.assertIn("needs.reconcile-access-requests.result == 'success'", jobs["reconcile-dione"])
+
     def test_package_state_failure_stops_each_preflight(self):
         lines = (SOURCE / ".github/workflows/publish-crate.yml").read_text().splitlines()
         blocks = []
@@ -113,7 +129,7 @@ class ReleasePreflightTests(unittest.TestCase):
             script = "\n".join(block)
             if "case " in script and "scripts/crates-io-package-state.sh" in script:
                 blocks.append(script)
-        self.assertEqual(len(blocks), 18)
+        self.assertEqual(len(blocks), 19)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "scripts").mkdir()
@@ -130,8 +146,8 @@ class ReleasePreflightTests(unittest.TestCase):
                 path.write_text("#!/bin/sh\n" + body + "\n")
                 path.chmod(0o755)
             for index, block in enumerate(blocks):
-                packages = (("dione", "dione-rendering", "dione-durable", "dione-contracts", "dione-rook", "dione-attention", "dione-evidence", "dione-messages", "dione-rate-limiter", "dione-vaelii", "dione-gaie", "dione-identity-display", "dione-harness", "dione-presentation", "dione-contradictionary", "dione-bell-rings", "dione-delivery-scheduler") if index == 0
-                            else ({1: "dione-rendering", 2: "dione-durable", 3: "dione-contracts", 4: "dione-rook", 5: "dione-attention", 6: "dione-evidence", 7: "dione-messages", 8: "dione-rate-limiter", 9: "dione-vaelii", 10: "dione-gaie", 11: "dione-identity-display", 12: "dione-harness", 13: "dione-presentation", 14: "dione-contradictionary", 15: "dione-bell-rings", 16: "dione-delivery-scheduler", 17: "dione"}[index],))
+                packages = (("dione", "dione-rendering", "dione-durable", "dione-contracts", "dione-rook", "dione-attention", "dione-evidence", "dione-messages", "dione-rate-limiter", "dione-vaelii", "dione-gaie", "dione-identity-display", "dione-harness", "dione-presentation", "dione-contradictionary", "dione-bell-rings", "dione-delivery-scheduler", "dione-access-requests") if index == 0
+                            else ({1: "dione-rendering", 2: "dione-durable", 3: "dione-contracts", 4: "dione-rook", 5: "dione-attention", 6: "dione-evidence", 7: "dione-messages", 8: "dione-rate-limiter", 9: "dione-vaelii", 10: "dione-gaie", 11: "dione-identity-display", 12: "dione-harness", 13: "dione-presentation", 14: "dione-contradictionary", 15: "dione-bell-rings", 16: "dione-delivery-scheduler", 17: "dione-access-requests", 18: "dione"}[index],))
                 for package in packages:
                     with self.subTest(block=index, package=package):
                         script = block.replace("${{ needs.verify-dione.outputs.rendering-version }}", "1.0.0")
@@ -151,6 +167,7 @@ class ReleasePreflightTests(unittest.TestCase):
                         script = script.replace("${{ needs.verify-dione.outputs.contradictionary-version }}", "1.0.0")
                         script = script.replace("${{ needs.verify-dione.outputs.bell-rings-version }}", "1.0.0")
                         script = script.replace("${{ needs.verify-dione.outputs.delivery-scheduler-version }}", "1.0.0")
+                        script = script.replace("${{ needs.verify-dione.outputs.access-requests-version }}", "1.0.0")
                         environment = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
                                            FAIL_PACKAGE=package, GITHUB_OUTPUT=str(root / "output"))
                         result = subprocess.run(["bash", "-c", script], cwd=root,

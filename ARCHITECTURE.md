@@ -86,6 +86,11 @@ FIFO, deadlines, bounded immediate budgets, requeue, and ordered drain.
 Discord retains evidence classification and native notification ownership.
 MCP retains admission, rate-limit handling, runtime delivery, and shutdown wiring.
 
+The public dione-access-requests package owns pending request storage,
+queue.json persistence, and administrator-notification cooldown bookkeeping.
+Dione retains current authorization, configuration-backed approval, async locks,
+administrator delivery, and pruning task lifetime.
+
 ## Processes and transports
 
 ```mermaid
@@ -177,7 +182,7 @@ deletions, reactions, interactions, and presence state.
 Each message handler loads the current immutable configuration snapshot.
 [gate.rs](src/gate.rs) applies DM policy, configured channels, allowlists,
 identity ignores, and targeting rules. Unknown DM senders can enter the bounded
-[access request queue](src/queue.rs) for admin review. Guild mutes suppress
+[access request queue](crates/dione-access-requests/src/lib.rs) for admin review. Guild mutes suppress
 delivery through the [mute store](src/mute_store.rs).
 
 Webhook identity follows a separate path. The
@@ -295,7 +300,7 @@ not imply that all writes have the same durability guarantee.
 | State | Owner and representation |
 |-------|--------------------------|
 | Configuration | [ConfigRuntime](src/config.rs) serializes mutations and publishes immutable snapshots through ArcSwap. TOML, last-known-good, and quarantine files support recovery. [ConfigStore](src/config_store.rs) edits TOML without owning persistence. |
-| Access requests | [AccessQueue](src/queue.rs) keeps requests in memory and writes `queue.json` through a temporary file and rename. Persistence errors are logged after memory changes. |
+| Access requests | [AccessQueue](crates/dione-access-requests/src/lib.rs) keeps requests in memory and writes `queue.json` through a temporary file and rename. Persistence errors are logged after memory changes. |
 | Codex delivery | [CodexEventQueue](src/codex/queue.rs) adapts the shared [durable owner](crates/dione-durable/src/queue.rs); its [legacy codec](src/codex/queue_codec.rs) preserves pending events, leases, consumers, and bindings in `codex-inbox.json`. The [store](crates/dione-durable/src/store.rs) holds `codex-inbox.lock` for its lifetime to exclude a second owner. |
 | Guild mutes | [MuteStore](src/mute_store.rs) rebuilds state from `guild_mute_receipts.jsonl`. Receipt append precedes snapshot publication. |
 | Attention | [AttentionRuntime](src/attention/runtime.rs) uses `attention/records.json` through the [attention store](crates/dione-attention/src/store.rs), plus `attention-status.json` for health reporting. |

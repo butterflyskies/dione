@@ -6,6 +6,7 @@ mod boundary_acceptance;
 mod lifecycle_acceptance;
 
 use super::*;
+use dione_access_requests::AccessQueue;
 use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use parking_lot::Mutex as SyncMutex;
 use serde_json::{Value, json};
@@ -531,9 +532,7 @@ impl Fixture {
         let (tx, _rx) = tokio::sync::mpsc::channel(4);
         let mut server = super::DioneServer::new(
             self.attention.resolver.state.clone(),
-            Arc::new(tokio::sync::Mutex::new(crate::queue::AccessQueue::load(
-                &self.path,
-            ))),
+            Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&self.path))),
             self.network.http(),
             self.path.clone(),
             tx,

@@ -1969,6 +1969,7 @@ fn parse_reaction_type(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dione_access_requests::AccessQueue;
     use serde_json::Value;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::{
@@ -5595,9 +5596,7 @@ mod tests {
         let (notifications, _rx) = tokio::sync::mpsc::channel(4);
         let server = crate::mcp::server::DioneServer::new(
             new_state(),
-            Arc::new(tokio::sync::Mutex::new(crate::queue::AccessQueue::load(
-                &path,
-            ))),
+            Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&path))),
             http,
             path.clone(),
             notifications,

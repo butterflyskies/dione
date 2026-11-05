@@ -1,6 +1,7 @@
 //! Pending Discord access requests and configuration-backed decisions.
 
 use camino::Utf8PathBuf;
+use dione_access_requests::AccessQueue;
 use serenity::model::id::UserId;
 use std::{fmt, sync::Arc};
 use thiserror::Error;
@@ -9,7 +10,6 @@ use {
     crate::{
         config::{ConfigDurability, ConfigRuntime, LoadedConfig},
         config_store::BoxError,
-        queue::AccessQueue,
     },
     dione_messages::timestamp::Timestamp,
 };

@@ -1,6 +1,7 @@
 //! Registration behavior through MCP requests and the resident socket.
 
 use super::*;
+use dione_access_requests::AccessQueue;
 use dione_contracts::MessageRef;
 use futures_util::future::BoxFuture;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -53,7 +54,7 @@ async fn server_with_http(
     let (tx, _rx) = mpsc::channel(1);
     let server = DioneServer::new(
         crate::state::new_state(),
-        Arc::new(Mutex::new(crate::queue::AccessQueue::load(&path))),
+        Arc::new(Mutex::new(AccessQueue::load(&path))),
         http,
         path.clone(),
         tx,

@@ -1,3 +1,6 @@
+//! Pending access-request storage and administrator-notification bookkeeping.
+#![warn(missing_docs)]
+
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -11,9 +14,13 @@ const PREVIEW_MAX: usize = 100;
 /// A pending access request from an unknown Discord user.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessRequest {
+    /// Stored user observation, including historical zero and maximum values.
     pub user_id: u64,
+    /// Display name observed when the request was recorded.
     pub username: String,
+    /// Message preview, capped at 100 UTF-8 bytes by enqueue.
     pub message_preview: String,
+    /// UTC time at which the request was recorded.
     pub timestamp: DateTime<Utc>,
 }
 
@@ -46,7 +53,7 @@ impl AccessQueue {
     ///
     /// - Deduplicates by `user_id`.
     /// - Enforces `max_pending` cap (silently drops excess).
-    /// - Truncates `message_preview` to 100 chars.
+    /// - Truncates `message_preview` to 100 UTF-8 bytes on a character boundary.
     /// - Persists on change.
     ///
     /// Returns `true` if the request was actually added (new entry).
@@ -99,7 +106,9 @@ impl AccessQueue {
         }
     }
 
-    /// Approves an access request, removing it from the queue.
+    /// Removes a pending request after the caller approves it.
+    ///
+    /// This operation does not grant access or modify authorization policy.
     ///
     /// Returns the removed request if it existed.
     pub fn approve(&mut self, user_id: u64) -> Option<AccessRequest> {
