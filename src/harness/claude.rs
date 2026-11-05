@@ -4,10 +4,12 @@ use super::{
     codex::{ToolArgumentError, recognizes},
 };
 use dione_contracts::MessageRef;
-use dione_harness::HarnessProtocol;
-use dione_messages::{delivery::Delivery, events::PermissionDecision};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
+use {
+    dione_harness::HarnessProtocol,
+    dione_messages::{delivery::Delivery, events::PermissionDecision},
+};
 pub(super) const ATTENTION_POLICY: AttentionPolicy = AttentionPolicy::Direct;
 
 pub(crate) fn notification(delivery: &Delivery) -> Value {

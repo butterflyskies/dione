@@ -1,15 +1,18 @@
 //! Historical compact-format expectations exercised through typed conversion.
-use crate::{
-    discord::events::{MessageEvent, NotificationEvent},
-    harness::test_support,
-};
 use chrono_tz::Tz;
 use dione_messages::{
     delivery::{EvidenceVisibility, PresentationContext},
-    timestamp::{Timestamp, format_compact},
+    timestamp::format_compact,
 };
 use serde_json::Value;
 use serenity::model::id::{ChannelId, MessageId, UserId};
+use {
+    crate::{
+        discord::events::{MessageEvent, NotificationEvent},
+        harness::test_support,
+    },
+    dione_messages::timestamp::Timestamp,
+};
 #[derive(Debug)]
 enum RenderedFixture {
     Single,
