@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.90.0]
+
+### Changed
+
+- Extract Rook's durable recipient owner, context reads, and publication receipts
+  into `dione-rook`. Discord retains its access policy, native observation
+  conversion, and network transport. Preserve persisted records and migrate
+  callers directly.
+
 ## [0.89.0]
 
 ### Changed

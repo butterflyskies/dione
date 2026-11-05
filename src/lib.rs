@@ -34,7 +34,6 @@ pub mod rate_limiter;
     reason = "standalone receipt-gate fixture is runtime-wired in a follow-up PR"
 )]
 pub(crate) mod receipt_gate;
-pub mod rook;
 pub mod state;
 pub(crate) mod status_lint;
 pub mod teams;

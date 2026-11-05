@@ -20,7 +20,10 @@ pub struct ContextObservation {
 }
 
 impl ContextObservation {
-    pub(crate) fn capture(value: &dione_contracts::context::ContextObservation) -> Self {
+    /// Copies descriptive context without fabricating a delivered occurrence.
+    ///
+    /// Call `validate` to check cross-field source agreement before admission.
+    pub fn capture(value: &dione_contracts::context::ContextObservation) -> Self {
         Self {
             reference: value.reference().into(),
             context: ContextFields::capture(value),

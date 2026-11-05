@@ -1,7 +1,7 @@
 //! Publication commands share the recipient owner's snapshot commit boundary.
 
 use super::{Command, Owner, Response, RookHandle};
-use crate::rook::{
+use crate::{
     AuthenticatedRecipient, ClaimGrant, EventKey, OwnerError, OwnerErrorKind,
     model::Handling,
     publication::{

@@ -448,6 +448,15 @@ impl PublicationDispatch {
     pub(crate) fn into_parts(self) -> (DispatchOutcome, Option<PublicationFollowUp>) {
         (self.outcome, self.after_commit)
     }
+
+    /// Separates a provider report for adapter tests without a durable owner.
+    ///
+    /// This bypasses the owner's commit boundary. Production adapters return
+    /// the report to the owner instead of starting its follow-up themselves.
+    #[cfg(feature = "test-support")]
+    pub fn into_test_parts(self) -> (DispatchOutcome, Option<PublicationFollowUp>) {
+        self.into_parts()
+    }
 }
 
 /// Trusted adapter boundary. Preparation performs no message POST; dispatch performs at most one.
