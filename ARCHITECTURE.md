@@ -187,7 +187,7 @@ argument handling, queue delivery, and live binding publisher. Attention's
 [delivery contracts](crates/dione-attention/src/delivery.rs) belong to the attention
 module and are consumed by the concrete worker.
 
-The [Oh My Pi adapter](src/harness/oh_my_pi.rs) validates rendered events and
+The [Oh My Pi adapter](crates/dione-omp/src/adapter.rs) validates rendered events and
 projects versioned `notifications/dione/event` frames through the same output
 writer. Its [extension](extensions/oh-my-pi/dione.ts) validates the exact server,
 method, and payload, then submits the full event to the main agent. It uses the
@@ -195,7 +195,7 @@ direct attention policy and exposes ordinary tools without Claude permission
 relay. Generic Discord notifications have no durable inbox, acknowledgment,
 or replay guarantee.
 
-Optional Teams ingress uses the [OMP session owner](src/harness/omp_session.rs)
+Optional Teams ingress uses the [OMP session owner](crates/dione-omp/src/lib.rs)
 with a durable inbox and private Unix controls. The
 [Teams extension bridge](extensions/oh-my-pi/teams.ts) binds an exact saved main
 session and acknowledges only an exact receipt synchronized to its file-backed

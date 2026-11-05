@@ -170,12 +170,12 @@ impl OmpPayload {
 
 #[derive(Debug, Error)]
 #[error("OMP session failed: {kind}")]
-pub(crate) struct OmpSessionError {
+pub struct OmpSessionError {
     #[source]
-    pub(crate) kind: OmpSessionErrorKind,
+    pub kind: OmpSessionErrorKind,
 }
 #[derive(Debug, Error)]
-pub(crate) enum OmpSessionErrorKind {
+pub enum OmpSessionErrorKind {
     #[error("invalid saved session identity")]
     InvalidSession,
     #[error("invalid binding identity")]

@@ -1,0 +1,5 @@
+error[E0616]: field `queue` of struct `OmpSession` is private
+ --> tests/ui/session_queue.rs:2:21
+  |
+2 |     let _ = session.queue;
+  |                     ^^^^^ private field

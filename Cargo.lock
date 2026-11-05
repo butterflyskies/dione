@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.114.0"
+version = "0.115.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -955,6 +955,7 @@ dependencies = [
  "dione-mcp-tools",
  "dione-messages",
  "dione-mutes",
+ "dione-omp",
  "dione-outbound-consent",
  "dione-pluralkit-identities",
  "dione-pre-send",
@@ -1253,6 +1254,32 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "dione-omp"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "chrono",
+ "dione-contracts",
+ "dione-durable",
+ "dione-harness",
+ "dione-messages",
+ "dione-presentation",
+ "dione-provider-delivery",
+ "dione-teams-identities",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "trybuild",
+ "uuid",
 ]
 
 [[package]]

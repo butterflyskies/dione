@@ -1,0 +1,10 @@
+error[E0624]: method `initialized` is private
+ --> tests/ui/initialize.rs:2:21
+  |
+2 |     let _ = control.initialized().await;
+  |                     ^^^^^^^^^^^ private method
+  |
+ ::: src/actor.rs
+  |
+  |     pub(crate) async fn initialized(&self) -> Result<(), OmpSessionError> {
+  |     --------------------------------------------------------------------- private method defined here

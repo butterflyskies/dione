@@ -1,5 +1,10 @@
 use super::*;
 use camino::Utf8PathBuf;
+use dione_attention::delivery::{AttentionDeliveryReceipt, AttentionGuardFailure};
+use dione_messages::timestamp::Timestamp;
+use dione_provider_delivery::{
+    ProviderEventKey, ReplyHandle, TeamsAdmissionOutcome, TeamsResidentEvent,
+};
 use futures_util::{SinkExt, StreamExt, future::BoxFuture};
 use serde_json::{Value, json};
 use std::{error::Error, time::Duration};
@@ -11,13 +16,6 @@ use tokio::{
     time::timeout,
 };
 use tokio_tungstenite::{accept_async, tungstenite::Message};
-use {
-    dione_attention::delivery::{AttentionDeliveryReceipt, AttentionGuardFailure},
-    dione_messages::timestamp::Timestamp,
-    dione_provider_delivery::{
-        ProviderEventKey, ReplyHandle, TeamsAdmissionOutcome, TeamsResidentEvent,
-    },
-};
 
 #[derive(Debug)]
 pub(crate) struct Guard;

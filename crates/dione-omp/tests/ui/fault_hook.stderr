@@ -1,0 +1,5 @@
+error[E0599]: no method named `test_set_persist_failure` found for struct `OmpSession` in the current scope
+ --> tests/ui/fault_hook.rs:2:13
+  |
+2 |     session.test_set_persist_failure();
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `OmpSession`

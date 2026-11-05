@@ -64,11 +64,11 @@ struct Pause {
 }
 
 #[derive(Clone)]
-pub(crate) struct OmpAdmission {
+pub struct OmpAdmission {
     sender: mpsc::Sender<Command>,
 }
 #[derive(Clone)]
-pub(crate) struct OmpControl {
+pub struct OmpControl {
     sender: mpsc::Sender<Command>,
 }
 
@@ -86,7 +86,7 @@ async fn request<T>(
         .map_err(OmpSessionErrorKind::CompletionUnknown)?
 }
 impl OmpAdmission {
-    pub(crate) async fn enqueue(
+    pub async fn enqueue(
         &self,
         event: TeamsResidentEvent,
     ) -> Result<AdmissionOutcome, OmpSessionError> {
@@ -138,12 +138,12 @@ impl OmpControl {
     }
 }
 
-pub(crate) struct OmpSession {
+pub struct OmpSession {
     queue: Inbox,
     sender: mpsc::Sender<Command>,
     receiver: mpsc::Receiver<Command>,
 }
-pub(crate) struct RunningOmpSession {
+pub struct RunningOmpSession {
     stop: CancellationToken,
     actor: JoinHandle<Result<(), OmpSessionError>>,
     forwarder: JoinHandle<Result<(), OmpSessionError>>,
@@ -157,7 +157,7 @@ impl Drop for WorkerFailureGuard {
     }
 }
 impl OmpSession {
-    pub(crate) async fn open(directory: &Utf8Path) -> Result<Self, OmpSessionError> {
+    pub async fn open(directory: &Utf8Path) -> Result<Self, OmpSessionError> {
         let queue = Inbox::open(
             directory.to_owned(),
             Arc::new(OmpCodec),
@@ -180,17 +180,17 @@ impl OmpSession {
             receiver,
         })
     }
-    pub(crate) fn admission(&self) -> OmpAdmission {
+    pub fn admission(&self) -> OmpAdmission {
         OmpAdmission {
             sender: self.sender.clone(),
         }
     }
-    pub(crate) fn control(&self) -> OmpControl {
+    pub fn control(&self) -> OmpControl {
         OmpControl {
             sender: self.sender.clone(),
         }
     }
-    pub(crate) fn start(
+    pub fn start(
         self,
         output: ProtocolOutput,
         process_shutdown: CancellationToken,
@@ -242,7 +242,7 @@ impl OmpSession {
     }
 }
 impl RunningOmpSession {
-    pub(crate) async fn shutdown(self) -> Result<(), OmpSessionError> {
+    pub async fn shutdown(self) -> Result<(), OmpSessionError> {
         self.stop.cancel();
         let actor = self.actor.await.map_err(OmpSessionErrorKind::Worker);
         let forwarder = self.forwarder.await.map_err(OmpSessionErrorKind::Worker);

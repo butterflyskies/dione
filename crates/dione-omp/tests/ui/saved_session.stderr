@@ -1,0 +1,11 @@
+error[E0603]: module `types` is private
+ --> tests/ui/saved_session.rs:1:16
+  |
+1 | use dione_omp::types::SavedSessionId;
+  |                ^^^^^ private module
+  |
+note: the module `types` is defined here
+ --> src/lib.rs
+  |
+  | mod types;
+  | ^^^^^^^^^

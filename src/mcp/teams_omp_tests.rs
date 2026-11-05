@@ -1,6 +1,7 @@
 //! Authenticated Teams ingress and private OMP controls share the assembled MCP route.
 use super::*;
-use crate::{harness::omp_session::OmpSession, teams_test_process::FixtureProcess};
+use crate::teams_test_process::FixtureProcess;
+use dione_omp::OmpSession;
 use sha2::{Digest as _, Sha256};
 use std::{
     io::{Read as _, Write as _},
@@ -43,8 +44,11 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
     let session = OmpSession::open(&path).await.unwrap();
     let (writer, reader) = tokio::io::duplex(64 * 1024);
     let output = ProtocolOutput::new(writer);
-    let harness =
-        crate::harness::oh_my_pi_with_control_and_output(session.control(), output.clone());
+    let harness = dione_omp::connect(
+        output.clone(),
+        Some(session.control()),
+        crate::harness::TOOL_NAMES,
+    );
     let mut fixture = FixtureProcess::start(
         crate::composition::teams_admission::from_omp(session.admission()),
         "activity/id%2F?",
@@ -145,8 +149,11 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
         .expect("shutdown releases the inbox lock");
     let (writer, reader) = tokio::io::duplex(64 * 1024);
     let output = ProtocolOutput::new(writer);
-    let harness =
-        crate::harness::oh_my_pi_with_control_and_output(session.control(), output.clone());
+    let harness = dione_omp::connect(
+        output.clone(),
+        Some(session.control()),
+        crate::harness::TOOL_NAMES,
+    );
     fixture
         .reopen(crate::composition::teams_admission::from_omp(
             session.admission(),
@@ -285,8 +292,11 @@ fn omp_lifecycle_child_entry() {
             let session = OmpSession::open(&path).await.unwrap();
             let admission = session.admission();
             let output = ProtocolOutput::new(tokio::io::stdout());
-            let harness =
-                crate::harness::oh_my_pi_with_control_and_output(session.control(), output.clone());
+            let harness = dione_omp::connect(
+                output.clone(),
+                Some(session.control()),
+                crate::harness::TOOL_NAMES,
+            );
             let cancel = CancellationToken::new();
             let running = session.start(output.clone(), cancel.clone());
             let (_server_dir, assembled) = server(harness).await;
@@ -327,7 +337,7 @@ fn omp_lifecycle_child_entry() {
                             Err(error)
                                 if matches!(
                                     error.kind,
-                                    crate::harness::omp_session::OmpSessionErrorKind::Unavailable
+                                    dione_omp::OmpSessionErrorKind::Unavailable
                                 ) =>
                             {
                                 tokio::time::sleep(Duration::from_millis(10)).await

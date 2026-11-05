@@ -1,28 +1,26 @@
 //! Adapter behavior for the same typed live records and historical inbox codec.
 
 use super::{ProtocolOutput, test_support};
+use crate::codex::{CodexEventQueue, LegacyDiscordScope, legacy_delivery};
 use camino::Utf8PathBuf;
+use dione_attention::{delivery::AttentionDirective, types::RecordId};
 use dione_contracts::{
     ActorId, ActorRef, ConversationId, ConversationRef, MessageId, MessageRef, ModuleInstanceId,
     ModuleSlotId, ProviderId,
+};
+use dione_messages::{
+    delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
+    events::{
+        AuthorOrigin, BellObservation, BellStatus, ByteSize, MessageCreated, ObservedAttachment,
+        ObservedAuthor, OrdinaryEvent, ReplyObservation, Targeting,
+    },
+    timestamp::Timestamp,
 };
 use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     sync::watch,
-};
-use {
-    crate::codex::{CodexEventQueue, LegacyDiscordScope, legacy_delivery},
-    dione_attention::{delivery::AttentionDirective, types::RecordId},
-    dione_messages::{
-        delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
-        events::{
-            AuthorOrigin, BellObservation, BellStatus, ByteSize, MessageCreated,
-            ObservedAttachment, ObservedAuthor, OrdinaryEvent, ReplyObservation, Targeting,
-        },
-        timestamp::Timestamp,
-    },
 };
 
 fn conversation(module: &ModuleInstanceId, id: u64) -> ConversationRef {
@@ -120,7 +118,11 @@ async fn actual_claude_and_omp_writers_project_the_same_typed_message() {
             .all(Value::is_string)
     );
     let (writer, reader) = tokio::io::duplex(8192);
-    let omp = crate::harness::oh_my_pi_with_output(ProtocolOutput::new(writer));
+    let omp = dione_omp::connect(
+        ProtocolOutput::new(writer),
+        None,
+        crate::harness::TOOL_NAMES,
+    );
     omp.deliver(&delivery).await.unwrap();
     let actual = read_line(reader).await;
     let mut expected = expected_legacy();

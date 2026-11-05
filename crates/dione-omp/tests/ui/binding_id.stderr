@@ -1,0 +1,11 @@
+error[E0603]: module `types` is private
+ --> tests/ui/binding_id.rs:1:16
+  |
+1 | use dione_omp::types::BindingId;
+  |                ^^^^^ private module
+  |
+note: the module `types` is defined here
+ --> src/lib.rs
+  |
+  | mod types;
+  | ^^^^^^^^^

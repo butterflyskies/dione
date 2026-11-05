@@ -1,0 +1,13 @@
+error[E0603]: module `actor` is private
+ --> tests/ui/command.rs:1:16
+  |
+1 | use dione_omp::actor::Command;
+  |                ^^^^^  ------- enum `Command` is not publicly re-exported
+  |                |
+  |                private module
+  |
+note: the module `actor` is defined here
+ --> src/lib.rs
+  |
+  | mod actor;
+  | ^^^^^^^^^
