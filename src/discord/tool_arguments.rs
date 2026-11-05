@@ -1,5 +1,6 @@
 //! Shared Discord tool argument parsing at the MCP boundary.
 use crate::{
+    config::EvidenceMarkerVersion,
     discord::ids::Snowflake,
     evidence::{SentexError, SentexHandles, parse_tool_sentex_handles},
     pre_send::{HookName, PipelineError},
@@ -63,8 +64,9 @@ impl From<ArgumentError> for String {
 pub(crate) fn parse_enabled_sentex_handles(
     args: &Value,
     evidence_markers_enabled: bool,
+    version: EvidenceMarkerVersion,
 ) -> Result<SentexHandles, ArgumentError> {
-    let handles = parse_tool_sentex_handles(args).map_err(ArgumentErrorKind::Evidence)?;
+    let handles = parse_tool_sentex_handles(args, version).map_err(ArgumentErrorKind::Evidence)?;
     if evidence_markers_enabled {
         return Ok(handles);
     }
@@ -140,7 +142,10 @@ pub(crate) fn parse_hook_overrides(args: &Value) -> Result<Vec<HookName>, Argume
         .collect()
 }
 
-pub(crate) fn sentex_handles_schema(role_description: &str) -> Value {
+pub(crate) fn sentex_handles_schema(
+    role_description: &str,
+    version: EvidenceMarkerVersion,
+) -> Value {
     json!({
         "type": "array",
         "maxItems": crate::evidence::MAX_SENTEX_REFS,
@@ -150,7 +155,8 @@ pub(crate) fn sentex_handles_schema(role_description: &str) -> Value {
             "maxLength": 20
         },
         "description": format!(
-            "{role_description}. Canonical positive decimal u64 strings naming opaque Vaelii sentex handles; JSON numbers are rejected to avoid precision loss. Dione transports the role and handle in terminal [🔍=v3:<role>:<token>] locators after pre-send hooks, where the token is the minimal-width big-endian handle bytes in unpadded base64url. At most {} claim and citation handles combined and {} aggregate marker bytes. A locator is author-offered metadata, not verification or truth.",
+            "{role_description}. Canonical positive decimal u64 strings naming opaque Vaelii sentex handles; JSON numbers are rejected to avoid precision loss. Dione transports the role and handle in terminal {}. At most {} claim and citation handles combined and {} aggregate marker bytes. A locator is author-offered metadata, not verification or truth.",
+            version.grammar_description(),
             crate::evidence::MAX_SENTEX_REFS,
             crate::evidence::MAX_SENTEX_MARKER_BYTES,
         )

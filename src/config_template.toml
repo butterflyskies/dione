@@ -109,6 +109,9 @@ trusted_webhook_creators = ["466378653216014359"]   # PluralKit
 text_chunk_limit = 2000
 # Opt in to role-preserving Vaelii sentex locators. Default: false.
 # evidence_markers_enabled = false
+# Outbound grammar pin: "v2" (fixed-width) or "v3" (minimal-width).
+# Omission stays V3 across upgrades; inbound supported formats are unchanged.
+# evidence_marker_version = "v3"
 # Global default coalescing delay for channel events (ms). Per-channel
 # delivery_delay_ms overrides this. 0 = no buffering.
 # delivery_delay_ms = 0

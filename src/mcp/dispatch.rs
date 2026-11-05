@@ -172,8 +172,11 @@ pub(crate) async fn call_tool(
                     .and_then(Value::as_str)
                     .ok_or_else(|| "missing content".to_string())?;
                 let no_rly_hooks = parse_hook_overrides(&args)?;
-                let sentex_handles =
-                    parse_enabled_sentex_handles(&args, config.delivery.evidence_markers_enabled)?;
+                let sentex_handles = parse_enabled_sentex_handles(
+                    &args,
+                    config.delivery.evidence_markers_enabled,
+                    config.delivery.evidence_marker_version,
+                )?;
                 messaging_wire::dm(
                     send_dm_with_evidence_and_hook_overrides(
                         &ctx,
