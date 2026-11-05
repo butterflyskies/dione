@@ -377,6 +377,21 @@ unused setter states remain scoped inherited policy debt. Production-roster
 checks prove the builder executes lint and emits real audit events; they do not
 observe whether startup calls that builder.
 
+## Teams identity boundary
+
+dione-teams-identities owns TenantId, ApplicationId, BotId, ActorId,
+ConversationId, ActivityId and their shared typed errors. The six private
+representations, common validator, conversions and validating serde move unchanged.
+Values preserve case, spaces and spelling; limits remain nonempty, at most 512
+UTF-8 bytes and no control characters. Whitespace-only values remain accepted.
+Syntax does not establish authenticated identity or grant reply authority.
+
+Configuration imports ConversationId directly, removing its application Teams
+backedge. Native auth, persisted reply handles, startup, probe and OMP consumers
+use the owning crate. The obsolete module and compatibility-only facade reexports
+are removed; no generic ID abstraction or duplicate validator is introduced.
+Actual persisted config/auth/store tests remain separate from member serde proof.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -401,6 +416,7 @@ observe whether startup calls that builder.
 18. Mute store and expiry mechanics, with process wiring and authorization retained.
 19. Checked coordination protocol, with publication policy retained.
 20. Cohesive pre-send hooks and private status lint, with native consent retained.
+21. Teams identity family, with native authentication and reply authority retained.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -413,7 +429,7 @@ The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, and `dione-pre-send`.
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, and `dione-teams-identities`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -435,14 +451,14 @@ Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, and `dione-pre-send`,
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, and `dione-teams-identities`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all twenty capabilities. Contradictionary publishing waits
+publishing waits for all twenty-one capabilities. Contradictionary publishing waits
 for evidence reconciliation. Presentation publishing waits for
 contracts, attention, evidence, messages, and identity-display reconciliation. Harness publishing waits for
 contracts and messages reconciliation. Messages publishing waits for
@@ -463,3 +479,5 @@ Mute storage has no capability publication prerequisite. Dione publishing waits 
 Coordination is a leaf publication. Dione publishing waits for its tokenless reconciliation.
 
 Pre-send publishing and reconciliation wait for evidence reconciliation. Root publication and reconciliation wait for pre-send.
+
+Teams identities is a leaf publication. Root publication and reconciliation wait for its reconciliation.

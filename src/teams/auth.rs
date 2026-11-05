@@ -3,9 +3,9 @@
 //! The types in this module enforce the documented Bot Connector JWT/JWKS
 //! boundary and preserve the correlated state needed to construct a reply.
 
-use super::{
+use super::json::decode_json;
+use dione_teams_identities::{
     ActivityId, ActorId, ApplicationId, BotId, ConversationId, IdentityError, TenantId,
-    json::decode_json,
 };
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::Jwk};
 #[cfg(test)]

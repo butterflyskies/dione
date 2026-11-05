@@ -1,5 +1,7 @@
 //! Opaque Teams coordinates; syntax never grants reply authority.
 
+#![warn(missing_docs)]
+
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 use thiserror::Error;
@@ -60,6 +62,23 @@ fn validate(value: &str, identity: IdentityKind) -> Result<(), IdentityError> {
 }
 
 /// An opaque Teams tenant coordinate, preserving its original spelling.
+///
+/// ```compile_fail
+/// use dione_teams_identities::TenantId;
+/// let id = TenantId("opaque".to_owned());
+/// ```
+///
+/// ```compile_fail
+/// use dione_teams_identities::TenantId;
+/// let id = TenantId::parse("opaque").unwrap();
+/// let raw = id.0;
+/// ```
+///
+/// ```compile_fail
+/// use dione_teams_identities::{TenantId, ApplicationId};
+/// fn requires_other(_: ApplicationId) {}
+/// requires_other(TenantId::parse("opaque").unwrap());
+/// ```
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct TenantId(String);
@@ -107,6 +126,23 @@ impl fmt::Display for TenantId {
 }
 
 /// An opaque Teams application coordinate, preserving its original spelling.
+///
+/// ```compile_fail
+/// use dione_teams_identities::ApplicationId;
+/// let id = ApplicationId("opaque".to_owned());
+/// ```
+///
+/// ```compile_fail
+/// use dione_teams_identities::ApplicationId;
+/// let id = ApplicationId::parse("opaque").unwrap();
+/// let raw = id.0;
+/// ```
+///
+/// ```compile_fail
+/// use dione_teams_identities::{ApplicationId, BotId};
+/// fn requires_other(_: BotId) {}
+/// requires_other(ApplicationId::parse("opaque").unwrap());
+/// ```
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct ApplicationId(String);
@@ -154,6 +190,23 @@ impl fmt::Display for ApplicationId {
 }
 
 /// An opaque Teams bot coordinate, preserving its original spelling.
+///
+/// ```compile_fail
+/// use dione_teams_identities::BotId;
+/// let id = BotId("opaque".to_owned());
+/// ```
+///
+/// ```compile_fail
+/// use dione_teams_identities::BotId;
+/// let id = BotId::parse("opaque").unwrap();
+/// let raw = id.0;
+/// ```
+///
+/// ```compile_fail
+/// use dione_teams_identities::{BotId, ActorId};
+/// fn requires_other(_: ActorId) {}
+/// requires_other(BotId::parse("opaque").unwrap());
+/// ```
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct BotId(String);
@@ -201,6 +254,23 @@ impl fmt::Display for BotId {
 }
 
 /// An opaque Teams actor coordinate, preserving its original spelling.
+///
+/// ```compile_fail
+/// use dione_teams_identities::ActorId;
+/// let id = ActorId("opaque".to_owned());
+/// ```
+///
+/// ```compile_fail
+/// use dione_teams_identities::ActorId;
+/// let id = ActorId::parse("opaque").unwrap();
+/// let raw = id.0;
+/// ```
+///
+/// ```compile_fail
+/// use dione_teams_identities::{ActorId, ConversationId};
+/// fn requires_other(_: ConversationId) {}
+/// requires_other(ActorId::parse("opaque").unwrap());
+/// ```
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct ActorId(String);
@@ -248,6 +318,23 @@ impl fmt::Display for ActorId {
 }
 
 /// An opaque Teams conversation coordinate, preserving its original spelling.
+///
+/// ```compile_fail
+/// use dione_teams_identities::ConversationId;
+/// let id = ConversationId("opaque".to_owned());
+/// ```
+///
+/// ```compile_fail
+/// use dione_teams_identities::ConversationId;
+/// let id = ConversationId::parse("opaque").unwrap();
+/// let raw = id.0;
+/// ```
+///
+/// ```compile_fail
+/// use dione_teams_identities::{ConversationId, ActivityId};
+/// fn requires_other(_: ActivityId) {}
+/// requires_other(ConversationId::parse("opaque").unwrap());
+/// ```
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct ConversationId(String);
@@ -295,6 +382,23 @@ impl fmt::Display for ConversationId {
 }
 
 /// An opaque Teams activity coordinate, preserving its original spelling.
+///
+/// ```compile_fail
+/// use dione_teams_identities::ActivityId;
+/// let id = ActivityId("opaque".to_owned());
+/// ```
+///
+/// ```compile_fail
+/// use dione_teams_identities::ActivityId;
+/// let id = ActivityId::parse("opaque").unwrap();
+/// let raw = id.0;
+/// ```
+///
+/// ```compile_fail
+/// use dione_teams_identities::{ActivityId, TenantId};
+/// fn requires_other(_: TenantId) {}
+/// requires_other(ActivityId::parse("opaque").unwrap());
+/// ```
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct ActivityId(String);

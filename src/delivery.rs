@@ -1,6 +1,6 @@
 //! Provider-qualified event identities shared by platforms and resident delivery.
 
-use crate::teams::{ActivityId, BotId, ConversationId, TenantId};
+use dione_teams_identities::{ActivityId, BotId, ConversationId, TenantId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

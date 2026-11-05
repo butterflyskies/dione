@@ -552,8 +552,8 @@ async fn prepare_teams(
     let Ok(app_id) = environment("TEAMS_APP_ID") else {
         return Ok(None);
     };
-    let app_id =
-        crate::teams::ApplicationId::parse(app_id).map_err(StartupErrorKind::TeamsIdentity)?;
+    let app_id = dione_teams_identities::ApplicationId::parse(app_id)
+        .map_err(StartupErrorKind::TeamsIdentity)?;
     if teams_config.allowed_conversations.is_empty() {
         return Err(StartupErrorKind::TeamsConversationsRequired.into());
     }
@@ -566,8 +566,8 @@ async fn prepare_teams(
         }
     };
     let tenant_id = environment("TEAMS_TENANT_ID").map_err(StartupErrorKind::TeamsTenant)?;
-    let tenant_id =
-        crate::teams::TenantId::parse(tenant_id).map_err(StartupErrorKind::TeamsIdentity)?;
+    let tenant_id = dione_teams_identities::TenantId::parse(tenant_id)
+        .map_err(StartupErrorKind::TeamsIdentity)?;
     let client_secret = secrecy::SecretString::from(
         environment("TEAMS_CLIENT_SECRET")
             .map_err(|source| StartupErrorKind::TeamsSecret(source.into()))?,

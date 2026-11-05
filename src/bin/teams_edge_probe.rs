@@ -35,12 +35,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .try_init()
         .map_err(|error| format!("failed to initialize tracing: {error}"))?;
 
-    let app_id = dione::teams::ApplicationId::parse(required("TEAMS_APP_ID")?)?;
-    let tenant_id = dione::teams::TenantId::parse(required("TEAMS_TENANT_ID")?)?;
+    let app_id = dione_teams_identities::ApplicationId::parse(required("TEAMS_APP_ID")?)?;
+    let tenant_id = dione_teams_identities::TenantId::parse(required("TEAMS_TENANT_ID")?)?;
     let client_secret = SecretString::from(required("TEAMS_CLIENT_SECRET")?);
     let allowed_host = required("TEAMS_ALLOWED_SERVICE_HOST")?;
     let allowed_conversation =
-        dione::teams::ConversationId::parse(required("TEAMS_ALLOWED_CONVERSATION")?)?;
+        dione_teams_identities::ConversationId::parse(required("TEAMS_ALLOWED_CONVERSATION")?)?;
     let listen: SocketAddr = env::var("TEAMS_LISTEN_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:3978".to_owned())
         .parse()?;

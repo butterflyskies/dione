@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.107.0] - 2026-11-05
+
+### Changed
+
+- Extract the six validated Teams identity types into dione-teams-identities.
+  Migrate consumers directly to the owner and remove the former application
+  identity module and forwarding exports without changing wire spelling.
+
 ## [0.106.0] - 2026-11-05
 
 ### Changed
