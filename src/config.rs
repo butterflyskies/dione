@@ -1,5 +1,6 @@
 use arc_swap::ArcSwap;
 use camino::{Utf8Path, Utf8PathBuf};
+use dione_bell_rings::{BellProviderConfig, RecallOptions};
 use dione_gaie::{DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES, DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES};
 use regex::RegexSet;
 use serde::{Deserialize, Deserializer, de::Error as _};
@@ -422,18 +423,14 @@ pub struct BellRingsConfig {
     /// Shadow (log only) or live (inject into metadata).
     pub mode: BellMode,
     /// Memory-mcp providers to fan out recall to. All are queried concurrently
-    /// within the total deadline; results are merged and sorted by loudness.
+    /// within separate bounded connection and recall phases; results are merged and sorted by loudness.
     pub providers: Vec<BellProviderConfig>,
     /// Which messages trigger evaluation by default.
     pub trigger: BellTrigger,
     /// Per-channel trigger overrides.
     pub channel_overrides: Vec<BellChannelOverride>,
-    /// Largest admitted cosine distance.
-    pub max_semantic_distance: f64,
-    /// Maximum candidates requested and bells retained.
-    pub max_bells: usize,
-    /// Total evaluation deadline in milliseconds.
-    pub deadline_ms: u64,
+    /// Validated recall distance, candidate limit, and per-provider recall deadline.
+    pub recall: RecallOptions,
 }
 
 #[derive(Deserialize)]
@@ -467,9 +464,9 @@ impl Default for BellRingsConfigWire {
             providers: vec![],
             trigger: defaults.trigger,
             channel_overrides: defaults.channel_overrides,
-            max_semantic_distance: defaults.max_semantic_distance,
-            max_bells: defaults.max_bells,
-            deadline_ms: defaults.deadline_ms,
+            max_semantic_distance: defaults.recall.max_semantic_distance(),
+            max_bells: defaults.recall.max_bells(),
+            deadline_ms: defaults.recall.deadline_ms(),
         }
     }
 }
@@ -480,6 +477,9 @@ impl<'de> Deserialize<'de> for BellRingsConfig {
         D: Deserializer<'de>,
     {
         let wire = BellRingsConfigWire::deserialize(deserializer)?;
+        let recall =
+            RecallOptions::new(wire.max_semantic_distance, wire.max_bells, wire.deadline_ms)
+                .map_err(D::Error::custom)?;
         let mut providers = if !wire.providers.is_empty() {
             wire.providers
         } else if let Some(provider) = wire.provider {
@@ -540,9 +540,7 @@ impl<'de> Deserialize<'de> for BellRingsConfig {
             providers,
             trigger: wire.trigger,
             channel_overrides: wire.channel_overrides,
-            max_semantic_distance: wire.max_semantic_distance,
-            max_bells: wire.max_bells,
-            deadline_ms: wire.deadline_ms,
+            recall,
         })
     }
 }
@@ -555,9 +553,7 @@ impl Default for BellRingsConfig {
             providers: vec![],
             trigger: BellTrigger::Directed,
             channel_overrides: vec![],
-            max_semantic_distance: 0.3,
-            max_bells: 3,
-            deadline_ms: 300,
+            recall: RecallOptions::default(),
         }
     }
 }
@@ -573,97 +569,15 @@ impl BellRingsConfig {
     }
 }
 
-/// One memory-mcp endpoint and one explicit allowed scope.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct BellProviderConfig {
-    /// Streamable HTTP MCP endpoint.
-    pub url: BellProviderUrl,
-    /// Explicit recall scope. `all` and empty scopes are rejected while parsing.
-    pub scope: BellScope,
-    /// Stable non-secret alias for provenance tracking. Defaults to the scope value.
-    #[serde(default)]
-    pub alias: Option<String>,
-}
-
-impl BellProviderConfig {
-    pub fn alias(&self) -> &str {
-        self.alias.as_deref().unwrap_or(self.scope.as_str())
-    }
-}
-
-/// A validated HTTP(S) memory-mcp endpoint without embedded credentials.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BellProviderUrl(String);
-
-impl BellProviderUrl {
-    pub fn parse(value: impl Into<String>) -> Result<Self, String> {
-        let value = value.into();
-        let parsed = value
-            .parse::<reqwest::Url>()
-            .map_err(|_| "bell_rings provider url must be a valid HTTP(S) URL".to_owned())?;
-        if !matches!(parsed.scheme(), "http" | "https")
-            || !parsed.username().is_empty()
-            || parsed.password().is_some()
-        {
-            return Err(
-                "bell_rings provider url must be HTTP(S) without embedded credentials".to_owned(),
-            );
-        }
-        Ok(Self(parsed.to_string()))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for BellProviderUrl {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Self::parse(String::deserialize(deserializer)?).map_err(D::Error::custom)
-    }
-}
-
-/// A validated memory scope which cannot represent the cross-scope `all` value.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BellScope(String);
-
-impl BellScope {
-    pub fn parse(value: impl Into<String>) -> Result<Self, String> {
-        let value = value.into();
-        let trimmed = value.trim();
-        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("all") {
-            Err("bell_rings provider scope must be explicit and cannot be `all`".to_owned())
-        } else {
-            Ok(Self(trimmed.to_owned()))
-        }
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for BellScope {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Self::parse(String::deserialize(deserializer)?).map_err(D::Error::custom)
-    }
-}
-
 fn deserialize_max_semantic_distance<'de, D>(deserializer: D) -> Result<f64, D::Error>
 where
     D: Deserializer<'de>,
 {
     let value = f64::deserialize(deserializer)?;
-    (value.is_finite() && (0.0..=2.0).contains(&value))
-        .then_some(value)
-        .ok_or_else(|| D::Error::custom("max_semantic_distance must be finite and between 0 and 2"))
+    let defaults = RecallOptions::default();
+    RecallOptions::new(value, defaults.max_bells(), defaults.deadline_ms())
+        .map(|options| options.max_semantic_distance())
+        .map_err(D::Error::custom)
 }
 
 fn deserialize_max_bells<'de, D>(deserializer: D) -> Result<usize, D::Error>
@@ -671,10 +585,14 @@ where
     D: Deserializer<'de>,
 {
     let value = usize::deserialize(deserializer)?;
-    (1..=100)
-        .contains(&value)
-        .then_some(value)
-        .ok_or_else(|| D::Error::custom("max_bells must be between 1 and 100"))
+    let defaults = RecallOptions::default();
+    RecallOptions::new(
+        defaults.max_semantic_distance(),
+        value,
+        defaults.deadline_ms(),
+    )
+    .map(|options| options.max_bells())
+    .map_err(D::Error::custom)
 }
 
 fn deserialize_bell_deadline<'de, D>(deserializer: D) -> Result<u64, D::Error>
@@ -682,10 +600,14 @@ where
     D: Deserializer<'de>,
 {
     let value = u64::deserialize(deserializer)?;
-    (1..=2000)
-        .contains(&value)
-        .then_some(value)
-        .ok_or_else(|| D::Error::custom("deadline_ms must be between 1 and 2000"))
+    let defaults = RecallOptions::default();
+    RecallOptions::new(
+        defaults.max_semantic_distance(),
+        defaults.max_bells(),
+        value,
+    )
+    .map(|options| options.deadline_ms())
+    .map_err(D::Error::custom)
 }
 
 /// Pre-send hook lifecycle configuration.

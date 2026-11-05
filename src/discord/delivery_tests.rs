@@ -30,7 +30,7 @@ fn fixture() -> MessageEvent {
         reply_to_user: Some("original author".into()),
         reply_to_content_preview: Some("preview\n".into()),
         bells: Some("bell text".into()),
-        bells_status: Some(bell_rings::BellStatus::PartialTimeout),
+        bells_status: Some(dione_bell_rings::BellStatus::PartialTimeout),
     }
 }
 
@@ -160,17 +160,17 @@ fn origin_targeting_and_bell_classes_convert_exhaustively() {
         );
     }
     for (raw, expected) in [
-        (bell_rings::BellStatus::Ok, BellStatus::Ok),
+        (dione_bell_rings::BellStatus::Ok, BellStatus::Ok),
         (
-            bell_rings::BellStatus::PartialTimeout,
+            dione_bell_rings::BellStatus::PartialTimeout,
             BellStatus::PartialTimeout,
         ),
         (
-            bell_rings::BellStatus::PartialError,
+            dione_bell_rings::BellStatus::PartialError,
             BellStatus::PartialError,
         ),
-        (bell_rings::BellStatus::Timeout, BellStatus::Timeout),
-        (bell_rings::BellStatus::Error, BellStatus::Error),
+        (dione_bell_rings::BellStatus::Timeout, BellStatus::Timeout),
+        (dione_bell_rings::BellStatus::Error, BellStatus::Error),
     ] {
         let mut event = fixture();
         event.bells_status = Some(raw);

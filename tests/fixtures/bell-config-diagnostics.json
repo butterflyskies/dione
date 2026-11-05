@@ -1,0 +1,114 @@
+[
+  {
+    "display": "TOML parse error at line 2, column 23\n  |\n2 | max_semantic_distance=nan\n  |                       ^^^\nmax_semantic_distance must be finite and between 0 and 2\n",
+    "load_display": "config parse error: TOML parse error at line 2, column 23\n  |\n2 | max_semantic_distance=nan\n  |                       ^^^\nmax_semantic_distance must be finite and between 0 and 2\n",
+    "path": "bell_rings.max_semantic_distance",
+    "path_display": "TOML parse error at line 2, column 23\n  |\n2 | max_semantic_distance=nan\n  |                       ^^^\nmax_semantic_distance must be finite and between 0 and 2\n",
+    "source": "[bell_rings]\nmax_semantic_distance=nan\n"
+  },
+  {
+    "display": "TOML parse error at line 2, column 23\n  |\n2 | max_semantic_distance=2.1\n  |                       ^^^\nmax_semantic_distance must be finite and between 0 and 2\n",
+    "load_display": "config parse error: TOML parse error at line 2, column 23\n  |\n2 | max_semantic_distance=2.1\n  |                       ^^^\nmax_semantic_distance must be finite and between 0 and 2\n",
+    "path": "bell_rings.max_semantic_distance",
+    "path_display": "TOML parse error at line 2, column 23\n  |\n2 | max_semantic_distance=2.1\n  |                       ^^^\nmax_semantic_distance must be finite and between 0 and 2\n",
+    "source": "[bell_rings]\nmax_semantic_distance=2.1\n"
+  },
+  {
+    "display": "TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
+    "load_display": "config parse error: TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
+    "path": "bell_rings.max_bells",
+    "path_display": "TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
+    "source": "[bell_rings]\nmax_bells=0\n"
+  },
+  {
+    "display": "TOML parse error at line 2, column 11\n  |\n2 | max_bells=101\n  |           ^^^\nmax_bells must be between 1 and 100\n",
+    "load_display": "config parse error: TOML parse error at line 2, column 11\n  |\n2 | max_bells=101\n  |           ^^^\nmax_bells must be between 1 and 100\n",
+    "path": "bell_rings.max_bells",
+    "path_display": "TOML parse error at line 2, column 11\n  |\n2 | max_bells=101\n  |           ^^^\nmax_bells must be between 1 and 100\n",
+    "source": "[bell_rings]\nmax_bells=101\n"
+  },
+  {
+    "display": "TOML parse error at line 2, column 13\n  |\n2 | deadline_ms=0\n  |             ^\ndeadline_ms must be between 1 and 2000\n",
+    "load_display": "config parse error: TOML parse error at line 2, column 13\n  |\n2 | deadline_ms=0\n  |             ^\ndeadline_ms must be between 1 and 2000\n",
+    "path": "bell_rings.deadline_ms",
+    "path_display": "TOML parse error at line 2, column 13\n  |\n2 | deadline_ms=0\n  |             ^\ndeadline_ms must be between 1 and 2000\n",
+    "source": "[bell_rings]\ndeadline_ms=0\n"
+  },
+  {
+    "display": "TOML parse error at line 2, column 13\n  |\n2 | deadline_ms=2001\n  |             ^^^^\ndeadline_ms must be between 1 and 2000\n",
+    "load_display": "config parse error: TOML parse error at line 2, column 13\n  |\n2 | deadline_ms=2001\n  |             ^^^^\ndeadline_ms must be between 1 and 2000\n",
+    "path": "bell_rings.deadline_ms",
+    "path_display": "TOML parse error at line 2, column 13\n  |\n2 | deadline_ms=2001\n  |             ^^^^\ndeadline_ms must be between 1 and 2000\n",
+    "source": "[bell_rings]\ndeadline_ms=2001\n"
+  },
+  {
+    "display": "TOML parse error at line 3, column 13\n  |\n3 | deadline_ms=0\n  |             ^\ndeadline_ms must be between 1 and 2000\n",
+    "load_display": "config parse error: TOML parse error at line 3, column 13\n  |\n3 | deadline_ms=0\n  |             ^\ndeadline_ms must be between 1 and 2000\n",
+    "path": "bell_rings.deadline_ms",
+    "path_display": "TOML parse error at line 3, column 13\n  |\n3 | deadline_ms=0\n  |             ^\ndeadline_ms must be between 1 and 2000\n",
+    "source": "[bell_rings]\nmax_bells=0\ndeadline_ms=0\n"
+  },
+  {
+    "display": "TOML parse error at line 2, column 13\n  |\n2 | deadline_ms=0\n  |             ^\ndeadline_ms must be between 1 and 2000\n",
+    "load_display": "config parse error: TOML parse error at line 2, column 13\n  |\n2 | deadline_ms=0\n  |             ^\ndeadline_ms must be between 1 and 2000\n",
+    "path": "bell_rings.deadline_ms",
+    "path_display": "TOML parse error at line 2, column 13\n  |\n2 | deadline_ms=0\n  |             ^\ndeadline_ms must be between 1 and 2000\n",
+    "source": "[bell_rings]\ndeadline_ms=0\nmax_bells=0\n"
+  },
+  {
+    "display": "TOML parse error at line 3, column 11\n  |\n3 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
+    "load_display": "config parse error: TOML parse error at line 3, column 11\n  |\n3 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
+    "path": "bell_rings.max_bells",
+    "path_display": "TOML parse error at line 3, column 11\n  |\n3 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
+    "source": "[bell_rings]\nenabled=true\nmax_bells=0\n"
+  },
+  {
+    "display": "TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
+    "load_display": "config parse error: TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
+    "path": "bell_rings.max_bells",
+    "path_display": "TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
+    "source": "[bell_rings]\nmax_bells=0\nenabled=true\n"
+  },
+  {
+    "display": "TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
+    "load_display": "config parse error: TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
+    "path": "bell_rings.max_bells",
+    "path_display": "TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
+    "source": "[bell_rings]\nmax_bells=0\n[[bell_rings.providers]]\nurl='http://memory/mcp'\nscope='syne'\nalias=' '\n"
+  },
+  {
+    "display": "TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
+    "load_display": "config parse error: TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
+    "path": "bell_rings.max_bells",
+    "path_display": "TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
+    "source": "[bell_rings]\nmax_bells=0\n[bell_rings.provider]\nurl='file:///tmp/memory'\nscope='syne'\n"
+  },
+  {
+    "display": "TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
+    "load_display": "config parse error: TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
+    "path": "bell_rings.max_bells",
+    "path_display": "TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
+    "source": "[bell_rings]\nmax_bells=0\n[bell_rings.provider]\nurl='http://memory/mcp'\nscope='all'\n"
+  },
+  {
+    "display": "TOML parse error at line 2, column 11\n  |\n2 | max_bells='wrong'\n  |           ^^^^^^^\ninvalid type: string \"wrong\", expected usize\n",
+    "load_display": "config parse error: TOML parse error at line 2, column 11\n  |\n2 | max_bells='wrong'\n  |           ^^^^^^^\ninvalid type: string \"wrong\", expected usize\n",
+    "path": "bell_rings.max_bells",
+    "path_display": "TOML parse error at line 2, column 11\n  |\n2 | max_bells='wrong'\n  |           ^^^^^^^\ninvalid type: string \"wrong\", expected usize\n",
+    "source": "[bell_rings]\nmax_bells='wrong'\n"
+  },
+  {
+    "display": "TOML parse error at line 2, column 13\n  |\n2 | deadline_ms=[]\n  |             ^^\ninvalid type: sequence, expected u64\n",
+    "load_display": "config parse error: TOML parse error at line 2, column 13\n  |\n2 | deadline_ms=[]\n  |             ^^\ninvalid type: sequence, expected u64\n",
+    "path": "bell_rings.deadline_ms",
+    "path_display": "TOML parse error at line 2, column 13\n  |\n2 | deadline_ms=[]\n  |             ^^\ninvalid type: sequence, expected u64\n",
+    "source": "[bell_rings]\ndeadline_ms=[]\n"
+  },
+  {
+    "display": "TOML parse error at line 2, column 23\n  |\n2 | max_semantic_distance=true\n  |                       ^^^^\ninvalid type: boolean `true`, expected f64\n",
+    "load_display": "config parse error: TOML parse error at line 2, column 23\n  |\n2 | max_semantic_distance=true\n  |                       ^^^^\ninvalid type: boolean `true`, expected f64\n",
+    "path": "bell_rings.max_semantic_distance",
+    "path_display": "TOML parse error at line 2, column 23\n  |\n2 | max_semantic_distance=true\n  |                       ^^^^\ninvalid type: boolean `true`, expected f64\n",
+    "source": "[bell_rings]\nmax_semantic_distance=true\n"
+  }
+]

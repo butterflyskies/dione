@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.100.0"
+version = "0.101.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -940,6 +940,7 @@ dependencies = [
  "clap",
  "color-eyre",
  "dione-attention",
+ "dione-bell-rings",
  "dione-contracts",
  "dione-contradictionary",
  "dione-durable",
@@ -967,7 +968,6 @@ dependencies = [
  "rcgen",
  "regex",
  "reqwest 0.12.28",
- "rmcp",
  "rustls",
  "secrecy",
  "serde",
@@ -1012,6 +1012,20 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "dione-bell-rings"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "reqwest 0.12.28",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

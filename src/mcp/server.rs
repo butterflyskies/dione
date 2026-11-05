@@ -13,6 +13,7 @@
 
 pub use crate::tracing_channel::TraceLevelController;
 use camino::Utf8PathBuf;
+use dione_bell_rings::{BellEvaluator, render_bells};
 use dione_contracts::ModuleInstanceId;
 #[cfg(test)]
 use dione_contracts::{ModuleSlotId, ProviderId};
@@ -31,7 +32,7 @@ use tokio::{
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use {
     crate::{
-        bell_rings::{BellEvaluator, render_bells},
+        bell_rings::evaluate_native,
         config::BellMode,
         delivery_buffer::BufferResult,
         discord::{
@@ -1961,11 +1962,12 @@ async fn prepare_bells(
             let shadow_event = event.clone();
             let shadow_config = cfg.bell_rings.clone();
             tokio::spawn(async move {
-                let _ = evaluator.evaluate(shadow_event, &shadow_config).await;
+                let _ = evaluate_native(shadow_event, &shadow_config, &evaluator).await;
             });
         }
         BellMode::Live => {
-            let (returned, bells, status) = evaluator.evaluate(event, &cfg.bell_rings).await;
+            let (returned, bells, status) =
+                evaluate_native(event, &cfg.bell_rings, evaluator).await;
             event = returned;
             if let NotificationEvent::Message(message) = &mut event {
                 if let Some(status) = status {
