@@ -1017,7 +1017,7 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
         package
             .matches("scripts/verify-public-package-privacy.sh")
             .count(),
-        16 * archive_package_calls.len(),
+        17 * archive_package_calls.len(),
         "every archive-producing workspace package call must cross the privacy verifier"
     );
     for (index, _) in archive_package_calls {
