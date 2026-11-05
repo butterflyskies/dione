@@ -441,15 +441,23 @@ those checks.
 For public API changes, identify affected consumers and verify their builds and
 behavior. Keep the compile-fail tests that protect verified-action boundaries.
 
-Every PR requires an independent six-lens review and approval of the final
-candidate. Any member of `lacuna-constructs`, `friends-of-lacuna`, or
+PRs targeting `main` require an independent six-lens review and official
+approval of the final candidate and accumulated diff. Intermediate stacked PRs
+targeting a contained working branch require focused source/package technical
+review and ordinary required CI, not the main-only official approval or receipt.
+Internal pre-PR review is a separate process; this merge-boundary distinction
+does not replace or waive it.
+
+For a merge into `main`, any member of `lacuna-constructs`, `friends-of-lacuna`, or
 `lacuna-blinkers` is an official reviewer and may review and approve a PR.
 The author of a PR cannot review or approve it. Once others have reviewed and
 approved, any member of `lacuna-blinkers` may merge, including the author or
 the reviewer.
-Resolve findings before approval and check the required CI results before
-merging. Verify the repository's current branch protection settings separately
-before claiming that the server enforces these requirements.
+Resolve technical review findings and check the required CI results before any
+merge. For contained merges, verify the actual target-specific requirements
+instead of applying the `main` approval rule by inference. These review rules
+do not authorize a merge or retarget to `main`. Verify the repository's current
+branch protection settings separately before claiming that the server enforces these requirements.
 For pre-PR review, consult the group's pinned design principles and review
 lenses linked from [docs/pr-ready.md](docs/pr-ready.md).
 
