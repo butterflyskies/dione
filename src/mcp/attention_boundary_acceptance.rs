@@ -296,7 +296,8 @@ async fn ordered_off_baseline() -> BoundaryTrace {
             .is_none()
     );
     let mut direct = fixture.event(100, 1_403).await;
-    direct.targeting = MessageTargeting::GuildDirected(crate::gate::MentionKind::DirectMention);
+    direct.targeting =
+        MessageTargeting::GuildDirected(dione_discord_events::MentionKind::DirectMention);
     assert!(fixture.dispatch(direct).await.is_none());
     assert_eq!(fixture.network.provider_requests(), Vec::<Value>::new());
     BoundaryTrace {
@@ -380,7 +381,8 @@ fn a05_log_sink_matches_off_while_y_finishes_before_x_and_direct_does_not_wait()
         await_ordered_provider(&fixture, &mut requests, &mut y_pending, &y_source).await;
 
         let mut direct = fixture.event(100, 1_403).await;
-        direct.targeting = MessageTargeting::GuildDirected(crate::gate::MentionKind::DirectMention);
+        direct.targeting =
+            MessageTargeting::GuildDirected(dione_discord_events::MentionKind::DirectMention);
         assert!(fixture.begin(direct).await.is_none());
         assert!(!x_pending.is_finished());
         assert!(!y_pending.is_finished());
@@ -445,7 +447,8 @@ fn a05_log_provider_failure_keeps_the_exact_off_order_and_sink_envelopes() {
                 .is_none()
         );
         let mut direct = fixture.event(100, 1_403).await;
-        direct.targeting = MessageTargeting::GuildDirected(crate::gate::MentionKind::DirectMention);
+        direct.targeting =
+            MessageTargeting::GuildDirected(dione_discord_events::MentionKind::DirectMention);
         assert!(fixture.dispatch(direct).await.is_none());
 
         assert_eq!(fixture.drain().await, baseline.sink);

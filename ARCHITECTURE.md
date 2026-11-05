@@ -259,7 +259,7 @@ Admitted events enter a Tokio channel with capacity 256. The notification task
 in [server.rs](src/mcp/server.rs) applies rate limits and optional attention
 evaluation, then buffers and coalesces ordinary delivery through
 [scheduling.rs](src/discord/scheduling.rs) and [delivery scheduler](crates/dione-delivery-scheduler/src/lib.rs).
-[delivery.rs](src/discord/delivery.rs) constructs typed batches, and
+[Discord event contracts](crates/dione-discord-events/src/lib.rs) own descriptive observations and targeting reasons. [Discord delivery conversion](crates/dione-discord-events/src/delivery.rs) constructs typed batches, and
 [dione-presentation](crates/dione-presentation/src/lib.rs) projects deliveries for each harness.
 The buffer is in memory;
 entering the gateway channel is not a durable inbox commit.

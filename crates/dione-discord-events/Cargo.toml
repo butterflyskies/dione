@@ -1,0 +1,22 @@
+[package]
+name = "dione-discord-events"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Descriptive Discord events and canonical typed delivery conversion"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["discord", "events", "delivery"]
+categories = ["asynchronous"]
+
+[dependencies]
+dione-attention.workspace = true
+dione-bell-rings.workspace = true
+dione-messages.workspace = true
+dione-coordination.workspace = true
+dione-evidence.workspace = true
+dione-contracts.workspace = true
+serenity.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

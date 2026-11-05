@@ -7,8 +7,6 @@
 #[path = "support/codex_projection.rs"]
 mod codex_projection;
 
-use dione::discord::events::MessageEvent;
-use dione::discord::events::NotificationEvent;
 use dione::discord::scheduling::DeliveryBuffer;
 use dione::mcp::server::test_helpers;
 use dione_config::ChannelConfig;
@@ -18,6 +16,8 @@ use dione_config::LoadedConfig;
 use dione_config::RateLimitTomlConfig;
 use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use dione_delivery_scheduler::BufferResult;
+use dione_discord_events::MessageEvent;
+use dione_discord_events::NotificationEvent;
 use dione_messages::timestamp::Timestamp;
 use dione_rate_limiter::ChannelRef;
 use dione_rate_limiter::OverflowPolicy;
@@ -51,7 +51,7 @@ fn msg_event_with_id(
         user_id,
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: content.to_string(),
-        targeting: dione::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -836,7 +836,7 @@ async fn notification_format_preserved_through_pipeline() {
         user_id: UserId::new(100),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: "hello world".to_string(),
-        targeting: dione::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-06-08T12:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: false,

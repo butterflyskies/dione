@@ -3,7 +3,7 @@
 use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use serde_json::Value;
 use {
-    crate::discord::{delivery, events::NotificationEvent},
+    dione_discord_events::{self as delivery, NotificationEvent},
     dione_messages::{
         delivery::{Delivery, EvidenceVisibility, PresentationContext},
         events::{ControlEvent, TraceLevel},

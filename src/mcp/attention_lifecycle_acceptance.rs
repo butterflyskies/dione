@@ -1857,7 +1857,8 @@ fn denied_antecedent_stays_absent_in_the_same_provider_fault_fallback_trace() {
 
         fixture.network.insert(100, direct_id, direct_text, None);
         let mut direct = fixture.event(100, direct_id).await;
-        direct.targeting = MessageTargeting::GuildDirected(crate::gate::MentionKind::DirectMention);
+        direct.targeting =
+            MessageTargeting::GuildDirected(dione_discord_events::MentionKind::DirectMention);
         assert!(fixture.dispatch(direct).await.is_none());
 
         let requests = fixture.network.provider_requests();

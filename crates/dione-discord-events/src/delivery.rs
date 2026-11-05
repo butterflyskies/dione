@@ -1,6 +1,6 @@
 //! Discord ingress conversion into scoped, typed live deliveries.
 
-use super::events::{MessageEvent, MessageTargeting, NotificationEvent};
+use crate::{MentionKind, MessageEvent, MessageTargeting, NotificationEvent};
 use dione_contracts::{
     ActorId, ActorRef, ConversationId, ConversationRef, MessageId, MessageRef, ModuleInstanceId,
 };
@@ -8,7 +8,6 @@ use dione_coordination::CoordinationEvent;
 use serenity::model::id::{ChannelId, MessageId as DiscordMessageId, UserId};
 use thiserror::Error;
 use {
-    crate::gate::MentionKind,
     dione_attention::types::SourceAuthorKind,
     dione_messages::{
         delivery::{Delivery, PresentationContext},
@@ -20,7 +19,7 @@ use {
     },
 };
 
-pub(crate) enum ConvertedEvent {
+enum ConvertedEvent {
     Ordinary(OrdinaryEvent),
     Control(ControlEvent),
 }
@@ -38,7 +37,8 @@ fn actor(module: &ModuleInstanceId, user: UserId) -> ActorRef {
     ActorRef::new(module.clone(), ActorId::numeric(user.into()))
 }
 
-pub(crate) fn message(module: &ModuleInstanceId, event: MessageEvent) -> MessageCreated {
+/// Converts a descriptive message while retaining its observed fields.
+pub fn message(module: &ModuleInstanceId, event: MessageEvent) -> MessageCreated {
     let origin = match event.author_kind {
         SourceAuthorKind::Unknown => AuthorOrigin::Unknown,
         SourceAuthorKind::DirectHuman => AuthorOrigin::DirectHuman,
@@ -99,7 +99,7 @@ pub(crate) fn message(module: &ModuleInstanceId, event: MessageEvent) -> Message
     .with_bells(BellObservation::new(event.bells, status))
 }
 
-pub(crate) fn convert(
+fn convert(
     module: &ModuleInstanceId,
     event: NotificationEvent,
 ) -> Result<ConvertedEvent, DeliveryConversionError> {
@@ -204,7 +204,8 @@ pub(crate) fn convert(
     })
 }
 
-pub(crate) fn single(
+/// Converts one observation into an ordinary or control delivery.
+pub fn single(
     module: &ModuleInstanceId,
     event: NotificationEvent,
     presentation: PresentationContext,
@@ -215,7 +216,8 @@ pub(crate) fn single(
     })
 }
 
-pub(crate) fn batch(
+/// Converts an ordered ordinary batch, rejecting any mixed control event.
+pub fn batch(
     module: &ModuleInstanceId,
     first: NotificationEvent,
     rest: Vec<NotificationEvent>,
@@ -243,16 +245,21 @@ fn control_error(source: ControlError) -> DeliveryConversionError {
         kind: DeliveryConversionErrorKind::Control(source),
     }
 }
+/// A failed conversion into a typed delivery.
 #[derive(Debug, Error)]
 #[error("cannot convert Discord delivery: {kind}")]
-pub(crate) struct DeliveryConversionError {
+pub struct DeliveryConversionError {
+    /// The concrete conversion failure and its typed source.
     #[source]
-    kind: DeliveryConversionErrorKind,
+    pub kind: DeliveryConversionErrorKind,
 }
+/// The exhaustive reasons a native observation cannot form a delivery.
 #[derive(Debug, Error)]
-enum DeliveryConversionErrorKind {
+pub enum DeliveryConversionErrorKind {
+    /// A control payload failed its existing validation.
     #[error(transparent)]
     Control(#[from] ControlError),
+    /// A control observation was included in an ordinary batch.
     #[error("a control event cannot be included in an ordinary batch")]
     MixedControl,
 }

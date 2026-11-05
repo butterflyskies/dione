@@ -1,5 +1,5 @@
-use crate::discord::events::NotificationEvent;
 use camino::Utf8PathBuf;
+use dione_discord_events::NotificationEvent;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;

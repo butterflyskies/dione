@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.120.0] - 2026-11-05
+
+### Changed
+
+- Extract native Discord event observations and their canonical typed-delivery conversion into `dione-discord-events`, preserving original fields and conversion behavior. Targeting reasons now use an exhaustive enum in their owning crate; native detection and authorization remain in the application.
+
 ## [0.119.0] - 2026-11-05
 
 ### Changed

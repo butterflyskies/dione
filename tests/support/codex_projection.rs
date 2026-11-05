@@ -1,5 +1,5 @@
-use dione::discord::events::NotificationEvent;
 use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
+use dione_discord_events::NotificationEvent;
 use dione_messages::delivery::Delivery;
 use serde_json::Value;
 use std::time::Duration;

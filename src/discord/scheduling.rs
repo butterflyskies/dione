@@ -1,8 +1,8 @@
 //! Discord scheduling classification and scoped payload ownership.
 
-use crate::discord::events::NotificationEvent;
 use dione_contracts::{ConversationId, ConversationRef, ModuleInstanceId};
 use dione_delivery_scheduler::{BufferResult, BufferedEvent, DeliveryBuffer as Scheduler};
+use dione_discord_events::NotificationEvent;
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -139,7 +139,7 @@ mod tests {
     use super::*;
     use dione_contracts::{ModuleSlotId, ProviderId};
     use serenity::model::id::{ChannelId, MessageId, UserId};
-    use {crate::discord::events::MessageEvent, dione_messages::timestamp::Timestamp};
+    use {dione_discord_events::MessageEvent, dione_messages::timestamp::Timestamp};
 
     fn msg_event(chat_id: ChannelId) -> NotificationEvent {
         NotificationEvent::Message(MessageEvent {
@@ -149,7 +149,7 @@ mod tests {
             user_id: UserId::new(100),
             author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
             content: "hello".to_string(),
-            targeting: crate::discord::events::MessageTargeting::Ambient,
+            targeting: dione_discord_events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
@@ -703,7 +703,7 @@ mod tests {
             user_id: UserId::new(300),
             author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
             content: "world".to_string(),
-            targeting: crate::discord::events::MessageTargeting::Ambient,
+            targeting: dione_discord_events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
@@ -768,7 +768,7 @@ mod proptests {
     use dione_contracts::{ModuleSlotId, ProviderId};
     use proptest::prelude::*;
     use serenity::model::id::{ChannelId, MessageId, UserId};
-    use {crate::discord::events::MessageEvent, dione_messages::timestamp::Timestamp};
+    use {dione_discord_events::MessageEvent, dione_messages::timestamp::Timestamp};
 
     /// Strategy: pick a channel ID from a small set.
     fn channel_id_strategy() -> impl Strategy<Value = ChannelId> {
@@ -822,7 +822,7 @@ mod proptests {
                     user_id: UserId::new(100),
                     author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
                     content: format!("evt-{i}"),
-                    targeting: crate::discord::events::MessageTargeting::Ambient,
+                    targeting: dione_discord_events::MessageTargeting::Ambient,
                     timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                     attachments: vec![],
                     is_voice_message: false,
@@ -900,7 +900,7 @@ mod proptests {
                     user_id: UserId::new(100),
                     author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
                     content: format!("order-{i}"),
-                    targeting: crate::discord::events::MessageTargeting::Ambient,
+                    targeting: dione_discord_events::MessageTargeting::Ambient,
                     timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                     attachments: vec![],
                     is_voice_message: false,
@@ -948,7 +948,7 @@ mod proptests {
                     user_id: UserId::new(100),
                     author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
                     content: format!("evt-{i}"),
-                    targeting: crate::discord::events::MessageTargeting::Ambient,
+                    targeting: dione_discord_events::MessageTargeting::Ambient,
                     timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                     attachments: vec![],
                     is_voice_message: false,

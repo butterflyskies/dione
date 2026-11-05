@@ -9,11 +9,11 @@
 mod codex_projection;
 
 use dione::{
-    discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
     mcp::server::{DioneServer, test_helpers},
     tracing_channel::TraceLevelController,
 };
 use dione_access_requests::AccessQueue;
+use dione_discord_events::{AttachmentMeta, MessageEvent, NotificationEvent};
 use dione_discord_state::new_state;
 use dione_harness::HarnessConnection;
 use dione_messages::timestamp::Timestamp;
@@ -1419,7 +1419,7 @@ async fn test_notification_has_no_id_field() {
         user_id: UserId::new(3),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: "hi".to_string(),
-        targeting: dione::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -1447,7 +1447,7 @@ async fn test_notification_attachment_metadata_present() {
         user_id: UserId::new(3),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: "see file".to_string(),
-        targeting: dione::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![AttachmentMeta {
             name: "photo.png".to_string(),
@@ -1478,7 +1478,7 @@ async fn test_notification_voice_flag_in_meta() {
         user_id: UserId::new(3),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: String::new(),
-        targeting: dione::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: true,
@@ -1514,7 +1514,7 @@ async fn test_notification_message_snapshot() {
         user_id: UserId::new(3000),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: "snapshot content".to_string(),
-        targeting: dione::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00+00:00").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -1623,7 +1623,7 @@ async fn test_notification_message_in_thread_snapshot() {
         user_id: UserId::new(3000),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: "reply in thread".to_string(),
-        targeting: dione::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00+00:00").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -1648,7 +1648,7 @@ async fn test_notification_message_reply_snapshot() {
         user_id: UserId::new(3000),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: "replying to someone".to_string(),
-        targeting: dione::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00+00:00").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -1673,7 +1673,7 @@ async fn test_notification_message_reply_in_thread_snapshot() {
         user_id: UserId::new(3000),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: "reply in thread".to_string(),
-        targeting: dione::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00+00:00").unwrap(),
         attachments: vec![],
         is_voice_message: false,

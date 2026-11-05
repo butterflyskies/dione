@@ -22,7 +22,6 @@ pub(crate) mod visibility;
 mod visibility_contract_tests;
 pub(crate) mod visibility_read;
 
-pub(crate) mod delivery;
 pub(crate) mod messaging_wire;
 pub(crate) mod reply_tool;
 pub(crate) mod tool_arguments;

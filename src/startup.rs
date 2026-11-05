@@ -1,4 +1,5 @@
 //! Process startup, offline commands, and ordered shutdown.
+use dione_discord_events::NotificationEvent;
 use dione_teams::{
     AdmissionPolicy, ChannelPolicy,
     edge::{ClientSecretTokenProvider, TeamsEdge},
@@ -30,7 +31,7 @@ use tracing_subscriber::{EnvFilter, prelude::*, reload};
 use {
     crate::{
         attention::control::AttentionCommand,
-        discord::events::{Handler, NotificationEvent},
+        discord::events::Handler,
         harness::{CodexSessionOptions, HarnessSelection, HarnessSession, HarnessSessionError},
         mcp::server::DioneServer,
         tracing_channel::{TraceLevelController, TracingChannelLayer},
