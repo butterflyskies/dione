@@ -89,9 +89,11 @@ sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-mutes-$
 coordination_version=$(sh scripts/workspace-package-version.sh dione-coordination)
 teams_identities_version=$(sh scripts/workspace-package-version.sh dione-teams-identities)
 discord_identities_version=$(sh scripts/workspace-package-version.sh dione-discord-identities)
+pluralkit_identities_version=$(sh scripts/workspace-package-version.sh dione-pluralkit-identities)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-coordination-${coordination_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-teams-identities-${teams_identities_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-discord-identities-${discord_identities_version}.crate"
+sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-pluralkit-identities-${pluralkit_identities_version}.crate"
 pre_send_version=$(sh scripts/workspace-package-version.sh dione-pre-send)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-pre-send-${pre_send_version}.crate"
 presentation_version=$(sh scripts/workspace-package-version.sh dione-presentation)

@@ -3,6 +3,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use dione_bell_rings::{BellProviderConfig, RecallOptions};
 use dione_coordination::{CoordinationConfig, Coordinator};
 use dione_gaie::{DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES, DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES};
+use dione_pluralkit_identities::{PLURALKIT_APPLICATION_ID, PkUuid};
 use dione_pre_send::ConstructId;
 use dione_teams_identities::ConversationId;
 use regex::RegexSet;
@@ -22,7 +23,6 @@ use {
     crate::{
         config_candidate::{compose_candidate, resolve_sidecar_path},
         config_store::{BoxError, ConfigStore},
-        discord::verified_action::PLURALKIT_APPLICATION_ID,
     },
     dione_contradictionary::{Contradictionary, Entry, load_sidecar_entries},
     dione_messages::timestamp::Timestamp,
@@ -1459,22 +1459,20 @@ fn validate_pk_uuids(uuids: &[String], field: &str, channel_id: &str) -> HashSet
     uuids
         .iter()
         .enumerate()
-        .filter_map(
-            |(index, s)| match crate::pluralkit::PkUuid::parse(s.as_str()) {
-                Ok(uuid) => Some(uuid.as_str().to_owned()),
-                Err(e) => {
-                    tracing::error!(
-                        channel_id,
-                        field,
-                        index,
-                        len = s.len(),
-                        error = e,
-                        "invalid PK UUID in config — entry rejected, channel will fail closed"
-                    );
-                    None
-                }
-            },
-        )
+        .filter_map(|(index, s)| match PkUuid::parse(s.as_str()) {
+            Ok(uuid) => Some(uuid.as_str().to_owned()),
+            Err(e) => {
+                tracing::error!(
+                    channel_id,
+                    field,
+                    index,
+                    len = s.len(),
+                    error = %e,
+                    "invalid PK UUID in config — entry rejected, channel will fail closed"
+                );
+                None
+            }
+        })
         .collect()
 }
 

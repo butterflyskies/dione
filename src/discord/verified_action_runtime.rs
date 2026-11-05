@@ -583,7 +583,7 @@ mod tests {
     // generic provider.
     #[test]
     fn trusted_creator_gate_consults_config_list() {
-        use super::super::verified_action::PLURALKIT_APPLICATION_ID;
+        use dione_pluralkit_identities::PLURALKIT_APPLICATION_ID;
 
         let shipped = TrustedWebhookCreators::default();
         assert_eq!(
@@ -639,9 +639,8 @@ mod tests {
     // a trusted creator's webhook whose human is not in `allow_from` is denied.
     #[test]
     fn trusted_creator_does_not_bypass_represented_principal_gate() {
-        use super::super::verified_action::{
-            PLURALKIT_APPLICATION_ID, VerifiedActionGate, VerifiedGateVerdict,
-        };
+        use super::super::verified_action::{VerifiedActionGate, VerifiedGateVerdict};
+        use dione_pluralkit_identities::PLURALKIT_APPLICATION_ID;
 
         let mut raw = crate::config::Config::default();
         raw.access.trusted_webhook_creators =

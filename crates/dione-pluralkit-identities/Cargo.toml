@@ -1,0 +1,14 @@
+[package]
+name = "dione-pluralkit-identities"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Configured PluralKit UUID validation and official deployment identity"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["pluralkit", "identity", "validation"]
+categories = ["data-structures"]
+
+[dependencies]
+thiserror.workspace = true

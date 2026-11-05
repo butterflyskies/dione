@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.109.0] - 2026-11-05
+
+### Changed
+
+- Extract configured PluralKit UUID validation and the official deployment ID
+  into dione-pluralkit-identities. Preserve UUID syntax and normalization while
+  publishing typed validation errors with lowercase diagnostics. Configuration
+  and verified-action callers import the owner directly; network trust and
+  private proof construction remain application-owned.
+
 ## [0.108.0] - 2026-11-05
 
 ### Changed

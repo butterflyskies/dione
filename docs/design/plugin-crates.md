@@ -407,6 +407,20 @@ the config backedge. config_store::DiscordId stays with its editor-input owner.
 Serenity workspace features are retained; explicit existing native-tls vendored
 feature supports standalone builds. No verified model-only minimum is claimed.
 
+## PluralKit configured identity boundary
+
+dione-pluralkit-identities owns private String PkUuid, its existing full dashed
+ASCII-hex syntax and lowercase normalization, and the sole official application
+ID constant. Nil and arbitrary hex version/variant values remain accepted. The
+new public error struct carries an exhaustive Empty or InvalidFormat kind without
+rejected input. Diagnostics intentionally become lowercase fragments. No serde,
+FromStr, mutable constructor, HTTP client, or trust proof is added.
+
+Config retains raw_had_identity_entries and fail-closed selector behavior.
+The HTTP resolver retains uuid::Uuid parsing and verified response binding.
+Verified-action constructors, fields, linear state and configured trust remain
+application-owned. The constant identifies a deployment and grants no authority.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -433,6 +447,7 @@ feature supports standalone builds. No verified model-only minimum is claimed.
 20. Cohesive pre-send hooks and private status lint, with native consent retained.
 21. Teams identity family, with native authentication and reply authority retained.
 22. Discord nonzero input identity and SDK conversions, with adapter parsing retained.
+23. PluralKit configured UUID and deployment identity, with network trust retained.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -445,7 +460,7 @@ The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, and `dione-discord-identities`.
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, and `dione-pluralkit-identities`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -467,14 +482,14 @@ Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, and `dione-discord-identities`,
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, and `dione-pluralkit-identities`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all twenty-two capabilities. Contradictionary publishing waits
+publishing waits for all twenty-three capabilities. Contradictionary publishing waits
 for evidence reconciliation. Presentation publishing waits for
 contracts, attention, evidence, messages, and identity-display reconciliation. Harness publishing waits for
 contracts and messages reconciliation. Messages publishing waits for
@@ -499,3 +514,5 @@ Pre-send publishing and reconciliation wait for evidence reconciliation. Root pu
 Teams identities is a leaf publication. Root publication and reconciliation wait for its reconciliation.
 
 Discord identities is a leaf publication. Root publication/reconciliation wait for its reconciliation.
+
+PluralKit identities is a leaf publication. Root publication and reconciliation wait for its reconciliation.

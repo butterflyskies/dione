@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.108.0"
+version = "0.109.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -954,6 +954,7 @@ dependencies = [
  "dione-identity-display",
  "dione-messages",
  "dione-mutes",
+ "dione-pluralkit-identities",
  "dione-pre-send",
  "dione-presentation",
  "dione-rate-limiter",
@@ -1203,6 +1204,13 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "dione-pluralkit-identities"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
 ]
 
 [[package]]

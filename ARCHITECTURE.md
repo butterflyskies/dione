@@ -112,6 +112,11 @@ Discord input validator and four Serenity ID conversions. Config,tools,search an
 persisted codecs import it directly while retaining their adapter-level parsing
 and current native authority checks.
 
+The public dione-pluralkit-identities package owns configured PK UUID validation
+and the official deployment application ID. Configuration imports its private
+validated UUID and typed errors. Verified-action classification imports the
+constant while retaining configured trust and private proof construction.
+
 ## Processes and transports
 
 ```mermaid
