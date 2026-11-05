@@ -457,6 +457,19 @@ than authentication tokens. Journal appends remain best effort. The inherited
 plain chunker tiny-limit multibyte risk is unchanged; this extraction makes no
 arbitrary-limit safety claim.
 
+## MCP tool registration boundary
+
+dione-mcp-tools owns immutable registration validation, lexical discovery,
+explicit resident opt-in and borrowed Send handler futures. All invariant-bearing
+representations remain private. Server assembly supplies a fresh concrete
+BTreeSet catalog at initial construction and replacement, joining all fixed
+harness names, current selected-harness tool definitions and private controls.
+The member has no platform or harness dependency. Native producers retain
+services and reply authority; transport retains origin, readiness and admission.
+
+Existing malformed discovery behavior is retained. Missing tools becomes null
+through mutable JSON indexing; existing non-array values remain unchanged.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -486,6 +499,7 @@ arbitrary-limit safety claim.
 23. PluralKit configured UUID and deployment identity, with network trust retained.
 24. Unified configuration validation, persistence, recovery, and global publication.
 25. Cohesive outbound consent, held retries, diary, journal and fence-aware chunks.
+26. Immutable MCP tool registration and owner handler contracts.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -498,7 +512,7 @@ The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, and `dione-outbound-consent`.
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, and `dione-mcp-tools`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -520,14 +534,14 @@ Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, and `dione-outbound-consent`,
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, and `dione-mcp-tools`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all twenty-five capabilities. Contradictionary publishing waits
+publishing waits for all twenty-six capabilities. Contradictionary publishing waits
 for evidence reconciliation. Presentation publishing waits for
 contracts, attention, evidence, messages, and identity-display reconciliation. Harness publishing waits for
 contracts and messages reconciliation. Messages publishing waits for
@@ -564,3 +578,6 @@ reconciliation also wait for config reconciliation.
 Outbound consent publishing and tokenless reconciliation wait for configuration,
 evidence, Contradictionary and messages reconciliation. Dione waits for outbound
 consent reconciliation as well.
+
+MCP tools is a capability leaf. Root publication and tokenless reconciliation
+wait for its reconciliation before publishing the application.

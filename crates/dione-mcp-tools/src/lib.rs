@@ -1,4 +1,34 @@
-//! Immutable MCP adapter registrations, validated before requests are served.
+//! Immutable MCP registrations and owner-provided tool contracts.
+
+//! Validated representations and registry storage cannot be constructed directly.
+//!
+//! ```compile_fail
+//! use dione_mcp_tools::ToolName;
+//! let name = ToolName("unchecked".into());
+//! ```
+//!
+//! ```compile_fail
+//! use dione_mcp_tools::{ToolDefinition, ToolName};
+//! let definition = ToolDefinition { name: ToolName::new("valid").unwrap(), description: "text".into(), input_schema: serde_json::json!({}) };
+//! ```
+//!
+//! ```compile_fail
+//! use dione_mcp_tools::RegisteredTool;
+//! fn forge(registration: RegisteredTool) { let _ = registration.handler; }
+//! ```
+//!
+//! ```compile_fail
+//! use dione_mcp_tools::ToolRegistry;
+//! let registry = ToolRegistry::default();
+//! let storage = registry.tools;
+//! ```
+//!
+//! ```compile_fail
+//! use dione_mcp_tools::ToolName;
+//! let name: ToolName = serde_json::from_str("\"unchecked\"").unwrap();
+//! ```
+
+#![warn(missing_docs)]
 
 use futures_util::future::BoxFuture;
 use serde::Serialize;
@@ -11,20 +41,14 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
-use {
-    crate::{
-        harness::TOOL_NAMES,
-        mcp::{harness_wire::PRIVATE_CONTROL_TOOLS, protocol::tools_list},
-    },
-    dione_harness::HarnessConnection,
-};
 
 /// A validated MCP tool name used to identify registration conflicts.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct ToolName(Box<str>);
 
 impl ToolName {
-    pub(crate) fn new(name: &str) -> Result<Self, ToolNameError> {
+    /// Validates a nonempty ASCII tool name of at most 128 bytes.
+    pub fn new(name: &str) -> Result<Self, ToolNameError> {
         if name.is_empty()
             || name.len() > 128
             || !name
@@ -56,15 +80,17 @@ pub struct ToolNameError {
     name: String,
 }
 
+/// A validated name and its owner-provided MCP discovery description.
 #[derive(Clone, Serialize)]
-pub(crate) struct ToolDefinition {
+pub struct ToolDefinition {
     name: ToolName,
     description: String,
     #[serde(rename = "inputSchema")]
     input_schema: Value,
 }
 impl ToolDefinition {
-    pub(crate) fn new(name: ToolName, description: impl Into<String>, input_schema: Value) -> Self {
+    /// Builds discovery metadata using an already validated name.
+    pub fn new(name: ToolName, description: impl Into<String>, input_schema: Value) -> Self {
         Self {
             name,
             description: description.into(),
@@ -74,17 +100,21 @@ impl ToolDefinition {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ToolExposure {
+enum ToolExposure {
     SeatOnly,
     SeatAndResident,
 }
 
+/// Current presentation settings supplied for each discovery request.
 #[derive(Clone, Copy)]
-pub(crate) struct ToolDiscoveryContext {
-    pub(crate) evidence_markers_enabled: bool,
+pub struct ToolDiscoveryContext {
+    /// Whether the current caller enables evidence-marker presentation.
+    pub evidence_markers_enabled: bool,
 }
 
-pub(crate) trait McpTool: Send + Sync {
+/// Owner-provided discovery presentation and borrowed asynchronous execution.
+pub trait McpTool: Send + Sync {
+    /// Presents this definition using the current request context.
     fn present_definition(
         &self,
         definition: &ToolDefinition,
@@ -92,6 +122,7 @@ pub(crate) trait McpTool: Send + Sync {
     ) -> Value {
         serde_json::json!(definition)
     }
+    /// Calls the owner while borrowing the handler and argument value.
     fn call<'a>(&'a self, arguments: &'a Value) -> BoxFuture<'a, Result<Value, ToolCallError>>;
 }
 
@@ -105,37 +136,43 @@ pub struct RegisteredTool {
     handler: Arc<dyn McpTool>,
 }
 impl RegisteredTool {
-    pub(crate) fn new(definition: ToolDefinition, handler: Arc<dyn McpTool>) -> Self {
+    /// Registers an owner handler with seat-only access by default.
+    pub fn new(definition: ToolDefinition, handler: Arc<dyn McpTool>) -> Self {
         Self {
             definition,
             exposure: ToolExposure::SeatOnly,
             handler,
         }
     }
-    pub(crate) fn with_resident_access(mut self) -> Self {
+    /// Explicitly permits resident routing to this registration.
+    pub fn with_resident_access(mut self) -> Self {
         self.exposure = ToolExposure::SeatAndResident;
         self
     }
-    pub(crate) fn call<'a>(
-        &'a self,
-        arguments: &'a Value,
-    ) -> BoxFuture<'a, Result<Value, ToolCallError>> {
+    /// Calls the registered owner while retaining its typed failure.
+    pub fn call<'a>(&'a self, arguments: &'a Value) -> BoxFuture<'a, Result<Value, ToolCallError>> {
         self.handler.call(arguments)
     }
 }
 
+/// A typed owner failure retained until the protocol presentation boundary.
 #[derive(Debug, Error)]
 #[error("{kind}")]
-pub(crate) struct ToolCallError {
+pub struct ToolCallError {
     #[source]
-    pub(crate) kind: ToolCallErrorKind,
+    /// The failure category and its original cause.
+    pub kind: ToolCallErrorKind,
 }
+/// The category of an owner-provided tool failure.
 #[derive(Debug, Error)]
-pub(crate) enum ToolCallErrorKind {
+pub enum ToolCallErrorKind {
+    /// The owner rejected domain input.
     #[error("{0}")]
     OwnerInput(#[source] Box<dyn Error + Send + Sync>),
+    /// The request arguments could not be parsed.
     #[error("tool call failed: invalid arguments: {0}")]
     Arguments(#[source] Box<dyn Error + Send + Sync>),
+    /// Execution failed after argument validation.
     #[error("tool call failed: execution failed: {0}")]
     Execution(#[source] Box<dyn Error + Send + Sync>),
 }
@@ -161,21 +198,17 @@ pub enum RegistrationErrorKind {
     Reserved,
 }
 
+/// Immutable validated registrations shared by clones.
 #[derive(Clone, Default)]
-pub(crate) struct ToolRegistry {
+pub struct ToolRegistry {
     tools: Arc<BTreeMap<ToolName, RegisteredTool>>,
 }
 impl ToolRegistry {
-    pub(crate) fn new(
-        harness: &HarnessConnection,
+    /// Rejects reserved names before duplicates, preserving input error order.
+    pub fn new(
+        reserved: &BTreeSet<String>,
         registrations: Vec<RegisteredTool>,
     ) -> Result<Self, RegistrationError> {
-        let definitions = tools_list(harness, true);
-        let mut reserved: BTreeSet<&str> = TOOL_NAMES.iter().copied().collect();
-        if let Some(tools) = definitions["tools"].as_array() {
-            reserved.extend(tools.iter().filter_map(|tool| tool["name"].as_str()));
-        }
-        reserved.extend(PRIVATE_CONTROL_TOOLS.iter().copied());
         let mut tools = BTreeMap::new();
         for registration in registrations {
             let name = registration.definition.name.clone();
@@ -195,14 +228,17 @@ impl ToolRegistry {
             tools: Arc::new(tools),
         })
     }
-    pub(crate) fn find(&self, name: &str) -> Option<&RegisteredTool> {
+    /// Finds an installed registration by its exact name.
+    pub fn find(&self, name: &str) -> Option<&RegisteredTool> {
         self.tools.get(name)
     }
-    pub(crate) fn resident_allowed(&self, name: &str) -> bool {
+    /// Reports whether an installed registration opted into resident access.
+    pub fn resident_allowed(&self, name: &str) -> bool {
         self.find(name)
             .is_some_and(|tool| tool.exposure == ToolExposure::SeatAndResident)
     }
-    pub(crate) fn append_definitions(&self, response: &mut Value, context: ToolDiscoveryContext) {
+    /// Appends lexical definitions to an existing tools array.
+    pub fn append_definitions(&self, response: &mut Value, context: ToolDiscoveryContext) {
         if let Some(tools) = response["tools"].as_array_mut() {
             tools.extend(
                 self.tools

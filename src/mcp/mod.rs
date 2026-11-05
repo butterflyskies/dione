@@ -9,9 +9,3 @@ pub mod server;
 pub mod tools;
 
 pub(crate) mod harness_wire;
-
-pub(crate) mod tool_registry;
-
-pub use tool_registry::{
-    RegisteredTool, RegistrationError, RegistrationErrorKind, ToolName, ToolNameError,
-};

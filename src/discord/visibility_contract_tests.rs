@@ -12,8 +12,8 @@ use super::{
     visibility::VisibilityRequest,
     visibility_read,
 };
-use crate::mcp::tool_registry::ToolRegistry;
 use camino::Utf8PathBuf;
+use dione_mcp_tools::ToolRegistry;
 use serde_json::{Value, json};
 use serenity::model::id::{ChannelId, UserId};
 use std::{future::pending, sync::Arc, time::Duration};
@@ -592,7 +592,7 @@ fn registry(ctx: &IntrospectionCtx, state_dir: &camino::Utf8Path) -> ToolRegistr
         None,
     ));
     ToolRegistry::new(
-        &crate::harness::connect_claude(),
+        &crate::mcp::server::reserved_tool_names(&crate::harness::connect_claude()),
         introspection_tools::registrations(services).unwrap(),
     )
     .unwrap()

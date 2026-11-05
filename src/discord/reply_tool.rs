@@ -12,18 +12,18 @@ use super::{
     },
 };
 use crate::ingress_ledger::IngressLedger;
-use crate::mcp::tool_registry::McpTool;
-use crate::mcp::tool_registry::RegisteredTool;
-use crate::mcp::tool_registry::ToolCallError;
-use crate::mcp::tool_registry::ToolCallErrorKind;
-use crate::mcp::tool_registry::ToolDefinition;
-use crate::mcp::tool_registry::ToolDiscoveryContext;
-use crate::mcp::tool_registry::ToolName;
-use crate::mcp::tool_registry::ToolNameError;
 use crate::state::State;
 use camino::Utf8PathBuf;
 use dione_config::load_config;
 use dione_evidence::SentexHandles;
+use dione_mcp_tools::McpTool;
+use dione_mcp_tools::RegisteredTool;
+use dione_mcp_tools::ToolCallError;
+use dione_mcp_tools::ToolCallErrorKind;
+use dione_mcp_tools::ToolDefinition;
+use dione_mcp_tools::ToolDiscoveryContext;
+use dione_mcp_tools::ToolName;
+use dione_mcp_tools::ToolNameError;
 use dione_outbound_consent::consent::ConsentGate;
 use dione_pre_send::HookName;
 use futures_util::future::BoxFuture;

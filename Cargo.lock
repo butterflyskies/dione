@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.111.0"
+version = "0.112.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -953,6 +953,7 @@ dependencies = [
  "dione-gaie",
  "dione-harness",
  "dione-identity-display",
+ "dione-mcp-tools",
  "dione-messages",
  "dione-mutes",
  "dione-outbound-consent",
@@ -1213,6 +1214,17 @@ dependencies = [
  "serde_yaml_ng",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "dione-mcp-tools"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]
