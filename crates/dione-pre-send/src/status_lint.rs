@@ -30,7 +30,7 @@
 use regex::Regex;
 use std::sync::LazyLock;
 use {
-    crate::pre_send::{
+    crate::{
         Assessment, AuditTrail, ConstructFeedback, HookContext, HookDecision, HookName, HookOutput,
         PreSendHook,
     },
@@ -653,7 +653,7 @@ impl PreSendHook for StatusPacketLint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pre_send::{ChannelType, ConstructId, OutboundDestination};
+    use crate::{ChannelType, ConstructId, OutboundDestination};
     use serenity::model::id::ChannelId;
 
     fn categories(text: &str) -> Vec<String> {

@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.106.0] - 2026-11-05
+
+### Changed
+
+- Extract the pre-send runner, private status lint and production hook roster
+  into dione-pre-send, preserving Observe audit behavior and application-owned
+  installation, native authority and separate consent checks.
+
 ## [0.105.0] - 2026-11-05
 
 ### Changed

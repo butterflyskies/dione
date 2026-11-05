@@ -12,6 +12,7 @@ use super::{
     },
 };
 use camino::Utf8PathBuf;
+use dione_pre_send::HookName;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use serenity::{
@@ -29,7 +30,6 @@ use {
             ToolDiscoveryContext, ToolName, ToolNameError,
         },
         no_rly::consent::ConsentGate,
-        pre_send::HookName,
         state::State,
     },
     dione_evidence::SentexHandles,
@@ -216,7 +216,7 @@ impl<'a> ReplyRequest<'a> {
 mod tests {
     use super::*;
     use std::error::Error;
-    use {crate::pre_send::PipelineError, dione_evidence::SentexError};
+    use {dione_evidence::SentexError, dione_pre_send::PipelineError};
 
     #[test]
     fn reply_evidence_errors_preserve_typed_parser_cause() {

@@ -3,10 +3,10 @@ use crate::{
     config::StartupConfigError,
     harness::HarnessSessionError,
     mcp::{RegistrationError, ToolNameError, server::ServerConstructionError},
-    pre_send::PipelineError,
     teams::{edge::TeamsEdgeError, runtime::TeamsRuntimeError},
 };
 use camino::Utf8PathBuf;
+use dione_pre_send::PipelineError;
 use std::{env::VarError, io, net::AddrParseError};
 use thiserror::Error;
 use tokio::task::JoinError;

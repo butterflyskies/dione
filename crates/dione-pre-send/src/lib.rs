@@ -1,15 +1,18 @@
-//! Generic pre-send hook plumbing for outbound messages.
+//! Synchronous pre-send hooks, assessment routing, and the production Observe pipeline.
+
+#![warn(missing_docs)]
+
+mod status_lint;
 
 use serenity::model::id::{ChannelId, GuildId, MessageId, UserId};
 use std::{
     collections::{HashMap, HashSet},
     fmt,
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::{Arc, OnceLock, RwLock},
+    sync::Arc,
 };
 
 /// Whether hook dispositions are observed or enforced.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PipelineMode {
     /// Record findings without changing, redirecting, or stopping output.
@@ -20,19 +23,22 @@ pub enum PipelineMode {
 }
 
 /// The Discord destination kind for an outbound message.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelType {
+    /// A public guild channel.
     Public,
+    /// A direct-message channel.
     DirectMessage,
+    /// A thread channel.
     Thread,
 }
 
 /// The typed destination known before an outbound send reaches Discord.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutboundDestination {
+    /// A known Discord channel.
     Channel(ChannelId),
+    /// A recipient whose DM channel is not yet resolved.
     DmRecipient(UserId),
 }
 
@@ -41,6 +47,7 @@ pub enum OutboundDestination {
 pub struct HookName(String);
 
 impl HookName {
+    /// Parses a nonempty canonical hook identifier.
     pub fn parse(value: impl Into<String>) -> Result<Self, PipelineError> {
         let value = value.into();
         if valid_identifier(&value) {
@@ -50,6 +57,7 @@ impl HookName {
         }
     }
 
+    /// Returns the validated identifier.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -66,6 +74,7 @@ impl fmt::Display for HookName {
 pub struct ConstructId(String);
 
 impl ConstructId {
+    /// Parses a nonempty canonical construct identifier.
     pub fn parse(value: impl Into<String>) -> Result<Self, String> {
         let value = value.into();
         valid_identifier(&value)
@@ -73,6 +82,7 @@ impl ConstructId {
             .ok_or_else(|| format!("invalid construct id `{value}`"))
     }
 
+    /// Returns the validated identifier.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -98,6 +108,7 @@ pub struct HookContext {
 }
 
 impl HookContext {
+    /// Creates outbound context from text, destination, classification, and construct.
     pub fn new(
         text: impl Into<String>,
         destination: OutboundDestination,
@@ -116,14 +127,17 @@ impl HookContext {
         }
     }
 
+    /// Returns the outbound text.
     pub fn text(&self) -> &str {
         &self.text
     }
 
+    /// Returns the typed outbound destination.
     pub fn destination(&self) -> OutboundDestination {
         self.destination
     }
 
+    /// Returns the channel ID when the destination is a channel.
     pub fn channel_id(&self) -> Option<ChannelId> {
         match self.destination {
             OutboundDestination::Channel(channel_id) => Some(channel_id),
@@ -131,6 +145,7 @@ impl HookContext {
         }
     }
 
+    /// Returns the recipient ID before a DM channel is resolved.
     pub fn dm_recipient_id(&self) -> Option<UserId> {
         match self.destination {
             OutboundDestination::DmRecipient(user_id) => Some(user_id),
@@ -138,40 +153,49 @@ impl HookContext {
         }
     }
 
+    /// Returns the supplied channel classification.
     pub fn channel_type(&self) -> ChannelType {
         self.channel_type
     }
 
+    /// Returns the optional outbound author attribution.
     pub fn author_id(&self) -> Option<UserId> {
         self.author_id
     }
 
+    /// Returns the optional guild attribution.
     pub fn guild_id(&self) -> Option<GuildId> {
         self.guild_id
     }
 
+    /// Returns the optional reply target.
     pub fn reply_to_message_id(&self) -> Option<MessageId> {
         self.reply_to_message_id
     }
 
+    /// Returns the validated construct attribution.
     pub fn construct_id(&self) -> &str {
         self.construct_id.as_str()
     }
 
+    /// Looks up one metadata value.
     pub fn metadata(&self, key: &str) -> Option<&str> {
         self.metadata.get(key).map(String::as_str)
     }
 
+    /// Sets the optional reply target.
     pub fn with_reply_to(mut self, message_id: Option<MessageId>) -> Self {
         self.reply_to_message_id = message_id;
         self
     }
 
+    /// Adds or replaces one metadata entry.
     pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.metadata.insert(key.into(), value.into());
         self
     }
 
+    /// Sets the optional author attribution.
     pub fn with_author_id(mut self, author_id: Option<UserId>) -> Self {
         self.author_id = author_id;
         self
@@ -188,6 +212,7 @@ pub struct Assessment {
 }
 
 impl Assessment {
+    /// Creates an assessment with finite confidence clamped to zero through one.
     pub fn new(category: impl Into<String>, confidence: f32, detail: impl Into<String>) -> Self {
         let confidence = if confidence.is_finite() {
             confidence.clamp(0.0, 1.0)
@@ -202,18 +227,22 @@ impl Assessment {
         }
     }
 
+    /// Returns the hook attribution stamped by the runner.
     pub fn hook_name(&self) -> Option<&HookName> {
         self.hook_name.as_ref()
     }
 
+    /// Returns the assessment category.
     pub fn category(&self) -> &str {
         &self.category
     }
 
+    /// Returns normalized confidence.
     pub fn confidence(&self) -> f32 {
         self.confidence
     }
 
+    /// Returns the recorded detail.
     pub fn detail(&self) -> &str {
         &self.detail
     }
@@ -228,10 +257,12 @@ impl Assessment {
 pub struct ConstructFeedback(Vec<Assessment>);
 
 impl ConstructFeedback {
+    /// Creates a stream from ordered assessments.
     pub fn new(assessments: Vec<Assessment>) -> Self {
         Self(assessments)
     }
 
+    /// Borrows the ordered assessments.
     pub fn as_slice(&self) -> &[Assessment] {
         &self.0
     }
@@ -250,10 +281,12 @@ impl ConstructFeedback {
 pub struct AuditTrail(Vec<Assessment>);
 
 impl AuditTrail {
+    /// Creates a stream from ordered assessments.
     pub fn new(assessments: Vec<Assessment>) -> Self {
         Self(assessments)
     }
 
+    /// Borrows the ordered assessments.
     pub fn as_slice(&self) -> &[Assessment] {
         &self.0
     }
@@ -273,13 +306,25 @@ impl AuditTrail {
 }
 
 /// Assessment-free disposition returned by one hook.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum HookDecision {
+    /// Preserves the current send.
     Continue,
-    Rewrite { text: String },
-    Halt { reason: String },
-    Redirect { channel_id: ChannelId },
+    /// Replaces outbound text under enforcement.
+    Rewrite {
+        /// Replacement outbound text.
+        text: String,
+    },
+    /// Stops outbound delivery under enforcement.
+    Halt {
+        /// Reason delivery was stopped.
+        reason: String,
+    },
+    /// Changes the target channel under enforcement.
+    Redirect {
+        /// Replacement channel destination.
+        channel_id: ChannelId,
+    },
 }
 
 impl HookDecision {
@@ -302,6 +347,7 @@ pub struct HookOutput {
 }
 
 impl HookOutput {
+    /// Creates one hook result with its separate assessment streams.
     pub fn new(
         decision: HookDecision,
         to_construct: ConstructFeedback,
@@ -324,7 +370,9 @@ impl HookOutput {
 
 /// A synchronous, immutable pre-send hook.
 pub trait PreSendHook: Send + Sync {
+    /// Returns this hook's stable validated identifier.
     fn name(&self) -> HookName;
+    /// Evaluates one outbound context synchronously.
     fn execute(&self, context: &HookContext) -> HookOutput;
 }
 
@@ -333,6 +381,7 @@ pub trait PreSendHook: Send + Sync {
 pub struct SinkError(String);
 
 impl SinkError {
+    /// Creates a sink failure with its diagnostic message.
     pub fn new(message: impl Into<String>) -> Self {
         Self(message.into())
     }
@@ -346,16 +395,17 @@ impl fmt::Display for SinkError {
 
 /// Receives accumulated construct-facing feedback once per pipeline run.
 pub trait FeedbackSink: Send + Sync {
+    /// Records construct-facing feedback for one run.
     fn record(&self, feedback: &ConstructFeedback, context: &HookContext) -> Result<(), SinkError>;
 }
 
 /// Receives accumulated audit assessments once per pipeline run.
 pub trait AuditSink: Send + Sync {
+    /// Records audit assessments for one run.
     fn record(&self, trail: &AuditTrail, context: &HookContext) -> Result<(), SinkError>;
 }
 
 /// What to do when either routing sink fails or panics.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SinkFailurePolicy {
     /// Preserve the send and report degraded routing in the outcome.
@@ -373,22 +423,28 @@ pub struct SinkFailure {
 }
 
 impl SinkFailure {
+    /// Returns the failed assessment stream.
     pub fn sink(&self) -> SinkKind {
         self.sink
     }
 
+    /// Returns the recorded detail.
     pub fn detail(&self) -> &str {
         &self.detail
     }
 }
 
+/// The assessment stream that failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SinkKind {
+    /// The construct-facing feedback stream.
     Feedback,
+    /// The audit stream.
     Audit,
 }
 
 impl SinkKind {
+    /// Returns the stable stream name.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Feedback => "feedback",
@@ -398,13 +454,17 @@ impl SinkKind {
 }
 
 /// Pipeline construction or fail-closed execution error.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PipelineError {
+    /// An identifier violates the canonical hook-name grammar.
     InvalidHookName(String),
+    /// Two registered hooks share an identifier.
     DuplicateHookName(String),
+    /// A requested bypass names an unregistered hook.
     UnknownHookName(HookName),
+    /// Fail-closed routing captured one or more sink failures.
     SinkFailures(Vec<SinkFailure>),
+    /// A hook panicked during enforced execution.
     HookPanicked(String),
 }
 
@@ -447,7 +507,6 @@ impl NoRly {
 }
 
 /// Final disposition of one pre-send pipeline run.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct PipelineOutcome {
     decision: HookDecision,
@@ -458,18 +517,23 @@ pub struct PipelineOutcome {
 }
 
 impl PipelineOutcome {
+    /// Returns the final disposition.
     pub fn decision(&self) -> &HookDecision {
         &self.decision
     }
+    /// Returns construct-facing feedback.
     pub fn to_construct(&self) -> &ConstructFeedback {
         &self.to_construct
     }
+    /// Returns the audit assessments.
     pub fn to_audit(&self) -> &AuditTrail {
         &self.to_audit
     }
+    /// Returns final send text, or None when enforcement halted delivery.
     pub fn final_text(&self) -> Option<&str> {
         self.final_text.as_deref()
     }
+    /// Returns captured routing failures.
     pub fn sink_failures(&self) -> &[SinkFailure] {
         &self.sink_failures
     }
@@ -539,14 +603,12 @@ impl AuditSink for TracingAuditSink {
     }
 }
 
-static INSTALLED_PIPELINE: OnceLock<RwLock<Option<Arc<PreSendPipeline>>>> = OnceLock::new();
-
 /// The hooks production runs, in order.
 ///
 /// This is the single registration seam: `main` installs exactly this set, and
 /// the integration tests assert against it. Constructing the set separately in
 /// a test would certify a parallel wiring rather than the shipped one.
-pub(crate) fn production_hooks() -> Vec<Box<dyn PreSendHook>> {
+fn production_hooks() -> Vec<Box<dyn PreSendHook>> {
     vec![Box::new(crate::status_lint::StatusPacketLint::new())]
 }
 
@@ -586,22 +648,6 @@ pub fn configured_pipeline(
     }
 }
 
-/// Installs or explicitly disables the process-wide outbound pipeline.
-pub fn install_pipeline(pipeline: Option<Arc<PreSendPipeline>>) {
-    *INSTALLED_PIPELINE
-        .get_or_init(|| RwLock::new(None))
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = pipeline;
-}
-
-pub(crate) fn installed_pipeline() -> Option<Arc<PreSendPipeline>> {
-    INSTALLED_PIPELINE
-        .get_or_init(|| RwLock::new(None))
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
-}
-
 /// Sequential pre-send hook runner with separate feedback and audit sinks.
 pub struct PreSendPipeline {
     mode: PipelineMode,
@@ -624,11 +670,13 @@ impl PreSendPipeline {
         })
     }
 
+    /// Selects observation or explicit enforcement.
     pub fn with_mode(mut self, mode: PipelineMode) -> Self {
         self.mode = mode;
         self
     }
 
+    /// Replaces both assessment sinks and their failure policy.
     pub fn with_sinks(
         mut self,
         feedback_sink: Box<dyn FeedbackSink>,
@@ -655,6 +703,7 @@ impl PreSendPipeline {
         Ok(())
     }
 
+    /// Validates named hook bypasses against this pipeline.
     pub fn no_rly(&self, names: &[HookName]) -> Result<NoRly, PipelineError> {
         for name in names {
             if !self.hooks.iter().any(|hook| hook.name() == *name) {
@@ -664,6 +713,7 @@ impl PreSendPipeline {
         Ok(NoRly::new(names.iter().cloned()))
     }
 
+    /// Runs ordered hooks and routes their assessments under the configured policy.
     pub fn run(
         &self,
         context: &HookContext,
@@ -1284,7 +1334,7 @@ mod tests {
 #[cfg(test)]
 mod audit_sink_tests {
     use super::*;
-    use crate::pre_send::{ChannelType, ConstructId, OutboundDestination};
+    use crate::{ChannelType, ConstructId, OutboundDestination};
     use serenity::model::id::ChannelId;
     use std::{
         collections::BTreeMap,

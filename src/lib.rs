@@ -16,7 +16,6 @@ pub mod no_rly;
 pub mod oneshot;
 pub mod permissions;
 pub mod pluralkit;
-pub mod pre_send;
 pub mod principal_policy;
 #[expect(
     dead_code,
@@ -24,7 +23,6 @@ pub mod principal_policy;
 )]
 pub(crate) mod receipt_gate;
 pub mod state;
-pub(crate) mod status_lint;
 pub mod teams;
 pub mod tracing_channel;
 pub mod util;

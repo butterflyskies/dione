@@ -899,11 +899,11 @@ mod tests {
         use super::*;
         use serde_json::json;
         use {
-            crate::pre_send::{
+            dione_contradictionary::{Entry, MatchMode},
+            dione_pre_send::{
                 AuditTrail, ConstructFeedback, HookContext, HookDecision, HookName, HookOutput,
                 PipelineMode, PreSendHook, PreSendPipeline,
             },
-            dione_contradictionary::{Entry, MatchMode},
         };
 
         struct DecisionHook(HookDecision);
