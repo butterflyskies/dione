@@ -30,7 +30,7 @@ Those operations have their own later compatibility slice.
 
 The fixture includes optional SDK fields that Dione currently discards. Their
 presence tests tolerance of additional message data, not preservation of that
-data. The [compatibility inventory](../../../docs/design/teams-sdk-compatibility.md)
+data. The [compatibility inventory](../../../../../docs/design/teams-sdk-compatibility.md)
 records the scope and issue for each planned behavior.
 
 [activity]: https://github.com/microsoft/teams.ts/blob/79ed749cb65c7f14bb9b1f94b8cfdc7b9c5a5b81/packages/api/src/activities/activity.ts
