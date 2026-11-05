@@ -1165,7 +1165,7 @@ mod tests {
             camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf-8 path");
         let (notification_tx, _notification_rx) = tokio::sync::mpsc::channel(1);
         let server = DioneServer::new(
-            crate::state::new_state(),
+            dione_discord_state::new_state(),
             std::sync::Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&state_dir))),
             http,
             state_dir.clone(),
@@ -1410,7 +1410,7 @@ mod tests {
         };
         assert!(gateway_handle.is_same_authority(server_handle));
         let server = DioneServer::new(
-            crate::state::new_state(),
+            dione_discord_state::new_state(),
             std::sync::Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&state_dir))),
             std::sync::Arc::new(serenity::http::Http::new("fake")),
             state_dir.clone(),

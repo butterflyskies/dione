@@ -182,7 +182,7 @@ async fn runtime_for(path: Utf8PathBuf, network: &Network) -> Arc<AttentionRunti
         AttentionRuntime::new(
             SourceResolver {
                 http: network.http(),
-                state: crate::state::new_state(),
+                state: dione_discord_state::new_state(),
                 state_dir: path,
                 ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
             },

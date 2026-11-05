@@ -198,7 +198,7 @@ impl NotificationEvent {
 
 /// Serenity event handler — bridges Discord gateway events to the MCP layer.
 pub struct Handler {
-    pub state: crate::state::State,
+    pub state: dione_discord_state::State,
     pub queue: Arc<tokio::sync::Mutex<AccessQueue>>,
     pub tx: tokio::sync::mpsc::Sender<NotificationEvent>,
     pub state_dir: camino::Utf8PathBuf,
@@ -275,7 +275,7 @@ impl Handler {
 }
 
 async fn emit_lifecycle_delete_to(
-    state: &crate::state::State,
+    state: &dione_discord_state::State,
     ingress_ledger: &crate::ingress_ledger::IngressLedger,
     tx: &tokio::sync::mpsc::Sender<NotificationEvent>,
     channel_id: ChannelId,
@@ -1906,7 +1906,7 @@ pub(crate) fn passive_edit_policy_allows(
 /// For DM channels (`is_dm = true`), thread resolution is skipped entirely.
 async fn resolve_guild_channel(
     http: &serenity::http::Http,
-    state: &crate::state::State,
+    state: &dione_discord_state::State,
     config: &dione_config::LoadedConfig,
     channel_id: u64,
     is_dm: bool,
@@ -2213,7 +2213,7 @@ fn build_message_event_with_coordinates(
 /// the result either way. Returns `None` if the channel is not a thread.
 pub(super) async fn resolve_thread_parent(
     http: &serenity::http::Http,
-    state: &crate::state::State,
+    state: &dione_discord_state::State,
     channel_id: u64,
 ) -> Option<u64> {
     // Check cache first — includes negative entries (Some(None)).
@@ -3241,7 +3241,9 @@ mod tests {
             crate::ingress_ledger::TransitionResult::Admitted(_)
         ));
 
-        let state = Arc::new(tokio::sync::RwLock::new(crate::state::SharedState::new()));
+        let state = Arc::new(tokio::sync::RwLock::new(
+            dione_discord_state::SharedState::new(),
+        ));
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         for id in [140, 999, 141] {
             emit_lifecycle_delete_to(
@@ -4572,7 +4574,7 @@ mod tests {
         .unwrap();
         let (tx, notifications) = tokio::sync::mpsc::channel(8);
         let handler = Handler {
-            state: crate::state::new_state(),
+            state: dione_discord_state::new_state(),
             queue: Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&state_dir))),
             tx,
             state_dir,

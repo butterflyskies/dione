@@ -12,9 +12,9 @@ use super::{
     },
 };
 use crate::ingress_ledger::IngressLedger;
-use crate::state::State;
 use camino::Utf8PathBuf;
 use dione_config::load_config;
+use dione_discord_state::State;
 use dione_evidence::SentexHandles;
 use dione_mcp_tools::McpTool;
 use dione_mcp_tools::RegisteredTool;

@@ -221,7 +221,7 @@ impl OwnerProcess {
         let connection = self.connection();
         let (notification_tx, _notification_rx) = tokio::sync::mpsc::channel(1);
         crate::mcp::server::DioneServer::new(
-            crate::state::new_state(),
+            dione_discord_state::new_state(),
             std::sync::Arc::new(tokio::sync::Mutex::new(
                 dione_access_requests::AccessQueue::load(&path),
             )),

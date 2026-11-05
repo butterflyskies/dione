@@ -164,7 +164,7 @@ async fn registered_queries_parse_execute_project_and_reload_policy() {
                 .ratelimiter_disabled(true)
                 .build(),
         ),
-        crate::state::new_state(),
+        dione_discord_state::new_state(),
         state_dir.clone(),
         Arc::new(dione_outbound_consent::consent::ConsentGate::new(
             &state_dir,
@@ -407,7 +407,7 @@ async fn wrong_observation_exchange() {
                 .ratelimiter_disabled(true)
                 .build(),
         ),
-        crate::state::new_state(),
+        dione_discord_state::new_state(),
         state_dir.clone(),
         Arc::new(dione_outbound_consent::consent::ConsentGate::new(
             &state_dir,

@@ -585,7 +585,7 @@ fn request(ids: &[u64]) -> VisibilityRequest {
 fn registry(ctx: &IntrospectionCtx, state_dir: &camino::Utf8Path) -> ToolRegistry {
     let services = Arc::new(ReplyServices::new(
         ctx.http.clone(),
-        crate::state::new_state(),
+        dione_discord_state::new_state(),
         state_dir.to_owned(),
         Arc::new(dione_outbound_consent::consent::ConsentGate::new(state_dir)),
         Arc::new(crate::ingress_ledger::IngressLedger::new()),

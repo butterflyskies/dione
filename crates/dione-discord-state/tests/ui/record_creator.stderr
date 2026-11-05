@@ -1,0 +1,10 @@
+error[E0624]: method `record_webhook_creator` is private
+ --> tests/ui/record_creator.rs:3:24
+  |
+3 |     SharedState::new().record_webhook_creator(40, 200);
+  |                        ^^^^^^^^^^^^^^^^^^^^^^ private method
+  |
+ ::: src/lib.rs
+  |
+  |     fn record_webhook_creator(&mut self, webhook_id: u64, creator_bot_id: u64) {
+  |     -------------------------------------------------------------------------- private method defined here

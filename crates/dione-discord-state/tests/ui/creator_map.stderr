@@ -1,0 +1,5 @@
+error[E0616]: field `webhook_creators` of struct `SharedState` is private
+ --> tests/ui/creator_map.rs:3:24
+  |
+3 |     SharedState::new().webhook_creators.clear();
+  |                        ^^^^^^^^^^^^^^^^ private field

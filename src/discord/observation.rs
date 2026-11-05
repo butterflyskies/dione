@@ -1137,7 +1137,7 @@ mod tests {
         let state_dir = camino::Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
         let (tx, _rx) = mpsc::channel(1);
         let handler = Handler {
-            state: crate::state::new_state(),
+            state: dione_discord_state::new_state(),
             queue: Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&state_dir))),
             tx,
             state_dir,

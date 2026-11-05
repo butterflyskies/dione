@@ -205,7 +205,7 @@ mod tests {
     struct Fixture {
         provider: DiscordContextProvider,
         config: Arc<Mutex<LoadedConfig>>,
-        state: crate::state::State,
+        state: dione_discord_state::State,
         paths: Arc<Mutex<Vec<String>>>,
         server: tokio::task::JoinHandle<()>,
     }
@@ -260,7 +260,7 @@ mod tests {
                 LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
             ));
             let current = config.clone();
-            let state = crate::state::new_state();
+            let state = dione_discord_state::new_state();
             let shared_state = state.clone();
             let provider = DiscordContextProvider::new(
                 "primary",

@@ -2041,7 +2041,7 @@ mod tests {
         let state_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf-8 path");
         let ctx = MessagingCtx::new(
             Arc::new(serenity::http::Http::new(&token)),
-            crate::state::new_state(),
+            dione_discord_state::new_state(),
             Arc::new(LoadedConfig::try_from_raw(raw).expect("valid test configuration")),
             state_dir.clone(),
             Arc::new(ConsentGate::new(&state_dir)),
