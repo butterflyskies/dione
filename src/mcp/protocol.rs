@@ -2,10 +2,8 @@
 
 use serde_json::{Value, json};
 use {
-    crate::discord::{
-        presence::{ActivityType, OnlineStatus},
-        tool_arguments::sentex_handles_schema,
-    },
+    crate::discord::tool_arguments::sentex_handles_schema,
+    dione_discord_presence::{ActivityType, OnlineStatus},
     dione_harness::HarnessConnection,
 };
 

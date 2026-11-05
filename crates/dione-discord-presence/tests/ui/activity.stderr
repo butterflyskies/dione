@@ -1,0 +1,5 @@
+error[E0616]: field `name` of struct `PresenceActivity` is private
+ --> tests/ui/activity.rs:4:14
+  |
+4 |     activity.name = "replacement".to_owned();
+  |              ^^^^ private field

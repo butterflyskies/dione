@@ -1205,7 +1205,7 @@ mod tests {
     #[tokio::test]
     async fn presence_wire_defaults_and_activity_text() {
         let (_dir, server) = presence_test_server().await;
-        let (_, presence) = crate::discord::presence::wire_shared_presence();
+        let (_, presence) = dione_discord_presence::wire_shared_presence();
         let server = server.with_presence(presence);
         assert_presence_tool_result(
             call_tool(&server, "get_presence", json!({})).await.unwrap(),
@@ -1305,7 +1305,7 @@ mod tests {
     async fn presence_wire_validation_precedes_capability_and_preserves_state() {
         let (_dir, unavailable) = presence_test_server().await;
         let (_direct_dir, direct) = presence_test_server().await;
-        let (_, presence) = crate::discord::presence::wire_shared_presence();
+        let (_, presence) = dione_discord_presence::wire_shared_presence();
         let direct = direct.with_presence(presence);
         call_tool(&direct, "set_presence", json!({"online_status": "idle"}))
             .await
@@ -1367,7 +1367,7 @@ mod tests {
     async fn presence_wire_queue_acceptance_and_closed_channel() {
         let (_dir, server) = presence_test_server().await;
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        let server = server.with_presence(crate::discord::presence::PresenceCapability::Queued(tx));
+        let server = server.with_presence(dione_discord_presence::PresenceCapability::Queued(tx));
         assert_presence_tool_result(
             call_tool(&server, "set_presence", json!({"activity_type": "custom"}))
                 .await
@@ -1403,8 +1403,8 @@ mod tests {
         let state_dir =
             camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf-8 path");
         let (notification_tx, _notification_rx) = tokio::sync::mpsc::channel(1);
-        let (gateway_handle, server_presence) = crate::discord::presence::wire_shared_presence();
-        let crate::discord::presence::PresenceCapability::Direct(server_handle) = &server_presence
+        let (gateway_handle, server_presence) = dione_discord_presence::wire_shared_presence();
+        let dione_discord_presence::PresenceCapability::Direct(server_handle) = &server_presence
         else {
             panic!("assembly wires the direct MCP handle");
         };
@@ -1472,7 +1472,7 @@ mod tests {
         let observed = gateway_handle.snapshot().await;
         assert_eq!(
             observed.desired().map(|d| d.request().status()),
-            Some(crate::discord::presence::OnlineStatus::Dnd)
+            Some(dione_discord_presence::OnlineStatus::Dnd)
         );
     }
 

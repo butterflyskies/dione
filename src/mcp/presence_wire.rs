@@ -1,11 +1,9 @@
 //! MCP projection of typed Discord presence and typing results.
 
-use crate::discord::{
-    presence::{
-        InvalidActivityType, InvalidOnlineStatus, PresenceAcknowledgement, PresenceActivity,
-        PresenceRequest, PresenceSetError, PresenceSnapshot, PresenceUnavailable,
-    },
-    typing::TypingError,
+use crate::discord::typing::TypingError;
+use dione_discord_presence::{
+    InvalidActivityType, InvalidOnlineStatus, PresenceAcknowledgement, PresenceActivity,
+    PresenceRequest, PresenceSetError, PresenceSnapshot, PresenceUnavailable,
 };
 use serde_json::{Value, json};
 use thiserror::Error;

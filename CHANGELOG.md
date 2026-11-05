@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.118.0] - 2026-11-05
+
+### Changed
+
+- Extract the shared Discord presence owner into `dione-discord-presence`,
+  preserving direct and queued acknowledgements, state ordering, and reconnect replay.
+
 ## [0.117.0] - 2026-11-05
 
 ### Changed

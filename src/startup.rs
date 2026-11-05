@@ -227,7 +227,7 @@ pub async fn run() -> Result<(), StartupError> {
         crate::pluralkit::PkResolver::with_defaults(),
     ));
 
-    let (shared_presence, server_presence) = crate::discord::presence::wire_shared_presence();
+    let (shared_presence, server_presence) = dione_discord_presence::wire_shared_presence();
     let handler = Handler {
         state: state.clone(),
         queue: queue.clone(),
