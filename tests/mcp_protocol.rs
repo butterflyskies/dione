@@ -49,7 +49,10 @@ static CONFIG_FIXTURE_LOCK: Mutex<()> = Mutex::const_new(());
 async fn can_view_channel_is_discovered_with_main_schema_in_every_harness() {
     let (_directory, state_dir) = temp_state_dir();
     for harness in [
-        dione::harness::connect_claude(),
+        dione_claude::connect(
+            dione_harness::ProtocolOutput::new(tokio::io::stdout()),
+            dione_codex::TOOL_NAMES,
+        ),
         dione::harness::HarnessSession::oh_my_pi().connection(),
         codex_connection(&state_dir),
     ] {
@@ -85,7 +88,10 @@ async fn can_view_channel_is_discovered_with_main_schema_in_every_harness() {
 async fn channel_audience_is_discovered_without_requiring_candidate_users() {
     let (_directory, state_dir) = temp_state_dir();
     for harness in [
-        dione::harness::connect_claude(),
+        dione_claude::connect(
+            dione_harness::ProtocolOutput::new(tokio::io::stdout()),
+            dione_codex::TOOL_NAMES,
+        ),
         dione::harness::HarnessSession::oh_my_pi().connection(),
         codex_connection(&state_dir),
     ] {
@@ -155,7 +161,15 @@ async fn make_server(state_dir: &camino::Utf8PathBuf) -> DioneServer {
 }
 
 async fn make_server_with_http(state_dir: &camino::Utf8PathBuf, http: Arc<Http>) -> DioneServer {
-    make_server_with_connection(state_dir, http, dione::harness::connect_claude()).await
+    make_server_with_connection(
+        state_dir,
+        http,
+        dione_claude::connect(
+            dione_harness::ProtocolOutput::new(tokio::io::stdout()),
+            dione_codex::TOOL_NAMES,
+        ),
+    )
+    .await
 }
 
 async fn make_server_with_harness(
@@ -336,7 +350,10 @@ async fn harness_contract_initialize_capabilities() {
     let (_dir, state_dir) = temp_state_dir();
     for (harness, capabilities) in [
         (
-            dione::harness::connect_claude(),
+            dione_claude::connect(
+                dione_harness::ProtocolOutput::new(tokio::io::stdout()),
+                dione_codex::TOOL_NAMES,
+            ),
             json!({
                 "tools": {},
                 "experimental": {"claude/channel": {}, "claude/channel/permission": {}}

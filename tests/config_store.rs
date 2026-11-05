@@ -47,7 +47,10 @@ async fn make_server(state_dir: &Utf8PathBuf) -> DioneServer {
         state_dir.clone(),
         notification_tx,
         TraceLevelController::noop(),
-        dione::harness::connect_claude(),
+        dione_claude::connect(
+            dione_harness::ProtocolOutput::new(tokio::io::stdout()),
+            dione_codex::TOOL_NAMES,
+        ),
         Arc::new(ConsentGate::new(state_dir)),
         Arc::new(dione::ingress_ledger::IngressLedger::new()),
         dione_contracts::ModuleInstanceId::new(

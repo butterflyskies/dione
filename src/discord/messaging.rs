@@ -5663,7 +5663,10 @@ mod tests {
             path.clone(),
             notifications,
             crate::tracing_channel::TraceLevelController::noop(),
-            crate::harness::connect_claude(),
+            dione_claude::connect(
+                dione_harness::ProtocolOutput::new(tokio::io::stdout()),
+                dione_codex::TOOL_NAMES,
+            ),
             Arc::new(ConsentGate::new(&path)),
             Arc::new(IngressLedger::new()),
             dione_contracts::ModuleInstanceId::new(

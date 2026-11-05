@@ -1,10 +1,9 @@
 //! Harness delivery and protocol boundaries.
 
-mod claude;
 mod session;
 pub use dione_codex::CodexSessionOptions;
+pub(crate) use dione_harness::ProtocolOutput;
 pub use dione_harness::{AttentionPolicy, HarnessConnection};
-pub(crate) use dione_harness::{HarnessDelivery, HarnessError, ProtocolOutput};
 pub(crate) use session::ResidentAdmission;
 pub use session::{
     HarnessSession, HarnessSessionError, HarnessSessionErrorKind, RunningHarnessSession,
@@ -25,9 +24,6 @@ pub(crate) mod test_support;
 #[cfg(test)]
 mod typed_delivery_tests;
 
-#[cfg(test)]
-pub(crate) use claude::claude_with_output;
-pub use claude::connect_claude;
 #[cfg(test)]
 mod oh_my_pi_tests;
 

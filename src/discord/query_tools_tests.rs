@@ -173,7 +173,10 @@ async fn registered_queries_parse_execute_project_and_reload_policy() {
         None,
     ));
     let registry = ToolRegistry::new(
-        &crate::mcp::server::reserved_tool_names(&crate::harness::connect_claude()),
+        &crate::mcp::server::reserved_tool_names(&dione_claude::connect(
+            dione_harness::ProtocolOutput::new(tokio::io::stdout()),
+            dione_codex::TOOL_NAMES,
+        )),
         registrations_with_search(
             services,
             dione_contracts::ModuleInstanceId::new(
@@ -413,7 +416,10 @@ async fn wrong_observation_exchange() {
         None,
     ));
     let registry = ToolRegistry::new(
-        &crate::mcp::server::reserved_tool_names(&crate::harness::connect_claude()),
+        &crate::mcp::server::reserved_tool_names(&dione_claude::connect(
+            dione_harness::ProtocolOutput::new(tokio::io::stdout()),
+            dione_codex::TOOL_NAMES,
+        )),
         registrations_with_search(
             services,
             dione_contracts::ModuleInstanceId::new(

@@ -114,7 +114,10 @@ impl Fixture {
             ModuleSlotId::new(slot).unwrap(),
         );
         let registry = ToolRegistry::new(
-            &crate::mcp::server::reserved_tool_names(&crate::harness::connect_claude()),
+            &crate::mcp::server::reserved_tool_names(&dione_claude::connect(
+                dione_harness::ProtocolOutput::new(tokio::io::stdout()),
+                dione_codex::TOOL_NAMES,
+            )),
             registrations(services, source).unwrap(),
         )
         .unwrap();

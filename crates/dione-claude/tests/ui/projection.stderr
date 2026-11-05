@@ -1,0 +1,11 @@
+error[E0603]: function `notification` is private
+ --> tests/ui/projection.rs:2:27
+  |
+2 |     let _ = dione_claude::notification;
+  |                           ^^^^^^^^^^^^ private function
+  |
+note: the function `notification` is defined here
+ --> src/lib.rs
+  |
+  | fn notification(delivery: &Delivery) -> Value {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

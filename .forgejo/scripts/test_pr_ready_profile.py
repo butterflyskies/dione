@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import tomllib
 import unittest
 
 
@@ -19,6 +20,7 @@ class PrReadyProfileTests(unittest.TestCase):
         self.root.mkdir()
         self.log = Path(self.directory.name) / "cargo.jsonl"
         self.binary_log = Path(self.directory.name) / "binary.log"
+        self.privacy_log = Path(self.directory.name) / "privacy.jsonl"
         (self.root / "scripts").mkdir()
         shutil.copyfile(SOURCE / "scripts/pr-ready.sh", self.root / "scripts/pr-ready.sh")
         shutil.copyfile(SOURCE / "scripts/run-tests.py", self.root / "scripts/run-tests.py")
@@ -38,6 +40,11 @@ class PrReadyProfileTests(unittest.TestCase):
             path = self.root / name
             path.write_text("#!/bin/sh\n" + body + "\n")
             path.chmod(0o755)
+        privacy = self.root / "scripts/verify-public-package-privacy.sh"
+        privacy.write_text(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$TEST_PRIVACY_LOG\"\n"
+        )
+        privacy.chmod(0o755)
         tools = self.root / "tools"
         tools.mkdir()
         cargo = tools / "cargo"
@@ -72,6 +79,7 @@ class PrReadyProfileTests(unittest.TestCase):
         self.environment = dict(
             os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"],
             TEST_CARGO_LOG=str(self.log), TEST_BINARY_LOG=str(self.binary_log),
+            TEST_PRIVACY_LOG=str(self.privacy_log),
             CARGO_TARGET_DIR="target",
         )
 
@@ -89,6 +97,15 @@ class PrReadyProfileTests(unittest.TestCase):
         self.assertEqual(builds, [["build", "--profile", profile, "--workspace", "--bins", "--locked"]])
         self.assertEqual(self.binary_log.read_text().strip(), profile)
         self.assertIn(f"({profile} build)", result.stdout)
+        workspace = tomllib.loads((SOURCE / "Cargo.toml").read_text())
+        packages = {
+            tomllib.loads((SOURCE / member / "Cargo.toml").read_text())["package"]["name"]
+            for member in workspace["workspace"]["members"]
+        }
+        privacy_calls = [(line,) for line in self.privacy_log.read_text().splitlines()]
+        expected = {(f"target/package/{name}-1.0.0.crate",) for name in packages}
+        self.assertEqual({tuple(call) for call in privacy_calls}, expected)
+        self.assertEqual(len(privacy_calls), len(expected))
 
     def test_default_builds_and_launches_review_binary(self):
         self.assert_build(self.run_gate(), "review")

@@ -213,11 +213,11 @@ JSON-line writer. Both facets derive from one adapter allocation. Application
 factories pass the adapter's writer; private fields prevent later independent
 facet replacement. They do not establish an arbitrary adapter's implementation.
 
-Dione retains cross-provider session selection, Claude construction, private
-request origins, reserved control routing, and application tool registration.
+Dione retains cross-provider session selection, private request origins,
+reserved control routing, and application tool registration.
 The session facade directly re-exports its external connection and policy types.
-Codex and OMP construct their concrete adapters through `dione_codex::connect`
-and `dione_omp::connect`; output/control assembly remains application-owned.
+Claude, Codex and OMP construct their concrete adapters through their owning
+crates. Output/control assembly remains application-owned.
 
 The private-control trait hook requires application-authorized routing. No
 request-origin or reserved-name authority moves into the crate. Writer fields,
@@ -549,7 +549,7 @@ The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, `dione-provider-delivery`, `dione-teams`, `dione-omp`, and `dione-codex`.
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, `dione-provider-delivery`, `dione-teams`, `dione-omp`, `dione-codex`, and `dione-claude`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -571,7 +571,7 @@ Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, `dione-provider-delivery`, `dione-teams`, `dione-omp`, and `dione-codex`,
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, `dione-provider-delivery`, `dione-teams`, `dione-omp`, `dione-codex`, and `dione-claude`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
@@ -632,3 +632,7 @@ The `dione-omp` member owns the durable OMP session actor, strict version-1 code
 The `dione-codex` member owns the complete queue, historical codec, protocol adapter, delivery worker, session lifecycle, and concrete Teams admission mapping. Resident handles, binding controls, fault injection, and stored payload internals remain private. Application composition selects the owner, supplies delivery configuration and attention guards, and maps its concrete lifecycle errors exhaustively. The actual immutable Codex tool catalog also supplies Claude reserved-name handling and OMP composition.
 
 Private process fixtures preserve actual root dispatch and native admission effects across the test boundary. The owning process inspects genuine completion causes before descriptive transfer. Root observes explicit remote provenance; transferred attention descriptors preserve every decoded field through existing public constructors and do not confer authority. Presentation fixtures observe actual public adapter/queue output. Publication waits for attention, configuration, contracts, Discord identities, durable, harness, messages, presentation, and provider-delivery prerequisites before Codex and root publication.
+
+## Claude adapter owner
+
+`dione-claude` owns channel and permission envelopes, protocol metadata, reserved-tool rejection and shared-output error classification. Application composition supplies one `ProtocolOutput` and the actual immutable Codex catalog. The owner reuses harness output and presentation; it has no Codex runtime dependency. Root retains selection, stdout construction, lifecycle and native authorization. Publication waits for contracts, harness, messages and presentation before Claude and root reconciliation.

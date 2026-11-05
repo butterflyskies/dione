@@ -21,7 +21,7 @@ impl HarnessSelection {
     }
     pub(crate) const fn attention_policy(self) -> AttentionPolicy {
         match self {
-            Self::ClaudeCode => super::claude::ATTENTION_POLICY,
+            Self::ClaudeCode => dione_claude::ATTENTION_POLICY,
             Self::Codex => dione_codex::ATTENTION_POLICY,
             Self::OhMyPi => AttentionPolicy::Direct,
         }
@@ -62,6 +62,31 @@ mod tests {
         assert_eq!(
             HarnessSelection::Codex.stdio_exit_policy(true),
             StdioExitPolicy::DetachUntilCancellation
+        );
+    }
+    #[tokio::test]
+    async fn claude_composition_uses_actual_codex_catalog() {
+        let session = HarnessSession::claude();
+        let connection = session.connection();
+        for name in dione_codex::TOOL_NAMES {
+            let result = connection
+                .protocol()
+                .call(name, &serde_json::json!({}))
+                .await;
+            let error = result
+                .expect("actual Codex tool must be reserved")
+                .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!("{name} is only available in Codex mode")
+            );
+        }
+        assert!(
+            connection
+                .protocol()
+                .call("unknown-app-tool", &serde_json::json!({}))
+                .await
+                .is_none()
         );
     }
 }
