@@ -28,15 +28,18 @@
 //! Expiry is enforced at reserve time (see [`super::queue`]), so a handle past
 //! its TTL is dead even if the background sweep has not caught it yet.
 
-use crate::{
-    contradictionary_diary::DiaryRecord,
-    discord::FenceContext,
-    no_rly::{
-        journal::{self, JournalHandle, Outcome},
-        judge::{OutboundJudge, RejectReason, Verdict},
-        queue::{ClaimError, Held, HoldHandle, HoldQueue},
-    },
-};
+use crate::chunker::FenceContext;
+use crate::diary::DiaryRecord;
+use crate::journal;
+use crate::journal::JournalHandle;
+use crate::journal::Outcome;
+use crate::judge::OutboundJudge;
+use crate::judge::RejectReason;
+use crate::judge::Verdict;
+use crate::queue::ClaimError;
+use crate::queue::Held;
+use crate::queue::HoldHandle;
+use crate::queue::HoldQueue;
 use camino::Utf8Path;
 use serenity::model::id::{ChannelId, MessageId};
 use std::{
@@ -102,11 +105,43 @@ impl PartialEq for ReplyFenceContext {
 impl Eq for ReplyFenceContext {}
 
 impl ReplyRequest {
-    pub(crate) fn fence_context(&self) -> Option<FenceContext> {
+    /// Constructs an ordinary reply with no deferred diary or retry fence state.
+    pub fn new(
+        channel_id: ChannelId,
+        content: String,
+        reply_to_message_id: Option<MessageId>,
+        suppress_ping: bool,
+        suppress_embeds: bool,
+    ) -> Self {
+        Self {
+            channel_id,
+            content,
+            reply_to_message_id,
+            suppress_ping,
+            suppress_embeds,
+            pending_diary_records: Vec::new(),
+            fence_context: ReplyFenceContext::default(),
+        }
+    }
+
+    /// Attaches diary records that are committed only after delivery completes.
+    pub fn with_pending_diary_records(mut self, records: Vec<DiaryRecord>) -> Self {
+        self.pending_diary_records = records;
+        self
+    }
+
+    /// Borrows the deferred full-message diary records.
+    pub fn pending_diary_records(&self) -> &[DiaryRecord] {
+        &self.pending_diary_records
+    }
+
+    /// Returns the opaque incoming fence state retained for this request.
+    pub fn fence_context(&self) -> Option<FenceContext> {
         self.fence_context.get()
     }
 
-    pub(crate) fn set_fence_context(&self, context: Option<FenceContext>) {
+    /// Retains the incoming fence state required to resume original source bytes.
+    pub fn set_fence_context(&self, context: Option<FenceContext>) {
         self.fence_context.set(context);
     }
 }
@@ -620,13 +655,13 @@ impl ConsentGate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discord::chunk_preserving_fences;
-    use crate::discord::chunk_preserving_fences_with_context;
-    use crate::no_rly::journal::BounceRecord;
-    use crate::no_rly::journal::JournalRecord;
-    use crate::no_rly::journal::StatsFilter;
-    use crate::no_rly::judge::AlwaysClear;
-    use crate::no_rly::judge::ReasonEntry;
+    use crate::chunker::chunk_preserving_fences;
+    use crate::chunker::chunk_preserving_fences_with_context;
+    use crate::journal::BounceRecord;
+    use crate::journal::JournalRecord;
+    use crate::journal::StatsFilter;
+    use crate::judge::AlwaysClear;
+    use crate::judge::ReasonEntry;
     use camino::Utf8PathBuf;
     use dione_config::ChunkMode;
     use dione_contradictionary::Action;
@@ -1451,7 +1486,7 @@ mod tests {
                 if line.contains("after") {
                     assert_eq!(state, None, "post-fence text must render outside code");
                 }
-                state = crate::discord::chunker::advance_fence(&state, line);
+                state = crate::chunker::advance_fence(&state, line);
             }
             assert_eq!(state, None, "every retry chunk must be fence-balanced");
         }

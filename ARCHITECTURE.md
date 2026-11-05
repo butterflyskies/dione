@@ -123,6 +123,12 @@ publication writer/cache/counter/watch channel. Application admission acquires
 that same writer through its narrow guard API. File watching and native process
 lifetimes remain application adapters.
 
+The public dione-outbound-consent package owns consent decisions, held retries,
+journal maintenance, deferred diary records and fence-aware chunking. Native
+senders retain HTTP, authorization and coordination effects. Their terminal
+failure projection consumes typed progress and diary records; consent retries
+retain private remainder and fence state inside the owner.
+
 ## Processes and transports
 
 ```mermaid
@@ -296,14 +302,14 @@ client's authority and have no local allowlist or ingress checks. The
 [Discord introspection adapter](src/discord/introspection_wire.rs) formats results and
 original SDK error text; [registered introspection tools](src/discord/introspection_tools.rs) own argument parsing.
 
-[Consent delivery types](src/no_rly/delivery.rs) distinguish total failure from
+[Consent delivery types](crates/dione-outbound-consent/src/delivery.rs) distinguish total failure from
 nonempty partial progress and retain retry state privately. Attention consumes
 the same typed outcomes and treats only complete delivery as success.
 
 [dione-pre-send](crates/dione-pre-send/src/lib.rs) owns the hook runner, private
 status lint and production roster. [Process composition](src/composition/pre_send.rs)
 installs the production pipeline in Observe mode. Observe records findings without changing or stopping output. Separately,
-the [no_rly consent gate](src/no_rly/consent.rs) can hold rejected message text
+the [no_rly consent gate](crates/dione-outbound-consent/src/consent.rs) can hold rejected message text
 for an explicit release or rephrase. Its pending handles are in memory, while
 resolved outcomes go to the journal. These are different mechanisms.
 
@@ -337,7 +343,7 @@ not imply that all writes have the same durability guarantee.
 | Codex delivery | [CodexEventQueue](src/codex/queue.rs) adapts the shared [durable owner](crates/dione-durable/src/queue.rs); its [legacy codec](src/codex/queue_codec.rs) preserves pending events, leases, consumers, and bindings in `codex-inbox.json`. The [store](crates/dione-durable/src/store.rs) holds `codex-inbox.lock` for its lifetime to exclude a second owner. |
 | Guild mutes | [MuteStore](crates/dione-mutes/src/lib.rs) rebuilds state from `guild_mute_receipts.jsonl`. Receipt append precedes snapshot publication. |
 | Attention | [AttentionRuntime](src/attention/runtime.rs) uses `attention/records.json` through the [attention store](crates/dione-attention/src/store.rs), plus `attention-status.json` for health reporting. |
-| Consent outcomes | [JournalHandle](src/no_rly/journal.rs) serializes writes to `no_rly_journal.jsonl`. Pending consent handles are owned by [HoldQueue](src/no_rly/queue.rs). |
+| Consent outcomes | [JournalHandle](crates/dione-outbound-consent/src/journal.rs) serializes writes to `no_rly_journal.jsonl`. Pending consent handles are owned by [HoldQueue](crates/dione-outbound-consent/src/queue.rs). |
 | Attachments | [Discord queries](src/discord/messaging/queries.rs) download Discord attachments into the state directory's `inbox/`. |
 | Transient Discord state | [SharedState](src/state.rs) holds entity caches, DM indexes, sent-message identities, and permission requests. The [ingress ledger](src/ingress_ledger.rs), delivery buffer, and rate limiter are also process-local. |
 | Archive data | The separate [GAIE archive](crates/dione-gaie/src/archive.rs) owns corpus NDJSON, checkpoints, attachment data, origin evidence, and archive locks. See the [archive guide](docs/gaie-archive.md). |

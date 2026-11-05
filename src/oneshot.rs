@@ -19,15 +19,15 @@
 //! The binary prints exactly one JSON object ([`Outcome::to_json`]) on
 //! stdout and maps [`Outcome::exit_code`] to the process status.
 
-use crate::discord::chunk_preserving_fences;
 use crate::gate::OutboundGate;
-use crate::no_rly::OutboundJudge as _;
-use crate::no_rly::Verdict;
 use camino::Utf8Path;
 use dione_config::ChunkMode;
 use dione_config::ConfigError;
 use dione_config::LoadedConfig;
 use dione_config::ReadOnlyConfigError;
+use dione_outbound_consent::OutboundJudge as _;
+use dione_outbound_consent::Verdict;
+use dione_outbound_consent::chunker::chunk_preserving_fences;
 use dione_pre_send::{
     ChannelType, HookContext, HookDecision, NoRly, OutboundDestination, observe_pipeline,
 };

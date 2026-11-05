@@ -1,13 +1,13 @@
 use camino::Utf8PathBuf;
 use dione::mcp::server::DioneServer;
 use dione::mcp::server::test_helpers;
-use dione::no_rly::consent::ConsentGate;
 use dione::state::new_state;
 use dione::tracing_channel::TraceLevelController;
 use dione_access_requests::AccessQueue;
 use dione_config::Config;
 use dione_config::DmPolicy;
 use dione_config::LoadedConfig;
+use dione_outbound_consent::consent::ConsentGate;
 use serde_json::{Value, json};
 use serenity::http::Http;
 use std::sync::Arc;

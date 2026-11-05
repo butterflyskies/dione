@@ -260,7 +260,9 @@ pub async fn run() -> Result<(), StartupError> {
         notif_tx,
         trace_controller,
         session.connection(),
-        Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
+        Arc::new(dione_outbound_consent::consent::ConsentGate::new(
+            &state_dir,
+        )),
         ingress_ledger,
         authority_module,
         Some(event_tx.clone()),

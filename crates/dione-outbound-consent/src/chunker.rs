@@ -1,3 +1,5 @@
+//! Original source ranges and fence-aware presentation chunks.
+
 use dione_config::ChunkMode;
 use dione_evidence::markdown::FenceTransition;
 use dione_evidence::markdown::fence_transition;
@@ -73,6 +75,13 @@ pub struct FenceChunk {
     pub(crate) incoming: Option<FenceContext>,
 }
 
+impl FenceChunk {
+    /// Borrows the fence state active before this chunk's original source bytes.
+    pub fn incoming_context(&self) -> Option<&FenceContext> {
+        self.incoming.as_ref()
+    }
+}
+
 /// Why fenced Markdown cannot be represented safely as inline Discord text.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum FenceChunkError {
@@ -81,11 +90,15 @@ pub enum FenceChunkError {
     #[error(
         "message requires attachment fallback: fenced Markdown cannot fit within {limit}-byte chunks"
     )]
-    InlineImpossible { limit: usize },
+    InlineImpossible {
+        /// The configured maximum inline byte length.
+        limit: usize,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct FenceContext {
+/// Opaque fence state recovered from an existing presentation chunk.
+pub struct FenceContext {
     backticks: usize,
     lang: String,
 }
@@ -185,7 +198,7 @@ pub fn chunk_preserving_fences(
 }
 
 /// Resume fence-preserving chunking from a prior chunk's incoming state.
-pub(crate) fn chunk_preserving_fences_with_context(
+pub fn chunk_preserving_fences_with_context(
     text: &str,
     limit: usize,
     mode: ChunkMode,

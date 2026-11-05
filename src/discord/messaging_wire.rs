@@ -2,19 +2,17 @@
 use serde_json::{Value, json};
 use serenity::model::id::MessageId;
 use {
-    crate::{
-        discord::messaging::{
-            DeliveryReceipt, DmDeliveryRoute, DmOutcome, MessagingError, MessagingErrorKind,
-            ReplyOutcome, Report, TargetError,
-        },
-        no_rly::{
-            consent::{BounceTicket, RejectedHandle, Released, Rephrased},
-            delivery::{DeliveryProgress, PostedMessages},
-            queue::HoldHandle,
-        },
+    crate::discord::messaging::{
+        DeliveryReceipt, DmDeliveryRoute, DmOutcome, MessagingError, MessagingErrorKind,
+        ReplyOutcome, Report, TargetError,
     },
     dione_contradictionary::AutoRewrite,
     dione_evidence::SentexRole,
+    dione_outbound_consent::{
+        consent::{BounceTicket, RejectedHandle, Released, Rephrased},
+        delivery::{DeliveryProgress, PostedMessages},
+        queue::HoldHandle,
+    },
 };
 /// Make every `auto` rewrite visible to the sender: one
 /// `auto: <match> → <replace>` line each, under `auto_rewrites`.
@@ -252,12 +250,10 @@ pub(crate) fn unit(result: Result<(), MessagingError>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        discord::messaging::PartialReceipt,
-        no_rly::{
-            delivery::{DeliveryCause, DeliveryProgress, PostedMessages},
-            judge::{ReasonEntry, RejectReason},
-        },
+    use crate::discord::messaging::PartialReceipt;
+    use dione_outbound_consent::{
+        delivery::{DeliveryCause, DeliveryProgress, PostedMessages},
+        judge::{ReasonEntry, RejectReason},
     };
     use std::time::Duration;
     // ── bounce_json wire contract ────────────────────────────────────────
@@ -348,8 +344,11 @@ mod tests {
             assert_eq!(dm(result), expected);
         }
         let partial = crate::discord::messaging::PartialReceipt {
-            sent: crate::no_rly::delivery::PostedMessages::new(MessageId::new(101), vec![]),
-            cause: crate::no_rly::delivery::DeliveryCause::ChunkSend {
+            sent: dione_outbound_consent::delivery::PostedMessages::new(
+                MessageId::new(101),
+                vec![],
+            ),
+            cause: dione_outbound_consent::delivery::DeliveryCause::ChunkSend {
                 index: 1,
                 source: serenity::Error::Other("connection lost").into(),
             },
@@ -367,12 +366,12 @@ mod tests {
     fn retry_failure_preserves_partial_progress_and_live_handle() {
         let failure = RejectedHandle::SendFailed {
             handle: HoldHandle::new("nr-test-1"),
-            error: crate::no_rly::delivery::DeliveryCause::ChunkSend {
+            error: dione_outbound_consent::delivery::DeliveryCause::ChunkSend {
                 index: 1,
                 source: serenity::Error::Other("connection lost").into(),
             },
-            progress: crate::no_rly::delivery::DeliveryProgress::Partial(
-                crate::no_rly::delivery::PostedMessages::new(MessageId::new(101), vec![]),
+            progress: dione_outbound_consent::delivery::DeliveryProgress::Partial(
+                dione_outbound_consent::delivery::PostedMessages::new(MessageId::new(101), vec![]),
             ),
             expires_in: std::time::Duration::from_secs(30),
         };

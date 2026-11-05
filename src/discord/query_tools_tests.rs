@@ -166,7 +166,9 @@ async fn registered_queries_parse_execute_project_and_reload_policy() {
         ),
         crate::state::new_state(),
         state_dir.clone(),
-        Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
+        Arc::new(dione_outbound_consent::consent::ConsentGate::new(
+            &state_dir,
+        )),
         Arc::new(crate::ingress_ledger::IngressLedger::new()),
         None,
     ));
@@ -404,7 +406,9 @@ async fn wrong_observation_exchange() {
         ),
         crate::state::new_state(),
         state_dir.clone(),
-        Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
+        Arc::new(dione_outbound_consent::consent::ConsentGate::new(
+            &state_dir,
+        )),
         Arc::new(crate::ingress_ledger::IngressLedger::new()),
         None,
     ));

@@ -1,4 +1,4 @@
-//! Application diary policy and retained contradictionary records.
+//! Contradictionary diary policy and retained records.
 
 use crate::util::truncate_chars;
 use chrono::Utc;
@@ -29,7 +29,7 @@ use std::path::Path;
 ///
 /// `no_rly` only gates the block tier: it never changes what the `log` and
 /// `celebrate` tiers record.
-pub(crate) fn evaluate_block(hits: &[Hit], content: &str, no_rly: bool) -> BlockOutcome {
+pub fn evaluate_block(hits: &[Hit], content: &str, no_rly: bool) -> BlockOutcome {
     // An `auto` hit that reaches evaluation unrewritten gates like `block`.
     let blocked: Vec<&str> = hits
         .iter()
