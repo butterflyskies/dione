@@ -81,6 +81,11 @@ ranking, retrieval status and compact rendering. Dione retains native eligibilit
 configuration/alias policy, shadow/live orchestration and metadata injection. No
 Discord or Dione application dependency enters the retrieval member.
 
+The public dione-delivery-scheduler package owns the generic per-conversation
+FIFO, deadlines, bounded immediate budgets, requeue, and ordered drain.
+Discord retains evidence classification and native notification ownership.
+MCP retains admission, rate-limit handling, runtime delivery, and shutdown wiring.
+
 ## Processes and transports
 
 ```mermaid

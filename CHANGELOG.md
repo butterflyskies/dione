@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.102.0]
+
+### Changed
+
+- Extract the generic scoped FIFO scheduler into dione-delivery-scheduler.
+  Migrate Discord, MCP, and pipeline tests directly while retaining native
+  evidence classification and routing in Dione. Preserve deadlines, immediate
+  burst budgets, rejected payloads, retry ordering, and shutdown drain ordering.
+
 ## [0.101.0]
 
 ### Changed
