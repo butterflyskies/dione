@@ -5,6 +5,9 @@
 //! a real Discord connection. Tool calls that require Discord HTTP are tested
 //! either up to the gate-rejection path or against a local mock HTTP server.
 
+#[path = "support/codex_projection.rs"]
+mod codex_projection;
+
 use dione::{
     discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
     mcp::server::{DioneServer, test_helpers},
@@ -407,9 +410,9 @@ async fn harness_contract_claude_queue_tools_reject_before_parsing() {
 #[tokio::test]
 async fn harness_contract_codex_consumer_receives_and_acknowledges_event() {
     let (_dir, state_dir) = temp_state_dir();
-    let queue = dione::codex::CodexEventQueue::load(
+    let queue = dione_codex::CodexEventQueue::load(
         &state_dir,
-        dione::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        dione_codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -424,7 +427,7 @@ async fn harness_contract_codex_consumer_receives_and_acknowledges_event() {
         .unwrap();
     let server = make_server_with_harness(
         &state_dir,
-        dione::harness::connect_codex(queue, tokio::sync::watch::channel(None).0),
+        dione_codex::connect(queue, tokio::sync::watch::channel(None).0),
     )
     .await;
     for (name, arguments, expected) in [
@@ -1338,10 +1341,10 @@ async fn test_bind_codex_thread_updates_live_binding() {
     let (binding_tx, mut binding_rx) = tokio::sync::watch::channel(None);
     let server = make_server_with_harness(
         &state_dir,
-        dione::harness::connect_codex(
-            dione::codex::CodexEventQueue::load(
+        dione_codex::connect(
+            dione_codex::CodexEventQueue::load(
                 &state_dir,
-                dione::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                dione_codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                     dione_contracts::ProviderId::new("discord").unwrap(),
                     dione_contracts::ModuleSlotId::new("primary").unwrap(),
                 )),
@@ -1371,7 +1374,7 @@ async fn test_bind_codex_thread_updates_live_binding() {
         binding_rx
             .borrow_and_update()
             .as_ref()
-            .map(dione::codex::EndpointId::as_str),
+            .map(dione_codex::EndpointId::as_str),
         Some(thread_id)
     );
 
@@ -1390,8 +1393,8 @@ async fn test_bind_codex_thread_updates_live_binding() {
 
 // Semantic property tests — wire format is pinned by snapshots below.
 
-#[test]
-fn test_notification_has_no_id_field() {
+#[tokio::test]
+async fn test_notification_has_no_id_field() {
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1),
         message_id: MessageId::new(2),
@@ -1411,15 +1414,15 @@ fn test_notification_has_no_id_field() {
         bells: None,
         bells_status: None,
     });
-    let notif = test_helpers::make_notification(event).unwrap();
+    let notif = codex_projection::make_notification(event).await.unwrap();
     assert!(
         notif.get("id").is_none(),
         "notifications must not have an id field"
     );
 }
 
-#[test]
-fn test_notification_attachment_metadata_present() {
+#[tokio::test]
+async fn test_notification_attachment_metadata_present() {
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1),
         message_id: MessageId::new(2),
@@ -1443,14 +1446,14 @@ fn test_notification_attachment_metadata_present() {
         bells: None,
         bells_status: None,
     });
-    let notif = test_helpers::make_notification(event).unwrap();
+    let notif = codex_projection::make_notification(event).await.unwrap();
     let meta = &notif["params"]["meta"];
     assert_eq!(meta["attachment_count"], "1");
     assert!(meta["attachments"].as_str().unwrap().contains("photo.png"));
 }
 
-#[test]
-fn test_notification_voice_flag_in_meta() {
+#[tokio::test]
+async fn test_notification_voice_flag_in_meta() {
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1),
         message_id: MessageId::new(2),
@@ -1470,23 +1473,23 @@ fn test_notification_voice_flag_in_meta() {
         bells: None,
         bells_status: None,
     });
-    let notif = test_helpers::make_notification(event).unwrap();
+    let notif = codex_projection::make_notification(event).await.unwrap();
     assert_eq!(notif["params"]["meta"]["is_voice_message"], true);
 }
 
-#[test]
-fn test_permission_deny_uses_deny_behavior() {
+#[tokio::test]
+async fn test_permission_deny_uses_deny_behavior() {
     let event = NotificationEvent::PermissionResponse {
         request_id: "req-xyz".to_string(),
         granted: false,
     };
-    let notif = test_helpers::make_notification(event).unwrap();
+    let notif = codex_projection::make_notification(event).await.unwrap();
     assert_eq!(notif["params"]["behavior"], "deny");
     assert_eq!(notif["method"], "notifications/claude/channel/permission");
 }
 
-#[test]
-fn test_notification_message_snapshot() {
+#[tokio::test]
+async fn test_notification_message_snapshot() {
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1000),
         message_id: MessageId::new(2000),
@@ -1506,12 +1509,12 @@ fn test_notification_message_snapshot() {
         bells: None,
         bells_status: None,
     });
-    let notif = test_helpers::make_notification(event).unwrap();
+    let notif = codex_projection::make_notification(event).await.unwrap();
     insta::assert_json_snapshot!(notif);
 }
 
-#[test]
-fn test_notification_reaction_snapshot() {
+#[tokio::test]
+async fn test_notification_reaction_snapshot() {
     let event = NotificationEvent::Reaction {
         chat_id: ChannelId::new(1001),
         message_id: MessageId::new(2001),
@@ -1520,15 +1523,15 @@ fn test_notification_reaction_snapshot() {
         emoji: "🎉".to_string(),
         self_react: false,
     };
-    let notif = test_helpers::make_notification(event).unwrap();
+    let notif = codex_projection::make_notification(event).await.unwrap();
     insta::assert_json_snapshot!(notif);
 }
 
 /// Tool-initiated self-reacts (contradictionary celebrate) must carry
 /// `self_react: true` in the notification meta so the construct can tell its
 /// own reinforcement signal apart from other users' reactions.
-#[test]
-fn test_notification_self_react_snapshot() {
+#[tokio::test]
+async fn test_notification_self_react_snapshot() {
     let event = NotificationEvent::Reaction {
         chat_id: ChannelId::new(1001),
         message_id: MessageId::new(2001),
@@ -1537,22 +1540,22 @@ fn test_notification_self_react_snapshot() {
         emoji: "✨".to_string(),
         self_react: true,
     };
-    let notif = test_helpers::make_notification(event).unwrap();
+    let notif = codex_projection::make_notification(event).await.unwrap();
     insta::assert_json_snapshot!(notif);
 }
 
-#[test]
-fn test_notification_permission_response_snapshot() {
+#[tokio::test]
+async fn test_notification_permission_response_snapshot() {
     let event = NotificationEvent::PermissionResponse {
         request_id: "snap-req-42".to_string(),
         granted: true,
     };
-    let notif = test_helpers::make_notification(event).unwrap();
+    let notif = codex_projection::make_notification(event).await.unwrap();
     insta::assert_json_snapshot!(notif);
 }
 
-#[test]
-fn test_notification_message_edit_snapshot() {
+#[tokio::test]
+async fn test_notification_message_edit_snapshot() {
     let event = NotificationEvent::MessageEdit {
         chat_id: ChannelId::new(1002),
         message_id: MessageId::new(2002),
@@ -1563,12 +1566,12 @@ fn test_notification_message_edit_snapshot() {
         thread_parent_id: None,
         reply_to_message_id: None,
     };
-    let notif = test_helpers::make_notification(event).unwrap();
+    let notif = codex_projection::make_notification(event).await.unwrap();
     insta::assert_json_snapshot!(notif);
 }
 
-#[test]
-fn test_notification_message_edit_reply_snapshot() {
+#[tokio::test]
+async fn test_notification_message_edit_reply_snapshot() {
     let event = NotificationEvent::MessageEdit {
         chat_id: ChannelId::new(1002),
         message_id: MessageId::new(2002),
@@ -1579,23 +1582,23 @@ fn test_notification_message_edit_reply_snapshot() {
         thread_parent_id: None,
         reply_to_message_id: Some(MessageId::new(8888)),
     };
-    let notif = test_helpers::make_notification(event).unwrap();
+    let notif = codex_projection::make_notification(event).await.unwrap();
     insta::assert_json_snapshot!(notif);
 }
 
-#[test]
-fn test_notification_message_delete_snapshot() {
+#[tokio::test]
+async fn test_notification_message_delete_snapshot() {
     let event = NotificationEvent::MessageDelete {
         chat_id: ChannelId::new(1003),
         message_id: MessageId::new(2003),
         thread_parent_id: None,
     };
-    let notif = test_helpers::make_notification(event).unwrap();
+    let notif = codex_projection::make_notification(event).await.unwrap();
     insta::assert_json_snapshot!(notif);
 }
 
-#[test]
-fn test_notification_message_in_thread_snapshot() {
+#[tokio::test]
+async fn test_notification_message_in_thread_snapshot() {
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1000),
         message_id: MessageId::new(2000),
@@ -1615,12 +1618,12 @@ fn test_notification_message_in_thread_snapshot() {
         bells: None,
         bells_status: None,
     });
-    let notif = test_helpers::make_notification(event).unwrap();
+    let notif = codex_projection::make_notification(event).await.unwrap();
     insta::assert_json_snapshot!(notif);
 }
 
-#[test]
-fn test_notification_message_reply_snapshot() {
+#[tokio::test]
+async fn test_notification_message_reply_snapshot() {
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1000),
         message_id: MessageId::new(2000),
@@ -1640,12 +1643,12 @@ fn test_notification_message_reply_snapshot() {
         bells: None,
         bells_status: None,
     });
-    let notif = test_helpers::make_notification(event).unwrap();
+    let notif = codex_projection::make_notification(event).await.unwrap();
     insta::assert_json_snapshot!(notif);
 }
 
-#[test]
-fn test_notification_message_reply_in_thread_snapshot() {
+#[tokio::test]
+async fn test_notification_message_reply_in_thread_snapshot() {
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1000),
         message_id: MessageId::new(2000),
@@ -1665,12 +1668,12 @@ fn test_notification_message_reply_in_thread_snapshot() {
         bells: None,
         bells_status: None,
     });
-    let notif = test_helpers::make_notification(event).unwrap();
+    let notif = codex_projection::make_notification(event).await.unwrap();
     insta::assert_json_snapshot!(notif);
 }
 
-#[test]
-fn test_trace_notification_format() {
+#[tokio::test]
+async fn test_trace_notification_format() {
     let event = NotificationEvent::Trace {
         level: tracing::Level::DEBUG,
         target: "dione::discord::events".to_string(),
@@ -1680,7 +1683,7 @@ fn test_trace_notification_format() {
             ("cached".to_string(), "None".to_string()),
         ],
     };
-    let notif = test_helpers::make_notification(event).unwrap();
+    let notif = codex_projection::make_notification(event).await.unwrap();
     assert_eq!(notif["method"], "notifications/claude/channel");
     assert_eq!(notif["params"]["meta"]["type"], "trace");
     assert_eq!(notif["params"]["meta"]["level"], "DEBUG");
@@ -1691,28 +1694,28 @@ fn test_trace_notification_format() {
     assert!(content.contains("cached=None"));
 }
 
-#[test]
-fn test_trace_notification_no_fields() {
+#[tokio::test]
+async fn test_trace_notification_no_fields() {
     let event = NotificationEvent::Trace {
         level: tracing::Level::INFO,
         target: "dione".to_string(),
         message: "dione starting".to_string(),
         fields: vec![],
     };
-    let notif = test_helpers::make_notification(event).unwrap();
+    let notif = codex_projection::make_notification(event).await.unwrap();
     assert_eq!(notif["params"]["content"], "dione starting");
     assert_eq!(notif["params"]["meta"]["type"], "trace");
 }
 
-#[test]
-fn test_trace_notification_snapshot() {
+#[tokio::test]
+async fn test_trace_notification_snapshot() {
     let event = NotificationEvent::Trace {
         level: tracing::Level::WARN,
         target: "dione::mcp".to_string(),
         message: "something happened".to_string(),
         fields: vec![("key".to_string(), "value".to_string())],
     };
-    let notif = test_helpers::make_notification(event).unwrap();
+    let notif = codex_projection::make_notification(event).await.unwrap();
     insta::assert_json_snapshot!(notif);
 }
 
@@ -2521,10 +2524,10 @@ async fn test_reply_preserves_discord_missing_access_after_gate() {
 }
 
 fn codex_connection(state_dir: &camino::Utf8Path) -> HarnessConnection {
-    dione::harness::connect_codex(
-        dione::codex::CodexEventQueue::load(
+    dione_codex::connect(
+        dione_codex::CodexEventQueue::load(
             state_dir,
-            dione::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            dione_codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),

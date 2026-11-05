@@ -156,3 +156,20 @@ impl From<QueueError> for LiveQueueError {
         }
     }
 }
+
+#[cfg(test)]
+mod display_tests {
+    #[test]
+    fn replay_capacity_display_starts_lowercase() {
+        assert_eq!(
+            crate::LiveQueueError {
+                kind: crate::LiveQueueErrorKind::ReplayCapacity(crate::QueueError::new(
+                    "resident admission",
+                    crate::QueueErrorKind::ReplayCapacity
+                ))
+            }
+            .to_string(),
+            "teams replay-identity capacity is full"
+        );
+    }
+}

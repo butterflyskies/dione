@@ -1,0 +1,47 @@
+{
+  "next_id": 2,
+  "next_lease_generation": 0,
+  "next_consumer_generation": 0,
+  "primary_consumer": null,
+  "live_thread_id": null,
+  "consumers": [],
+  "processed_message_ids": [],
+  "entries": [
+    {
+      "id": 0,
+      "payload": {
+        "jsonrpc": "2.0",
+        "method": "notifications/claude/channel",
+        "params": {
+          "content": "prior release first",
+          "meta": {
+            "chat_id": "123",
+            "message_id": "4101"
+          }
+        }
+      },
+      "discord_message_id": "4101",
+      "consumer_id": null,
+      "live_thread_id": null,
+      "lease": null
+    },
+    {
+      "id": 1,
+      "payload": {
+        "jsonrpc": "2.0",
+        "method": "notifications/claude/channel",
+        "params": {
+          "content": "prior release second",
+          "meta": {
+            "chat_id": "123",
+            "message_id": "4102"
+          }
+        }
+      },
+      "discord_message_id": "4102",
+      "consumer_id": null,
+      "live_thread_id": null,
+      "lease": null
+    }
+  ]
+}

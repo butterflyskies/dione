@@ -14,7 +14,6 @@ use crate::attention::control::execute;
 use crate::attention::runtime::AttentionRuntime;
 use crate::attention::source::SourceResolver;
 use crate::attention::source::now_ms;
-use crate::codex::CodexEventQueue;
 use crate::discord::events::MessageEvent;
 use crate::discord::events::MessageTargeting;
 use dione_access_requests::AccessQueue;
@@ -32,6 +31,7 @@ use dione_attention::types::SourceAuthorKind;
 use dione_attention::types::SourceKey;
 use dione_attention::types::SourceVersion;
 use dione_attention::types::content_hash;
+use dione_codex::CodexEventQueue;
 use dione_config::ConfigRuntime;
 use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use parking_lot::Mutex as SyncMutex;
@@ -338,7 +338,7 @@ struct Fixture {
     attention: Arc<AttentionRuntime>,
     admissions: AdmissionController,
     queue: CodexEventQueue,
-    consumer: crate::codex::ConsumerId,
+    consumer: dione_codex::ConsumerId,
     buffer: DeliveryBuffer,
     bells: Arc<BellEvaluator>,
 }
@@ -400,7 +400,7 @@ impl Fixture {
         );
         let queue = CodexEventQueue::load(
             &path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            dione_codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),

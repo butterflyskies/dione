@@ -1,23 +1,20 @@
 //! Codex queue, binding, and delivery task ownership.
-use super::{
-    HarnessConnection,
-    session::{HarnessSessionError, HarnessSessionErrorKind},
-};
-use crate::codex::CodexDeliveryConfig;
-use crate::codex::CodexEventQueue;
-use crate::codex::CodexThreadId;
-use crate::codex::run_delivery_worker;
+use crate::CodexDeliveryConfig;
+use crate::CodexEventQueue;
+use crate::CodexThreadId;
+use crate::run_delivery_worker;
 use camino::{Utf8Path, Utf8PathBuf};
 use dione_attention::delivery::AttentionDeliveryGuard;
 use dione_config::DeliveryConfig;
 use dione_durable::EndpointId;
+use dione_harness::HarnessConnection;
 use std::{env, sync::Arc};
 use tokio::{sync::watch, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 /// Optional CLI overrides resolved only when live delivery starts.
 pub struct CodexSessionOptions {
-    legacy_scope: crate::codex::LegacyDiscordScope,
+    legacy_scope: crate::LegacyDiscordScope,
     socket_path: Option<Utf8PathBuf>,
     initial_thread: Option<CodexThreadId>,
 }
@@ -27,7 +24,7 @@ impl CodexSessionOptions {
     pub fn new(
         socket_path: Option<Utf8PathBuf>,
         initial_thread: Option<CodexThreadId>,
-        legacy_scope: crate::codex::LegacyDiscordScope,
+        legacy_scope: crate::LegacyDiscordScope,
     ) -> Self {
         Self {
             legacy_scope,
@@ -37,28 +34,31 @@ impl CodexSessionOptions {
     }
 }
 
-pub(super) struct CodexSession {
+/// Prepared durable queue and connection before the resident worker starts.
+pub struct CodexSession {
     queue: CodexEventQueue,
     binding_tx: watch::Sender<Option<EndpointId>>,
     binding_rx: watch::Receiver<Option<EndpointId>>,
     options: CodexSessionOptions,
 }
 
-pub(super) struct RunningCodexSession {
+/// Owns cancellation, worker completion and pending durable operations.
+pub struct RunningCodexSession {
     queue: CodexEventQueue,
     cancellation: CancellationToken,
     worker: JoinHandle<()>,
 }
 
 impl CodexSession {
-    pub(super) async fn prepare(
+    /// Opens the inbox without reading environment or connecting to a host.
+    pub async fn prepare(
         state_dir: &Utf8Path,
         options: CodexSessionOptions,
-    ) -> Result<Self, HarnessSessionError> {
+    ) -> Result<Self, CodexSessionError> {
         let queue = CodexEventQueue::open(state_dir, options.legacy_scope.clone())
             .await
-            .map_err(|source| HarnessSessionError {
-                kind: HarnessSessionErrorKind::QueueOpen(source),
+            .map_err(|source| CodexSessionError {
+                kind: CodexSessionErrorKind::QueueOpen(source),
             })?;
         let (binding_tx, binding_rx) = watch::channel(None);
         Ok(Self {
@@ -69,20 +69,23 @@ impl CodexSession {
         })
     }
 
-    pub(super) fn connection(&self) -> HarnessConnection {
-        crate::harness::connect_codex(self.queue.clone(), self.binding_tx.clone())
+    /// Returns the coupled protocol and delivery connection.
+    pub fn connection(&self) -> HarnessConnection {
+        crate::connect(self.queue.clone(), self.binding_tx.clone())
     }
 
-    pub(super) fn codex_admission(&self) -> CodexEventQueue {
+    /// Returns the durable queue used to assemble native resident admission.
+    pub fn admission(&self) -> CodexEventQueue {
         self.queue.clone()
     }
 
-    pub(super) async fn start(
+    /// Resolves live settings, commits initial binding and starts the owned worker.
+    pub async fn start(
         self,
         delivery: &DeliveryConfig,
         attention: Arc<dyn AttentionDeliveryGuard>,
         process_shutdown: CancellationToken,
-    ) -> Result<RunningCodexSession, HarnessSessionError> {
+    ) -> Result<RunningCodexSession, CodexSessionError> {
         self.start_with_thread_environment(delivery, attention, process_shutdown, || {
             env::var("CODEX_THREAD_ID").ok()
         })
@@ -95,13 +98,13 @@ impl CodexSession {
         attention: Arc<dyn AttentionDeliveryGuard>,
         process_shutdown: CancellationToken,
         environment_thread: impl FnOnce() -> Option<String>,
-    ) -> Result<RunningCodexSession, HarnessSessionError> {
+    ) -> Result<RunningCodexSession, CodexSessionError> {
         let mut config = CodexDeliveryConfig::resolve(
             self.options.socket_path,
             self.options.legacy_scope.clone(),
         )
-        .map_err(|source| HarnessSessionError {
-            kind: HarnessSessionErrorKind::Configure(source),
+        .map_err(|source| CodexSessionError {
+            kind: CodexSessionErrorKind::Configure(source),
         })?;
         config.preamble_mode = delivery.preamble_mode;
         config.preamble_template = delivery.preamble_template.clone();
@@ -111,16 +114,16 @@ impl CodexSession {
             None => environment_thread()
                 .map(|value| value.parse())
                 .transpose()
-                .map_err(|source| HarnessSessionError {
-                    kind: HarnessSessionErrorKind::EnvironmentThread(source),
+                .map_err(|source| CodexSessionError {
+                    kind: CodexSessionErrorKind::EnvironmentThread(source),
                 })?,
         };
         self.queue
             .binding_controller()
             .bind_live_thread_and_publish(initial_thread, &self.binding_tx)
             .await
-            .map_err(|source| HarnessSessionError {
-                kind: HarnessSessionErrorKind::InitialBinding(source),
+            .map_err(|source| CodexSessionError {
+                kind: CodexSessionErrorKind::InitialBinding(source),
             })?;
         let cancellation = CancellationToken::new();
         let worker_cancel = cancellation.clone();
@@ -142,10 +145,11 @@ impl CodexSession {
 }
 
 impl RunningCodexSession {
-    pub(super) async fn shutdown(self) -> Result<(), HarnessSessionError> {
+    /// Cancels and joins the worker before draining owned operations.
+    pub async fn shutdown(self) -> Result<(), CodexSessionError> {
         self.cancellation.cancel();
-        let result = self.worker.await.map_err(|source| HarnessSessionError {
-            kind: HarnessSessionErrorKind::Join(source),
+        let result = self.worker.await.map_err(|source| CodexSessionError {
+            kind: CodexSessionErrorKind::Join(source),
         });
         self.queue.drain_owned().await;
         result
@@ -154,10 +158,8 @@ impl RunningCodexSession {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        super::session::tests::{Guard, peer, receive, wait_for_worker},
-        *,
-    };
+    use super::*;
+    use crate::test_support::{Guard, peer, receive, wait_for_worker};
     use serde_json::json;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -167,7 +169,7 @@ mod tests {
         CodexSessionOptions::new(
             Some(path),
             Some(CodexThreadId::parse("registration-thread").unwrap()),
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
@@ -180,7 +182,7 @@ mod tests {
         let path = root.join("app.sock");
         let listener = UnixListener::bind(&path).unwrap();
         let session = CodexSession::prepare(&root, options(path)).await.unwrap();
-        let queue = session.codex_admission();
+        let queue = session.admission();
         let prepared = queue.test_snapshot().await;
         assert!(
             prepared.consumers.is_empty(),
@@ -206,7 +208,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let fault = queue.test_set_persist_failure(Some(crate::codex::PersistFailure::AfterRename));
+        let fault = queue.test_set_persist_failure(Some(crate::PersistFailure::AfterRename));
         tokio::pin!(fault);
         assert!(futures_util::poll!(fault.as_mut()).is_pending());
         release.send(()).unwrap();
@@ -255,9 +257,7 @@ mod tests {
         .await
         .expect("worker registration must recover after directory sync resumes");
         connection
-            .deliver(&crate::harness::test_support::text(
-                "registration recovered",
-            ))
+            .deliver(&crate::test_support::text("registration recovered"))
             .await
             .unwrap();
         assert_eq!(receive(&mut received).await["method"], "initialize");
@@ -288,7 +288,7 @@ mod tests {
         let session = CodexSession::prepare(&root, options(root.join("unused.sock")))
             .await
             .unwrap();
-        let queue = session.codex_admission();
+        let queue = session.admission();
         let primary = queue
             .register_consumer("public".into(), Duration::from_secs(300), true, false)
             .await
@@ -328,7 +328,7 @@ mod tests {
             CodexSessionOptions::new(
                 Some(path),
                 None,
-                crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                     dione_contracts::ProviderId::new("discord").unwrap(),
                     dione_contracts::ModuleSlotId::new("primary").unwrap(),
                 )),
@@ -361,7 +361,7 @@ mod tests {
             .unwrap()
             .unwrap();
         connection
-            .deliver(&crate::harness::test_support::text("late binding delivery"))
+            .deliver(&crate::test_support::text("late binding delivery"))
             .await
             .unwrap();
         assert_eq!(receive(&mut received).await["method"], "initialize");
@@ -384,7 +384,7 @@ mod tests {
             CodexSessionOptions::new(
                 Some(path),
                 None,
-                crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                     dione_contracts::ProviderId::new("discord").unwrap(),
                     dione_contracts::ModuleSlotId::new("primary").unwrap(),
                 )),
@@ -407,8 +407,8 @@ mod tests {
         assert_eq!(error.to_string(), "invalid CODEX_THREAD_ID");
         assert!(matches!(
             error.kind,
-            HarnessSessionErrorKind::EnvironmentThread(crate::codex::CodexQueueError {
-                kind: crate::codex::CodexQueueErrorKind::InvalidThreadId
+            CodexSessionErrorKind::EnvironmentThread(crate::CodexQueueError {
+                kind: crate::CodexQueueErrorKind::InvalidThreadId
             })
         ));
         assert!(
@@ -428,7 +428,7 @@ mod tests {
             tokio::process::Command::new(executable)
                 .args([
                     "--exact",
-                    "harness::codex_session::tests::interrupted_legacy_temporary_initial_binding_child_022",
+                    "session::tests::interrupted_legacy_temporary_initial_binding_child_022",
                     "--ignored",
                     "--nocapture",
                     "--test-threads=1",
@@ -479,7 +479,7 @@ mod tests {
             if case == "committed" {
                 fs::write(
                     &snapshot,
-                    include_bytes!("../../tests/fixtures/codex-inbox/v0.48.0-two-pending.json"),
+                    include_bytes!("../tests/fixtures/codex-inbox/v0.48.0-two-pending.json"),
                 )
                 .unwrap();
             }
@@ -506,7 +506,7 @@ mod tests {
             let session = CodexSession::prepare(&root, options(path.clone()))
                 .await
                 .unwrap();
-            let queue = session.codex_admission();
+            let queue = session.admission();
             assert_eq!(queue.status().await.queued, legacy_count);
             if let Some(identity) = before {
                 let metadata = fs::symlink_metadata(&temporary).unwrap();
@@ -525,21 +525,19 @@ mod tests {
             if case == "committed" {
                 assert_eq!(
                     fs::read(&snapshot).unwrap(),
-                    include_bytes!("../../tests/fixtures/codex-inbox/v0.48.0-two-pending.json")
+                    include_bytes!("../tests/fixtures/codex-inbox/v0.48.0-two-pending.json")
                 );
             }
             let lock = root.join("codex-inbox.lock");
             let lock_before = fs::metadata(&lock).unwrap();
             assert!(matches!(
                 CodexSession::prepare(&root, options(path)).await,
-                Err(HarnessSessionError {
-                    kind: HarnessSessionErrorKind::QueueOpen(crate::codex::CodexQueueError {
-                        kind: crate::codex::CodexQueueErrorKind::Durable(
-                            dione_durable::QueueError {
-                                kind: dione_durable::QueueErrorKind::Locked(_),
-                                ..
-                            }
-                        )
+                Err(CodexSessionError {
+                    kind: CodexSessionErrorKind::QueueOpen(crate::CodexQueueError {
+                        kind: crate::CodexQueueErrorKind::Durable(dione_durable::QueueError {
+                            kind: dione_durable::QueueErrorKind::Locked(_),
+                            ..
+                        })
                     })
                 })
             ));
@@ -570,9 +568,7 @@ mod tests {
             );
             wait_for_worker(&connection).await;
             connection
-                .deliver(&crate::harness::test_support::text(
-                    "after interrupted upgrade",
-                ))
+                .deliver(&crate::test_support::text("after interrupted upgrade"))
                 .await
                 .unwrap();
             assert_eq!(receive(&mut received).await["method"], "initialize");
@@ -596,10 +592,7 @@ mod tests {
             let reopened = CodexSession::prepare(&root, options(root.join("unused.sock")))
                 .await
                 .unwrap();
-            assert_eq!(
-                reopened.codex_admission().status().await.queued,
-                legacy_count
-            );
+            assert_eq!(reopened.admission().status().await.queued, legacy_count);
             if case == "committed" {
                 let persisted: serde_json::Value =
                     serde_json::from_slice(&fs::read(snapshot).unwrap()).unwrap();
@@ -615,4 +608,32 @@ mod tests {
         }
         println!("DIONE_LEGACY_TEMP_CASES=3");
     }
+}
+
+/// A failed Codex lifecycle operation retaining its concrete cause.
+#[derive(Debug, thiserror::Error)]
+#[error("{kind}")]
+pub struct CodexSessionError {
+    /// The failed operation and its original source.
+    #[source]
+    pub kind: CodexSessionErrorKind,
+}
+/// Concrete failures of Codex queue preparation and worker ownership.
+#[derive(Debug, thiserror::Error)]
+pub enum CodexSessionErrorKind {
+    /// The durable inbox could not be opened.
+    #[error("failed to open Codex event queue")]
+    QueueOpen(#[source] crate::CodexQueueError),
+    /// Live delivery configuration could not be resolved.
+    #[error("failed to configure Codex live delivery")]
+    Configure(#[source] crate::CodexDeliveryError),
+    /// The environment fallback contained an invalid thread identifier.
+    #[error("invalid CODEX_THREAD_ID")]
+    EnvironmentThread(#[source] crate::CodexQueueError),
+    /// The initial binding could not be committed.
+    #[error("failed to persist initial Codex thread binding")]
+    InitialBinding(#[source] crate::CodexQueueError),
+    /// The worker could not be joined during shutdown.
+    #[error("Codex delivery worker panicked during drain")]
+    Join(#[source] tokio::task::JoinError),
 }

@@ -6,14 +6,11 @@ use super::{
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::TimeDelta;
-use dione_access_requests::AccessQueue;
 use dione_durable::{PersistFailure, QueueCodec, QueueSnapshot};
 use dione_provider_delivery::ProviderEventKey;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::sync::Arc;
 use tempfile::TempDir;
-use tokio::sync::Mutex;
 
 const INBOX_FILE_NAME: &str = "codex-inbox.json";
 const LIVE_CONSUMER_LABEL: &str = "dione-live-app-server";
@@ -91,13 +88,6 @@ fn teams_key(activity_id: &str) -> ProviderEventKey {
     )
 }
 
-fn tool_result(response: Value) -> Value {
-    let text = response["content"][0]["text"]
-        .as_str()
-        .expect("MCP tool result contains JSON text");
-    serde_json::from_str(text).expect("MCP tool result text is JSON")
-}
-
 fn managed_message(id: &str, record_id: &str, delivery: &str, content: &str) -> Value {
     let mut notification = message(id, content);
     notification["params"]["meta"]["user_id"] = json!("456");
@@ -120,7 +110,7 @@ async fn durable_payload_migrates_legacy_evidence_projection_to_citations() {
     let path = temp_path(&dir);
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -138,7 +128,7 @@ async fn durable_payload_migrates_legacy_evidence_projection_to_citations() {
 
     let reloaded = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -207,7 +197,7 @@ async fn lease_ack_removes_event_durably() {
     let path = temp_path(&dir);
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -233,7 +223,7 @@ async fn lease_and_ack_refresh_the_registered_consumer_ttl() {
     let dir = TempDir::new().unwrap();
     let queue = CodexEventQueue::load(
         &temp_path(&dir),
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -288,7 +278,7 @@ async fn expired_lease_is_redelivered_with_new_token() {
     let dir = TempDir::new().unwrap();
     let queue = CodexEventQueue::load(
         &temp_path(&dir),
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -316,7 +306,7 @@ async fn duplicate_discord_message_is_not_enqueued_twice() {
     let dir = TempDir::new().unwrap();
     let queue = CodexEventQueue::load(
         &temp_path(&dir),
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -334,7 +324,7 @@ async fn durable_lifecycle_events_are_not_deduplicated_as_duplicate_creates() {
     let path = temp_path(&dir);
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -359,7 +349,7 @@ async fn durable_lifecycle_events_are_not_deduplicated_as_duplicate_creates() {
 
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -400,7 +390,7 @@ fn second_process_owner_is_rejected() {
     let path = temp_path(&dir);
     let _first = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -408,7 +398,7 @@ fn second_process_owner_is_rejected() {
     .unwrap();
     let second = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -576,7 +566,7 @@ async fn existing_v1_inbox_is_backward_compatible() {
     .unwrap();
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -598,7 +588,7 @@ async fn existing_v1_inbox_is_backward_compatible() {
 
     let reloaded = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -639,7 +629,7 @@ async fn legacy_consumer_without_stored_ttl_uses_the_default() {
 
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -676,7 +666,7 @@ async fn registered_consumer_ttl_survives_restart() {
     let consumer = {
         let queue = CodexEventQueue::load(
             &path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
@@ -697,7 +687,7 @@ async fn registered_consumer_ttl_survives_restart() {
 
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -730,7 +720,7 @@ async fn handoff_moves_future_and_pending_events_to_new_consumer() {
     let dir = TempDir::new().unwrap();
     let queue = CodexEventQueue::load(
         &temp_path(&dir),
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -781,7 +771,7 @@ async fn acknowledged_discord_message_remains_deduplicated() {
     let dir = TempDir::new().unwrap();
     let queue = CodexEventQueue::load(
         &temp_path(&dir),
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -806,7 +796,7 @@ async fn registered_consumer_can_claim_after_primary_expires() {
     let dir = TempDir::new().unwrap();
     let queue = CodexEventQueue::load(
         &temp_path(&dir),
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -846,7 +836,7 @@ async fn live_consumer_is_reused_after_process_restart() {
     let path = temp_path(&dir);
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -859,7 +849,7 @@ async fn live_consumer_is_reused_after_process_restart() {
     drop(queue);
     let reloaded = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -879,7 +869,7 @@ async fn expired_live_consumer_keeps_routed_events_after_long_outage() {
     let path = temp_path(&dir);
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -907,7 +897,7 @@ async fn expired_live_consumer_keeps_routed_events_after_long_outage() {
     drop(queue);
     let reloaded = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -930,7 +920,7 @@ async fn live_rebind_does_not_replay_unleased_event_into_new_thread() {
     let dir = TempDir::new().unwrap();
     let queue = CodexEventQueue::load(
         &temp_path(&dir),
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -978,7 +968,7 @@ async fn live_rebind_does_not_replay_leased_event_into_new_thread() {
     let dir = TempDir::new().unwrap();
     let queue = CodexEventQueue::load(
         &temp_path(&dir),
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -1019,231 +1009,13 @@ async fn live_rebind_does_not_replay_leased_event_into_new_thread() {
     );
 }
 
-async fn binding_server(
-    path: &Utf8Path,
-    queue: &CodexEventQueue,
-) -> (
-    crate::mcp::server::DioneServer,
-    tokio::sync::watch::Receiver<Option<EndpointId>>,
-) {
-    let (notification_tx, _notification_rx) = tokio::sync::mpsc::channel(1);
-    let (binding_tx, binding_rx) = tokio::sync::watch::channel(None);
-    let server = crate::mcp::server::DioneServer::new(
-        crate::state::new_state(),
-        Arc::new(Mutex::new(AccessQueue::load(path))),
-        Arc::new(serenity::http::Http::new("fake")),
-        path.to_owned(),
-        notification_tx,
-        crate::tracing_channel::TraceLevelController::noop(),
-        crate::harness::connect_codex(queue.clone(), binding_tx),
-        Arc::new(dione_outbound_consent::consent::ConsentGate::new(path)),
-        Arc::new(crate::ingress_ledger::IngressLedger::new()),
-        dione_contracts::ModuleInstanceId::new(
-            dione_contracts::ProviderId::new("discord").unwrap(),
-            dione_contracts::ModuleSlotId::new("primary").unwrap(),
-        ),
-        None,
-    )
-    .await
-    .expect("Discord reply registration");
-    (server, binding_rx)
-}
-
-async fn dispatch_binding(
-    server: &crate::mcp::server::DioneServer,
-    thread_id: &str,
-) -> Result<Value, String> {
-    crate::mcp::dispatch::call_tool(
-        server,
-        "bind_codex_thread",
-        json!({ "thread_id": thread_id }),
-    )
-    .await
-}
-
-#[tokio::test]
-async fn dispatch_binding_publishes_retained_commit_on_failure() {
-    for stage in [
-        PersistFailure::BeforeWrite,
-        PersistFailure::BeforeRename,
-        PersistFailure::AfterRename,
-    ] {
-        let dir = TempDir::new().unwrap();
-        let path = temp_path(&dir);
-        let queue = CodexEventQueue::load(
-            &path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-                dione_contracts::ProviderId::new("discord").unwrap(),
-                dione_contracts::ModuleSlotId::new("primary").unwrap(),
-            )),
-        )
-        .unwrap();
-        let (server, binding_rx) = binding_server(&path, &queue).await;
-        dispatch_binding(&server, "thread-a").await.unwrap();
-        let consumer = queue.register_live_consumer().await.unwrap();
-        queue.test_set_persist_failure(Some(stage)).await;
-
-        let error = dispatch_binding(&server, "thread-b").await.unwrap_err();
-        let committed = stage == PersistFailure::AfterRename;
-        assert_eq!(error.contains("unconfirmed crash durability"), committed);
-        let expected =
-            CodexThreadId::parse(if committed { "thread-b" } else { "thread-a" }).unwrap();
-        assert_eq!(
-            binding_rx.borrow().as_ref(),
-            Some(&EndpointId::new(expected.as_str()).unwrap())
-        );
-        assert_eq!(
-            queue.test_snapshot().await.endpoint.as_ref(),
-            Some(&EndpointId::new(expected.as_str()).unwrap())
-        );
-        let disk = LegacyQueueCodec::new(queue.legacy_scope().clone())
-            .decode(&std::fs::read(path.join(INBOX_FILE_NAME)).unwrap())
-            .unwrap();
-        assert_eq!(
-            disk.endpoint.as_ref(),
-            Some(&EndpointId::new(expected.as_str()).unwrap())
-        );
-        if committed {
-            let error = dispatch_binding(&server, "thread-c").await.unwrap_err();
-            assert!(error.contains("unconfirmed crash durability"));
-            assert_eq!(
-                binding_rx.borrow().as_ref(),
-                Some(&EndpointId::new(expected.as_str()).unwrap())
-            );
-            assert_eq!(
-                queue.test_snapshot().await.endpoint.as_ref(),
-                Some(&EndpointId::new(expected.as_str()).unwrap())
-            );
-        }
-
-        queue.test_set_persist_failure(None).await;
-        queue
-            .enqueue(message("1", "retained binding"))
-            .await
-            .unwrap();
-        let watched = CodexThreadId::parse(binding_rx.borrow().as_ref().unwrap().as_str()).unwrap();
-        let event = consumer
-            .next_event(&watched, Duration::ZERO, DEFAULT_LEASE)
-            .await
-            .unwrap()
-            .expect("delivery without another bind or enqueue");
-        assert_eq!(event.event["params"]["content"], "retained binding");
-    }
-}
-
-#[tokio::test]
-async fn dispatch_binding_recovery_barrier_publishes_actual_binding() {
-    let dir = TempDir::new().unwrap();
-    let path = temp_path(&dir);
-    let queue = CodexEventQueue::load(
-        &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-            dione_contracts::ProviderId::new("discord").unwrap(),
-            dione_contracts::ModuleSlotId::new("primary").unwrap(),
-        )),
-    )
-    .unwrap();
-    let (server, binding_rx) = binding_server(&path, &queue).await;
-    dispatch_binding(&server, "thread-a").await.unwrap();
-    let consumer = queue.register_live_consumer().await.unwrap();
-    queue
-        .test_set_persist_failure(Some(PersistFailure::AfterRename))
-        .await;
-    assert!(queue.enqueue(message("1", "already queued")).await.is_err());
-    let before = std::fs::read(path.join(INBOX_FILE_NAME)).unwrap();
-
-    let error = dispatch_binding(&server, "thread-b").await.unwrap_err();
-    assert!(error.contains("unconfirmed crash durability"));
-    let expected = CodexThreadId::parse("thread-a").unwrap();
-    assert_eq!(
-        binding_rx.borrow().as_ref(),
-        Some(&EndpointId::new(expected.as_str()).unwrap())
-    );
-    assert_eq!(std::fs::read(path.join(INBOX_FILE_NAME)).unwrap(), before);
-    queue.test_set_persist_failure(None).await;
-    let watched = CodexThreadId::parse(binding_rx.borrow().as_ref().unwrap().as_str()).unwrap();
-    let event = consumer
-        .next_event(&watched, Duration::ZERO, DEFAULT_LEASE)
-        .await
-        .unwrap()
-        .expect("recovery delivers the existing event without another mutation");
-    assert_eq!(event.event["params"]["content"], "already queued");
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn dispatch_binding_concurrent_publication_matches_commit_order() {
-    let dir = TempDir::new().unwrap();
-    let path = temp_path(&dir);
-    let queue = CodexEventQueue::load(
-        &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-            dione_contracts::ProviderId::new("discord").unwrap(),
-            dione_contracts::ModuleSlotId::new("primary").unwrap(),
-        )),
-    )
-    .unwrap();
-    let (server, binding_rx) = binding_server(&path, &queue).await;
-    dispatch_binding(&server, "thread-initial").await.unwrap();
-    let server = Arc::new(server);
-    let (reached_rx, release_tx) = queue.pause_binding_publish_for_test();
-
-    let first_server = Arc::clone(&server);
-    let first = tokio::spawn(async move { dispatch_binding(&first_server, "thread-first").await });
-    tokio::time::timeout(Duration::from_secs(2), reached_rx)
-        .await
-        .expect("first bind reaches committed but unpublished state")
-        .unwrap();
-    let first_id = CodexThreadId::parse("thread-first").unwrap();
-    assert!(
-        tokio::time::timeout(Duration::from_millis(20), queue.test_snapshot())
-            .await
-            .is_err()
-    );
-    assert_eq!(
-        binding_rx.borrow().as_ref(),
-        Some(&EndpointId::new("thread-initial").unwrap())
-    );
-    let committed = LegacyQueueCodec::new(queue.legacy_scope().clone())
-        .decode(&std::fs::read(path.join(INBOX_FILE_NAME)).unwrap())
-        .unwrap();
-    assert_eq!(
-        committed.endpoint.as_ref(),
-        Some(&EndpointId::new(first_id.as_str()).unwrap())
-    );
-
-    let second_server = Arc::clone(&server);
-    let mut second =
-        tokio::spawn(async move { dispatch_binding(&second_server, "thread-second").await });
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut second)
-            .await
-            .is_err(),
-        "second bind must not complete before first watch publication"
-    );
-    release_tx.send(()).unwrap();
-    first.await.unwrap().unwrap();
-    second.await.unwrap().unwrap();
-    let second_id = CodexThreadId::parse("thread-second").unwrap();
-    assert_eq!(
-        binding_rx.borrow().as_ref(),
-        Some(&EndpointId::new(second_id.as_str()).unwrap())
-    );
-    let disk = LegacyQueueCodec::new(queue.legacy_scope().clone())
-        .decode(&std::fs::read(path.join(INBOX_FILE_NAME)).unwrap())
-        .unwrap();
-    assert_eq!(
-        disk.endpoint.as_ref(),
-        Some(&EndpointId::new(second_id.as_str()).unwrap())
-    );
-}
-
 #[tokio::test]
 async fn post_rename_enqueue_keeps_memory_consistent_with_disk() {
     let dir = TempDir::new().unwrap();
     let path = temp_path(&dir);
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -1262,7 +1034,7 @@ async fn post_rename_enqueue_keeps_memory_consistent_with_disk() {
     drop(queue);
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -1278,7 +1050,7 @@ async fn uncertain_lease_does_not_hide_first_event_behind_second() {
     let path = temp_path(&dir);
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -1326,7 +1098,7 @@ async fn uncertain_lease_does_not_hide_first_event_behind_second() {
     drop(queue);
     let restarted = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -1350,7 +1122,7 @@ async fn pending_directory_sync_rejects_lease_before_mutation() {
     let path = temp_path(&dir);
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -1408,7 +1180,7 @@ async fn enqueue_persistence_failure_outcomes() {
         let path = temp_path(&dir);
         let queue = CodexEventQueue::load(
             &path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
@@ -1493,7 +1265,7 @@ async fn enqueue_persistence_failure_outcomes() {
         drop(queue);
         let queue = CodexEventQueue::load(
             &path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
@@ -1523,7 +1295,7 @@ async fn enqueue_persistence_failure_outcomes() {
         drop(queue);
         let queue = CodexEventQueue::load(
             &path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
@@ -1547,7 +1319,7 @@ async fn acknowledgement_persistence_failure_outcomes() {
         let path = temp_path(&dir);
         let queue = CodexEventQueue::load(
             &path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
@@ -1639,7 +1411,7 @@ async fn acknowledgement_persistence_failure_outcomes() {
         drop(queue);
         let queue = CodexEventQueue::load(
             &path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
@@ -1665,7 +1437,7 @@ async fn acknowledgement_persistence_failure_outcomes() {
         drop(queue);
         let queue = CodexEventQueue::load(
             &path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
@@ -1681,7 +1453,7 @@ async fn live_enqueue_requires_exact_resident_and_preserves_failed_route_state()
     let dir = TempDir::new().unwrap();
     let queue = CodexEventQueue::load(
         &temp_path(&dir),
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -1748,341 +1520,11 @@ async fn live_enqueue_requires_exact_resident_and_preserves_failed_route_state()
 }
 
 #[tokio::test]
-async fn dispatch_forged_live_label_cannot_admit_or_receive_teams_event() {
-    let dir = TempDir::new().unwrap();
-    let path = temp_path(&dir);
-    let queue = CodexEventQueue::load(
-        &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-            dione_contracts::ProviderId::new("discord").unwrap(),
-            dione_contracts::ModuleSlotId::new("primary").unwrap(),
-        )),
-    )
-    .unwrap();
-    let (server, binding_rx) = binding_server(&path, &queue).await;
-    dispatch_binding(&server, "thread-a").await.unwrap();
-    let forged = crate::mcp::dispatch::call_tool(
-        &server,
-        "register_event_consumer",
-        json!({
-            "label": LIVE_CONSUMER_LABEL,
-            "make_primary": true,
-            "claim_unassigned": true
-        }),
-    )
-    .await
-    .unwrap_err();
-    assert_eq!(forged, "invalid consumer id");
-    assert!(queue.status().await.primary_consumer.is_none());
-
-    let resident = queue.register_live_consumer().await.unwrap();
-    assert!(matches!(
-        queue
-            .enqueue_live(message("1", "for resident"), teams_key("activity-1"))
-            .await,
-        Ok(LiveAdmissionOutcome::Committed)
-    ));
-    let thread = CodexThreadId::parse(binding_rx.borrow().as_ref().unwrap().as_str()).unwrap();
-    let event = resident
-        .next_event(&thread, Duration::ZERO, DEFAULT_LEASE)
-        .await
-        .unwrap()
-        .expect("only dedicated live consumer receives Teams event");
-    assert_eq!(event.event["params"]["content"], "for resident");
-}
-
-#[tokio::test]
-async fn dispatch_public_poll_cannot_lease_status_disclosed_live_consumer() {
-    let dir = TempDir::new().unwrap();
-    let path = temp_path(&dir);
-    let queue = CodexEventQueue::load(
-        &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-            dione_contracts::ProviderId::new("discord").unwrap(),
-            dione_contracts::ModuleSlotId::new("primary").unwrap(),
-        )),
-    )
-    .unwrap();
-    let (server, binding_rx) = binding_server(&path, &queue).await;
-    dispatch_binding(&server, "thread-a").await.unwrap();
-    let resident = queue.register_live_consumer().await.unwrap();
-    queue
-        .enqueue_live(
-            message("1", "private Teams activity"),
-            teams_key("activity-1"),
-        )
-        .await
-        .unwrap();
-
-    let status = crate::mcp::dispatch::call_tool(&server, "event_queue_status", json!({}))
-        .await
-        .unwrap();
-    let status = tool_result(status);
-    let disclosed = status["primary_consumer"].as_str().unwrap();
-    assert_eq!(disclosed, resident.consumer_id().as_str());
-    let public_poll = crate::mcp::dispatch::call_tool(
-        &server,
-        "next_event",
-        json!({ "consumer_id": disclosed, "wait_seconds": 0 }),
-    )
-    .await;
-    assert!(
-        public_poll.is_err(),
-        "public poll leased live event: {public_poll:?}"
-    );
-
-    let thread = CodexThreadId::parse(binding_rx.borrow().as_ref().unwrap().as_str()).unwrap();
-    let event = resident
-        .next_event(&thread, Duration::ZERO, DEFAULT_LEASE)
-        .await
-        .unwrap()
-        .expect("resident still receives private activity");
-    assert_eq!(event.event["params"]["content"], "private Teams activity");
-}
-
-#[tokio::test]
-async fn dispatch_public_ack_cannot_remove_resident_lease() {
-    let dir = TempDir::new().unwrap();
-    let path = temp_path(&dir);
-    let queue = CodexEventQueue::load(
-        &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-            dione_contracts::ProviderId::new("discord").unwrap(),
-            dione_contracts::ModuleSlotId::new("primary").unwrap(),
-        )),
-    )
-    .unwrap();
-    let (server, binding_rx) = binding_server(&path, &queue).await;
-    dispatch_binding(&server, "thread-a").await.unwrap();
-    let resident = queue.register_live_consumer().await.unwrap();
-    queue
-        .enqueue_live(
-            message("1", "private Teams activity"),
-            teams_key("activity-1"),
-        )
-        .await
-        .unwrap();
-    let thread = CodexThreadId::parse(binding_rx.borrow().as_ref().unwrap().as_str()).unwrap();
-    let leased = resident
-        .next_event(&thread, Duration::ZERO, DEFAULT_LEASE)
-        .await
-        .unwrap()
-        .unwrap();
-
-    let public_ack = crate::mcp::dispatch::call_tool(
-        &server,
-        "ack_event",
-        json!({
-            "consumer_id": resident.consumer_id().as_str(),
-            "delivery_token": leased.delivery_token.as_str()
-        }),
-    )
-    .await;
-    assert!(
-        public_ack.is_err(),
-        "public ack removed resident lease: {public_ack:?}"
-    );
-    assert_eq!(queue.status().await.queued, 1);
-    assert_eq!(queue.status().await.leased, 1);
-}
-
-#[tokio::test]
-async fn dispatch_public_handoff_cannot_move_live_primary_or_pending_activity() {
-    let dir = TempDir::new().unwrap();
-    let path = temp_path(&dir);
-    let queue = CodexEventQueue::load(
-        &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-            dione_contracts::ProviderId::new("discord").unwrap(),
-            dione_contracts::ModuleSlotId::new("primary").unwrap(),
-        )),
-    )
-    .unwrap();
-    let (server, binding_rx) = binding_server(&path, &queue).await;
-    dispatch_binding(&server, "thread-a").await.unwrap();
-    let resident = queue.register_live_consumer().await.unwrap();
-    queue
-        .enqueue_live(
-            message("1", "private Teams activity"),
-            teams_key("activity-1"),
-        )
-        .await
-        .unwrap();
-    let pull = crate::mcp::dispatch::call_tool(
-        &server,
-        "register_event_consumer",
-        json!({ "label": "forged pull" }),
-    )
-    .await
-    .unwrap();
-    let pull = tool_result(pull);
-    let pull_id = pull["consumer_id"].as_str().unwrap();
-
-    let handoff = crate::mcp::dispatch::call_tool(
-        &server,
-        "handoff_event_consumer",
-        json!({
-            "from_consumer_id": resident.consumer_id().as_str(),
-            "to_consumer_id": pull_id,
-            "move_pending": true
-        }),
-    )
-    .await;
-    assert!(
-        handoff.is_err(),
-        "public handoff moved live route: {handoff:?}"
-    );
-    assert_eq!(
-        queue.status().await.primary_consumer.as_ref(),
-        Some(resident.consumer_id())
-    );
-
-    let thread = CodexThreadId::parse(binding_rx.borrow().as_ref().unwrap().as_str()).unwrap();
-    let event = resident
-        .next_event(&thread, Duration::ZERO, DEFAULT_LEASE)
-        .await
-        .unwrap()
-        .expect("live event remains with resident");
-    assert_eq!(event.event["params"]["content"], "private Teams activity");
-}
-
-#[tokio::test]
-async fn dispatch_public_claim_cannot_take_expired_live_activity_after_reload() {
-    let dir = TempDir::new().unwrap();
-    let path = temp_path(&dir);
-    let queue = CodexEventQueue::load(
-        &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-            dione_contracts::ProviderId::new("discord").unwrap(),
-            dione_contracts::ModuleSlotId::new("primary").unwrap(),
-        )),
-    )
-    .unwrap();
-    let (server, _binding_rx) = binding_server(&path, &queue).await;
-    dispatch_binding(&server, "thread-a").await.unwrap();
-    queue.register_live_consumer().await.unwrap();
-    queue
-        .enqueue_live(
-            message("1", "private Teams activity"),
-            teams_key("activity-1"),
-        )
-        .await
-        .unwrap();
-    {
-        queue
-            .test_mutate_snapshot(|snapshot| {
-                snapshot.consumers[0].expires_at = Utc::now() - TimeDelta::seconds(1);
-            })
-            .await;
-        write_fixture_snapshot(&queue, &temp_path(&dir)).await;
-    }
-    drop(server);
-    drop(queue);
-
-    let reloaded = CodexEventQueue::load(
-        &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-            dione_contracts::ProviderId::new("discord").unwrap(),
-            dione_contracts::ModuleSlotId::new("primary").unwrap(),
-        )),
-    )
-    .unwrap();
-    let (server, _) = binding_server(&path, &reloaded).await;
-    let pull = crate::mcp::dispatch::call_tool(
-        &server,
-        "register_event_consumer",
-        json!({ "label": "ordinary pull" }),
-    )
-    .await
-    .unwrap();
-    let pull = tool_result(pull);
-    let pull_id = pull["consumer_id"].as_str().unwrap();
-    let claimed = crate::mcp::dispatch::call_tool(
-        &server,
-        "claim_event_consumer",
-        json!({ "consumer_id": pull_id, "claim_orphaned": true }),
-    )
-    .await
-    .unwrap();
-    let claimed = tool_result(claimed);
-    assert_eq!(claimed["claimed_events"], 0);
-    let poll = crate::mcp::dispatch::call_tool(
-        &server,
-        "next_event",
-        json!({ "consumer_id": pull_id, "wait_seconds": 0 }),
-    )
-    .await
-    .unwrap();
-    let poll = tool_result(poll);
-    assert!(poll["event"].is_null());
-    assert_eq!(reloaded.status().await.queued, 1);
-}
-
-#[tokio::test]
-async fn dispatch_public_registration_cannot_claim_unassigned_live_activity() {
-    let dir = TempDir::new().unwrap();
-    let path = temp_path(&dir);
-    let queue = CodexEventQueue::load(
-        &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-            dione_contracts::ProviderId::new("discord").unwrap(),
-            dione_contracts::ModuleSlotId::new("primary").unwrap(),
-        )),
-    )
-    .unwrap();
-    let (server, _binding_rx) = binding_server(&path, &queue).await;
-    dispatch_binding(&server, "thread-a").await.unwrap();
-    queue.register_live_consumer().await.unwrap();
-    queue
-        .enqueue_live(
-            message("1", "private Teams activity"),
-            teams_key("activity-1"),
-        )
-        .await
-        .unwrap();
-    {
-        queue
-            .test_mutate_snapshot(|snapshot| {
-                snapshot.primary_consumer = None;
-                snapshot.consumers.clear();
-                snapshot.entries[0].consumer_id = None;
-            })
-            .await;
-        write_fixture_snapshot(&queue, &temp_path(&dir)).await;
-    }
-
-    let pull = crate::mcp::dispatch::call_tool(
-        &server,
-        "register_event_consumer",
-        json!({
-            "label": "ordinary pull",
-            "make_primary": true,
-            "claim_unassigned": true
-        }),
-    )
-    .await
-    .unwrap();
-    let pull = tool_result(pull);
-    let pull_id = pull["consumer_id"].as_str().unwrap();
-    let poll = crate::mcp::dispatch::call_tool(
-        &server,
-        "next_event",
-        json!({ "consumer_id": pull_id, "wait_seconds": 0 }),
-    )
-    .await
-    .unwrap();
-    let poll = tool_result(poll);
-    assert!(poll["event"].is_null());
-    assert_eq!(queue.status().await.queued, 1);
-    assert_eq!(queue.status().await.unassigned, 1);
-}
-
-#[tokio::test]
 async fn public_live_consumer_guard_waits_for_prior_sync_barrier() {
     let dir = TempDir::new().unwrap();
     let queue = CodexEventQueue::load(
         &temp_path(&dir),
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -2133,7 +1575,7 @@ async fn legacy_same_label_pull_record_never_becomes_live_after_reload_or_expiry
     let path = temp_path(&dir);
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -2164,7 +1606,7 @@ async fn legacy_same_label_pull_record_never_becomes_live_after_reload_or_expiry
 
     let reloaded = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -2199,7 +1641,7 @@ async fn legacy_same_label_pull_record_never_becomes_live_after_reload_or_expiry
 
     let recovered = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -2229,7 +1671,7 @@ async fn reserved_live_label_rejection_waits_for_prior_sync_barrier() {
     let dir = TempDir::new().unwrap();
     let queue = CodexEventQueue::load(
         &temp_path(&dir),
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -2296,7 +1738,7 @@ async fn live_enqueue_distinguishes_precommit_from_visible_uncertainty_and_wakes
         let dir = TempDir::new().unwrap();
         let queue = CodexEventQueue::load(
             &temp_path(&dir),
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
@@ -2397,7 +1839,7 @@ async fn live_enqueue_prior_sync_barrier_rejects_this_event_before_mutation() {
     let dir = TempDir::new().unwrap();
     let queue = CodexEventQueue::load(
         &temp_path(&dir),
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -2466,7 +1908,7 @@ async fn live_enqueue_reloaded_inbox_clears_barrier_before_admission() {
     let path = temp_path(&dir);
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -2483,7 +1925,7 @@ async fn live_enqueue_reloaded_inbox_clears_barrier_before_admission() {
 
     let reloaded = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -2531,7 +1973,7 @@ async fn live_enqueue_suppresses_queued_and_acknowledged_replays_across_restart(
     let path = temp_path(&dir);
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -2572,7 +2014,7 @@ async fn live_enqueue_suppresses_queued_and_acknowledged_replays_across_restart(
     drop(queue);
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -2603,7 +2045,7 @@ async fn live_enqueue_suppresses_queued_and_acknowledged_replays_across_restart(
 
     let reloaded = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -2648,7 +2090,7 @@ async fn live_enqueue_suppresses_queued_and_acknowledged_replays_across_restart(
 async fn literal_teams_inbox_preserves_scoped_keys_and_prior_wire_shape() {
     let dir = TempDir::new().unwrap();
     let path = temp_path(&dir);
-    let bytes = include_bytes!("../../tests/fixtures/teams/codex-inbox-scoped-identities.json");
+    let bytes = include_bytes!("../tests/fixtures/teams/codex-inbox-scoped-identities.json");
     write_private_fixture(path.join(INBOX_FILE_NAME), bytes).unwrap();
     let queue = CodexEventQueue::load(
         &path,
@@ -2695,7 +2137,7 @@ async fn inbox_reload_rejects_invalid_provider_event_key_without_rewriting_state
     let path = temp_path(&dir);
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -2719,7 +2161,7 @@ async fn inbox_reload_rejects_invalid_provider_event_key_without_rewriting_state
     let bytes = serde_json::to_vec_pretty(&disk).unwrap();
     write_private_fixture(&inbox_path, &bytes).unwrap();
     assert!(matches!(
-        CodexEventQueue::load(&path, crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(dione_contracts::ProviderId::new("discord").unwrap(), dione_contracts::ModuleSlotId::new("primary").unwrap()))),
+        CodexEventQueue::load(&path, crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(dione_contracts::ProviderId::new("discord").unwrap(), dione_contracts::ModuleSlotId::new("primary").unwrap()))),
         Err(CodexQueueError {kind: CodexQueueErrorKind::Durable(QueueError {kind: QueueErrorKind::Codec(source), ..})}) if cause_contains(&source, "invalid Teams")
     ));
     assert_eq!(std::fs::read(&inbox_path).unwrap(), bytes);
@@ -2731,7 +2173,7 @@ async fn live_enqueue_replay_key_validates_identity_and_expires_after_ack_window
     let path = temp_path(&dir);
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -2769,7 +2211,7 @@ async fn live_enqueue_replay_key_validates_identity_and_expires_after_ack_window
 
     let reloaded = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -2800,7 +2242,7 @@ async fn live_enqueue_acknowledgement_uncertainty_retains_processed_replay_key()
     let path = temp_path(&dir);
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -2859,7 +2301,7 @@ async fn live_enqueue_acknowledgement_uncertainty_retains_processed_replay_key()
     drop(queue);
     let reloaded = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -2878,7 +2320,7 @@ async fn live_enqueue_replay_capacity_fails_closed_but_allows_duplicates() {
     let dir = TempDir::new().unwrap();
     let queue = CodexEventQueue::load(
         &temp_path(&dir),
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -2940,7 +2382,7 @@ async fn live_enqueue_replay_capacity_fails_closed_but_allows_duplicates() {
     drop(queue);
     let reloaded = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -2978,7 +2420,7 @@ async fn failed_ack_persistence_rolls_back_in_memory_state() {
     let path = temp_path(&dir);
     let queue = CodexEventQueue::load(
         &path,
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -3197,7 +2639,7 @@ async fn attention_invalidation_preserves_same_message_in_another_conversation()
     let dir = TempDir::new().unwrap();
     let queue = CodexEventQueue::load(
         &temp_path(&dir),
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -3207,7 +2649,7 @@ async fn attention_invalidation_preserves_same_message_in_another_conversation()
     payload["params"]["meta"]["user_id"] = json!("456");
     queue.enqueue(payload).await.unwrap();
     let (binding, _) = tokio::sync::watch::channel(None);
-    let connection = crate::harness::connect_codex(queue.clone(), binding);
+    let connection = crate::connect(queue.clone(), binding);
     connection
         .invalidate_attention(dione_contracts::MessageRef::new(
             dione_contracts::ConversationRef::new(
@@ -3263,7 +2705,7 @@ async fn malformed_attention_markers_are_rejected_at_enqueue() {
     let dir = TempDir::new().unwrap();
     let queue = CodexEventQueue::load(
         &temp_path(&dir),
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),
@@ -3293,7 +2735,7 @@ async fn attention_invalidation_revokes_leases_and_preserves_unrelated_queue() {
     let dir = TempDir::new().unwrap();
     let queue = CodexEventQueue::load(
         &temp_path(&dir),
-        crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        crate::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),

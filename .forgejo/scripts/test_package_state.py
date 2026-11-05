@@ -371,7 +371,7 @@ class ReleasePreflightTests(unittest.TestCase):
             script = "\n".join(block)
             if "case " in script and "scripts/crates-io-package-state.sh" in script:
                 blocks.append(script)
-        self.assertEqual(len(blocks), 31)
+        self.assertEqual(len(blocks), 32)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "scripts").mkdir()
@@ -388,8 +388,8 @@ class ReleasePreflightTests(unittest.TestCase):
                 path.write_text("#!/bin/sh\n" + body + "\n")
                 path.chmod(0o755)
             for index, block in enumerate(blocks):
-                packages = (("dione", "dione-rendering", "dione-durable", "dione-contracts", "dione-rook", "dione-attention", "dione-evidence", "dione-messages", "dione-rate-limiter", "dione-vaelii", "dione-gaie", "dione-identity-display", "dione-harness", "dione-presentation", "dione-contradictionary", "dione-bell-rings", "dione-delivery-scheduler", "dione-access-requests", "dione-mutes", "dione-coordination", "dione-pre-send", "dione-teams-identities", "dione-discord-identities", "dione-pluralkit-identities", "dione-config", "dione-outbound-consent", "dione-mcp-tools", "dione-provider-delivery", "dione-teams", "dione-omp") if index == 0
-                            else ({1: "dione-rendering", 2: "dione-durable", 3: "dione-contracts", 4: "dione-rook", 5: "dione-attention", 6: "dione-evidence", 7: "dione-messages", 8: "dione-rate-limiter", 9: "dione-vaelii", 10: "dione-gaie", 11: "dione-identity-display", 12: "dione-harness", 13: "dione-presentation", 14: "dione-contradictionary", 15: "dione-bell-rings", 16: "dione-delivery-scheduler", 17: "dione-access-requests", 18: "dione-mutes", 19: "dione-coordination", 20: "dione-pre-send", 21: "dione-teams-identities", 22: "dione-discord-identities", 23: "dione-pluralkit-identities", 24: "dione-config", 25: "dione-outbound-consent", 26: "dione-mcp-tools", 27: "dione-provider-delivery", 28: "dione-teams", 29: "dione-omp", 30: "dione"}[index],))
+                packages = (("dione", "dione-rendering", "dione-durable", "dione-contracts", "dione-rook", "dione-attention", "dione-evidence", "dione-messages", "dione-rate-limiter", "dione-vaelii", "dione-gaie", "dione-identity-display", "dione-harness", "dione-presentation", "dione-contradictionary", "dione-bell-rings", "dione-delivery-scheduler", "dione-access-requests", "dione-mutes", "dione-coordination", "dione-pre-send", "dione-teams-identities", "dione-discord-identities", "dione-pluralkit-identities", "dione-config", "dione-outbound-consent", "dione-mcp-tools", "dione-provider-delivery", "dione-teams", "dione-omp", "dione-codex") if index == 0
+                            else ({1: "dione-rendering", 2: "dione-durable", 3: "dione-contracts", 4: "dione-rook", 5: "dione-attention", 6: "dione-evidence", 7: "dione-messages", 8: "dione-rate-limiter", 9: "dione-vaelii", 10: "dione-gaie", 11: "dione-identity-display", 12: "dione-harness", 13: "dione-presentation", 14: "dione-contradictionary", 15: "dione-bell-rings", 16: "dione-delivery-scheduler", 17: "dione-access-requests", 18: "dione-mutes", 19: "dione-coordination", 20: "dione-pre-send", 21: "dione-teams-identities", 22: "dione-discord-identities", 23: "dione-pluralkit-identities", 24: "dione-config", 25: "dione-outbound-consent", 26: "dione-mcp-tools", 27: "dione-provider-delivery", 28: "dione-teams", 29: "dione-omp", 30: "dione-codex", 31: "dione"}[index],))
                 for package in packages:
                     with self.subTest(block=index, package=package):
                         script = block.replace("${{ needs.verify-dione.outputs.rendering-version }}", "1.0.0")
@@ -422,6 +422,7 @@ class ReleasePreflightTests(unittest.TestCase):
                         script = script.replace("${{ needs.verify-dione.outputs.provider-delivery-version }}", "1.0.0")
                         script = script.replace("${{ needs.verify-dione.outputs.teams-version }}", "1.0.0")
                         script = script.replace("${{ needs.verify-dione.outputs.omp-version }}", "1.0.0")
+                        script = script.replace("${{ needs.verify-dione.outputs.codex-version }}", "1.0.0")
                         environment = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
                                            FAIL_PACKAGE=package, GITHUB_OUTPUT=str(root / "output"))
                         result = subprocess.run(["bash", "-c", script], cwd=root,

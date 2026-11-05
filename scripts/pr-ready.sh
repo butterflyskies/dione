@@ -94,6 +94,7 @@ mcp_tools_version=$(sh scripts/workspace-package-version.sh dione-mcp-tools)
 provider_delivery_version=$(sh scripts/workspace-package-version.sh dione-provider-delivery)
 teams_version=$(sh scripts/workspace-package-version.sh dione-teams)
 omp_version=$(sh scripts/workspace-package-version.sh dione-omp)
+codex_version=$(sh scripts/workspace-package-version.sh dione-codex)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-coordination-${coordination_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-teams-identities-${teams_identities_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-discord-identities-${discord_identities_version}.crate"
@@ -102,6 +103,7 @@ sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-mcp-too
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-provider-delivery-${provider_delivery_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-teams-${teams_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-omp-${omp_version}.crate"
+sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-codex-${codex_version}.crate"
 pre_send_version=$(sh scripts/workspace-package-version.sh dione-pre-send)
 outbound_consent_version=$(sh scripts/workspace-package-version.sh dione-outbound-consent)
 config_version=$(sh scripts/workspace-package-version.sh dione-config)

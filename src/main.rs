@@ -41,8 +41,8 @@ mod runtime_shutdown_tests {
     const CHILD_TEST: &str = "runtime_shutdown_tests::signal_with_open_stdin_child";
     const EXIT_BOUND: Duration = Duration::from_secs(5);
 
-    #[test]
-    fn signal_with_open_stdin_child() {
+    #[tokio::test]
+    async fn signal_with_open_stdin_child() {
         let Some(directory) = env::var_os(CHILD_DIRECTORY) else {
             return;
         };

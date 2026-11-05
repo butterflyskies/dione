@@ -1,6 +1,5 @@
 pub mod attention;
 mod bell_rings;
-pub mod codex;
 pub mod config_watcher;
 pub mod discord;
 pub mod drop_ledger;
@@ -46,3 +45,10 @@ mod teams_test_process;
 
 #[cfg(test)]
 mod teams_application_tests;
+
+#[cfg(test)]
+mod codex_dispatch_tests;
+#[cfg(test)]
+mod codex_test_process;
+#[cfg(test)]
+mod codex_test_wire;

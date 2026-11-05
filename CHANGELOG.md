@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.116.0] - 2026-11-05
+
+### Changed
+
+- Extract the complete Codex queue, compatibility codec, delivery worker, adapter, and session into dione-codex, retaining private resident and binding authority with direct application composition.
+
 ## [0.115.0] - 2026-11-05
 
 ### Changed

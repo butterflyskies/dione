@@ -1,15 +1,13 @@
 //! Adapter behavior for the same typed live records and historical inbox codec.
 
 use super::{ProtocolOutput, test_support};
-use crate::codex::{CodexEventQueue, LegacyDiscordScope, legacy_delivery};
 use camino::Utf8PathBuf;
-use dione_attention::{delivery::AttentionDirective, types::RecordId};
+use dione_codex::{CodexEventQueue, LegacyDiscordScope};
 use dione_contracts::{
     ActorId, ActorRef, ConversationId, ConversationRef, MessageId, MessageRef, ModuleInstanceId,
-    ModuleSlotId, ProviderId,
 };
 use dione_messages::{
-    delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
+    delivery::Delivery,
     events::{
         AuthorOrigin, BellObservation, BellStatus, ByteSize, MessageCreated, ObservedAttachment,
         ObservedAuthor, OrdinaryEvent, ReplyObservation, Targeting,
@@ -139,7 +137,7 @@ async fn typed_codex_delivery_reopens_with_literal_legacy_payload_and_create_ded
     let scope = LegacyDiscordScope::new(module.clone());
     let queue = CodexEventQueue::load(&path, scope.clone()).unwrap();
     let (binding, _) = watch::channel(None);
-    let connection = crate::harness::connect_codex(queue, binding);
+    let connection = dione_codex::connect(queue, binding);
     let delivery = Delivery::single(
         OrdinaryEvent::Message(Box::new(message(&module, 20))),
         test_support::context(),
@@ -169,167 +167,6 @@ async fn typed_codex_delivery_reopens_with_literal_legacy_payload_and_create_ded
             .await
             .unwrap()
             .is_none()
-    );
-}
-
-#[test]
-fn private_legacy_codec_rejects_every_foreign_or_opaque_nested_identity() {
-    let module = test_support::module();
-    let foreign = ModuleInstanceId::new(
-        ProviderId::new("other").unwrap(),
-        ModuleSlotId::new("primary").unwrap(),
-    );
-    let scope = LegacyDiscordScope::new(module.clone());
-    let encode = |message| {
-        legacy_delivery::encode(
-            &Delivery::single(
-                OrdinaryEvent::Message(Box::new(message)),
-                test_support::context(),
-            ),
-            &scope,
-        )
-    };
-    assert_eq!(encode(message(&module, 20)).unwrap(), expected_legacy());
-    assert!(encode(message(&foreign, 20)).is_err());
-    assert!(
-        encode(
-            message(&module, 20)
-                .with_context(Some(conversation(&foreign, 9)), ReplyObservation::default())
-        )
-        .is_err()
-    );
-    assert!(
-        encode(message(&module, 20).with_context(
-            None,
-            ReplyObservation::new(Some(source(&foreign, 10, 19)), None, None, None)
-        ))
-        .is_err()
-    );
-    assert!(
-        encode(message(&module, 20).with_context(
-            None,
-            ReplyObservation::new(Some(source(&module, 11, 19)), None, None, None)
-        ))
-        .is_err()
-    );
-    assert!(
-        encode(message(&module, 20).with_context(
-            None,
-            ReplyObservation::new(None, Some(actor(&foreign, 29)), None, None)
-        ))
-        .is_err()
-    );
-    let opaque = ActorRef::new(module.clone(), ActorId::opaque("29").unwrap());
-    assert!(
-        encode(
-            message(&module, 20)
-                .with_context(None, ReplyObservation::new(None, Some(opaque), None, None))
-        )
-        .is_err()
-    );
-    let opaque = MessageRef::new(conversation(&module, 10), MessageId::opaque("19").unwrap());
-    assert!(
-        encode(
-            message(&module, 20)
-                .with_context(None, ReplyObservation::new(Some(opaque), None, None, None))
-        )
-        .is_err()
-    );
-    let opaque = ConversationRef::new(module.clone(), ConversationId::opaque("9").unwrap());
-    assert!(
-        encode(message(&module, 20).with_context(Some(opaque), ReplyObservation::default()))
-            .is_err()
-    );
-}
-
-#[test]
-fn both_managed_directives_decode_to_the_same_retained_authority_descriptor() {
-    let module = test_support::module();
-    let scope = LegacyDiscordScope::new(module.clone());
-    for (directive, spelling) in [
-        (AttentionDirective::Prompt, "prompt"),
-        (AttentionDirective::NextTurn, "next_turn"),
-    ] {
-        let delivery = Delivery::managed(
-            message(&module, 20),
-            directive,
-            RecordId::new("literal-record").unwrap(),
-            test_support::context(),
-        );
-        let payload = legacy_delivery::encode(&delivery, &scope).unwrap();
-        let mut expected = expected_legacy();
-        expected["params"]["meta"]["attention_delivery"] = json!(spelling);
-        expected["params"]["meta"]["attention_record"] = json!("literal-record");
-        assert_eq!(payload, expected);
-        let decoded = legacy_delivery::decode_attention(&payload, &scope)
-            .unwrap()
-            .unwrap();
-        let descriptor = decoded.descriptor();
-        let original = delivery.attention().unwrap();
-        assert_eq!(descriptor.source(), original.source());
-        assert_eq!(descriptor.author(), original.author());
-        assert_eq!(descriptor.original_text(), "claim [🔍=v1:AAAAAAAAAAw]");
-        assert_eq!(descriptor.directive(), directive);
-        assert_eq!(descriptor.record().as_str(), "literal-record");
-    }
-}
-
-#[test]
-fn opaque_provider_batches_group_by_complete_scope_without_mutating_records() {
-    let module = |slot| {
-        ModuleInstanceId::new(
-            ProviderId::new("fake").unwrap(),
-            ModuleSlotId::new(slot).unwrap(),
-        )
-    };
-    let first = module("a");
-    let second = module("b");
-    let make = |module: &ModuleInstanceId, name: &str| {
-        OrdinaryEvent::Message(Box::new(MessageCreated::new(
-            MessageRef::new(
-                ConversationRef::new(module.clone(), ConversationId::opaque("room/x").unwrap()),
-                MessageId::opaque("message/x").unwrap(),
-            ),
-            ObservedAuthor::new(
-                ActorRef::new(module.clone(), ActorId::opaque("actor/x").unwrap()),
-                name.into(),
-                AuthorOrigin::DirectHuman,
-            ),
-            "exact\n\n".into(),
-            Targeting::Ambient,
-            Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
-        )))
-    };
-    let delivery = Delivery::batch(
-        make(&second, "second"),
-        vec![make(&first, "first")],
-        PresentationContext::new(None, EvidenceVisibility::Disabled),
-    );
-    let DeliveryKind::Ordinary { first: head, rest } = delivery.kind() else {
-        panic!("ordinary batch");
-    };
-    assert_eq!(head.source().conversation().module(), &second);
-    assert_eq!(rest[0].source().conversation().module(), &first);
-    let dione_presentation::Presentation::Channel(projected) =
-        dione_presentation::project(&delivery)
-    else {
-        panic!("channel");
-    };
-    assert_eq!(
-        projected.content,
-        "[batch ch=room/x n=1 latest=message/x]\n[users actor/x=first]\n\nmessage/x|00:00|first|L=1\nexact\n\n[batch ch=room/x n=1 latest=message/x]\n[users actor/x=second]\n\nmessage/x|00:00|second|L=1\nexact\n"
-    );
-    assert_eq!(
-        serde_json::to_value(projected.meta).unwrap(),
-        json!({"chat_id":"room/x","type":"batch","format":"multi_channel"})
-    );
-    let OrdinaryEvent::Message(message) = head else {
-        panic!("message");
-    };
-    assert_eq!(message.content().text(), "exact\n\n");
-    assert!(
-        legacy_delivery::encode(&delivery, &LegacyDiscordScope::new(test_support::module()))
-            .is_err()
     );
 }
 

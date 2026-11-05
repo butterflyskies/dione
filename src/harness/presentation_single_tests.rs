@@ -9,8 +9,8 @@ use {
     dione_messages::timestamp::Timestamp,
 };
 
-#[test]
-fn test_message_edit_includes_thread_parent_id() {
+#[tokio::test]
+async fn test_message_edit_includes_thread_parent_id() {
     let event = NotificationEvent::MessageEdit {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
@@ -21,14 +21,14 @@ fn test_message_edit_includes_thread_parent_id() {
         thread_parent_id: Some(ChannelId::new(400)),
         reply_to_message_id: None,
     };
-    let json = event.fixture_notification();
+    let json = event.fixture_notification().await;
     let meta = &json["params"]["meta"];
     assert_eq!(meta["thread_parent_id"], "400");
     assert_eq!(meta["type"], "message_edit");
 }
 
-#[test]
-fn test_message_edit_omits_thread_parent_id_when_none() {
+#[tokio::test]
+async fn test_message_edit_omits_thread_parent_id_when_none() {
     let event = NotificationEvent::MessageEdit {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
@@ -39,13 +39,13 @@ fn test_message_edit_omits_thread_parent_id_when_none() {
         thread_parent_id: None,
         reply_to_message_id: None,
     };
-    let json = event.fixture_notification();
+    let json = event.fixture_notification().await;
     let meta = &json["params"]["meta"];
     assert!(meta.get("thread_parent_id").is_none());
 }
 
-#[test]
-fn message_edit_projects_legacy_evidence_as_citations_and_removal_clears_it() {
+#[tokio::test]
+async fn message_edit_projects_legacy_evidence_as_citations_and_removal_clears_it() {
     let edit = |new_content: &str| NotificationEvent::MessageEdit {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
@@ -57,7 +57,9 @@ fn message_edit_projects_legacy_evidence_as_citations_and_removal_clears_it() {
         reply_to_message_id: None,
     };
 
-    let added = edit("edited [🔍=v1:AAAAAAAAAAw]").fixture_notification();
+    let added = edit("edited [🔍=v1:AAAAAAAAAAw]")
+        .fixture_notification()
+        .await;
     assert_eq!(
         added["params"]["meta"]["citation_locators"],
         json!([{
@@ -67,13 +69,13 @@ fn message_edit_projects_legacy_evidence_as_citations_and_removal_clears_it() {
     );
     assert!(added["params"]["meta"].get("claim_locators").is_none());
 
-    let removed = edit("edited").fixture_notification();
+    let removed = edit("edited").fixture_notification().await;
     assert!(removed["params"]["meta"].get("claim_locators").is_none());
     assert!(removed["params"]["meta"].get("citation_locators").is_none());
 }
 
-#[test]
-fn disabled_evidence_projection_preserves_visible_content_only() {
+#[tokio::test]
+async fn disabled_evidence_projection_preserves_visible_content_only() {
     let event = NotificationEvent::MessageEdit {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
@@ -85,40 +87,40 @@ fn disabled_evidence_projection_preserves_visible_content_only() {
         reply_to_message_id: None,
     };
 
-    let json = event.fixture_notification_with_evidence(false);
+    let json = event.fixture_notification_with_evidence(false).await;
     assert_eq!(json["params"]["content"], "edited [🔍=v1:AAAAAAAAAAw]");
     assert!(json["params"]["meta"].get("evidence").is_none());
     assert!(json["params"]["meta"].get("claim_locators").is_none());
     assert!(json["params"]["meta"].get("citation_locators").is_none());
 }
 
-#[test]
-fn test_message_delete_includes_thread_parent_id() {
+#[tokio::test]
+async fn test_message_delete_includes_thread_parent_id() {
     let event = NotificationEvent::MessageDelete {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
         thread_parent_id: Some(ChannelId::new(500)),
     };
-    let json = event.fixture_notification();
+    let json = event.fixture_notification().await;
     let meta = &json["params"]["meta"];
     assert_eq!(meta["thread_parent_id"], "500");
     assert_eq!(meta["type"], "message_delete");
 }
 
-#[test]
-fn test_message_delete_omits_thread_parent_id_when_none() {
+#[tokio::test]
+async fn test_message_delete_omits_thread_parent_id_when_none() {
     let event = NotificationEvent::MessageDelete {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
         thread_parent_id: None,
     };
-    let json = event.fixture_notification();
+    let json = event.fixture_notification().await;
     let meta = &json["params"]["meta"];
     assert!(meta.get("thread_parent_id").is_none());
 }
 
-#[test]
-fn test_message_omits_thread_parent_id_when_none() {
+#[tokio::test]
+async fn test_message_omits_thread_parent_id_when_none() {
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
@@ -138,13 +140,13 @@ fn test_message_omits_thread_parent_id_when_none() {
         bells: None,
         bells_status: None,
     });
-    let json = event.fixture_notification();
+    let json = event.fixture_notification().await;
     let meta = &json["params"]["meta"];
     assert!(meta.get("thread_parent_id").is_none());
 }
 
-#[test]
-fn test_message_includes_thread_parent_id() {
+#[tokio::test]
+async fn test_message_includes_thread_parent_id() {
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
@@ -164,15 +166,15 @@ fn test_message_includes_thread_parent_id() {
         bells: None,
         bells_status: None,
     });
-    let json = event.fixture_notification();
+    let json = event.fixture_notification().await;
     let meta = &json["params"]["meta"];
     assert_eq!(meta["thread_parent_id"], "600");
 }
 
 // ── Reply-to-message-id tests ─────────────────────────────────────────────
 
-#[test]
-fn test_message_includes_reply_to_message_id() {
+#[tokio::test]
+async fn test_message_includes_reply_to_message_id() {
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
@@ -192,13 +194,13 @@ fn test_message_includes_reply_to_message_id() {
         bells: None,
         bells_status: None,
     });
-    let json = event.fixture_notification();
+    let json = event.fixture_notification().await;
     let meta = &json["params"]["meta"];
     assert_eq!(meta["reply_to_message_id"], "999");
 }
 
-#[test]
-fn test_message_omits_reply_to_message_id_when_none() {
+#[tokio::test]
+async fn test_message_omits_reply_to_message_id_when_none() {
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
@@ -218,13 +220,13 @@ fn test_message_omits_reply_to_message_id_when_none() {
         bells: None,
         bells_status: None,
     });
-    let json = event.fixture_notification();
+    let json = event.fixture_notification().await;
     let meta = &json["params"]["meta"];
     assert!(meta.get("reply_to_message_id").is_none());
 }
 
-#[test]
-fn test_message_includes_reply_context() {
+#[tokio::test]
+async fn test_message_includes_reply_context() {
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
@@ -244,15 +246,15 @@ fn test_message_includes_reply_context() {
         bells: None,
         bells_status: None,
     });
-    let json = event.fixture_notification();
+    let json = event.fixture_notification().await;
     let meta = &json["params"]["meta"];
     assert_eq!(meta["reply_to_user_id"], "888");
     assert_eq!(meta["reply_to_user"], "bob");
     assert_eq!(meta["reply_to_content_preview"], "original message");
 }
 
-#[test]
-fn test_message_omits_reply_context_when_none() {
+#[tokio::test]
+async fn test_message_omits_reply_context_when_none() {
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
@@ -272,15 +274,15 @@ fn test_message_omits_reply_context_when_none() {
         bells: None,
         bells_status: None,
     });
-    let json = event.fixture_notification();
+    let json = event.fixture_notification().await;
     let meta = &json["params"]["meta"];
     assert!(meta.get("reply_to_user_id").is_none());
     assert!(meta.get("reply_to_user").is_none());
     assert!(meta.get("reply_to_content_preview").is_none());
 }
 
-#[test]
-fn test_message_omits_reply_context_but_keeps_reply_to_message_id() {
+#[tokio::test]
+async fn test_message_omits_reply_context_but_keeps_reply_to_message_id() {
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
@@ -300,7 +302,7 @@ fn test_message_omits_reply_context_but_keeps_reply_to_message_id() {
         bells: None,
         bells_status: None,
     });
-    let json = event.fixture_notification();
+    let json = event.fixture_notification().await;
     let meta = &json["params"]["meta"];
     assert_eq!(meta["reply_to_message_id"], "999");
     assert!(meta.get("reply_to_user_id").is_none());
@@ -308,8 +310,8 @@ fn test_message_omits_reply_context_but_keeps_reply_to_message_id() {
     assert!(meta.get("reply_to_content_preview").is_none());
 }
 
-#[test]
-fn test_message_includes_bells_when_present() {
+#[tokio::test]
+async fn test_message_includes_bells_when_present() {
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
@@ -329,7 +331,7 @@ fn test_message_includes_bells_when_present() {
         bells: Some("3s lain/person-pace;2b lain/feedback-no-platitudes".into()),
         bells_status: Some(BellStatus::Ok),
     });
-    let json = event.fixture_notification();
+    let json = event.fixture_notification().await;
     let meta = &json["params"]["meta"];
     assert_eq!(
         meta["bells"],
@@ -338,8 +340,8 @@ fn test_message_includes_bells_when_present() {
     assert_eq!(meta["bells_status"], "ok");
 }
 
-#[test]
-fn test_message_omits_bells_when_none() {
+#[tokio::test]
+async fn test_message_omits_bells_when_none() {
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
@@ -359,13 +361,13 @@ fn test_message_omits_bells_when_none() {
         bells: None,
         bells_status: None,
     });
-    let json = event.fixture_notification();
+    let json = event.fixture_notification().await;
     let meta = &json["params"]["meta"];
     assert!(meta.get("bells").is_none());
 }
 
-#[test]
-fn test_message_omits_preview_but_keeps_author() {
+#[tokio::test]
+async fn test_message_omits_preview_but_keeps_author() {
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
@@ -385,15 +387,15 @@ fn test_message_omits_preview_but_keeps_author() {
         bells: None,
         bells_status: None,
     });
-    let json = event.fixture_notification();
+    let json = event.fixture_notification().await;
     let meta = &json["params"]["meta"];
     assert_eq!(meta["reply_to_user_id"], "888");
     assert_eq!(meta["reply_to_user"], "bob");
     assert!(meta.get("reply_to_content_preview").is_none());
 }
 
-#[test]
-fn test_message_edit_includes_reply_to_message_id() {
+#[tokio::test]
+async fn test_message_edit_includes_reply_to_message_id() {
     let event = NotificationEvent::MessageEdit {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
@@ -404,13 +406,13 @@ fn test_message_edit_includes_reply_to_message_id() {
         thread_parent_id: None,
         reply_to_message_id: Some(MessageId::new(888)),
     };
-    let json = event.fixture_notification();
+    let json = event.fixture_notification().await;
     let meta = &json["params"]["meta"];
     assert_eq!(meta["reply_to_message_id"], "888");
 }
 
-#[test]
-fn test_message_edit_omits_reply_to_message_id_when_none() {
+#[tokio::test]
+async fn test_message_edit_omits_reply_to_message_id_when_none() {
     let event = NotificationEvent::MessageEdit {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
@@ -421,13 +423,13 @@ fn test_message_edit_omits_reply_to_message_id_when_none() {
         thread_parent_id: None,
         reply_to_message_id: None,
     };
-    let json = event.fixture_notification();
+    let json = event.fixture_notification().await;
     let meta = &json["params"]["meta"];
     assert!(meta.get("reply_to_message_id").is_none());
 }
 
-#[test]
-fn message_envelope_has_no_application_transport_tells() {
+#[tokio::test]
+async fn message_envelope_has_no_application_transport_tells() {
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(100),
         message_id: MessageId::new(200),
@@ -447,7 +449,7 @@ fn message_envelope_has_no_application_transport_tells() {
         bells: None,
         bells_status: None,
     });
-    let notification = event.fixture_notification();
+    let notification = event.fixture_notification().await;
     let meta = &notification["params"]["meta"];
     assert_eq!(meta["user_id"], "4242");
     for forbidden in [
@@ -460,15 +462,15 @@ fn message_envelope_has_no_application_transport_tells() {
     }
 }
 
-#[test]
-fn coordination_done_event_serializes_with_metadata() {
+#[tokio::test]
+async fn coordination_done_event_serializes_with_metadata() {
     let event = NotificationEvent::Coordination(dione_coordination::CoordinationEvent::Done {
         message_id: "7".parse().unwrap(),
         channel_id: "42".parse().unwrap(),
         bot_id: "111".parse().unwrap(),
         reply_message_id: "99".parse().unwrap(),
     });
-    let json = event.fixture_notification();
+    let json = event.fixture_notification().await;
     assert_eq!(json["method"], "notifications/claude/channel");
     let meta = &json["params"]["meta"];
     assert_eq!(meta["type"], "coordination");
@@ -479,13 +481,13 @@ fn coordination_done_event_serializes_with_metadata() {
     assert_eq!(meta["reply_message_id"], "99");
 }
 
-#[test]
-fn coordination_promoted_event_serializes_without_reply_fields() {
+#[tokio::test]
+async fn coordination_promoted_event_serializes_without_reply_fields() {
     let event = NotificationEvent::Coordination(dione_coordination::CoordinationEvent::Promoted {
         message_id: "7".parse().unwrap(),
         channel_id: "42".parse().unwrap(),
     });
-    let json = event.fixture_notification();
+    let json = event.fixture_notification().await;
     let meta = &json["params"]["meta"];
     assert_eq!(meta["type"], "coordination");
     assert_eq!(meta["event"], "promoted");

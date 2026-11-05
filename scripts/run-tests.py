@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Nextest with the current private Teams fixture compiler artifact."""
+"""Run Nextest with current private native and Codex fixture compiler artifacts."""
 import argparse
 import json
 import os
@@ -31,18 +31,23 @@ def main():
                              '--message-format', 'json'], cwd=root,
                             stdout=subprocess.PIPE, text=True, check=True)
     metadata = json.loads(listed.stdout)
-    suites = [suite for suite in metadata['rust-suites'].values()
-              if suite['package-name'] == 'dione-teams' and suite['kind'] == 'lib']
-    if len(suites) != 1:
-        raise RuntimeError('expected exactly one current Teams unit-test compiler artifact')
-    fixture = suites[0]
-    service = fixture['testcases'].get('fixture_process::native_fixture_service')
-    if not service or not service['ignored']:
-        raise RuntimeError('private native fixture service is absent or not explicitly ignored')
-    executable = Path(fixture['binary-path'])
-    if not executable.is_file():
-        raise RuntimeError('current compiler fixture artifact is missing')
-    environment = dict(os.environ, DIONE_TEAMS_FIXTURE_EXECUTABLE=str(executable))
+    environment = dict(os.environ)
+    for package, service_name, variable in [
+        ('dione-teams', 'fixture_process::native_fixture_service', 'DIONE_TEAMS_FIXTURE_EXECUTABLE'),
+        ('dione-codex', 'boundary_fixture::private_owner_fixture_service', 'DIONE_CODEX_FIXTURE_EXECUTABLE'),
+    ]:
+        suites = [suite for suite in metadata['rust-suites'].values()
+                  if suite['package-name'] == package and suite['kind'] == 'lib']
+        if len(suites) != 1:
+            raise RuntimeError(f'expected exactly one current {package} unit-test compiler artifact')
+        fixture = suites[0]
+        service = fixture['testcases'].get(service_name)
+        if not service or not service['ignored']:
+            raise RuntimeError(f'private {package} fixture service is absent or not explicitly ignored')
+        executable = Path(fixture['binary-path'])
+        if not executable.is_file():
+            raise RuntimeError(f'current {package} compiler fixture artifact is missing')
+        environment[variable] = str(executable)
     run = ['cargo', 'nextest', 'run', *common]
     if args.workspace or not args.package:
         run.append('--workspace')

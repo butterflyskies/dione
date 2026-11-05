@@ -18,7 +18,7 @@ enum RenderedFixture {
     Single,
     Coalesced(Value),
 }
-fn render_fixture(events: Vec<NotificationEvent>, tz: Option<Tz>) -> Option<RenderedFixture> {
+async fn render_fixture(events: Vec<NotificationEvent>, tz: Option<Tz>) -> Option<RenderedFixture> {
     let mut events = events.into_iter();
     let first = events.next()?;
     let rest: Vec<_> = events.collect();
@@ -33,11 +33,7 @@ fn render_fixture(events: Vec<NotificationEvent>, tz: Option<Tz>) -> Option<Rend
     )
     .unwrap();
     Some(RenderedFixture::Coalesced(
-        crate::codex::legacy_delivery::encode(
-            &delivery,
-            &crate::codex::LegacyDiscordScope::new(test_support::module()),
-        )
-        .unwrap(),
+        test_support::snapshot(&delivery).await,
     ))
 }
 fn msg_event(channel: u64, msg_id: u64, user: &str, content: &str) -> NotificationEvent {
@@ -94,13 +90,14 @@ fn delete_event(channel: u64, msg_id: u64) -> NotificationEvent {
     }
 }
 
-#[test]
-fn create_edit_and_delete_have_transport_neutral_headers() {
+#[tokio::test]
+async fn create_edit_and_delete_have_transport_neutral_headers() {
     let create = msg_event(1, 2, "alice", "hello");
     let edit = edit_event(1, 2);
     let delete = delete_event(1, 2);
-    let RenderedFixture::Coalesced(value) =
-        render_fixture(vec![create, edit, delete], None).expect("coalesced")
+    let RenderedFixture::Coalesced(value) = render_fixture(vec![create, edit, delete], None)
+        .await
+        .expect("coalesced")
     else {
         panic!("expected coalesced delivery");
     };
@@ -110,16 +107,17 @@ fn create_edit_and_delete_have_transport_neutral_headers() {
     assert!(rendered.contains("!delete|2\n"));
 }
 
-#[test]
-fn heterogeneous_events_preserve_each_visible_name_for_one_effective_user() {
+#[tokio::test]
+async fn heterogeneous_events_preserve_each_visible_name_for_one_effective_user() {
     let create = msg_event(1, 2, "alice", "hello");
     let mut edit = edit_event(1, 2);
     let NotificationEvent::MessageEdit { user, .. } = &mut edit else {
         unreachable!()
     };
     *user = "bob".to_owned();
-    let RenderedFixture::Coalesced(value) =
-        render_fixture(vec![create, edit], None).expect("coalesced")
+    let RenderedFixture::Coalesced(value) = render_fixture(vec![create, edit], None)
+        .await
+        .expect("coalesced")
     else {
         panic!("expected coalesced delivery");
     };
@@ -129,13 +127,13 @@ fn heterogeneous_events_preserve_each_visible_name_for_one_effective_user() {
     assert!(rendered.contains("!edit|2|15:31|bob|L=1\nedited content"));
 }
 
-#[test]
-fn two_messages_same_channel_coalesced() {
+#[tokio::test]
+async fn two_messages_same_channel_coalesced() {
     let events = vec![
         msg_event(1, 100, "alice", "hello"),
         msg_event(1, 101, "bob", "world"),
     ];
-    let result = render_fixture(events, None);
+    let result = render_fixture(events, None).await;
     match result {
         Some(RenderedFixture::Coalesced(v)) => {
             assert_eq!(v["method"], "notifications/claude/channel");
@@ -153,10 +151,10 @@ fn two_messages_same_channel_coalesced() {
     }
 }
 
-#[test]
-fn mixed_events_use_heterogeneous_format() {
+#[tokio::test]
+async fn mixed_events_use_heterogeneous_format() {
     let events = vec![msg_event(1, 100, "alice", "hello"), reaction_event(1, 100)];
-    let result = render_fixture(events, None);
+    let result = render_fixture(events, None).await;
     match result {
         Some(RenderedFixture::Coalesced(v)) => {
             assert_eq!(v["method"], "notifications/claude/channel");
@@ -171,14 +169,14 @@ fn mixed_events_use_heterogeneous_format() {
     }
 }
 
-#[test]
-fn heterogeneous_with_edit_and_delete() {
+#[tokio::test]
+async fn heterogeneous_with_edit_and_delete() {
     let events = vec![
         msg_event(1, 100, "alice", "original"),
         edit_event(1, 100),
         delete_event(1, 101),
     ];
-    let result = render_fixture(events, None);
+    let result = render_fixture(events, None).await;
     match result {
         Some(RenderedFixture::Coalesced(v)) => {
             let content = v["params"]["content"].as_str().unwrap();
@@ -192,13 +190,13 @@ fn heterogeneous_with_edit_and_delete() {
     }
 }
 
-#[test]
-fn different_channels_produce_multi_channel_batch() {
+#[tokio::test]
+async fn different_channels_produce_multi_channel_batch() {
     let events = vec![
         msg_event(1, 100, "alice", "in channel 1"),
         msg_event(2, 200, "bob", "in channel 2"),
     ];
-    let result = render_fixture(events, None);
+    let result = render_fixture(events, None).await;
     match result {
         Some(RenderedFixture::Coalesced(v)) => {
             // Multiple channels packed into a single standard notification.
@@ -216,14 +214,14 @@ fn different_channels_produce_multi_channel_batch() {
     }
 }
 
-#[test]
-fn roster_includes_all_participants() {
+#[tokio::test]
+async fn roster_includes_all_participants() {
     let events = vec![
         msg_event(1, 100, "alice", "hello"),
         reaction_event(1, 100),
         edit_event(1, 100),
     ];
-    let result = render_fixture(events, None);
+    let result = render_fixture(events, None).await;
     match result {
         Some(RenderedFixture::Coalesced(v)) => {
             let content = v["params"]["content"].as_str().unwrap();
@@ -245,8 +243,8 @@ fn timestamp_formatting() {
 
 // ── Wire-contract snapshots ─────────────────────────────────────────
 
-#[test]
-fn wire_format_snapshot_events_v1() {
+#[tokio::test]
+async fn wire_format_snapshot_events_v1() {
     // Pin the events_v1 heterogeneous envelope format.
     // A message, a reaction, an edit, and a delete — the four event types
     // that appear in a mixed-event batch for a single channel.
@@ -297,7 +295,7 @@ fn wire_format_snapshot_events_v1() {
         },
     ];
 
-    let result = render_fixture(events, Some(tz));
+    let result = render_fixture(events, Some(tz)).await;
     let v = match result {
         Some(RenderedFixture::Coalesced(v)) => v,
         other => panic!("expected Coalesced, got {other:?}"),

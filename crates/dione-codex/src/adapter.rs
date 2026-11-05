@@ -1,24 +1,22 @@
 //! Durable Codex delivery and MCP extension.
-use super::{AttentionPolicy, HarnessConnection, HarnessDelivery, HarnessError, ProtocolOutput};
+use crate::{
+    CodexBindingController, CodexEventQueue, CodexThreadId, ConsumerId, DeliveryToken,
+    consumer_ttl, lease_duration, timeout_response, wait_duration,
+};
 use dione_contracts::MessageRef;
 use dione_durable::EndpointId;
+use dione_harness::HarnessProtocol;
+use dione_harness::{
+    AttentionPolicy, HarnessConnection, HarnessDelivery, HarnessError, ProtocolOutput,
+};
+use dione_messages::delivery::Delivery;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use thiserror::Error;
 use tokio::sync::watch;
-use {
-    crate::{
-        codex::{
-            CodexBindingController, CodexEventQueue, CodexThreadId, ConsumerId, DeliveryToken,
-            consumer_ttl, lease_duration, timeout_response, wait_duration,
-        },
-        mcp::protocol::tool,
-    },
-    dione_harness::HarnessProtocol,
-    dione_messages::delivery::Delivery,
-};
 
-pub(super) const ATTENTION_POLICY: AttentionPolicy = AttentionPolicy::SafeTurn;
+/// The safe-turn attention policy required by Codex delivery.
+pub const ATTENTION_POLICY: AttentionPolicy = AttentionPolicy::SafeTurn;
 
 struct CodexAdapter {
     queue: CodexEventQueue,
@@ -26,7 +24,7 @@ struct CodexAdapter {
     binding: watch::Sender<Option<EndpointId>>,
 }
 /// Connects the queue and owner-issued binding control without claiming a consumer.
-pub fn connect_codex(
+pub fn connect(
     queue: CodexEventQueue,
     binding: watch::Sender<Option<EndpointId>>,
 ) -> HarnessConnection {
@@ -49,14 +47,14 @@ impl HarnessDelivery for CodexAdapter {
         Box::pin(async move {
             self.queue
                 .enqueue(
-                    crate::codex::legacy_delivery::encode(value, self.queue.legacy_scope())
+                    crate::legacy_delivery::encode(value, self.queue.legacy_scope())
                         .map_err(HarnessError::source)?,
                 )
                 .await
                 .map(|_| ())
                 .map_err(|error| {
                     let completion_unknown = match &error.kind {
-                        crate::codex::CodexQueueErrorKind::Durable(error) => match &error.kind {
+                        crate::CodexQueueErrorKind::Durable(error) => match &error.kind {
                             dione_durable::QueueErrorKind::CompletionUnknown(_) => true,
                             dione_durable::QueueErrorKind::Io(_)
                             | dione_durable::QueueErrorKind::Locked(_)
@@ -75,8 +73,8 @@ impl HarnessDelivery for CodexAdapter {
                             | dione_durable::QueueErrorKind::ResidentUnavailable
                             | dione_durable::QueueErrorKind::ReplayCapacity => false,
                         },
-                        crate::codex::CodexQueueErrorKind::LegacyAttention(_)
-                        | crate::codex::CodexQueueErrorKind::InvalidThreadId => false,
+                        crate::CodexQueueErrorKind::LegacyAttention(_)
+                        | crate::CodexQueueErrorKind::InvalidThreadId => false,
                     };
                     if completion_unknown {
                         HarnessError::completion_unknown(error)
@@ -89,7 +87,7 @@ impl HarnessDelivery for CodexAdapter {
     fn invalidate_attention(&self, source: MessageRef) -> BoxFuture<'_, Result<(), HarnessError>> {
         Box::pin(async move {
             self.queue
-                .invalidate_attention(crate::codex::AttentionInvalidation::Source(&source))
+                .invalidate_attention(crate::AttentionInvalidation::Source(&source))
                 .await
                 .map(|_| ())
                 .map_err(HarnessError::source)
@@ -171,7 +169,7 @@ impl HarnessProtocol for CodexAdapter {
         args: &'a Value,
     ) -> BoxFuture<'a, Option<Result<Value, HarnessError>>> {
         Box::pin(async move {
-            if recognizes(name) {
+            if TOOL_NAMES.contains(&name) {
                 Some(self.call_tool(name, args).await)
             } else {
                 None
@@ -313,7 +311,8 @@ impl CodexAdapter {
         })
     }
 }
-pub(crate) const TOOL_NAMES: &[&str] = &[
+/// Exact ordinary tool names reserved by the Codex protocol adapter.
+pub const TOOL_NAMES: &[&str] = &[
     "bind_codex_thread",
     "next_event",
     "ack_event",
@@ -322,12 +321,10 @@ pub(crate) const TOOL_NAMES: &[&str] = &[
     "handoff_event_consumer",
     "claim_event_consumer",
 ];
-pub(super) fn recognizes(name: &str) -> bool {
-    TOOL_NAMES.contains(&name)
-}
+
 #[derive(Debug, Error)]
 #[error("{0}")]
-pub(super) struct ToolArgumentError(pub(super) String);
+struct ToolArgumentError(String);
 #[derive(Debug, Error)]
 #[error("{context}{source}")]
 struct SerializationError {
@@ -339,4 +336,8 @@ fn parse_str<'a>(args: &'a Value, field: &str) -> Result<&'a str, HarnessError> 
     args.get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| HarnessError::source(ToolArgumentError(format!("missing {field}"))))
+}
+
+fn tool(name: &str, description: &str, input_schema: Value) -> Value {
+    json!({"name":name,"description":description,"inputSchema":input_schema})
 }

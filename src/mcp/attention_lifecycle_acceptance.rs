@@ -462,7 +462,7 @@ fn duplicate_overlap_edit_delete_and_reconnect_never_reintroduce_an_old_excerpt(
         fixture.attention.invalidate(source).await.unwrap();
         fixture
             .queue
-            .invalidate_attention(crate::codex::AttentionInvalidation::Source(
+            .invalidate_attention(dione_codex::AttentionInvalidation::Source(
                 &dione_contracts::MessageRef::new(
                     dione_contracts::ConversationRef::new(
                         fixture.attention.authority_module().clone(),
@@ -516,7 +516,7 @@ fn duplicate_overlap_edit_delete_and_reconnect_never_reintroduce_an_old_excerpt(
         fixture.attention.invalidate(source).await.unwrap();
         fixture
             .queue
-            .invalidate_attention(crate::codex::AttentionInvalidation::Source(
+            .invalidate_attention(dione_codex::AttentionInvalidation::Source(
                 &dione_contracts::MessageRef::new(
                     dione_contracts::ConversationRef::new(
                         fixture.attention.authority_module().clone(),
@@ -557,7 +557,7 @@ fn duplicate_overlap_edit_delete_and_reconnect_never_reintroduce_an_old_excerpt(
         drop(fixture.queue);
         fixture.queue = CodexEventQueue::load(
             &fixture.path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            dione_codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
@@ -593,6 +593,7 @@ fn duplicate_overlap_edit_delete_and_reconnect_never_reintroduce_an_old_excerpt(
 #[test]
 fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipts() {
     scenario(|| async {
+        let mut owner = crate::codex_test_process::OwnerProcess::start().await;
         let mut fixture = Fixture::new(AttentionMode::Log).await;
         let policy = prepare_policy(&mut fixture, 10_000, true).await;
         fixture.mode(AttentionMode::On).await;
@@ -688,22 +689,35 @@ fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipt
         );
         dione_attention::delivery::AttentionDeliveryGuard::check(
             fixture.attention.as_ref(),
-            &crate::codex::decode_legacy_attention_for_test(
-                &confirmed_event.event,
-                fixture.queue.legacy_scope(),
-            )
-            .unwrap()
-            .unwrap()
-            .descriptor(),
+            &owner
+                .decoded_attention(&confirmed_event.event, fixture.attention.authority_module())
+                .await
+                .descriptor(),
         )
         .unwrap();
-        let observed = crate::codex::decode_legacy_attention_for_test(
-            &confirmed_event.event,
-            fixture.queue.legacy_scope(),
-        )
-        .unwrap()
-        .unwrap();
+        let observed = owner
+            .decoded_attention(&confirmed_event.event, fixture.attention.authority_module())
+            .await;
         let valid = observed.descriptor();
+        assert_eq!(valid.record(), &confirmed.id);
+        assert_eq!(
+            valid.source().conversation().module(),
+            fixture.attention.authority_module()
+        );
+        assert_eq!(
+            valid
+                .source()
+                .conversation()
+                .local()
+                .as_numeric()
+                .unwrap()
+                .get(),
+            100
+        );
+        assert_eq!(
+            valid.source().local().as_numeric().unwrap().get(),
+            held_id + 1
+        );
         let wrong_record = dione_attention::types::RecordId::new("unrelated-decision").unwrap();
         let wrong_module = dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
@@ -856,13 +870,10 @@ fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipt
         );
         dione_attention::delivery::AttentionDeliveryGuard::check(
             fixture.attention.as_ref(),
-            &crate::codex::decode_legacy_attention_for_test(
-                &uncertain_event.event,
-                fixture.queue.legacy_scope(),
-            )
-            .unwrap()
-            .unwrap()
-            .descriptor(),
+            &owner
+                .decoded_attention(&uncertain_event.event, fixture.attention.authority_module())
+                .await
+                .descriptor(),
         )
         .unwrap();
         dione_attention::delivery::AttentionDeliveryGuard::receipt(
@@ -895,7 +906,7 @@ fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipt
         drop(fixture.queue);
         fixture.queue = CodexEventQueue::load(
             &fixture.path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            dione_codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
@@ -937,6 +948,7 @@ fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipt
             1,
             "reconciliation keeps the original stable queue entry instead of claiming exactly-once"
         );
+        owner.shutdown().await;
     });
 }
 
@@ -1917,7 +1929,7 @@ fn deleted_deferred_source_is_absent_from_serialized_denial_and_sink_transcript(
         fixture.attention.invalidate(source).await.unwrap();
         fixture
             .queue
-            .invalidate_attention(crate::codex::AttentionInvalidation::Source(
+            .invalidate_attention(dione_codex::AttentionInvalidation::Source(
                 &dione_contracts::MessageRef::new(
                     dione_contracts::ConversationRef::new(
                         fixture.attention.authority_module().clone(),
@@ -2124,15 +2136,21 @@ fn accepted_live_turn_is_not_replayed_after_real_receipt_write_failure() {
         prepare_policy(&mut fixture, 73_000, true).await;
         fixture.drain().await;
         let scope =
-            crate::codex::LegacyDiscordScope::new(fixture.attention.authority_module().clone());
+            dione_codex::LegacyDiscordScope::new(fixture.attention.authority_module().clone());
         fixture.queue =
             CodexEventQueue::load(&fixture.path.join("live-queue"), scope.clone()).unwrap();
-        let resident = fixture.queue.register_live_consumer().await.unwrap();
-        let thread = crate::codex::CodexThreadId::parse("receipt-failure-thread").unwrap();
-        resident
-            .bind_live_thread(Some(thread.clone()))
+        let (binding, binding_rx) = tokio::sync::watch::channel(None);
+        let connection = dione_codex::connect(fixture.queue.clone(), binding);
+        let bound = connection
+            .protocol()
+            .call(
+                "bind_codex_thread",
+                &json!({"thread_id":"receipt-failure-thread"}),
+            )
             .await
+            .unwrap()
             .unwrap();
+        assert_eq!(bound["thread_id"], "receipt-failure-thread");
         let socket_path = fixture.path.join("receipt.sock");
         let listener = tokio::net::UnixListener::bind(socket_path.as_std_path()).unwrap();
         let started = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
@@ -2187,16 +2205,14 @@ fn accepted_live_turn_is_not_replayed_after_real_receipt_write_failure() {
         });
         let outcomes = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut config =
-            crate::codex::CodexDeliveryConfig::resolve(Some(socket_path), scope).unwrap();
+            dione_codex::CodexDeliveryConfig::resolve(Some(socket_path), scope).unwrap();
         config.attention_guard = Some(Arc::new(ReceiptObserver {
             runtime: fixture.attention.clone(),
             outcomes: outcomes.clone(),
         }));
-        let (_binding, binding_rx) = tokio::sync::watch::channel(Some(
-            dione_durable::EndpointId::new(thread.as_str()).unwrap(),
-        ));
+
         let cancel = tokio_util::sync::CancellationToken::new();
-        let worker = tokio::spawn(crate::codex::run_delivery_worker(
+        let worker = tokio::spawn(dione_codex::run_delivery_worker(
             fixture.queue.clone(),
             config,
             binding_rx,

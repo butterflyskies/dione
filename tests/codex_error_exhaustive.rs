@@ -1,4 +1,4 @@
-use dione::codex::{
+use dione_codex::{
     CodexDeliveryError, CodexDeliveryErrorKind, CodexQueueError, CodexQueueErrorKind, QueueError,
     QueueErrorKind,
 };

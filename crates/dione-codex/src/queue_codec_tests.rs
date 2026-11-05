@@ -1,6 +1,6 @@
 //! Literal legacy restoration, exact identities and dual replay proof.
 use super::*;
-use crate::codex::{CodexEventQueue, CodexQueueErrorKind};
+use crate::{CodexEventQueue, CodexQueueErrorKind};
 use camino::Utf8PathBuf;
 use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use dione_durable::{QueueErrorKind, SnapshotIssue};
@@ -230,7 +230,7 @@ async fn dual_legacy_replay_keys_acknowledge_both_families_across_restart() {
             .enqueue_live(json!({"literal":"replayed"}), key)
             .await
             .unwrap(),
-        crate::codex::LiveAdmissionOutcome::Duplicate
+        crate::LiveAdmissionOutcome::Duplicate
     ));
     let snapshot = queue.test_snapshot().await;
     assert_eq!(
@@ -255,7 +255,7 @@ async fn dual_legacy_replay_keys_acknowledge_both_families_across_restart() {
 
 #[test]
 fn literal_teams_snapshot_retains_wire_fields_and_payload_extensions() {
-    let bytes = include_bytes!("../../tests/fixtures/teams/codex-inbox-scoped-identities.json");
+    let bytes = include_bytes!("../tests/fixtures/teams/codex-inbox-scoped-identities.json");
     let codec = LegacyQueueCodec::new(scope());
     let snapshot = codec.decode(bytes).unwrap();
     assert_eq!(
@@ -319,7 +319,7 @@ async fn dual_replay_invalidation_rolls_back_then_removes_both_indices() {
         .await;
     assert!(
         queue
-            .invalidate_attention(crate::codex::AttentionInvalidation::Record(&record))
+            .invalidate_attention(crate::AttentionInvalidation::Record(&record))
             .await
             .is_err()
     );
@@ -331,10 +331,10 @@ async fn dual_replay_invalidation_rolls_back_then_removes_both_indices() {
     queue.test_set_persist_failure(None).await;
     assert_eq!(
         queue
-            .invalidate_attention(crate::codex::AttentionInvalidation::Record(&record))
+            .invalidate_attention(crate::AttentionInvalidation::Record(&record))
             .await
             .unwrap(),
-        crate::codex::AttentionInvalidationResult {
+        crate::AttentionInvalidationResult {
             removed: 1,
             invalidated_leases: 1
         }
@@ -412,7 +412,7 @@ async fn retained_resident_replay_precedes_malformed_payload_validation() {
             .enqueue_live(json!({"literal":"retained"}), key.clone())
             .await
             .unwrap(),
-        crate::codex::LiveAdmissionOutcome::Committed
+        crate::LiveAdmissionOutcome::Committed
     ));
     assert!(matches!(
         queue
@@ -422,7 +422,7 @@ async fn retained_resident_replay_precedes_malformed_payload_validation() {
             )
             .await
             .unwrap(),
-        crate::codex::LiveAdmissionOutcome::Duplicate
+        crate::LiveAdmissionOutcome::Duplicate
     ));
     assert_eq!(queue.status().await.queued, 1);
 }

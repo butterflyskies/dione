@@ -323,10 +323,10 @@ mod tests {
             alias: None,
         });
         let original = NotificationEvent::Message(message(MessageTargeting::DirectMessage));
-        let before = original.clone().fixture_notification();
+        let before = original.clone().fixture_notification().await;
         let (returned, bells, status) =
             evaluate_native(original, &config, &BellEvaluator::new()).await;
-        assert_eq!(returned.fixture_notification(), before);
+        assert_eq!(returned.fixture_notification().await, before);
         assert_eq!(status, Some(BellStatus::PartialError));
         assert_eq!(bells.len(), 1);
         assert_eq!(bells[0].memory_id, "survivor");
@@ -524,10 +524,10 @@ mod tests {
         ] {
             let provider = McpFixture::start(response).await;
             let original = NotificationEvent::Message(message(MessageTargeting::DirectMessage));
-            let before = original.clone().fixture_notification();
+            let before = original.clone().fixture_notification().await;
             let (observed, bells, status) =
                 evaluate_fixture_event(original, &config(), &provider).await;
-            assert_eq!(observed.fixture_notification(), before);
+            assert_eq!(observed.fixture_notification().await, before);
             assert!(bells.is_empty());
             assert_eq!(status, Some(BellStatus::Error));
             assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
@@ -537,9 +537,9 @@ mod tests {
         let mut short = config();
         short.recall = RecallOptions::new(0.3, 3, 1000).unwrap();
         let original = NotificationEvent::Message(message(MessageTargeting::DirectMessage));
-        let before = original.clone().fixture_notification();
+        let before = original.clone().fixture_notification().await;
         let (observed, bells, status) = evaluate_fixture_event(original, &short, &provider).await;
-        assert_eq!(observed.fixture_notification(), before);
+        assert_eq!(observed.fixture_notification().await, before);
         assert!(bells.is_empty());
         assert_eq!(status, Some(BellStatus::Timeout));
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
@@ -550,10 +550,10 @@ mod tests {
         let provider =
             McpFixture::value(envelope(vec![hit("a", "memory-name", 0.1, "semantic")])).await;
         let original = NotificationEvent::Message(message(MessageTargeting::DirectMessage));
-        let before = original.clone().fixture_notification();
+        let before = original.clone().fixture_notification().await;
         let (observed, bells, status) =
             evaluate_fixture_event(original, &config(), &provider).await;
-        assert_eq!(observed.fixture_notification(), before);
+        assert_eq!(observed.fixture_notification().await, before);
         assert_eq!(bells.len(), 1);
         assert_eq!(bells[0].memory_name, "memory-name");
         assert_eq!(status, Some(BellStatus::Ok));

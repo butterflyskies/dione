@@ -1,7 +1,6 @@
-use crate::{
-    codex::{CodexEventQueue, CodexThreadId, LegacyDiscordScope},
-    teams_test_process::{AdmissionResult, FixtureProcess, ReplyResult},
-};
+use crate::codex_test_process::OwnerProcess;
+use crate::teams_test_process::{AdmissionResult, FixtureProcess, ReplyResult};
+use dione_codex::CodexThreadId;
 use dione_provider_delivery::ReplyHandle;
 use dione_teams::{
     ReplyStoreError,
@@ -9,80 +8,56 @@ use dione_teams::{
     runtime::{TeamsRuntimeError, TeamsRuntimeErrorKind},
 };
 use serde_json::json;
-use std::time::Duration;
-use tempfile::TempDir;
 
 const TENANT_ID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 
-fn discord_scope() -> LegacyDiscordScope {
-    LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-        dione_contracts::ProviderId::new("discord").unwrap(),
-        dione_contracts::ModuleSlotId::new("primary").unwrap(),
-    ))
-}
-
 #[tokio::test]
 async fn composed_edge_confines_reply_and_stops_before_token_on_failed_admission() {
-    let queue_dir = TempDir::new().unwrap();
-    let queue_path = camino::Utf8PathBuf::from_path_buf(queue_dir.path().to_owned()).unwrap();
-    let queue = CodexEventQueue::load(&queue_path, discord_scope()).unwrap();
+    let mut owner = OwnerProcess::start().await;
     let resident_thread = CodexThreadId::parse("thread-janus").unwrap();
-    let mut fixture = FixtureProcess::start(
-        crate::composition::teams_admission::from_codex(queue.clone()),
-        "activity/id",
-    )
-    .await;
+    let mut fixture = FixtureProcess::start(owner.teams_delivery(), "activity/id").await;
     let activity = fixture.activity("activity/id");
     fixture.begin(1, &activity).await;
     assert!(matches!(
         fixture.wait(1).await,
         AdmissionResult::RouteUnavailable
     ));
-    assert_eq!(queue.status().await.queued, 0);
+    assert_eq!(owner.queued().await, 0);
     assert_eq!(
         fixture.ingress(&activity).await,
         reqwest::StatusCode::SERVICE_UNAVAILABLE
     );
-    assert_eq!(queue.status().await.queued, 0);
+    assert_eq!(owner.queued().await, 0);
     assert_eq!(fixture.snapshot().await.pending_count, 0);
 
-    queue
-        .binding_controller()
-        .bind_live_thread(Some(resident_thread.clone()))
-        .await
-        .unwrap();
+    let bound=owner.command(json!({"command":"call","name":"bind_codex_thread","args":{"thread_id":resident_thread.as_str()}})).await;
+    assert!(
+        bound["ok"].is_object(),
+        "actual binding succeeds without creating a resident"
+    );
     fixture.begin(2, &activity).await;
     assert!(matches!(
         fixture.wait(2).await,
         AdmissionResult::RouteUnavailable
     ));
-    assert_eq!(queue.status().await.queued, 0);
+    assert_eq!(owner.queued().await, 0);
     assert_eq!(
         fixture.ingress(&activity).await,
         reqwest::StatusCode::SERVICE_UNAVAILABLE
     );
-    assert_eq!(queue.status().await.queued, 0);
-    let consumer = queue.register_live_consumer().await.unwrap();
+    assert_eq!(owner.queued().await, 0);
+    owner.command(json!({"command":"resident"})).await;
     assert_eq!(
         fixture.ingress(&activity).await,
         reqwest::StatusCode::ACCEPTED
     );
     assert!(
-        consumer
-            .next_event(
-                &CodexThreadId::parse("thread-other").unwrap(),
-                Duration::ZERO,
-                Duration::from_secs(30)
-            )
+        owner
+            .resident_next(&CodexThreadId::parse("thread-other").unwrap())
             .await
-            .unwrap()
             .is_none()
     );
-    let delivered = consumer
-        .next_event(&resident_thread, Duration::ZERO, Duration::from_secs(30))
-        .await
-        .unwrap()
-        .unwrap();
+    let delivered = owner.resident_next(&resident_thread).await.unwrap();
     assert_eq!(delivered.event["params"]["content"], "hello");
     assert_eq!(delivered.event["params"]["meta"]["provider"], "teams");
     assert_eq!(delivered.event["params"]["meta"]["tenant_id"], TENANT_ID);
@@ -90,13 +65,7 @@ async fn composed_edge_confines_reply_and_stops_before_token_on_failed_admission
         fixture.ingress(&activity).await,
         reqwest::StatusCode::ACCEPTED
     );
-    assert!(
-        consumer
-            .next_event(&resident_thread, Duration::ZERO, Duration::from_secs(30))
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(owner.resident_next(&resident_thread).await.is_none());
     let reply_handle = delivered.event["params"]["meta"]["reply_handle"]
         .as_str()
         .unwrap();
@@ -105,11 +74,7 @@ async fn composed_edge_confines_reply_and_stops_before_token_on_failed_admission
     let reply_handle = ReplyHandle::parse(reply_handle).unwrap();
 
     fixture.close().await;
-    fixture
-        .reopen(crate::composition::teams_admission::from_codex(
-            queue.clone(),
-        ))
-        .await;
+    fixture.reopen(owner.teams_delivery()).await;
     let ReplyResult::Sent {
         incoming_activity_id,
         outgoing_activity_id,
@@ -139,15 +104,12 @@ async fn composed_edge_confines_reply_and_stops_before_token_on_failed_admission
         fixture.reply(&reply_handle, "must not send twice").await,
         ReplyResult::UnknownReplyHandle
     ));
-    consumer
-        .acknowledge(&delivered.delivery_token)
-        .await
-        .unwrap();
+    owner.resident_ack(&delivered.delivery_token).await;
     assert_eq!(
         fixture.ingress(&activity).await,
         reqwest::StatusCode::ACCEPTED
     );
-    assert_eq!(queue.status().await.queued, 0);
+    assert_eq!(owner.queued().await, 0);
     assert_eq!(fixture.snapshot().await.replies.len(), 1);
 
     let second_activity = fixture.activity("other/activity");
@@ -155,11 +117,7 @@ async fn composed_edge_confines_reply_and_stops_before_token_on_failed_admission
         fixture.ingress(&second_activity).await,
         reqwest::StatusCode::ACCEPTED
     );
-    let second = consumer
-        .next_event(&resident_thread, Duration::ZERO, Duration::from_secs(30))
-        .await
-        .unwrap()
-        .unwrap();
+    let second = owner.resident_next(&resident_thread).await.unwrap();
     let second_handle = ReplyHandle::parse(
         second.event["params"]["meta"]["reply_handle"]
             .as_str()
@@ -193,7 +151,7 @@ async fn composed_edge_confines_reply_and_stops_before_token_on_failed_admission
     let snapshot = fixture.snapshot().await;
     assert_eq!(snapshot.token_requests, 2);
     assert_eq!(snapshot.replies.len(), 2);
-    let queued_before = queue.status().await.queued;
+    let queued_before = owner.queued().await;
     let mut excluded: serde_json::Value = serde_json::from_slice(&activity).unwrap();
     excluded["conversation"]["id"] = json!("excluded/native room");
     let excluded = serde_json::to_vec(&excluded).unwrap();
@@ -206,25 +164,21 @@ async fn composed_edge_confines_reply_and_stops_before_token_on_failed_admission
         fixture.ingress(&excluded).await,
         reqwest::StatusCode::UNAUTHORIZED
     );
-    assert_eq!(queue.status().await.queued, queued_before);
+    assert_eq!(owner.queued().await, queued_before);
     let snapshot = fixture.snapshot().await;
     assert_eq!(snapshot.token_requests, 2);
     assert_eq!(snapshot.replies.len(), 2);
 
     assert_legacy_consumer_denial_and_recovery().await;
 
-    consumer.acknowledge(&second.delivery_token).await.unwrap();
+    owner.resident_ack(&second.delivery_token).await;
     assert_eq!(
         fixture
             .ingress(&fixture.activity("invalid-receipt/activity"))
             .await,
         reqwest::StatusCode::ACCEPTED
     );
-    let invalid_receipt_event = consumer
-        .next_event(&resident_thread, Duration::ZERO, Duration::from_secs(30))
-        .await
-        .unwrap()
-        .unwrap();
+    let invalid_receipt_event = owner.resident_next(&resident_thread).await.unwrap();
     let invalid_receipt_handle = ReplyHandle::parse(
         invalid_receipt_event.event["params"]["meta"]["reply_handle"]
             .as_str()
@@ -252,170 +206,53 @@ async fn composed_edge_confines_reply_and_stops_before_token_on_failed_admission
     assert_eq!(snapshot.token_requests, 3);
     assert_eq!(snapshot.pending_count, 0);
     fixture.shutdown().await;
+    owner.shutdown().await;
 }
 
 async fn assert_legacy_consumer_denial_and_recovery() {
-    let legacy_dir = TempDir::new().unwrap();
-    let legacy_path = camino::Utf8PathBuf::from_path_buf(legacy_dir.path().to_owned()).unwrap();
-    let legacy_queue = CodexEventQueue::load(&legacy_path, discord_scope()).unwrap();
+    let mut owner = OwnerProcess::start().await;
     let legacy_thread = CodexThreadId::parse("legacy-thread").unwrap();
-    legacy_queue
-        .binding_controller()
-        .bind_live_thread(Some(legacy_thread.clone()))
-        .await
-        .unwrap();
-    drop(legacy_queue);
-    let inbox_path = legacy_path.join("codex-inbox.json");
-    let mut disk: serde_json::Value =
-        serde_json::from_slice(&tokio::fs::read(&inbox_path).await.unwrap()).unwrap();
-    disk["next_consumer_generation"] = json!(1);
-    disk["primary_consumer"] = json!("codex-consumer-0");
-    disk["consumers"] = json!([{
-        "id":"codex-consumer-0", "label":"dione-live-app-server",
-        "expires_at":chrono::Utc::now() + chrono::TimeDelta::hours(1), "ttl_seconds":3600
-    }]);
-    tokio::fs::write(&inbox_path, serde_json::to_vec_pretty(&disk).unwrap())
-        .await
-        .unwrap();
-    let legacy_queue = CodexEventQueue::load(&legacy_path, discord_scope()).unwrap();
-    let mut fixture = FixtureProcess::start(
-        crate::composition::teams_admission::from_codex(legacy_queue.clone()),
-        "legacy/activity",
-    )
-    .await;
+    let bound=owner.command(json!({"command":"call","name":"bind_codex_thread","args":{"thread_id":legacy_thread.as_str()}})).await;
+    assert!(bound["ok"].is_object());
+    owner
+        .command(json!({"command":"legacy_native_fixture"}))
+        .await;
+    let mut fixture = FixtureProcess::start(owner.teams_delivery(), "legacy/activity").await;
     let activity = fixture.activity("legacy/activity");
     fixture.begin(1, &activity).await;
     assert!(matches!(
         fixture.wait(1).await,
         AdmissionResult::RouteUnavailable
     ));
-    assert_eq!(legacy_queue.status().await.queued, 0);
+    assert_eq!(owner.queued().await, 0);
     assert_eq!(
         fixture.ingress(&activity).await,
         reqwest::StatusCode::SERVICE_UNAVAILABLE
     );
-    assert_eq!(legacy_queue.status().await.queued, 0);
+    assert_eq!(owner.queued().await, 0);
     assert_eq!(fixture.snapshot().await.pending_count, 0);
-    assert!(matches!(
-        legacy_queue.register_live_consumer().await,
-        Err(crate::codex::CodexQueueError {
-            kind: crate::codex::CodexQueueErrorKind::Durable(dione_durable::QueueError {
-                kind: dione_durable::QueueErrorKind::PrimaryConsumerExists,
-                ..
-            })
-        })
-    ));
+    assert_eq!(
+        owner
+            .command(json!({"command":"legacy_native_primary_conflict"}))
+            .await["kind"],
+        "primary_consumer_exists"
+    );
     fixture.close().await;
-    drop(legacy_queue);
-    disk["consumers"][0]["expires_at"] = json!(chrono::Utc::now() - chrono::TimeDelta::seconds(1));
-    tokio::fs::write(&inbox_path, serde_json::to_vec_pretty(&disk).unwrap())
-        .await
-        .unwrap();
-    let recovered_queue = CodexEventQueue::load(&legacy_path, discord_scope()).unwrap();
-    let resident = recovered_queue.register_live_consumer().await.unwrap();
-    fixture
-        .reopen(crate::composition::teams_admission::from_codex(
-            recovered_queue.clone(),
-        ))
+    owner
+        .command(json!({"command":"legacy_native_recover"}))
         .await;
+    fixture.reopen(owner.teams_delivery()).await;
     assert_eq!(
         fixture.ingress(&activity).await,
         reqwest::StatusCode::ACCEPTED
     );
-    let recovered_event = resident
-        .next_event(&legacy_thread, Duration::ZERO, Duration::from_secs(30))
-        .await
-        .unwrap()
-        .unwrap();
+    let recovered_event = owner.resident_next(&legacy_thread).await.unwrap();
     assert_eq!(
         recovered_event.event["params"]["meta"]["message_id"],
         "legacy/activity"
     );
     fixture.shutdown().await;
-}
-
-#[tokio::test]
-async fn owned_admission_completion_retains_native_authority_after_queue_restart() {
-    for lose_response in [false, true] {
-        let directory = TempDir::new().unwrap();
-        let path = camino::Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
-        let scope = discord_scope();
-        let queue = CodexEventQueue::open(&path, scope.clone()).await.unwrap();
-        let consumer = queue.register_live_consumer().await.unwrap();
-        let consumer_id = consumer.consumer_id().clone();
-        let thread = CodexThreadId::parse("owned-admission").unwrap();
-        consumer
-            .bind_live_thread(Some(thread.clone()))
-            .await
-            .unwrap();
-        let mut fixture = FixtureProcess::start(
-            crate::composition::teams_admission::from_codex(queue.clone()),
-            "owned/admission",
-        )
-        .await;
-        let (reached, release) = queue.pause_owned_completion_for_test(lose_response);
-        fixture.begin(1, &fixture.activity("owned/admission")).await;
-        tokio::time::timeout(Duration::from_secs(2), reached)
-            .await
-            .unwrap()
-            .unwrap();
-        if lose_response {
-            release.send(()).unwrap();
-            assert!(matches!(
-                fixture.wait(1).await,
-                AdmissionResult::CompletionUnknown
-            ));
-            assert_eq!(fixture.join_panic_count(), 1);
-        } else {
-            fixture.cancel(1).await;
-            release.send(()).unwrap();
-        }
-        queue.drain_owned().await;
-        fixture.close().await;
-        drop(consumer);
-        drop(queue);
-        let queue = CodexEventQueue::open(&path, scope).await.unwrap();
-        let consumer = queue.register_live_consumer().await.unwrap();
-        assert_eq!(consumer.consumer_id(), &consumer_id);
-        fixture
-            .reopen(crate::composition::teams_admission::from_codex(
-                queue.clone(),
-            ))
-            .await;
-        let event = consumer
-            .next_event(&thread, Duration::ZERO, Duration::from_secs(30))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            event.event["params"]["meta"]["message_id"],
-            "owned/admission"
-        );
-        let handle = ReplyHandle::parse(
-            event.event["params"]["meta"]["reply_handle"]
-                .as_str()
-                .unwrap(),
-        )
-        .unwrap();
-        let before = fixture.snapshot().await;
-        assert!(matches!(
-            fixture
-                .reply(&handle, "reply after owned admission restart")
-                .await,
-            ReplyResult::Sent { .. }
-        ));
-        let after = fixture.snapshot().await;
-        assert_eq!(after.replies.len(), before.replies.len() + 1);
-        assert_eq!(after.token_requests, before.token_requests + 1);
-        assert!(matches!(
-            fixture.reply(&handle, "must not send twice").await,
-            ReplyResult::UnknownReplyHandle
-        ));
-        let repeated = fixture.snapshot().await;
-        assert_eq!(repeated.replies.len(), before.replies.len() + 1);
-        assert_eq!(repeated.token_requests, before.token_requests + 1);
-        fixture.shutdown().await;
-    }
+    owner.shutdown().await;
 }
 
 #[test]
@@ -440,15 +277,5 @@ fn teams_error_display_fragments_start_lowercase() {
         }
         .to_string(),
         "teams metadata response exceeds its size limit"
-    );
-    assert_eq!(
-        crate::codex::LiveQueueError {
-            kind: crate::codex::LiveQueueErrorKind::ReplayCapacity(crate::codex::QueueError::new(
-                "resident admission",
-                crate::codex::QueueErrorKind::ReplayCapacity
-            ))
-        }
-        .to_string(),
-        "teams replay-identity capacity is full"
     );
 }

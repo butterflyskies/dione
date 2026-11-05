@@ -1,11 +1,12 @@
 //! Prepared and running ownership of a harness session.
-use super::{
-    HarnessConnection,
-    codex_session::{CodexSession, CodexSessionOptions, RunningCodexSession},
-};
-use crate::codex::{CodexDeliveryError, CodexQueueError};
+use super::HarnessConnection;
 use camino::Utf8Path;
 use dione_attention::delivery::AttentionDeliveryGuard;
+use dione_codex::{CodexDeliveryError, CodexQueueError};
+use dione_codex::{
+    CodexSession, CodexSessionError, CodexSessionErrorKind, CodexSessionOptions,
+    RunningCodexSession,
+};
 use dione_config::DeliveryConfig;
 use dione_omp::{OmpAdmission, OmpSession, RunningOmpSession};
 use std::{error::Error, sync::Arc};
@@ -42,7 +43,7 @@ enum RunningLifecycle {
 }
 
 pub(crate) enum ResidentAdmission {
-    Codex(crate::codex::CodexEventQueue),
+    Codex(dione_codex::CodexEventQueue),
     Omp(OmpAdmission),
 }
 
@@ -88,9 +89,7 @@ impl HarnessSession {
 
     pub(crate) fn resident_admission(&self) -> Result<ResidentAdmission, HarnessSessionError> {
         match &self.lifecycle {
-            PreparedLifecycle::Codex(session) => {
-                Ok(ResidentAdmission::Codex(session.codex_admission()))
-            }
+            PreparedLifecycle::Codex(session) => Ok(ResidentAdmission::Codex(session.admission())),
             PreparedLifecycle::OmpResident(session) => {
                 Ok(ResidentAdmission::Omp(session.admission()))
             }
@@ -118,14 +117,14 @@ impl HarnessSession {
     }
 
     /// Returns the prepared Codex admission queue for explicit provider composition.
-    pub fn codex_admission(&self) -> Result<crate::codex::CodexEventQueue, HarnessSessionError> {
+    pub fn codex_admission(&self) -> Result<dione_codex::CodexEventQueue, HarnessSessionError> {
         match &self.lifecycle {
             PreparedLifecycle::Claude
             | PreparedLifecycle::OhMyPi
             | PreparedLifecycle::OmpResident(_) => Err(HarnessSessionError {
                 kind: HarnessSessionErrorKind::TeamsUnavailable,
             }),
-            PreparedLifecycle::Codex(session) => Ok(session.codex_admission()),
+            PreparedLifecycle::Codex(session) => Ok(session.admission()),
         }
     }
 
@@ -166,7 +165,7 @@ impl RunningHarnessSession {
                         kind: HarnessSessionErrorKind::Omp(Box::new(source)),
                     })
             }
-            RunningLifecycle::Codex(session) => session.shutdown().await,
+            RunningLifecycle::Codex(session) => session.shutdown().await.map_err(Into::into),
         };
         drop(self.connection);
         result
@@ -210,3 +209,20 @@ pub enum HarnessSessionErrorKind {
 #[cfg(test)]
 #[path = "session_tests.rs"]
 pub(super) mod tests;
+
+impl From<CodexSessionError> for HarnessSessionError {
+    fn from(error: CodexSessionError) -> Self {
+        let kind = match error.kind {
+            CodexSessionErrorKind::QueueOpen(source) => HarnessSessionErrorKind::QueueOpen(source),
+            CodexSessionErrorKind::Configure(source) => HarnessSessionErrorKind::Configure(source),
+            CodexSessionErrorKind::EnvironmentThread(source) => {
+                HarnessSessionErrorKind::EnvironmentThread(source)
+            }
+            CodexSessionErrorKind::InitialBinding(source) => {
+                HarnessSessionErrorKind::InitialBinding(source)
+            }
+            CodexSessionErrorKind::Join(source) => HarnessSessionErrorKind::Join(source),
+        };
+        Self { kind }
+    }
+}

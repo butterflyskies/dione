@@ -1,0 +1,5 @@
+error[E0616]: field `queue` of struct `CodexSession` is private
+ --> tests/ui/session_state.rs:2:22
+  |
+2 |     let _ = &session.queue;
+  |                      ^^^^^ private field

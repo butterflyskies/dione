@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
-use {dione::codex::CodexEventQueue, dione_attention::store::AttentionStore};
+use {dione_attention::store::AttentionStore, dione_codex::CodexEventQueue};
 
 struct CliFixture {
     root: TempDir,
@@ -126,7 +126,7 @@ fn startup_cli_offline_codex_ignores_occupied_inbox_and_app_server() {
     let fixture = CliFixture::new();
     let queue = CodexEventQueue::load(
         &fixture.state,
-        dione::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+        dione_codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
         )),

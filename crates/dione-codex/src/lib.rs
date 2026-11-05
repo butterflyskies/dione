@@ -1,7 +1,18 @@
-//! Legacy Codex delivery projection backed by the shared durable state machine.
+//! Durable Codex inbox, protocol adapter, delivery worker and session lifecycle.
+#![warn(missing_docs)]
+
+mod adapter;
+mod session;
+mod teams_delivery;
+pub use adapter::{ATTENTION_POLICY, TOOL_NAMES, connect};
+pub use session::{
+    CodexSession, CodexSessionError, CodexSessionErrorKind, CodexSessionOptions,
+    RunningCodexSession,
+};
+pub use teams_delivery::teams_delivery;
 mod app_server;
 mod error;
-pub(crate) mod legacy_delivery;
+mod legacy_delivery;
 mod queue;
 mod queue_codec;
 #[cfg(test)]
@@ -26,8 +37,6 @@ pub use dione_durable::{
 };
 pub use error::{CodexQueueError, CodexQueueErrorKind};
 pub(crate) use error::{LiveQueueError, LiveQueueErrorKind};
-#[cfg(test)]
-pub(crate) use legacy_delivery::decode_attention as decode_legacy_attention_for_test;
 pub use legacy_delivery::{LegacyDeliveryError, LegacyDiscordScope};
 pub use queue::CodexEventQueue;
 pub(crate) use queue::{CodexBindingController, CodexResidentHandle, LiveAdmissionOutcome};
@@ -167,3 +176,14 @@ pub fn consumer_ttl(seconds: Option<u64>) -> Duration {
 pub fn timeout_response() -> Value {
     json!({"event":null,"timed_out":true})
 }
+
+#[cfg(test)]
+mod boundary_delivery;
+#[cfg(test)]
+mod boundary_fixture;
+
+#[cfg(test)]
+mod test_support;
+
+#[cfg(test)]
+mod typed_codec_tests;

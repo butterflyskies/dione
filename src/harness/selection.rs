@@ -22,7 +22,7 @@ impl HarnessSelection {
     pub(crate) const fn attention_policy(self) -> AttentionPolicy {
         match self {
             Self::ClaudeCode => super::claude::ATTENTION_POLICY,
-            Self::Codex => super::codex::ATTENTION_POLICY,
+            Self::Codex => dione_codex::ATTENTION_POLICY,
             Self::OhMyPi => AttentionPolicy::Direct,
         }
     }
