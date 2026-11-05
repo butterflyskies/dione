@@ -1,4 +1,5 @@
 use super::*;
+use dione_mutes::{MuteState, MuteStore};
 
 #[derive(Debug, PartialEq)]
 struct BoundaryTrace {
@@ -230,13 +231,13 @@ fn a04_production_ingress_gate_receipts_cover_denied_and_muted_direct_variants()
         const MUTED_GUILD: u64 = 9_000_004;
         let fixture = Fixture::new(AttentionMode::On).await;
 
-        if crate::mute_store::global().is_none() {
-            crate::mute_store::init_global(crate::mute_store::MuteStore::from_state(
-                crate::mute_store::MuteState::default(),
+        if crate::composition::mutes::global().is_none() {
+            crate::composition::mutes::init_global(MuteStore::from_state(
+                MuteState::default(),
                 &fixture.path,
             ));
         }
-        let mute_store = crate::mute_store::global().unwrap();
+        let mute_store = crate::composition::mutes::global().unwrap();
         mute_store
             .mute_guild(MUTED_GUILD, 60, "boundary-fixture".into(), None)
             .await

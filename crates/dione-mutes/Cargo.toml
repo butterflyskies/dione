@@ -1,0 +1,24 @@
+[package]
+name = "dione-mutes"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Guild mute receipt replay, projection, and expiry mechanics"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["mute", "receipts", "expiry"]
+categories = ["asynchronous", "data-structures"]
+
+[dependencies]
+arc-swap.workspace = true
+camino.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.104.0]
+
+### Changed
+
+- Extract mute receipt replay, projection, mutation and expiry mechanics into
+  dione-mutes. Move the existing process-global handle to application
+  composition and migrate callers directly. Preserve receipt compatibility,
+  append/projection ordering, expiry retry behavior and current authorization.
+
 ## [0.103.0]
 
 ### Changed

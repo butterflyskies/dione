@@ -292,7 +292,8 @@ impl ObservationIngress {
             return Err(DispatchOutcome::Filtered(Exclusion::Scope));
         }
         if guild.is_some_and(|guild| {
-            crate::mute_store::global().is_some_and(|store| store.is_guild_muted(guild.get()))
+            crate::composition::mutes::global()
+                .is_some_and(|store| store.is_guild_muted(guild.get()))
         }) {
             return Err(DispatchOutcome::Filtered(Exclusion::Muted));
         }
@@ -687,7 +688,7 @@ impl ObservationIngress {
             return DispatchOutcome::Filtered(Exclusion::Ignored);
         }
         if message.guild_id.is_some_and(|id| {
-            crate::mute_store::global().is_some_and(|store| store.is_guild_muted(id.get()))
+            crate::composition::mutes::global().is_some_and(|store| store.is_guild_muted(id.get()))
         }) {
             return DispatchOutcome::Filtered(Exclusion::Muted);
         }

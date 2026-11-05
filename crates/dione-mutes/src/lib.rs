@@ -9,7 +9,7 @@
 //! `tokio::sync::Mutex`. The receipt is appended to the log *first* — this
 //! is the commit point. Only after a successful append is the in-memory
 //! projection updated. If the receipt write fails, the operation fails and
-//! no state changes.
+//! the in-memory projection stays unchanged. Disk bytes may still have changed.
 //!
 //! The read-only `is_guild_muted()` path is pure: it checks the projection
 //! and returns `false` for expired entries without emitting receipts.
@@ -20,6 +20,8 @@
 //! `muted_until` deadline and then calls `reconcile_expiries` to emit
 //! `Expire` receipts promptly. When no active mutes exist it parks on a
 //! `Notify` that `mute_guild` triggers.
+
+#![warn(missing_docs)]
 
 use arc_swap::ArcSwap;
 use camino::Utf8Path;
@@ -32,6 +34,7 @@ use tokio::sync::{Mutex, Notify};
 
 /// Abstraction over the system clock so tests can use deterministic time.
 pub trait Clock: Send + Sync + 'static {
+    /// Returns the current UTC time.
     fn now(&self) -> DateTime<Utc>;
 }
 
@@ -52,10 +55,15 @@ pub const MAX_TTL_MINUTES: u64 = 43200;
 /// A single guild mute entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GuildMute {
+    /// Stored guild identity.
     pub guild_id: u64,
+    /// Time at which the mute expires.
     pub muted_until: DateTime<Utc>,
+    /// Recorded actor for this mute.
     pub muted_by: String,
+    /// Optional recorded reason.
     pub reason: Option<String>,
+    /// Time at which the mute was recorded.
     pub muted_at: DateTime<Utc>,
     /// Deterministic identity for classifying pre-cutoff stragglers.
     #[serde(default)]
@@ -77,6 +85,7 @@ impl GuildMute {
 /// Snapshot of all guild mutes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MuteState {
+    /// Guild mute projection keyed by stored identity.
     pub mutes: HashMap<u64, GuildMute>,
 }
 
@@ -86,19 +95,28 @@ pub struct MuteState {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MuteOperation {
+    /// Record a new mute.
     Mute,
+    /// Record manual removal.
     Unmute,
+    /// Record a replaced mute expiry.
     Extend,
+    /// Record expiry reconciliation.
     Expire,
 }
 
 /// A durable, append-only lifecycle receipt for audit history.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MuteReceipt {
+    /// Time at which the operation was recorded.
     pub timestamp: DateTime<Utc>,
+    /// Stored guild identity.
     pub guild_id: u64,
+    /// Recorded lifecycle operation.
     pub operation: MuteOperation,
+    /// Recorded actor for the operation.
     pub actor: String,
+    /// Optional recorded reason.
     pub reason: Option<String>,
     /// For Mute/Extend: the new expiry time.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -370,7 +388,7 @@ impl MuteStore {
     /// already muted and the new TTL extends it, this is recorded as an
     /// `Extend` operation.
     ///
-    /// `ttl_minutes` must be in `1..=43200` (30 days).
+    /// `ttl_minutes` may be zero and must not exceed 43200 (30 days).
     pub async fn mute_guild(
         &self,
         guild_id: u64,
@@ -632,21 +650,6 @@ impl MuteStore {
 
         Ok(())
     }
-}
-
-// ── Global accessor ─────────────────────────────────────────────────────────
-
-/// Process-global mute store, initialized at startup.
-static MUTE_STORE: std::sync::OnceLock<Arc<MuteStore>> = std::sync::OnceLock::new();
-
-/// Initialize the global mute store. Called once at startup.
-pub fn init_global(store: MuteStore) {
-    MUTE_STORE.set(Arc::new(store)).ok();
-}
-
-/// Load the global mute store. Returns `None` if not yet initialized.
-pub fn global() -> Option<Arc<MuteStore>> {
-    MUTE_STORE.get().cloned()
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────

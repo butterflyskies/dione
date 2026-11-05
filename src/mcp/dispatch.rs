@@ -23,6 +23,7 @@ use crate::{
     },
     no_rly::queue::HoldHandle,
 };
+use dione_mutes::MAX_TTL_MINUTES;
 use dione_rendering as rendering;
 use serde_json::{Value, json};
 
@@ -213,7 +214,7 @@ pub(crate) async fn call_tool(
                 // Annotate with active guild mutes so the caller sees muted guilds
                 // alongside the channel list (channels don't carry guild_id, so
                 // per-channel annotation isn't possible).
-                if let Some(store) = crate::mute_store::global() {
+                if let Some(store) = crate::composition::mutes::global() {
                     let now = store.now();
                     let mutes: Vec<Value> = store
                         .list_muted()
@@ -416,14 +417,14 @@ pub(crate) async fn call_tool(
                 if ttl_minutes == 0 {
                     return Err("ttl_minutes must be at least 1".to_string());
                 }
-                if ttl_minutes > crate::mute_store::MAX_TTL_MINUTES {
+                if ttl_minutes > MAX_TTL_MINUTES {
                     return Err(format!(
                         "ttl_minutes ({ttl_minutes}) exceeds maximum ({})",
-                        crate::mute_store::MAX_TTL_MINUTES,
+                        MAX_TTL_MINUTES,
                     ));
                 }
                 let reason = args.get("reason").and_then(Value::as_str).map(String::from);
-                let store = crate::mute_store::global()
+                let store = crate::composition::mutes::global()
                     .ok_or_else(|| "mute store not initialized".to_string())?;
                 match store
                     .mute_guild(guild_id, ttl_minutes, "admin".into(), reason)
@@ -446,7 +447,7 @@ pub(crate) async fn call_tool(
                 let guild_id: u64 = guild_id_str
                     .parse()
                     .map_err(|_| format!("invalid guild_id: {guild_id_str}"))?;
-                let store = crate::mute_store::global()
+                let store = crate::composition::mutes::global()
                     .ok_or_else(|| "mute store not initialized".to_string())?;
                 match store.unmute_guild(guild_id).await {
                     Ok(mute) => json!({
@@ -459,7 +460,7 @@ pub(crate) async fn call_tool(
             }
             "list_muted_servers" => {
                 check_admin_gate(&config)?;
-                let store = crate::mute_store::global()
+                let store = crate::composition::mutes::global()
                     .ok_or_else(|| "mute store not initialized".to_string())?;
                 let now = store.now();
                 let mutes: Vec<Value> = store
@@ -557,7 +558,99 @@ mod tests {
     use super::*;
     use crate::{discord::tool_arguments::parse_optional_id, pre_send::HookName};
     use dione_access_requests::AccessQueue;
+    use dione_mutes::MuteStore;
     use proptest::prelude::*;
+
+    #[tokio::test]
+    async fn mute_contract_preserves_admin_and_ttl_boundaries() {
+        const CHILD: &str = "DIONE_MUTE_DISPATCH_CONTRACT_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "mcp::dispatch::tests::mute_contract_preserves_admin_and_ttl_boundaries",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "stdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stdout)
+                    .contains("test result: ok. 1 passed; 0 failed;")
+            );
+            return;
+        }
+        let (_dir, server) = presence_test_server().await;
+        std::fs::write(
+            server.state_dir().join("config.toml"),
+            "[access]\nadmin_only_mutations = true\n",
+        )
+        .unwrap();
+        assert!(
+            crate::config::reload_config(server.state_dir())
+                .await
+                .1
+                .is_none()
+        );
+        assert_eq!(
+            call_tool(
+                &server,
+                "mute_server",
+                json!({"guild_id":"bad","ttl_minutes":0})
+            )
+            .await
+            .unwrap_err(),
+            "admin_only_mutations is enabled; config mutation tools are disabled"
+        );
+        std::fs::write(
+            server.state_dir().join("config.toml"),
+            "[access]\nadmin_only_mutations = false\n",
+        )
+        .unwrap();
+        assert!(
+            crate::config::reload_config(server.state_dir())
+                .await
+                .1
+                .is_none()
+        );
+        crate::composition::mutes::init_global(MuteStore::load(server.state_dir()).await.unwrap());
+        assert_eq!(
+            call_tool(
+                &server,
+                "mute_server",
+                json!({"guild_id":"42","ttl_minutes":0})
+            )
+            .await
+            .unwrap_err(),
+            "ttl_minutes must be at least 1"
+        );
+        assert!(
+            !crate::composition::mutes::global()
+                .unwrap()
+                .is_guild_muted(42)
+        );
+        let response = call_tool(
+            &server,
+            "mute_server",
+            json!({"guild_id":"42","ttl_minutes":1}),
+        )
+        .await
+        .unwrap();
+        let body: Value =
+            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["guild_id"], "42");
+        assert!(
+            crate::composition::mutes::global()
+                .unwrap()
+                .is_guild_muted(42)
+        );
+    }
 
     #[tokio::test]
     async fn access_contract_dispatch_gate_parser_and_tool_error_envelopes() {

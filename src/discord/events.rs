@@ -517,7 +517,8 @@ impl EventHandler for Handler {
                     .or_else(|| msg.referenced_message.as_deref().map(|m| m.id));
                 let policy = config.channel_policy(resolved.gate_channel_id);
                 let guild_muted = msg.guild_id.map(|g| g.get()).is_some_and(|gid| {
-                    crate::mute_store::global().is_some_and(|store| store.is_guild_muted(gid))
+                    crate::composition::mutes::global()
+                        .is_some_and(|store| store.is_guild_muted(gid))
                 });
                 match guild_message_preflight(
                     crate::drop_ledger::global(),
@@ -589,7 +590,7 @@ impl EventHandler for Handler {
                     },
                     || crate::config::load_config(&self.state_dir),
                     |guild_id, _gate_channel_id| {
-                        crate::mute_store::global()
+                        crate::composition::mutes::global()
                             .is_some_and(|store| store.is_guild_muted(guild_id))
                     },
                 )
@@ -654,7 +655,7 @@ impl EventHandler for Handler {
                 .and_then(|r| r.message_id)
                 .or_else(|| msg.referenced_message.as_deref().map(|m| m.id));
             let guild_muted = msg.guild_id.map(|g| g.get()).is_some_and(|gid| {
-                crate::mute_store::global().is_some_and(|store| store.is_guild_muted(gid))
+                crate::composition::mutes::global().is_some_and(|store| store.is_guild_muted(gid))
             });
 
             // The single admission authority: delivery is possible only
@@ -743,7 +744,7 @@ impl EventHandler for Handler {
 
         // Guild mute check — suppress reaction delivery for muted guilds.
         if let Some(gid) = reaction.guild_id
-            && let Some(store) = crate::mute_store::global()
+            && let Some(store) = crate::composition::mutes::global()
             && store.is_guild_muted(gid.get())
         {
             tracing::debug!(guild_id = gid.get(), "reaction dropped: guild muted");
@@ -1032,7 +1033,8 @@ impl EventHandler for Handler {
                 },
                 || crate::config::load_config(&self.state_dir),
                 |guild_id, _gate_channel_id| {
-                    crate::mute_store::global().is_some_and(|store| store.is_guild_muted(guild_id))
+                    crate::composition::mutes::global()
+                        .is_some_and(|store| store.is_guild_muted(guild_id))
                 },
             )
             .await
@@ -1825,7 +1827,7 @@ fn fresh_guild_envelope_allows(
     mention_kind: Option<MentionKind>,
 ) -> bool {
     let muted = guild_id.is_some_and(|guild_id| {
-        crate::mute_store::global().is_some_and(|store| store.is_guild_muted(guild_id))
+        crate::composition::mutes::global().is_some_and(|store| store.is_guild_muted(guild_id))
     });
     fresh_guild_envelope_allows_with_mute(config, gate_channel_id, mention_kind, muted)
 }
@@ -1866,7 +1868,7 @@ pub(crate) fn passive_edit_policy_allows(
         return false;
     }
     if guild_id.is_some_and(|guild_id| {
-        crate::mute_store::global().is_some_and(|store| store.is_guild_muted(guild_id))
+        crate::composition::mutes::global().is_some_and(|store| store.is_guild_muted(guild_id))
     }) {
         return false;
     }

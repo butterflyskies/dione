@@ -13,7 +13,6 @@ pub mod drop_ledger;
 pub mod gate;
 pub mod ingress_ledger;
 pub mod mcp;
-pub mod mute_store;
 pub mod no_rly;
 pub mod oneshot;
 pub mod permissions;
