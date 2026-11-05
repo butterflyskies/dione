@@ -1,0 +1,23 @@
+[package]
+name = "dione-presentation"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Retained delivery projection and compact message presentation"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["messages", "presentation", "formatting"]
+categories = ["text-processing"]
+
+[dependencies]
+dione-contracts.workspace = true
+dione-attention.workspace = true
+dione-evidence.workspace = true
+dione-messages.workspace = true
+dione-identity-display.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+chrono-tz.workspace = true
+serde_json.workspace = true

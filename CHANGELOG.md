@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.99.0]
+
+### Changed
+
+- Extract shared delivery projection and compact batch formatting into
+  `dione-presentation`. Retain provider envelopes, legacy scope validation, and
+  Discord conversion in Dione. Keep batch formatting tests inside the member
+  with typed fixtures and application conversion tests in Dione.
+
 ## [0.98.0]
 
 ### Changed

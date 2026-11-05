@@ -1,36 +1,55 @@
 use super::*;
 use chrono_tz::Tz;
-use serenity::model::id::{ChannelId, MessageId, UserId};
-use {
-    crate::{
-        discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
-        harness::test_support,
-    },
-    dione_messages::timestamp::Timestamp,
+use dione_contracts::{
+    ActorId, ConversationId, MessageId, ModuleInstanceId, ModuleSlotId, ProviderId,
 };
+use dione_messages::{
+    events::{
+        AuthorOrigin, ByteSize, MessageCreated, ObservedAttachment, ObservedAuthor,
+        ReplyObservation, Targeting,
+    },
+    timestamp::Timestamp,
+};
+use std::num::NonZeroU64;
 
+fn module() -> ModuleInstanceId {
+    ModuleInstanceId::new(
+        ProviderId::new("discord").unwrap(),
+        ModuleSlotId::new("primary").unwrap(),
+    )
+}
+fn conversation(id: u64) -> ConversationRef {
+    ConversationRef::new(
+        module(),
+        ConversationId::numeric(NonZeroU64::new(id).unwrap()),
+    )
+}
+fn source(channel: u64, message: u64) -> MessageRef {
+    MessageRef::new(
+        conversation(channel),
+        MessageId::numeric(NonZeroU64::new(message).unwrap()),
+    )
+}
+fn actor(id: u64) -> ActorRef {
+    ActorRef::new(module(), ActorId::numeric(NonZeroU64::new(id).unwrap()))
+}
 struct BatchContext {
-    channel_id: ChannelId,
-    thread_id: Option<ChannelId>,
+    channel_id: ConversationRef,
+    thread_id: Option<ConversationRef>,
     tz: Option<Tz>,
 }
 fn serialize_batch(
-    events: &[NotificationEvent],
+    events: &[MessageCreated],
     context: &BatchContext,
 ) -> Result<String, &'static str> {
-    let module = test_support::module();
     let mut converted = Vec::new();
-    for event in events.iter().cloned() {
-        let NotificationEvent::Message(mut message) = event else {
-            return Err("message fixture required");
-        };
-        if message.chat_id != context.channel_id {
+    for message in events.iter().cloned() {
+        if message.source().conversation() != &context.channel_id {
             return Err("channel fixture mismatch");
         }
-        message.thread_parent_id = context.thread_id;
-        converted.push(OrdinaryEvent::Message(Box::new(
-            crate::discord::delivery::message(&module, message),
-        )));
+        let reply = message.reply().clone();
+        let message = message.with_context(context.thread_id.clone(), reply);
+        converted.push(OrdinaryEvent::Message(Box::new(message)));
     }
     let Some((first, rest)) = converted.split_first() else {
         return Err("empty fixture");
@@ -44,26 +63,14 @@ fn serialize_batch(
     )
     .content)
 }
-fn msg(message_id: u64, user: &str, user_id: u64, content: &str) -> NotificationEvent {
-    NotificationEvent::Message(MessageEvent {
-        chat_id: ChannelId::new(100),
-        message_id: MessageId::new(message_id),
-        user: user.to_string(),
-        user_id: UserId::new(user_id),
-        author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
-        content: content.to_string(),
-        targeting: crate::discord::events::MessageTargeting::Ambient,
-        timestamp: Timestamp::parse("2026-06-19T15:30:00+00:00").unwrap(),
-        attachments: vec![],
-        is_voice_message: false,
-        thread_parent_id: None,
-        reply_to_message_id: None,
-        reply_to_user_id: None,
-        reply_to_user: None,
-        reply_to_content_preview: None,
-        bells: None,
-        bells_status: None,
-    })
+fn msg(message_id: u64, user: &str, user_id: u64, content: &str) -> MessageCreated {
+    MessageCreated::new(
+        source(100, message_id),
+        ObservedAuthor::new(actor(user_id), user.to_string(), AuthorOrigin::DirectHuman),
+        content.to_string(),
+        Targeting::Ambient,
+        Timestamp::parse("2026-06-19T15:30:00+00:00").unwrap(),
+    )
 }
 
 fn msg_with_reply(
@@ -72,26 +79,18 @@ fn msg_with_reply(
     user_id: u64,
     content: &str,
     reply_to: u64,
-) -> NotificationEvent {
-    NotificationEvent::Message(MessageEvent {
-        chat_id: ChannelId::new(100),
-        message_id: MessageId::new(message_id),
-        user: user.to_string(),
-        user_id: UserId::new(user_id),
-        author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
-        content: content.to_string(),
-        targeting: crate::discord::events::MessageTargeting::Ambient,
-        timestamp: Timestamp::parse("2026-06-19T15:30:00+00:00").unwrap(),
-        attachments: vec![],
-        is_voice_message: false,
-        thread_parent_id: None,
-        reply_to_message_id: Some(MessageId::new(reply_to)),
-        reply_to_user_id: None,
-        reply_to_user: None,
-        reply_to_content_preview: None,
-        bells: None,
-        bells_status: None,
-    })
+) -> MessageCreated {
+    MessageCreated::new(
+        source(100, message_id),
+        ObservedAuthor::new(actor(user_id), user.to_string(), AuthorOrigin::DirectHuman),
+        content.to_string(),
+        Targeting::Ambient,
+        Timestamp::parse("2026-06-19T15:30:00+00:00").unwrap(),
+    )
+    .with_context(
+        None,
+        ReplyObservation::new(Some(source(100, reply_to)), None, None, None),
+    )
 }
 
 fn msg_with_attachments(
@@ -100,39 +99,30 @@ fn msg_with_attachments(
     user_id: u64,
     content: &str,
     attachment_count: usize,
-) -> NotificationEvent {
+) -> MessageCreated {
     let attachments = (0..attachment_count)
-        .map(|i| AttachmentMeta {
-            name: format!("file{i}.png"),
-            content_type: Some("image/png".to_string()),
-            size: 1024,
+        .map(|i| {
+            ObservedAttachment::new(
+                format!("file{i}.png"),
+                Some("image/png".to_string()),
+                ByteSize::new(1024),
+            )
         })
         .collect();
 
-    NotificationEvent::Message(MessageEvent {
-        chat_id: ChannelId::new(100),
-        message_id: MessageId::new(message_id),
-        user: user.to_string(),
-        user_id: UserId::new(user_id),
-        author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
-        content: content.to_string(),
-        targeting: crate::discord::events::MessageTargeting::Ambient,
-        timestamp: Timestamp::parse("2026-06-19T15:30:00+00:00").unwrap(),
-        attachments,
-        is_voice_message: false,
-        thread_parent_id: None,
-        reply_to_message_id: None,
-        reply_to_user_id: None,
-        reply_to_user: None,
-        reply_to_content_preview: None,
-        bells: None,
-        bells_status: None,
-    })
+    MessageCreated::new(
+        source(100, message_id),
+        ObservedAuthor::new(actor(user_id), user.to_string(), AuthorOrigin::DirectHuman),
+        content.to_string(),
+        Targeting::Ambient,
+        Timestamp::parse("2026-06-19T15:30:00+00:00").unwrap(),
+    )
+    .with_attachments(attachments, false)
 }
 
 fn ctx_basic() -> BatchContext {
     BatchContext {
-        channel_id: ChannelId::new(100),
+        channel_id: conversation(100),
         thread_id: None,
         tz: None,
     }
@@ -140,15 +130,15 @@ fn ctx_basic() -> BatchContext {
 
 fn ctx_with_thread() -> BatchContext {
     BatchContext {
-        channel_id: ChannelId::new(100),
-        thread_id: Some(ChannelId::new(200)),
+        channel_id: conversation(100),
+        thread_id: Some(conversation(200)),
         tz: None,
     }
 }
 
 fn ctx_with_tz() -> BatchContext {
     BatchContext {
-        channel_id: ChannelId::new(100),
+        channel_id: conversation(100),
         thread_id: None,
         tz: Some("America/Los_Angeles".parse().expect("valid tz")),
     }
@@ -262,25 +252,13 @@ fn utc_fallback_when_no_tz() {
 
 #[test]
 fn timestamp_with_nonzero_seconds() {
-    let events = vec![NotificationEvent::Message(MessageEvent {
-        chat_id: ChannelId::new(100),
-        message_id: MessageId::new(1001),
-        user: "alice".to_string(),
-        user_id: UserId::new(42),
-        author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
-        content: "with seconds".to_string(),
-        targeting: crate::discord::events::MessageTargeting::Ambient,
-        timestamp: Timestamp::parse("2026-06-19T15:30:45+00:00").unwrap(),
-        attachments: vec![],
-        is_voice_message: false,
-        thread_parent_id: None,
-        reply_to_message_id: None,
-        reply_to_user_id: None,
-        reply_to_user: None,
-        reply_to_content_preview: None,
-        bells: None,
-        bells_status: None,
-    })];
+    let events = vec![MessageCreated::new(
+        source(100, 1001),
+        ObservedAuthor::new(actor(42), "alice".to_string(), AuthorOrigin::DirectHuman),
+        "with seconds".to_string(),
+        Targeting::Ambient,
+        Timestamp::parse("2026-06-19T15:30:45+00:00").unwrap(),
+    )];
     let result = serialize_batch(&events, &ctx_basic()).expect("should serialize");
 
     // Non-zero seconds should show HH:MM:SS.
@@ -309,29 +287,27 @@ fn attachment_count_suffix() {
 
 #[test]
 fn reply_and_attachments_both_present() {
-    let events = vec![NotificationEvent::Message(MessageEvent {
-        chat_id: ChannelId::new(100),
-        message_id: MessageId::new(1004),
-        user: "dave".to_string(),
-        user_id: UserId::new(55),
-        author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
-        content: "replying with files".to_string(),
-        targeting: crate::discord::events::MessageTargeting::Ambient,
-        timestamp: Timestamp::parse("2026-06-19T15:30:00+00:00").unwrap(),
-        attachments: vec![AttachmentMeta {
-            name: "doc.pdf".to_string(),
-            content_type: Some("application/pdf".to_string()),
-            size: 2048,
-        }],
-        is_voice_message: false,
-        thread_parent_id: None,
-        reply_to_message_id: Some(MessageId::new(1000)),
-        reply_to_user_id: None,
-        reply_to_user: None,
-        reply_to_content_preview: None,
-        bells: None,
-        bells_status: None,
-    })];
+    let events = vec![
+        MessageCreated::new(
+            source(100, 1004),
+            ObservedAuthor::new(actor(55), "dave".to_string(), AuthorOrigin::DirectHuman),
+            "replying with files".to_string(),
+            Targeting::Ambient,
+            Timestamp::parse("2026-06-19T15:30:00+00:00").unwrap(),
+        )
+        .with_attachments(
+            vec![ObservedAttachment::new(
+                "doc.pdf".to_string(),
+                Some("application/pdf".to_string()),
+                ByteSize::new(2048),
+            )],
+            false,
+        )
+        .with_context(
+            None,
+            ReplyObservation::new(Some(source(100, 1000)), None, None, None),
+        ),
+    ];
     let result = serialize_batch(&events, &ctx_basic()).expect("should serialize");
 
     // Should have both suffixes.
@@ -346,73 +322,58 @@ fn reply_and_attachments_both_present() {
 fn full_conversation_batch() {
     let tz: Tz = "US/Eastern".parse().expect("valid tz");
     let ctx = BatchContext {
-        channel_id: ChannelId::new(555),
-        thread_id: Some(ChannelId::new(666)),
+        channel_id: conversation(555),
+        thread_id: Some(conversation(666)),
         tz: Some(tz),
     };
 
     let events = vec![
-        NotificationEvent::Message(MessageEvent {
-            chat_id: ChannelId::new(555),
-            message_id: MessageId::new(2001),
-            user: "lina".to_string(),
-            user_id: UserId::new(10),
-            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
-            content: "hey, check this out".to_string(),
-            targeting: crate::discord::events::MessageTargeting::Ambient,
-            timestamp: Timestamp::parse("2026-06-19T20:00:00+00:00").unwrap(),
-            attachments: vec![],
-            is_voice_message: false,
-            thread_parent_id: Some(ChannelId::new(666)),
-            reply_to_message_id: None,
-            reply_to_user_id: None,
-            reply_to_user: None,
-            reply_to_content_preview: None,
-            bells: None,
-            bells_status: None,
-        }),
-        NotificationEvent::Message(MessageEvent {
-            chat_id: ChannelId::new(555),
-            message_id: MessageId::new(2002),
-            user: "ros".to_string(),
-            user_id: UserId::new(20),
-            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
-            content: "oh nice!".to_string(),
-            targeting: crate::discord::events::MessageTargeting::Ambient,
-            timestamp: Timestamp::parse("2026-06-19T20:01:30+00:00").unwrap(),
-            attachments: vec![],
-            is_voice_message: false,
-            thread_parent_id: Some(ChannelId::new(666)),
-            reply_to_message_id: Some(MessageId::new(2001)),
-            reply_to_user_id: Some(UserId::new(10)),
-            reply_to_user: Some("lina".to_string()),
-            reply_to_content_preview: Some("hey, check this out".to_string()),
-            bells: None,
-            bells_status: None,
-        }),
-        NotificationEvent::Message(MessageEvent {
-            chat_id: ChannelId::new(555),
-            message_id: MessageId::new(2003),
-            user: "lina".to_string(),
-            user_id: UserId::new(10),
-            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
-            content: "here's the file".to_string(),
-            targeting: crate::discord::events::MessageTargeting::Ambient,
-            timestamp: Timestamp::parse("2026-06-19T20:02:00+00:00").unwrap(),
-            attachments: vec![AttachmentMeta {
-                name: "design.png".to_string(),
-                content_type: Some("image/png".to_string()),
-                size: 4096,
-            }],
-            is_voice_message: false,
-            thread_parent_id: Some(ChannelId::new(666)),
-            reply_to_message_id: None,
-            reply_to_user_id: None,
-            reply_to_user: None,
-            reply_to_content_preview: None,
-            bells: None,
-            bells_status: None,
-        }),
+        MessageCreated::new(
+            source(555, 2001),
+            ObservedAuthor::new(actor(10), "lina".to_string(), AuthorOrigin::DirectHuman),
+            "hey, check this out".to_string(),
+            Targeting::Ambient,
+            Timestamp::parse("2026-06-19T20:00:00+00:00").unwrap(),
+        )
+        .with_context(
+            Some(conversation(666)),
+            ReplyObservation::new(None, None, None, None),
+        ),
+        MessageCreated::new(
+            source(555, 2002),
+            ObservedAuthor::new(actor(20), "ros".to_string(), AuthorOrigin::DirectHuman),
+            "oh nice!".to_string(),
+            Targeting::Ambient,
+            Timestamp::parse("2026-06-19T20:01:30+00:00").unwrap(),
+        )
+        .with_context(
+            Some(conversation(666)),
+            ReplyObservation::new(
+                Some(source(555, 2001)),
+                Some(actor(10)),
+                Some("lina".to_string()),
+                Some("hey, check this out".to_string()),
+            ),
+        ),
+        MessageCreated::new(
+            source(555, 2003),
+            ObservedAuthor::new(actor(10), "lina".to_string(), AuthorOrigin::DirectHuman),
+            "here's the file".to_string(),
+            Targeting::Ambient,
+            Timestamp::parse("2026-06-19T20:02:00+00:00").unwrap(),
+        )
+        .with_attachments(
+            vec![ObservedAttachment::new(
+                "design.png".to_string(),
+                Some("image/png".to_string()),
+                ByteSize::new(4096),
+            )],
+            false,
+        )
+        .with_context(
+            Some(conversation(666)),
+            ReplyObservation::new(None, None, None, None),
+        ),
     ];
 
     let result = serialize_batch(&events, &ctx).expect("should serialize");
@@ -450,25 +411,13 @@ fn full_conversation_batch() {
 
 #[test]
 fn multiline_message_content() {
-    let events = vec![NotificationEvent::Message(MessageEvent {
-        chat_id: ChannelId::new(100),
-        message_id: MessageId::new(1001),
-        user: "alice".to_string(),
-        user_id: UserId::new(42),
-        author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
-        content: "line one\nline two\nline three".to_string(),
-        targeting: crate::discord::events::MessageTargeting::Ambient,
-        timestamp: Timestamp::parse("2026-06-19T15:30:00+00:00").unwrap(),
-        attachments: vec![],
-        is_voice_message: false,
-        thread_parent_id: None,
-        reply_to_message_id: None,
-        reply_to_user_id: None,
-        reply_to_user: None,
-        reply_to_content_preview: None,
-        bells: None,
-        bells_status: None,
-    })];
+    let events = vec![MessageCreated::new(
+        source(100, 1001),
+        ObservedAuthor::new(actor(42), "alice".to_string(), AuthorOrigin::DirectHuman),
+        "line one\nline two\nline three".to_string(),
+        Targeting::Ambient,
+        Timestamp::parse("2026-06-19T15:30:00+00:00").unwrap(),
+    )];
     let result = serialize_batch(&events, &ctx_basic()).expect("should serialize");
 
     // Line count should reflect the three lines in content.
@@ -562,73 +511,58 @@ fn multiline_then_next_message() {
 fn wire_format_snapshot() {
     let tz: Tz = "US/Eastern".parse().expect("valid tz");
     let ctx = BatchContext {
-        channel_id: ChannelId::new(555),
-        thread_id: Some(ChannelId::new(666)),
+        channel_id: conversation(555),
+        thread_id: Some(conversation(666)),
         tz: Some(tz),
     };
 
     let events = vec![
-        NotificationEvent::Message(MessageEvent {
-            chat_id: ChannelId::new(555),
-            message_id: MessageId::new(2001),
-            user: "lina".to_string(),
-            user_id: UserId::new(10),
-            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
-            content: "hey, check this out".to_string(),
-            targeting: crate::discord::events::MessageTargeting::Ambient,
-            timestamp: Timestamp::parse("2026-06-19T20:00:00+00:00").unwrap(),
-            attachments: vec![],
-            is_voice_message: false,
-            thread_parent_id: Some(ChannelId::new(666)),
-            reply_to_message_id: None,
-            reply_to_user_id: None,
-            reply_to_user: None,
-            reply_to_content_preview: None,
-            bells: None,
-            bells_status: None,
-        }),
-        NotificationEvent::Message(MessageEvent {
-            chat_id: ChannelId::new(555),
-            message_id: MessageId::new(2002),
-            user: "ros".to_string(),
-            user_id: UserId::new(20),
-            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
-            content: "oh nice!".to_string(),
-            targeting: crate::discord::events::MessageTargeting::Ambient,
-            timestamp: Timestamp::parse("2026-06-19T20:01:30+00:00").unwrap(),
-            attachments: vec![],
-            is_voice_message: false,
-            thread_parent_id: Some(ChannelId::new(666)),
-            reply_to_message_id: Some(MessageId::new(2001)),
-            reply_to_user_id: Some(UserId::new(10)),
-            reply_to_user: Some("lina".to_string()),
-            reply_to_content_preview: Some("hey, check this out".to_string()),
-            bells: None,
-            bells_status: None,
-        }),
-        NotificationEvent::Message(MessageEvent {
-            chat_id: ChannelId::new(555),
-            message_id: MessageId::new(2003),
-            user: "lina".to_string(),
-            user_id: UserId::new(10),
-            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
-            content: "here's the file".to_string(),
-            targeting: crate::discord::events::MessageTargeting::Ambient,
-            timestamp: Timestamp::parse("2026-06-19T20:02:00+00:00").unwrap(),
-            attachments: vec![AttachmentMeta {
-                name: "design.png".to_string(),
-                content_type: Some("image/png".to_string()),
-                size: 4096,
-            }],
-            is_voice_message: false,
-            thread_parent_id: Some(ChannelId::new(666)),
-            reply_to_message_id: None,
-            reply_to_user_id: None,
-            reply_to_user: None,
-            reply_to_content_preview: None,
-            bells: None,
-            bells_status: None,
-        }),
+        MessageCreated::new(
+            source(555, 2001),
+            ObservedAuthor::new(actor(10), "lina".to_string(), AuthorOrigin::DirectHuman),
+            "hey, check this out".to_string(),
+            Targeting::Ambient,
+            Timestamp::parse("2026-06-19T20:00:00+00:00").unwrap(),
+        )
+        .with_context(
+            Some(conversation(666)),
+            ReplyObservation::new(None, None, None, None),
+        ),
+        MessageCreated::new(
+            source(555, 2002),
+            ObservedAuthor::new(actor(20), "ros".to_string(), AuthorOrigin::DirectHuman),
+            "oh nice!".to_string(),
+            Targeting::Ambient,
+            Timestamp::parse("2026-06-19T20:01:30+00:00").unwrap(),
+        )
+        .with_context(
+            Some(conversation(666)),
+            ReplyObservation::new(
+                Some(source(555, 2001)),
+                Some(actor(10)),
+                Some("lina".to_string()),
+                Some("hey, check this out".to_string()),
+            ),
+        ),
+        MessageCreated::new(
+            source(555, 2003),
+            ObservedAuthor::new(actor(10), "lina".to_string(), AuthorOrigin::DirectHuman),
+            "here's the file".to_string(),
+            Targeting::Ambient,
+            Timestamp::parse("2026-06-19T20:02:00+00:00").unwrap(),
+        )
+        .with_attachments(
+            vec![ObservedAttachment::new(
+                "design.png".to_string(),
+                Some("image/png".to_string()),
+                ByteSize::new(4096),
+            )],
+            false,
+        )
+        .with_context(
+            Some(conversation(666)),
+            ReplyObservation::new(None, None, None, None),
+        ),
     ];
 
     let expected = "\
@@ -647,4 +581,46 @@ here's the file
 
     let result = serialize_batch(&events, &ctx).expect("should serialize");
     assert_eq!(result, expected);
+}
+
+#[test]
+fn public_project_preserves_ordinary_single_shape() {
+    let delivery = Delivery::single(
+        OrdinaryEvent::Message(Box::new(msg(1001, "alice", 42, "hello"))),
+        PresentationContext::new(None, EvidenceVisibility::Enabled),
+    );
+    let Presentation::Channel(channel) = project(&delivery) else {
+        panic!("channel projection");
+    };
+    assert_eq!(channel.content, "hello");
+    assert_eq!(
+        serde_json::to_value(channel.meta).unwrap(),
+        serde_json::json!({
+            "chat_id": "100", "message_id": "1001", "user_id": "42", "user": "42=alice",
+            "ts": "2026-06-19T15:30:00+00:00"
+        })
+    );
+}
+#[test]
+fn public_project_groups_an_actual_two_event_batch() {
+    let delivery = Delivery::batch(
+        OrdinaryEvent::Message(Box::new(msg(1001, "alice", 42, "one"))),
+        vec![OrdinaryEvent::Message(Box::new(msg(
+            1002, "bob", 99, "two",
+        )))],
+        PresentationContext::new(None, EvidenceVisibility::Enabled),
+    );
+    let Presentation::Channel(channel) = project(&delivery) else {
+        panic!("channel projection");
+    };
+    assert_eq!(
+        channel.content,
+        "[batch ch=100 n=2 latest=1002]\n[users 42=alice 99=bob]\n\n1001|15:30|alice|L=1\none\n\n1002|15:30|bob|L=1\ntwo\n"
+    );
+    assert_eq!(
+        serde_json::to_value(channel.meta).unwrap(),
+        serde_json::json!({
+            "chat_id": "100", "type": "batch", "format": "batch_v1"
+        })
+    );
 }

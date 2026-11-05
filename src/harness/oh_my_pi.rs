@@ -62,11 +62,11 @@ enum ProjectionErrorKind {
     Permission,
 }
 fn notification(delivery: &Delivery) -> Result<Value, ProjectionError> {
-    match super::presentation::project(delivery) {
-        super::presentation::Presentation::Channel(channel) => Ok(
+    match dione_presentation::project(delivery) {
+        dione_presentation::Presentation::Channel(channel) => Ok(
             json!({"jsonrpc":"2.0","method":"notifications/dione/event","params":{"version":1,"content":channel.content,"meta":channel.meta}}),
         ),
-        super::presentation::Presentation::Permission { .. } => Err(ProjectionError {
+        dione_presentation::Presentation::Permission { .. } => Err(ProjectionError {
             kind: ProjectionErrorKind::Permission,
         }),
     }

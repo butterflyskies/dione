@@ -1,6 +1,9 @@
 //! Historical compact-format expectations exercised through typed conversion.
-use super::*;
 use chrono_tz::Tz;
+use dione_messages::{
+    delivery::{EvidenceVisibility, PresentationContext},
+    timestamp::format_compact,
+};
 use serde_json::Value;
 use serenity::model::id::{ChannelId, MessageId, UserId};
 use {

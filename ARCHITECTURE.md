@@ -65,6 +65,9 @@ directly and have no messages or attention dependency.
 The public `dione-harness` package owns one-adapter delivery/protocol facets and
 bounded shared JSON-line output. Dione retains provider factories, adapters,
 sessions, request-origin authorization, and private-control registration.
+The public `dione-presentation` package owns retained delivery projection and
+compact batch formatting. Dione retains provider envelopes, legacy scope validation,
+and native event conversion. Projection checks no current authorization.
 See the [crate split plan](docs/design/plugin-crates.md) for the next boundaries
 and the package release requirements.
 
@@ -176,7 +179,7 @@ in [server.rs](src/mcp/server.rs) applies rate limits and optional attention
 evaluation, then buffers and coalesces ordinary delivery through
 [scheduling.rs](src/discord/scheduling.rs) and [delivery_buffer.rs](src/delivery_buffer.rs).
 [delivery.rs](src/discord/delivery.rs) constructs typed batches, and
-[presentation.rs](src/harness/presentation.rs) projects deliveries for each harness.
+[dione-presentation](crates/dione-presentation/src/lib.rs) projects deliveries for each harness.
 The buffer is in memory;
 entering the gateway channel is not a durable inbox commit.
 

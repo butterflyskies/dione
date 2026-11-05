@@ -308,8 +308,8 @@ fn opaque_provider_batches_group_by_complete_scope_without_mutating_records() {
     };
     assert_eq!(head.source().conversation().module(), &second);
     assert_eq!(rest[0].source().conversation().module(), &first);
-    let super::presentation::Presentation::Channel(projected) =
-        super::presentation::project(&delivery)
+    let dione_presentation::Presentation::Channel(projected) =
+        dione_presentation::project(&delivery)
     else {
         panic!("channel");
     };
