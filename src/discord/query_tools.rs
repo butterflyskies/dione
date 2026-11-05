@@ -1,6 +1,5 @@
 //! Discord-owned history, attachment, and search tool boundary.
 use super::{
-    ids::Snowflake,
     messaging::{
         queries,
         search::{self, SearchPreparationError, SearchRequest},
@@ -21,6 +20,7 @@ use crate::{
     },
 };
 use dione_contracts::ModuleInstanceId;
+use dione_discord_identities::Snowflake;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use serenity::model::id::{ChannelId, MessageId};

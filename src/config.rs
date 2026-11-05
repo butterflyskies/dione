@@ -641,8 +641,8 @@ where
                 UserIdValue::String(value) => value.parse::<u64>().map_err(D::Error::custom)?,
                 UserIdValue::Integer(value) => value,
             };
-            crate::discord::ids::Snowflake::new(raw)
-                .map(crate::discord::ids::Snowflake::user)
+            dione_discord_identities::Snowflake::new(raw)
+                .map(dione_discord_identities::Snowflake::user)
                 .ok_or_else(|| D::Error::custom("Discord user ID must be nonzero"))
         })
         .transpose()

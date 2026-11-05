@@ -1,5 +1,7 @@
 //! Validated Discord IDs for external input boundaries.
 
+#![warn(missing_docs)]
+
 use serenity::model::id::{ChannelId, GuildId, MessageId, UserId};
 use std::num::NonZeroU64;
 
@@ -7,6 +9,24 @@ use std::num::NonZeroU64;
 ///
 /// Rejects `0`, which would make serenity's `*Id::new` panic at construction
 /// (its wrappers hold a `NonZeroU64`).
+///
+/// ```compile_fail
+/// use dione_discord_identities::Snowflake;
+/// use std::num::NonZeroU64;
+/// let input = Snowflake(NonZeroU64::new(1).unwrap());
+/// ```
+///
+/// ```compile_fail
+/// use dione_discord_identities::Snowflake;
+/// let input = Snowflake::new(1).unwrap();
+/// let raw = input.0;
+/// ```
+///
+/// ```compile_fail
+/// use dione_discord_identities::Snowflake;
+/// let input = Snowflake::new(1).unwrap();
+/// let raw = input.get();
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Snowflake(NonZeroU64);
 
@@ -16,6 +36,7 @@ impl Snowflake {
         NonZeroU64::new(n).map(Self)
     }
 
+    /// Reads the numeric value for internal unit tests.
     #[cfg(test)]
     pub fn get(self) -> u64 {
         self.0.get()

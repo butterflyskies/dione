@@ -107,6 +107,11 @@ Teams coordinates and their typed errors. Configuration, native authentication
 and persisted reply authority import the owning crate directly. Original spelling
 is preserved; valid coordinate syntax grants no authorization.
 
+The public dione-discord-identities package owns the existing nonzero external
+Discord input validator and four Serenity ID conversions. Config,tools,search and
+persisted codecs import it directly while retaining their adapter-level parsing
+and current native authority checks.
+
 ## Processes and transports
 
 ```mermaid

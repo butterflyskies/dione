@@ -2263,7 +2263,7 @@ async fn notify_admin_dm(
     message_preview: &str,
 ) {
     // Create DM channel with admin.
-    let Some(admin_uid) = crate::discord::ids::Snowflake::new(admin_id) else {
+    let Some(admin_uid) = dione_discord_identities::Snowflake::new(admin_id) else {
         tracing::warn!(admin_id, "skipping admin DM notification: admin_id is zero");
         return;
     };

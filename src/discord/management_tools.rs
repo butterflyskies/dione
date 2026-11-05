@@ -1,7 +1,6 @@
 //! Discord-owned message management registration and request boundary.
 
 use super::{
-    ids::Snowflake,
     management::{ManagementCtx, MessageAction, MessageCommand, create_thread, mutate_message},
     management_wire,
     reply_tool::ReplyServices,
@@ -14,6 +13,7 @@ use crate::{
         ToolNameError,
     },
 };
+use dione_discord_identities::Snowflake;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use serenity::model::id::{ChannelId, MessageId};

@@ -129,8 +129,8 @@ impl<'de> Deserialize<'de> for DiscordMessageId {
     {
         let value = String::deserialize(deserializer)?;
         let raw = value.parse::<u64>().map_err(serde::de::Error::custom)?;
-        let id = crate::discord::ids::Snowflake::new(raw)
-            .map(crate::discord::ids::Snowflake::message)
+        let id = dione_discord_identities::Snowflake::new(raw)
+            .map(dione_discord_identities::Snowflake::message)
             .ok_or_else(|| serde::de::Error::custom("Discord message ID must be non-zero"))?;
         Ok(Self(id))
     }
@@ -226,8 +226,8 @@ fn discord_message_id(payload: &Value) -> Option<DiscordMessageId> {
         .pointer("/params/meta/message_id")
         .and_then(Value::as_str)
         .and_then(|value| value.parse::<u64>().ok())
-        .and_then(crate::discord::ids::Snowflake::new)
-        .map(crate::discord::ids::Snowflake::message)
+        .and_then(dione_discord_identities::Snowflake::new)
+        .map(dione_discord_identities::Snowflake::message)
         .map(DiscordMessageId)
 }
 
