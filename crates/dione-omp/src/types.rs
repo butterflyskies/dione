@@ -168,34 +168,48 @@ impl OmpPayload {
     }
 }
 
+/// A session lifecycle or command failure with its original typed cause.
 #[derive(Debug, Error)]
 #[error("OMP session failed: {kind}")]
 pub struct OmpSessionError {
     #[source]
+    /// The failed operation or validation rule and its typed source.
     pub kind: OmpSessionErrorKind,
 }
+/// Exhaustive failures of OMP admission, persistence, control, and delivery.
 #[derive(Debug, Error)]
 pub enum OmpSessionErrorKind {
+    /// The saved session identity violates its native syntax or length limit.
     #[error("invalid saved session identity")]
     InvalidSession,
+    /// The binding identity is not a canonical lowercase UUID.
     #[error("invalid binding identity")]
     InvalidBinding,
+    /// The replay key disagrees with the event's native coordinates.
     #[error("event identity disagrees with its native coordinates")]
     EventIdentity,
+    /// The event cannot be represented by the OMP notification contract.
     #[error("event exceeds the OMP notification contract")]
     EventShape,
+    /// No initialized binding can admit fresh work.
     #[error("no initialized OMP binding is ready")]
     Unavailable,
+    /// The request names a binding generation that no longer owns control.
     #[error("binding is stale")]
     StaleBinding,
+    /// The accepted command lost its response, so completion is unknown.
     #[error("accepted command completion is unknown")]
     CompletionUnknown(#[source] tokio::sync::oneshot::error::RecvError),
+    /// The durable inbox failed; the source retains durability uncertainty.
     #[error("durable inbox operation failed")]
     Queue(#[source] QueueError),
+    /// An owned session task failed to join.
     #[error("session worker failed")]
     Worker(#[source] tokio::task::JoinError),
+    /// The protocol writer failed; the source retains write-completion classification.
     #[error("protocol output failed")]
     Output(#[source] dione_harness::ProtocolOutputError),
+    /// The output worker no longer accepts frames.
     #[error("protocol output is unavailable")]
     OutputUnavailable,
 }

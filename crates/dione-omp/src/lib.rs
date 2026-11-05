@@ -1,4 +1,5 @@
 //! Child-owned OMP inbox, lifecycle and event adapter.
+#![warn(missing_docs)]
 mod actor;
 mod adapter;
 mod codec;

@@ -64,10 +64,12 @@ struct Pause {
 }
 
 #[derive(Clone)]
+/// A cloneable admission capability for the session's durable inbox.
 pub struct OmpAdmission {
     sender: mpsc::Sender<Command>,
 }
 #[derive(Clone)]
+/// An opaque control capability supplied to the protocol adapter.
 pub struct OmpControl {
     sender: mpsc::Sender<Command>,
 }
@@ -86,6 +88,9 @@ async fn request<T>(
         .map_err(OmpSessionErrorKind::CompletionUnknown)?
 }
 impl OmpAdmission {
+    /// Admits a descriptive event under the current binding or returns its replay outcome.
+    ///
+    /// Known duplicates remain recognizable when a fresh event cannot be admitted.
     pub async fn enqueue(
         &self,
         event: TeamsResidentEvent,
@@ -138,11 +143,13 @@ impl OmpControl {
     }
 }
 
+/// A prepared durable inbox that holds its exclusive lock before workers start.
 pub struct OmpSession {
     queue: Inbox,
     sender: mpsc::Sender<Command>,
     receiver: mpsc::Receiver<Command>,
 }
+/// Owns the actor and output workers until shutdown drains accepted operations.
 pub struct RunningOmpSession {
     stop: CancellationToken,
     actor: JoinHandle<Result<(), OmpSessionError>>,
@@ -157,6 +164,7 @@ impl Drop for WorkerFailureGuard {
     }
 }
 impl OmpSession {
+    /// Opens the version-1 inbox and acquires its exclusive lock in the state directory.
     pub async fn open(directory: &Utf8Path) -> Result<Self, OmpSessionError> {
         let queue = Inbox::open(
             directory.to_owned(),
@@ -180,16 +188,21 @@ impl OmpSession {
             receiver,
         })
     }
+    /// Returns a capability that submits events to this session's command owner.
     pub fn admission(&self) -> OmpAdmission {
         OmpAdmission {
             sender: self.sender.clone(),
         }
     }
+    /// Returns an opaque capability for this session's private protocol controls.
     pub fn control(&self) -> OmpControl {
         OmpControl {
             sender: self.sender.clone(),
         }
     }
+    /// Starts owned delivery using the same output supplied to [`crate::connect`].
+    ///
+    /// Worker failure cancels `process_shutdown`; shutdown must still be awaited.
     pub fn start(
         self,
         output: ProtocolOutput,
@@ -242,6 +255,7 @@ impl OmpSession {
     }
 }
 impl RunningOmpSession {
+    /// Drains accepted commands and durable work, joins workers, and releases the lock.
     pub async fn shutdown(self) -> Result<(), OmpSessionError> {
         self.stop.cancel();
         let actor = self.actor.await.map_err(OmpSessionErrorKind::Worker);

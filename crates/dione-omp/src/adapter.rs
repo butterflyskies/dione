@@ -81,6 +81,9 @@ fn notification(delivery: &Delivery) -> Result<Value, ProjectionError> {
 struct ToolArgumentError(String);
 
 /// Connects OMP notifications and private controls to one protocol writer.
+///
+/// Supply the application's actual Codex tool names and the output used by the session.
+/// `control` enables in-process controls; the application still authorizes transport origins.
 pub fn connect(
     output: ProtocolOutput,
     control: Option<OmpControl>,
