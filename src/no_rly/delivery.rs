@@ -1,6 +1,6 @@
 //! Typed publication failures and the private state required to resume a send.
 
-use crate::{contradictionary::DiaryRecord, discord::chunker::FenceChunkError};
+use crate::{contradictionary_diary::DiaryRecord, discord::chunker::FenceChunkError};
 use serenity::model::id::{ChannelId, MessageId};
 use thiserror::Error;
 

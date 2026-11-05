@@ -7,24 +7,28 @@
 //! a real HTTP layer, so we verify the conditions that trigger the self-react).
 
 use camino::Utf8PathBuf;
-use dione::{
-    config::{ChannelConfig, Config, LoadedConfig, reload_config},
-    contradictionary::{Action, Contradictionary, DIARY_FILE_NAME, Entry, MatchMode},
-    discord::messaging::{
-        self, MessagingCtx, MessagingError, MessagingErrorKind, ReplyOutcome, Report,
-    },
-    no_rly::{
-        consent::{
-            BounceTicket, ConsentGate, DeliveryCause, DeliveryProgress, RejectedHandle, Rephrased,
-        },
-        journal::JOURNAL_FILE_NAME,
-        queue::HoldHandle,
-    },
-    state::new_state,
-};
 use serenity::model::id::ChannelId;
 use std::{fs, sync::Arc};
 use tempfile::TempDir;
+use {
+    dione::{
+        config::{ChannelConfig, Config, LoadedConfig, reload_config},
+        contradictionary_diary::DIARY_FILE_NAME,
+        discord::messaging::{
+            self, MessagingCtx, MessagingError, MessagingErrorKind, ReplyOutcome, Report,
+        },
+        no_rly::{
+            consent::{
+                BounceTicket, ConsentGate, DeliveryCause, DeliveryProgress, RejectedHandle,
+                Rephrased,
+            },
+            journal::JOURNAL_FILE_NAME,
+            queue::HoldHandle,
+        },
+        state::new_state,
+    },
+    dione_contradictionary::{Action, Contradictionary, Entry, MatchMode},
+};
 
 // ── Test data: the actual substrate tells and group vocabulary ───────────────
 

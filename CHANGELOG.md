@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.100.0]
+
+### Changed
+
+- Extract Contradictionary matching, conservative rewrites, and sidecar parsing
+  into `dione-contradictionary`. Keep raw settings, diary policy, consent, and
+  persistence in Dione. Move the state-free evaluation method to the application
+  diary owner and migrate all callers directly.
+
 ## [0.99.0]
 
 ### Changed

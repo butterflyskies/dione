@@ -5,7 +5,7 @@
 //! a future classifier can implement [`OutboundJudge`] and slot in without the
 //! queue, handles, journal, or expiry changing shape.
 
-use crate::contradictionary::Contradictionary;
+use dione_contradictionary::Contradictionary;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -118,7 +118,7 @@ impl OutboundJudge for AlwaysClear {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contradictionary::{Action, Entry, MatchMode};
+    use dione_contradictionary::{Action, Entry, MatchMode};
 
     fn entries() -> Vec<Entry> {
         vec![

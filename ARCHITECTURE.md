@@ -68,6 +68,10 @@ sessions, request-origin authorization, and private-control registration.
 The public `dione-presentation` package owns retained delivery projection and
 compact batch formatting. Dione retains provider envelopes, legacy scope validation,
 and native event conversion. Projection checks no current authorization.
+The public `dione-contradictionary` package owns text matching, conservative
+automatic rewrites, and sidecar entry compatibility. It uses the shared evidence
+Markdown scanner. Dione retains raw configuration, rule composition, diary
+decisions/persistence, current send authorization, and no_rly consent.
 See the [crate split plan](docs/design/plugin-crates.md) for the next boundaries
 and the package release requirements.
 

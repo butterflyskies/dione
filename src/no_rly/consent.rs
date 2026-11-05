@@ -29,7 +29,7 @@
 //! its TTL is dead even if the background sweep has not caught it yet.
 
 use crate::{
-    contradictionary::DiaryRecord,
+    contradictionary_diary::DiaryRecord,
     discord::FenceContext,
     no_rly::{
         journal::{self, JournalHandle, Outcome},
@@ -620,21 +620,23 @@ impl ConsentGate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::ChunkMode,
-        contradictionary::{Action, Contradictionary, Entry, MatchMode},
-        discord::{chunk_preserving_fences, chunk_preserving_fences_with_context},
-        no_rly::{
-            journal::{BounceRecord, JournalRecord, StatsFilter},
-            judge::{AlwaysClear, ReasonEntry},
-        },
-    };
     use camino::Utf8PathBuf;
     use std::{
         collections::VecDeque,
         sync::{Arc, Mutex as StdMutex},
     };
     use tempfile::TempDir;
+    use {
+        crate::{
+            config::ChunkMode,
+            discord::{chunk_preserving_fences, chunk_preserving_fences_with_context},
+            no_rly::{
+                journal::{BounceRecord, JournalRecord, StatsFilter},
+                judge::{AlwaysClear, ReasonEntry},
+            },
+        },
+        dione_contradictionary::{Action, Contradictionary, Entry, MatchMode},
+    };
 
     const TTL: Duration = Duration::from_secs(180);
     const MAX_PENDING: usize = 32;

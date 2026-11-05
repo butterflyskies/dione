@@ -928,9 +928,8 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.99.0"
+version = "0.100.0"
 dependencies = [
- "aho-corasick",
  "arc-swap",
  "axum",
  "axum-server",
@@ -942,6 +941,7 @@ dependencies = [
  "color-eyre",
  "dione-attention",
  "dione-contracts",
+ "dione-contradictionary",
  "dione-durable",
  "dione-evidence",
  "dione-gaie",
@@ -1021,6 +1021,18 @@ dependencies = [
  "chrono",
  "thiserror 2.0.21",
  "trybuild",
+]
+
+[[package]]
+name = "dione-contradictionary"
+version = "0.1.0"
+dependencies = [
+ "aho-corasick",
+ "dione-evidence",
+ "serde",
+ "tempfile",
+ "toml 1.1.6+spec-1.1.0",
+ "tracing",
 ]
 
 [[package]]
