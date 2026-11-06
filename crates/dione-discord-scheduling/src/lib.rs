@@ -1,4 +1,5 @@
 //! Discord scheduling classification and scoped payload ownership.
+#![warn(missing_docs)]
 
 use dione_contracts::{ConversationId, ConversationRef, ModuleInstanceId};
 use dione_delivery_scheduler::{BufferResult, BufferedEvent, DeliveryBuffer as Scheduler};
@@ -52,7 +53,8 @@ pub struct DeliveryBuffer {
 }
 
 impl DeliveryBuffer {
-    pub(crate) fn module(&self) -> &ModuleInstanceId {
+    /// Borrows the configured module slot used for conversation scoping.
+    pub fn module(&self) -> &ModuleInstanceId {
         &self.module
     }
 

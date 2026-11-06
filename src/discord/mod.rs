@@ -13,7 +13,6 @@ pub(crate) mod observation;
 pub(crate) mod rendering;
 pub mod rook_context;
 pub(crate) mod rook_observation;
-pub mod scheduling;
 pub mod typing;
 pub(crate) mod verified_action;
 pub(crate) mod verified_action_runtime;

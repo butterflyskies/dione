@@ -13,7 +13,6 @@
 
 use crate::discord::access::AccessCtx;
 use crate::discord::messaging::MessagingCtx;
-use crate::discord::scheduling::DeliveryBuffer;
 use crate::discord::typing::TypingCtx;
 use crate::mcp::dispatch::call_tool;
 use crate::mcp::harness_wire::PRIVATE_CONTROL_TOOLS;
@@ -36,6 +35,7 @@ use dione_discord_bells::prepare_bells;
 use dione_discord_events::MessageEvent;
 use dione_discord_events::NotificationEvent;
 use dione_discord_presence::PresenceCapability;
+use dione_discord_scheduling::DeliveryBuffer;
 use dione_harness::AttentionPolicy;
 use dione_harness::HarnessConnection;
 use dione_harness::HarnessError;
@@ -1320,11 +1320,11 @@ pub mod test_helpers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discord::scheduling::DeliveryBuffer;
     use crate::harness_test_support::FixtureNotification;
     use dione_config::ChannelConfig;
     use dione_config::Config;
     use dione_config::LoadedConfig;
+    use dione_discord_scheduling::DeliveryBuffer;
     use dione_messages::timestamp::Timestamp;
     use dione_provider_delivery::ReplyHandle;
     use dione_rate_limiter::OverflowPolicy;

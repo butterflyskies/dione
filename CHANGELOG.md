@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.129.0] - 2026-11-06
+
+### Changed
+
+- Extract complete Discord scheduling classification and payload buffering into
+  dione-discord-scheduling while preserving native MCP and pipeline effects.
+
 ## [0.128.0] - 2026-11-06
 
 ### Changed
