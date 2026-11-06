@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.130.0] - 2026-11-06
+
+### Changed
+
+- Move complete OMP Teams admission into dione-omp 0.2.0, preserving typed
+  outcomes and sources. Bump dependent dione-harness-runtime to 0.1.1 so its
+  normalized package manifest truthfully records the new OMP version.
+
 ## [0.129.0] - 2026-11-06
 
 ### Changed
