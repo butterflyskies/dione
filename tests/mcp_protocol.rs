@@ -51,7 +51,7 @@ async fn can_view_channel_is_discovered_with_main_schema_in_every_harness() {
             dione_harness::ProtocolOutput::new(tokio::io::stdout()),
             dione_codex::TOOL_NAMES,
         ),
-        dione::harness::HarnessSession::oh_my_pi().connection(),
+        dione_harness_runtime::HarnessSession::oh_my_pi().connection(),
         codex_connection(&state_dir),
     ] {
         let server = make_server_with_harness(&state_dir, harness).await;
@@ -90,7 +90,7 @@ async fn channel_audience_is_discovered_without_requiring_candidate_users() {
             dione_harness::ProtocolOutput::new(tokio::io::stdout()),
             dione_codex::TOOL_NAMES,
         ),
-        dione::harness::HarnessSession::oh_my_pi().connection(),
+        dione_harness_runtime::HarnessSession::oh_my_pi().connection(),
         codex_connection(&state_dir),
     ] {
         let server = make_server_with_harness(&state_dir, harness).await;

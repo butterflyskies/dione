@@ -1,5 +1,4 @@
 //! Prepared and running ownership of a harness session.
-use super::HarnessConnection;
 use camino::Utf8Path;
 use dione_attention::delivery::AttentionDeliveryGuard;
 use dione_codex::{CodexDeliveryError, CodexQueueError};
@@ -8,6 +7,7 @@ use dione_codex::{
     RunningCodexSession,
 };
 use dione_config::DeliveryConfig;
+use dione_harness::{HarnessConnection, ProtocolOutput};
 use dione_omp::{OmpAdmission, OmpSession, RunningOmpSession};
 use std::{error::Error, sync::Arc};
 use thiserror::Error;
@@ -42,8 +42,11 @@ enum RunningLifecycle {
     Codex(RunningCodexSession),
 }
 
-pub(crate) enum ResidentAdmission {
+/// Concrete resident admission handles for provider-specific Teams composition.
+pub enum ResidentAdmission {
+    /// The prepared Codex admission queue.
     Codex(dione_codex::CodexEventQueue),
+    /// The prepared OMP admission handle.
     Omp(OmpAdmission),
 }
 
@@ -52,7 +55,7 @@ impl HarnessSession {
     pub fn claude() -> Self {
         Self {
             connection: dione_claude::connect(
-                super::ProtocolOutput::new(tokio::io::stdout()),
+                ProtocolOutput::new(tokio::io::stdout()),
                 dione_codex::TOOL_NAMES,
             ),
             lifecycle: PreparedLifecycle::Claude,
@@ -63,26 +66,25 @@ impl HarnessSession {
     pub fn oh_my_pi() -> Self {
         Self {
             connection: dione_omp::connect(
-                super::ProtocolOutput::new(tokio::io::stdout()),
+                ProtocolOutput::new(tokio::io::stdout()),
                 None,
-                super::TOOL_NAMES,
+                dione_codex::TOOL_NAMES,
             ),
             lifecycle: PreparedLifecycle::OhMyPi,
         }
     }
 
-    pub(crate) async fn oh_my_pi_resident(
-        state_dir: &Utf8Path,
-    ) -> Result<Self, HarnessSessionError> {
+    /// Opens the existing resident OMP session without starting its worker.
+    pub async fn oh_my_pi_resident(state_dir: &Utf8Path) -> Result<Self, HarnessSessionError> {
         let session = OmpSession::open(state_dir)
             .await
             .map_err(|source| HarnessSessionError {
                 kind: HarnessSessionErrorKind::Omp(Box::new(source)),
             })?;
         let connection = dione_omp::connect(
-            super::ProtocolOutput::new(tokio::io::stdout()),
+            ProtocolOutput::new(tokio::io::stdout()),
             Some(session.control()),
-            super::TOOL_NAMES,
+            dione_codex::TOOL_NAMES,
         );
         Ok(Self {
             connection,
@@ -90,7 +92,8 @@ impl HarnessSession {
         })
     }
 
-    pub(crate) fn resident_admission(&self) -> Result<ResidentAdmission, HarnessSessionError> {
+    /// Returns the concrete prepared resident admission handle.
+    pub fn resident_admission(&self) -> Result<ResidentAdmission, HarnessSessionError> {
         match &self.lifecycle {
             PreparedLifecycle::Codex(session) => Ok(ResidentAdmission::Codex(session.admission())),
             PreparedLifecycle::OmpResident(session) => {

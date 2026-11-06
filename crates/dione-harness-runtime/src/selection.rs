@@ -1,9 +1,12 @@
 //! Construction selection and resource-free harness metadata.
-use super::{AttentionPolicy, CodexSessionOptions, HarnessSession, HarnessSessionError};
-use crate::mcp::server::StdioExitPolicy;
+use super::{HarnessSession, HarnessSessionError};
+use crate::StdioExitPolicy;
 use camino::Utf8Path;
+use dione_codex::CodexSessionOptions;
+use dione_harness::AttentionPolicy;
+/// Resource-free selection of the concrete provider session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Default)]
-pub(crate) enum HarnessSelection {
+pub enum HarnessSelection {
     /// Emit Claude Code channel notifications on MCP stdout.
     #[default]
     ClaudeCode,
@@ -13,20 +16,23 @@ pub(crate) enum HarnessSelection {
     OhMyPi,
 }
 impl HarnessSelection {
-    pub(crate) const fn stdio_exit_policy(self, resident_control: bool) -> StdioExitPolicy {
+    /// Selects whether MCP EOF shuts down or waits for cancellation.
+    pub const fn stdio_exit_policy(self, resident_control: bool) -> StdioExitPolicy {
         match (self, resident_control) {
             (Self::Codex, true) => StdioExitPolicy::DetachUntilCancellation,
             _ => StdioExitPolicy::ShutdownProcess,
         }
     }
-    pub(crate) const fn attention_policy(self) -> AttentionPolicy {
+    /// Returns the selected provider attention policy without opening resources.
+    pub const fn attention_policy(self) -> AttentionPolicy {
         match self {
             Self::ClaudeCode => dione_claude::ATTENTION_POLICY,
             Self::Codex => dione_codex::ATTENTION_POLICY,
             Self::OhMyPi => AttentionPolicy::Direct,
         }
     }
-    pub(crate) async fn prepare(
+    /// Prepares the selected provider without starting delivery.
+    pub async fn prepare(
         self,
         state_dir: &Utf8Path,
         options: CodexSessionOptions,

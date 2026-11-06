@@ -47,7 +47,7 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
     let harness = dione_omp::connect(
         output.clone(),
         Some(session.control()),
-        crate::harness::TOOL_NAMES,
+        dione_codex::TOOL_NAMES,
     );
     let mut fixture = FixtureProcess::start(
         crate::composition::teams_admission::from_omp(session.admission()),
@@ -101,7 +101,7 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
     assert_eq!(first["meta"]["mcp_session_id"], "saved-main-session");
     assert_eq!(first["meta"]["binding_id"], binding["binding_id"]);
     assert_eq!(first["content"], "hello");
-    let discord = crate::harness::test_support::delivery(
+    let discord = crate::harness_test_support::delivery(
         dione_discord_events::NotificationEvent::Message(dione_discord_events::MessageEvent {
             chat_id: serenity::model::id::ChannelId::new(10),
             message_id: serenity::model::id::MessageId::new(20),
@@ -152,7 +152,7 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
     let harness = dione_omp::connect(
         output.clone(),
         Some(session.control()),
-        crate::harness::TOOL_NAMES,
+        dione_codex::TOOL_NAMES,
     );
     fixture
         .reopen(crate::composition::teams_admission::from_omp(
@@ -295,7 +295,7 @@ fn omp_lifecycle_child_entry() {
             let harness = dione_omp::connect(
                 output.clone(),
                 Some(session.control()),
-                crate::harness::TOOL_NAMES,
+                dione_codex::TOOL_NAMES,
             );
             let cancel = CancellationToken::new();
             let running = session.start(output.clone(), cancel.clone());

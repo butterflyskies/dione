@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.127.0"
+version = "0.128.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -960,6 +960,7 @@ dependencies = [
  "dione-evidence",
  "dione-gaie",
  "dione-harness",
+ "dione-harness-runtime",
  "dione-identity-display",
  "dione-mcp-tools",
  "dione-messages",
@@ -1352,6 +1353,37 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "dione-harness-runtime"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "chrono-tz",
+ "clap",
+ "dione-attention",
+ "dione-bell-rings",
+ "dione-claude",
+ "dione-codex",
+ "dione-config",
+ "dione-contracts",
+ "dione-coordination",
+ "dione-discord-events",
+ "dione-durable",
+ "dione-harness",
+ "dione-messages",
+ "dione-omp",
+ "dione-provider-delivery",
+ "futures-util",
+ "serde_json",
+ "serenity",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

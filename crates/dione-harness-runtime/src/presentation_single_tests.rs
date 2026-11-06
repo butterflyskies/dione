@@ -2,7 +2,7 @@ use dione_bell_rings::BellStatus;
 use dione_discord_events::{MessageEvent, MessageTargeting, NotificationEvent};
 use serde_json::json;
 use serenity::model::id::{ChannelId, MessageId, UserId};
-use {crate::harness::test_support::FixtureNotification, dione_messages::timestamp::Timestamp};
+use {crate::test_support::FixtureNotification, dione_messages::timestamp::Timestamp};
 
 #[tokio::test]
 async fn test_message_edit_includes_thread_parent_id() {

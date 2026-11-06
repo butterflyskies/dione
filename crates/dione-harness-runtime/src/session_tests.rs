@@ -38,7 +38,7 @@ impl AttentionDeliveryGuard for Guard {
 }
 
 fn event(content: &str) -> dione_messages::delivery::Delivery {
-    crate::harness::test_support::text(content)
+    crate::test_support::text(content)
 }
 
 pub(crate) fn peer(
@@ -378,7 +378,7 @@ async fn oh_my_pi_session_is_direct_without_inbox_or_worker() {
     let dir = TempDir::new().unwrap();
     let root = Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
     let state = root.join("not-created");
-    let session = crate::harness::HarnessSelection::OhMyPi
+    let session = crate::HarnessSelection::OhMyPi
         .prepare(
             &state,
             CodexSessionOptions::new(

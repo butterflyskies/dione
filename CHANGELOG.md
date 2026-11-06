@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.128.0] - 2026-11-06
+
+### Changed
+
+- Extract complete provider session lifecycle and selection into
+  dione-harness-runtime, retaining private resources and typed causes.
+
 ## [0.127.0] - 2026-11-06
 
 ### Changed

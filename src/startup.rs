@@ -1,5 +1,7 @@
 //! Process startup, offline commands, and ordered shutdown.
+use dione_codex::CodexSessionOptions;
 use dione_discord_events::NotificationEvent;
+use dione_harness_runtime::{HarnessSelection, HarnessSession, HarnessSessionError};
 use dione_teams::{
     AdmissionPolicy, ChannelPolicy,
     edge::{ClientSecretTokenProvider, TeamsEdge},
@@ -31,10 +33,7 @@ use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{EnvFilter, prelude::*, reload};
 use {
     crate::{
-        attention::control::AttentionCommand,
-        discord::events::Handler,
-        harness::{CodexSessionOptions, HarnessSelection, HarnessSession, HarnessSessionError},
-        mcp::server::DioneServer,
+        attention::control::AttentionCommand, discord::events::Handler, mcp::server::DioneServer,
     },
     dione_harness::AttentionPolicy,
 };
@@ -553,8 +552,10 @@ async fn prepare_teams(
         return Err(StartupErrorKind::TeamsConversationsRequired.into());
     }
     let delivery = match session.resident_admission()? {
-        crate::harness::ResidentAdmission::Codex(queue) => dione_codex::teams_delivery(queue),
-        crate::harness::ResidentAdmission::Omp(admission) => {
+        dione_harness_runtime::ResidentAdmission::Codex(queue) => {
+            dione_codex::teams_delivery(queue)
+        }
+        dione_harness_runtime::ResidentAdmission::Omp(admission) => {
             crate::composition::teams_admission::from_omp(admission)
         }
     };

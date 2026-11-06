@@ -116,11 +116,7 @@ async fn actual_claude_and_omp_writers_project_the_same_typed_message() {
             .all(Value::is_string)
     );
     let (writer, reader) = tokio::io::duplex(8192);
-    let omp = dione_omp::connect(
-        ProtocolOutput::new(writer),
-        None,
-        crate::harness::TOOL_NAMES,
-    );
+    let omp = dione_omp::connect(ProtocolOutput::new(writer), None, dione_codex::TOOL_NAMES);
     omp.deliver(&delivery).await.unwrap();
     let actual = read_line(reader).await;
     let mut expected = expected_legacy();

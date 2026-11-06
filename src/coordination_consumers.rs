@@ -370,9 +370,9 @@ async fn malformed_coordinator_pushes_do_not_interrupt_subsequent_live_delivery(
         Err(broadcast::error::TryRecvError::Empty)
     ));
     let delivery = dione_discord_events::single(
-        &crate::harness::test_support::module(),
+        &crate::harness_test_support::module(),
         dione_discord_events::NotificationEvent::Coordination(event),
-        crate::harness::test_support::context(),
+        crate::harness_test_support::context(),
     )
     .unwrap();
     let (writer, reader) = tokio::io::duplex(4096);
