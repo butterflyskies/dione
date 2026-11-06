@@ -336,7 +336,7 @@ the [no_rly consent gate](crates/dione-outbound-consent/src/consent.rs) can hold
 for an explicit release or rephrase. Its pending handles are in memory, while
 resolved outcomes go to the journal. These are different mechanisms.
 
-[permissions.rs](src/permissions.rs) relays Claude Code permission requests to
+[permissions.rs](crates/dione-permissions/src/lib.rs) relays Claude Code permission requests to
 configured Discord admins. Permission button responses are separate from
 ordinary message admission. [oneshot.rs](src/oneshot.rs) implements the bounded
 one-shot send path with an explicit expected bot identity, described in the
@@ -431,3 +431,6 @@ or every journal write reached disk.
 
 The [drop ledger](crates/dione-drop-ledger/src/lib.rs) owns per-scope retention and
 reply inheritance; native admission and canonical fallback retain their policy checks.
+
+The [permission owner](crates/dione-permissions/src/lib.rs) sends admin prompts and
+handles current-admin acknowledgements, sibling cleanup, and decision forwarding.

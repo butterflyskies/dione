@@ -5,7 +5,6 @@ pub mod gate;
 pub mod ingress_ledger;
 pub mod mcp;
 pub mod oneshot;
-pub mod permissions;
 pub mod pluralkit;
 pub mod principal_policy;
 #[expect(

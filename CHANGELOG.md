@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.124.0] - 2026-11-06
+
+### Changed
+
+- Extract administrator permission prompts and their authorized interaction
+  acknowledgement, sibling cleanup, and response lifecycle into dione-permissions.
+
 ## [0.123.0] - 2026-11-06
 
 ### Changed
