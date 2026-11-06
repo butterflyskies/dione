@@ -12,7 +12,8 @@ use std::sync::Arc;
 
 /// Evaluate native message eligibility and retrieve bells without mutating metadata.
 ///
-/// Disabled, nonmessage, undirected, and empty-provider cases skip initialization.
+/// Disabled, nonmessage, empty-provider, and undirected cases under the Directed
+/// trigger skip initialization. The All trigger also permits ambient messages.
 /// These supplied observations do not establish delivery authorization.
 pub async fn evaluate_native(
     event: NotificationEvent,

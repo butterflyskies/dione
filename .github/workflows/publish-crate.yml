@@ -4383,7 +4383,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: release
-    discord-bells:
+    permissions:
       contents: read
       id-token: write
     steps:
@@ -4441,7 +4441,7 @@ jobs:
       (needs.publish-discord-bells.result == 'success' || needs.publish-discord-bells.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    discord-bells:
+    permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

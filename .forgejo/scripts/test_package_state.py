@@ -372,6 +372,10 @@ class ReleasePreflightTests(unittest.TestCase):
                 jobs[current] = ""
             elif current:
                 jobs[current] += line + "\n"
+        self.assertIn("    permissions:\n      contents: read\n      id-token: write\n", jobs["publish-discord-bells"])
+        self.assertIn("    permissions:\n      contents: read\n", jobs["reconcile-discord-bells"])
+        for name in ("publish-discord-bells", "reconcile-discord-bells"):
+            self.assertNotIn("    discord-bells:", jobs[name])
         capabilities = ('bell-rings', 'config', 'discord-events')
         expected = {"verify-dione"} | {"reconcile-" + name for name in capabilities}
         for name, extra in (("publish-discord-bells", set()), ("reconcile-discord-bells", {"publish-discord-bells"})):
