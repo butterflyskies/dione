@@ -1,9 +1,6 @@
 //! Bounded live source recovery. Metadata is not proof that a source still exists.
 
 use crate::discord::verified_action::LifecycleContext;
-use crate::gate::GateDecision;
-use crate::gate::InboundGate;
-use crate::gate::OutboundGate;
 use crate::ingress_ledger::IngressLedger;
 use camino::Utf8PathBuf;
 use dione_attention::{
@@ -12,6 +9,9 @@ use dione_attention::{
 };
 use dione_config::load_config;
 use dione_discord_events::MessageTargeting;
+use dione_discord_gate::GateDecision;
+use dione_discord_gate::InboundGate;
+use dione_discord_gate::OutboundGate;
 use dione_discord_state::State;
 use serenity::{http::Http, model::channel::Channel};
 use std::{sync::Arc, time::Duration};
@@ -252,7 +252,8 @@ impl SourceResolver {
                             scope.get(),
                             author.get(),
                             false,
-                            Some(guild.get())
+                            Some(guild.get()),
+                            crate::composition::mutes::global().as_deref()
                         ),
                         GateDecision::Deliver
                     )

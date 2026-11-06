@@ -241,7 +241,7 @@ gateway intents. [events.rs](src/discord/events.rs) handles messages, edits,
 deletions, reactions, interactions, and presence state.
 
 Each message handler loads the current immutable configuration snapshot.
-[gate.rs](src/gate.rs) applies DM policy, configured channels, allowlists,
+[gate.rs](crates/dione-discord-gate/src/lib.rs) applies DM policy, configured channels, allowlists,
 identity ignores, and targeting rules. Unknown DM senders can enter the bounded
 [access request queue](crates/dione-access-requests/src/lib.rs) for admin review. Guild mutes suppress
 delivery through the [mute store](crates/dione-mutes/src/lib.rs).
@@ -251,7 +251,7 @@ Webhook identity follows a separate path. The
 creator and resolves supported PluralKit identity before the
 [verified-action gate](src/discord/verified_action.rs) admits an action.
 Display names and webhook payload IDs alone are not user authority.
-[principal_policy.rs](src/principal_policy.rs) holds the typed principal policy.
+[principal_policy.rs](crates/dione-discord-gate/src/principal_policy.rs) holds the typed principal policy.
 The [ingress ledger](src/ingress_ledger.rs) retains admitted lifecycle evidence
 for edits, deletes, reply context, and subsequent reads.
 
@@ -284,7 +284,7 @@ A slow handler can therefore delay later requests and cancellation handling.
 
 [Messaging handlers](src/discord/messaging.rs) perform destination access
 checks and use Serenity HTTP for Discord operations. File uploads pass the
-canonical-path guard in [gate.rs](src/gate.rs), which excludes the state
+canonical-path guard in [gate.rs](crates/dione-discord-gate/src/lib.rs), which excludes the state
 directory except its attachment inbox. Fetch and download operations also
 have their own access checks; an MCP connection is not unrestricted Discord
 access.
@@ -438,3 +438,8 @@ handles current-admin acknowledgements, sibling cleanup, and decision forwarding
 The [native Bell owner](crates/dione-discord-bells/src/lib.rs) selects message
 eligibility and orchestrates shadow/live enrichment. Generic retrieval and rendering
 remain separate from native delivery admission and source revalidation.
+
+The [native gate owner](crates/dione-discord-gate/src/lib.rs) contains DM, guild,
+reaction, reply-parent, mention, outbound file/channel, and principal translation
+policy. Guild checks borrow the existing live MuteStore; root composition retains
+the only singleton and callers retain verified-action authority.

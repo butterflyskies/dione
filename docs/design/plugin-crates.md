@@ -672,3 +672,9 @@ MCP envelope validation remains native; shared Discord state retains pending dat
 `dione-discord-bells` owns native eligibility and shadow/live enrichment; generic
 Bell retrieval/rendering and surrounding native admission/revalidation stay with
 their owners. Existing typed application tests remain in a test-only root host.
+
+### Native gate and principal policy
+
+`dione-discord-gate` owns the complete native policy and legacy principal
+translation. Both current admission callers borrow the existing root mute store;
+sealed verified-action/ingress and attention orchestration remain separate owners.

@@ -2,12 +2,10 @@ pub mod attention;
 pub mod discord;
 #[cfg(test)]
 mod discord_bells_tests;
-pub mod gate;
 pub mod ingress_ledger;
 pub mod mcp;
 pub mod oneshot;
 pub mod pluralkit;
-pub mod principal_policy;
 #[expect(
     dead_code,
     reason = "standalone receipt-gate fixture is runtime-wired in a follow-up PR"

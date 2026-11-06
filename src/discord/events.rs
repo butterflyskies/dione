@@ -3,6 +3,10 @@ use dione_access_requests::{AccessQueue, AccessRequest};
 use dione_discord_events::{
     AttachmentMeta, MentionKind, MessageEvent, MessageTargeting, NotificationEvent,
 };
+use dione_discord_gate::{
+    GateDecision, InboundGate, MentionDetector, ReplyParentAction, ReplyParentResolution,
+    classify_reply_parent_ignore_default,
+};
 use dione_discord_presence::{
     ActivityType as PresenceActivityType, OnlineStatus as PresenceStatus, PresenceRequest,
     PresenceSink, SharedPresence, run_presence_commands,
@@ -19,19 +23,13 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 use {
-    crate::{
-        discord::{
-            messaging::create_dm_channel,
-            verified_action::{
-                LifecycleContext, LifecycleProvenance, VerifiedActionGate, VerifiedGateVerdict,
-            },
-            verified_action_runtime::{
-                VerifiedUpdateCandidate, fresh_policy_snapshot, resolve_webhook_action,
-            },
+    crate::discord::{
+        messaging::create_dm_channel,
+        verified_action::{
+            LifecycleContext, LifecycleProvenance, VerifiedActionGate, VerifiedGateVerdict,
         },
-        gate::{
-            GateDecision, InboundGate, MentionDetector, ReplyParentAction, ReplyParentResolution,
-            classify_reply_parent_ignore_default,
+        verified_action_runtime::{
+            VerifiedUpdateCandidate, fresh_policy_snapshot, resolve_webhook_action,
         },
     },
     dione_attention::types::{DirectAuthorKind, SourceAuthorKind},
@@ -644,8 +642,8 @@ impl EventHandler for Handler {
         // no unit test will catch its removal.
         let config = dione_config::load_config(&self.state_dir);
         if matches!(
-            crate::gate::InboundGate::check_reaction(&config, user_id.get()),
-            crate::gate::GateDecision::Drop
+            dione_discord_gate::InboundGate::check_reaction(&config, user_id.get()),
+            dione_discord_gate::GateDecision::Drop
         ) {
             tracing::debug!(
                 user_id = user_id.get(),
@@ -1142,7 +1140,7 @@ const IGNORE_PARENT_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::fr
 /// fact — never as the ignore authority.
 ///
 /// NOTE(#369/#400): this path is the *message*-ingress ignore. Reaction ignore
-/// is separate and has landed — see [`crate::gate::InboundGate::check_reaction`],
+/// is separate and has landed — see [`dione_discord_gate::InboundGate::check_reaction`],
 /// consulted in `reaction_add` (#400). "Everywhere" below refers to every
 /// *message* ingress path; reactions are gated in their own handler, not here.
 async fn resolve_reply_parent_ignore(
@@ -1345,6 +1343,7 @@ fn admit_direct_guild_message(
         author_id,
         mention_kind.is_some(),
         guild_id,
+        crate::composition::mutes::global().as_deref(),
     ) {
         GateDecision::Deliver => DirectGuildAdmission::Deliver {
             targeting: mention_kind
@@ -1358,7 +1357,7 @@ fn admit_direct_guild_message(
             // (e.g. sender outside `allow_from`) are recorded as roots. #369 v2:
             // only the AUTHOR triggers this; an ignored reply-parent redacts the
             // preview at the delivery layer and never reaches a drop here.
-            if crate::gate::author_ignored(config, author_id) {
+            if dione_discord_gate::author_ignored(config, author_id) {
                 return DirectGuildAdmission::IdentityIgnored;
             }
             // #361: remember the drop so a direct reply inherits it.
@@ -2133,6 +2132,51 @@ mod tests {
     use dione_config::DmPolicy;
     use dione_config::LoadedConfig;
     use std::{collections::HashSet, num::NonZeroUsize};
+
+    #[tokio::test]
+    async fn final_direct_admission_observes_live_mute_after_preflight_snapshot() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = camino::Utf8Path::from_path(directory.path()).unwrap();
+        crate::composition::mutes::init_global(dione_mutes::MuteStore::from_state(
+            dione_mutes::MuteState::default(),
+            path,
+        ));
+        let store = crate::composition::mutes::global().unwrap();
+        let guild = 9_000_027;
+        let config = admission_config(SCOPE, true, vec!["42"]);
+        let ledger = dione_drop_ledger::DropLedger::new();
+        let earlier_muted = store.is_guild_muted(guild);
+        assert!(!earlier_muted);
+        let admit = |id| {
+            admit_direct_guild_message(
+                &ledger,
+                &config,
+                scope(),
+                mid(id),
+                None,
+                Some(guild),
+                earlier_muted,
+                false,
+                42,
+                Some(MentionKind::DirectMention),
+            )
+        };
+        assert!(matches!(
+            admit(27_001),
+            DirectGuildAdmission::Deliver { .. }
+        ));
+        store
+            .mute_guild(guild, 60, "fixture".into(), None)
+            .await
+            .unwrap();
+        assert_eq!(admit(27_002), DirectGuildAdmission::GateDrop);
+        assert!(ledger.contains(scope(), mid(27_002)));
+        store.unmute_guild(guild).await.unwrap();
+        assert!(matches!(
+            admit(27_003),
+            DirectGuildAdmission::Deliver { .. }
+        ));
+    }
 
     fn mid(raw: u64) -> MessageId {
         MessageId::new(raw)
@@ -3883,12 +3927,12 @@ mod tests {
         let resolution = resolve_reply_parent_resolution(&config, &ledger, &http, &msg).await;
         assert_eq!(resolution, ReplyParentResolution::Unresolvable);
 
-        let fail_closed = crate::gate::classify_reply_parent_ignore(resolution, true);
+        let fail_closed = dione_discord_gate::classify_reply_parent_ignore(resolution, true);
         assert!(
             fail_closed.drops(),
             "fail-closed suppresses delivery of the reply"
         );
-        let fail_open = crate::gate::classify_reply_parent_ignore(resolution, false);
+        let fail_open = dione_discord_gate::classify_reply_parent_ignore(resolution, false);
         assert!(
             !fail_open.drops() && fail_open.redacts_preview(),
             "fail-open admits but redacts"
