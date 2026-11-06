@@ -549,7 +549,7 @@ The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, `dione-provider-delivery`, `dione-teams`, `dione-omp`, `dione-codex`, `dione-claude`, `dione-discord-presence`, `dione-discord-state`, `dione-discord-events`, `dione-tracing-channel`, `dione-config-watcher`, `dione-drop-ledger`, and `dione-permissions`.
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, `dione-provider-delivery`, `dione-teams`, `dione-omp`, `dione-codex`, `dione-claude`, `dione-discord-presence`, `dione-discord-state`, `dione-discord-events`, `dione-tracing-channel`, `dione-config-watcher`, `dione-drop-ledger`, `dione-permissions`, and `dione-discord-bells`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -571,7 +571,7 @@ Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, `dione-provider-delivery`, `dione-teams`, `dione-omp`, `dione-codex`, `dione-claude`, `dione-discord-presence`, `dione-discord-state`, `dione-discord-events`, `dione-tracing-channel`, `dione-config-watcher`, `dione-drop-ledger`, and `dione-permissions`,
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, `dione-provider-delivery`, `dione-teams`, `dione-omp`, `dione-codex`, `dione-claude`, `dione-discord-presence`, `dione-discord-state`, `dione-discord-events`, `dione-tracing-channel`, `dione-config-watcher`, `dione-drop-ledger`, `dione-permissions`, and `dione-discord-bells`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
@@ -668,3 +668,7 @@ the ledger does not authorize records, bound total scopes or persist over restar
 `dione-permissions` owns admin DM creation and actual current-admin component
 authorization, acknowledgement, shared-state cleanup, and decision forwarding.
 MCP envelope validation remains native; shared Discord state retains pending data.
+
+`dione-discord-bells` owns native eligibility and shadow/live enrichment; generic
+Bell retrieval/rendering and surrounding native admission/revalidation stay with
+their owners. Existing typed application tests remain in a test-only root host.

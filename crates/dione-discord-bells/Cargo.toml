@@ -1,0 +1,22 @@
+[package]
+name = "dione-discord-bells"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Native Bell eligibility and shadow/live enrichment"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["discord", "memory"]
+categories = ["asynchronous"]
+
+[dependencies]
+dione-bell-rings.workspace = true
+dione-config.workspace = true
+dione-discord-events.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+dione-attention.workspace = true
+dione-messages.workspace = true
+serenity.workspace = true

@@ -1794,3 +1794,197 @@ fn fresh_ledger_disallowed_bot_ancestor_is_not_exported_or_derived() {
         );
     });
 }
+
+#[test]
+fn native_bells_enrich_both_ordinary_and_attention_queue_deliveries() {
+    scenario(|| async {
+        let provider = crate::discord_bells_tests::tests::McpFixture::value(json!({
+            "recall_id":"r_combined", "results":[{"id":"native", "name":"memory", "scope":"syne", "distance":0.1, "match_type":"semantic"}], "count":1
+        })).await;
+        use dione_attention::{
+            learning::{EvaluationPlan, FitOptions, FixedThresholdPolicy, PromotionLimits},
+            types::FeedbackLabel,
+        };
+        let mut fixture = Fixture::new(AttentionMode::Log).await;
+        let mut training = Vec::new();
+        let mut heldout = Vec::new();
+        for (channel, ids) in [(100, &mut training), (101, &mut heldout)] {
+            for index in 0..12 {
+                let id = channel * 100 + index;
+                let text = match index % 3 {
+                    0 => "prompt synthetic wanted now",
+                    1 => "later synthetic wanted later",
+                    _ => "noise synthetic not needed",
+                };
+                fixture.network.insert(channel, id, text, None);
+                let record = fixture
+                    .dispatch(fixture.event(channel, id).await)
+                    .await
+                    .unwrap();
+                assert_eq!(record.actual, Admission::Ordinary);
+                ids.push(record.id);
+            }
+        }
+        fixture.drain().await;
+        let review = fixture
+            .control(AttentionCommand::Review {
+                requested: 24,
+                seed: 19,
+            })
+            .await;
+        assert_eq!(review["coverage"]["returned"], 24);
+        for (index, id) in training.iter().chain(&heldout).enumerate() {
+            if index == training.len() {
+                let heldout_review = fixture
+                    .control(AttentionCommand::Review {
+                        requested: heldout.len(),
+                        seed: 19,
+                    })
+                    .await;
+                let mut sampled: Vec<&str> = heldout_review["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|item| item["selection"]["record_id"].as_str().unwrap())
+                    .collect();
+                let mut expected: Vec<&str> = heldout.iter().map(|id| id.as_str()).collect();
+                sampled.sort_unstable();
+                expected.sort_unstable();
+                assert_eq!(sampled, expected);
+            }
+            let label = match index % 3 {
+                0 => FeedbackLabel::WantedPromptly,
+                1 => FeedbackLabel::WantedLater,
+                _ => FeedbackLabel::NotNeeded,
+            };
+            fixture
+                .control(AttentionCommand::Feedback {
+                    record_id: id.clone(),
+                    label,
+                })
+                .await;
+        }
+        let baseline = FixedThresholdPolicy {
+            wanted: 0.5,
+            prompt: 0.5,
+            participation: 0.5,
+            change: 0.5,
+        };
+        fixture
+            .control(AttentionCommand::Replay {
+                record_ids: training.clone(),
+                policy: baseline,
+            })
+            .await;
+        let artifact = fixture
+            .control(AttentionCommand::Fit {
+                record_ids: training.clone(),
+                options: FitOptions {
+                    minimum_labels: 9,
+                    minimum_wanted: 6,
+                    minimum_not_needed: 3,
+                    minimum_promptly: 3,
+                    minimum_later: 3,
+                    regularization: 0.01,
+                    iterations: 800,
+                    learning_rate: 0.2,
+                    seed: 19,
+                    environment: "rust-f64-synthetic-fixture".into(),
+                    wanted_threshold: 0.5,
+                    timely_threshold: 0.5,
+                    candidate_ttl_ms: 3_600_000,
+                },
+            })
+            .await;
+        let digest: ArtifactDigest = artifact["digest"].as_str().unwrap().into();
+        assert!(
+            fixture.control(AttentionCommand::Status).await["store"]["active_digest"].is_null()
+        );
+        assert!(
+            execute(
+                fixture.attention.clone(),
+                AttentionCommand::Promote {
+                    evaluation_id: "not-opened".into(),
+                    digest: digest.clone()
+                },
+                true
+            )
+            .await
+            .is_err()
+        );
+        fixture
+            .control(AttentionCommand::OpenEvaluation {
+                plan: EvaluationPlan {
+                    id: "synthetic-heldout".into(),
+                    record_ids: heldout,
+                    fixed_baseline: baseline,
+                    opened_at_ms: 0,
+                    limits: PromotionLimits {
+                        minimum_labeled: 12,
+                        minimum_wanted: 8,
+                        minimum_promptly: 4,
+                        minimum_wanted_recall: 1.0,
+                        minimum_timely_recall: 1.0,
+                        minimum_volume_reduction: 0.2,
+                        maximum_unwanted_delivery_rate: 0.0,
+                        maximum_standard_error: 1.0,
+                    },
+                },
+            })
+            .await;
+        let evaluation = fixture
+            .control(AttentionCommand::Evaluate {
+                evaluation_id: "synthetic-heldout".into(),
+                digest: digest.clone(),
+            })
+            .await;
+        assert_eq!(evaluation["passed"], true, "{evaluation}");
+        fixture
+            .control(AttentionCommand::Promote {
+                evaluation_id: "synthetic-heldout".into(),
+                digest: digest.clone(),
+            })
+            .await;
+        fixture.mode(AttentionMode::Off).await;
+        let config_path = fixture.path.join("config.toml");
+        let mut text = std::fs::read_to_string(&config_path).unwrap();
+        text.push_str(&format!("\n[bell_rings]\nenabled=true\nmode='live'\ntrigger='all'\n[[bell_rings.providers]]\nurl='{}'\nscope='syne'\nalias='combined'\n", provider.endpoint));
+        std::fs::write(&config_path, text).unwrap();
+        let (_, warning) = ConfigRuntime::new(fixture.path.clone()).reload().await;
+        assert!(warning.is_none());
+        fixture
+            .network
+            .insert(100, 910, "ordinary source for bells", None);
+        assert!(
+            fixture
+                .dispatch(fixture.event(100, 910).await)
+                .await
+                .is_none()
+        );
+        let ordinary = fixture.drain().await;
+        assert_eq!(ordinary.len(), 1);
+        assert_eq!(
+            ordinary[0]["params"]["meta"]["bells"],
+            "2s syne/memory@combined d=0.1 id=native rid=r_combined"
+        );
+        assert_eq!(ordinary[0]["params"]["meta"]["bells_status"], "ok");
+        fixture.mode(AttentionMode::On).await;
+        fixture
+            .network
+            .insert(100, 911, "prompt attention source for bells", None);
+        let record = fixture
+            .dispatch(fixture.event(100, 911).await)
+            .await
+            .unwrap();
+        assert_eq!(record.actual, Admission::Prompt);
+        let attention = fixture.drain().await;
+        assert_eq!(attention.len(), 1);
+        assert_eq!(attention[0]["params"]["meta"]["message_id"], "911");
+        assert_eq!(
+            attention[0]["params"]["meta"]["bells"],
+            "2s syne/memory@combined d=0.1 id=native rid=r_combined"
+        );
+        assert_eq!(attention[0]["params"]["meta"]["bells_status"], "ok");
+        assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    });
+}

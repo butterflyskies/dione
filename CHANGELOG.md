@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.125.0] - 2026-11-06
+
+### Changed
+
+- Extract native Bell eligibility and shadow/live enrichment into
+  dione-discord-bells while retaining actual application delivery tests.
+
 ## [0.124.0] - 2026-11-06
 
 ### Changed

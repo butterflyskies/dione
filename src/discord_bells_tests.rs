@@ -1,48 +1,18 @@
-//! Native message eligibility for memory retrieval. Delivery policy stays in Dione.
-use dione_bell_rings::{Bell, BellEvaluator, BellStatus};
-use dione_config::BellRingsConfig;
-use dione_config::BellTrigger;
-use dione_discord_events::NotificationEvent;
-
-pub(crate) async fn evaluate_native(
-    event: NotificationEvent,
-    config: &BellRingsConfig,
-    evaluator: &BellEvaluator,
-) -> (NotificationEvent, Vec<Bell>, Option<BellStatus>) {
-    let eligible = match &event {
-        NotificationEvent::Message(message) if config.enabled => {
-            let channel_id = message.chat_id.get().to_string();
-            match config.trigger_for_channel(&channel_id) {
-                BellTrigger::Directed => message.targeting.is_directed(),
-                BellTrigger::All => true,
-            }
-        }
-        _ => false,
-    };
-    if eligible
-        && !config.providers.is_empty()
-        && let NotificationEvent::Message(message) = &event
-        && let Some(result) = evaluator
-            .evaluate(&message.content, &config.providers, &config.recall)
-            .await
-    {
-        return (event, result.bells, Some(result.status));
-    }
-    (event, Vec::new(), None)
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod tests {
     use crate::harness::test_support::FixtureNotification;
     use axum::response::IntoResponse;
+    use dione_bell_rings::{Bell, BellEvaluator, BellStatus};
     use dione_bell_rings::{
         BellProviderConfig, BellProviderUrl, BellScope, BellTimbre, RecallOptions,
     };
+    use dione_config::BellRingsConfig;
     use dione_config::Config;
+    use dione_discord_bells::{evaluate_native, prepare_bells};
     use dione_discord_events::MentionKind;
     use dione_discord_events::MessageEvent;
     use dione_discord_events::MessageTargeting;
+    use dione_discord_events::NotificationEvent;
     use dione_messages::timestamp::Timestamp;
     use serde_json::{Value, json};
     use serenity::model::id::{ChannelId, MessageId, UserId};
@@ -50,14 +20,16 @@ mod tests {
         Arc, Mutex as StdMutex,
         atomic::{AtomicUsize, Ordering},
     };
-    struct McpFixture {
-        calls: Arc<AtomicUsize>,
+    pub(crate) struct McpFixture {
+        pub(crate) calls: Arc<AtomicUsize>,
         initializations: Arc<AtomicUsize>,
         requests: Arc<StdMutex<Vec<RecallRequest>>>,
-        endpoint: String,
+        pub(crate) endpoint: String,
         response: Arc<StdMutex<MockResponse>>,
         shutdown: tokio_util::sync::CancellationToken,
         server: tokio::task::JoinHandle<()>,
+        observed: Arc<tokio::sync::Notify>,
+        completed: Arc<tokio::sync::Notify>,
     }
 
     #[derive(Clone)]
@@ -66,6 +38,7 @@ mod tests {
         Error,
         ToolError,
         Pending,
+        Gated(Value, Arc<tokio::sync::Semaphore>),
     }
 
     struct RecallRequest {
@@ -75,7 +48,7 @@ mod tests {
     }
 
     impl McpFixture {
-        async fn value(value: Value) -> Self {
+        pub(crate) async fn value(value: Value) -> Self {
             Self::start(MockResponse::Value(value)).await
         }
 
@@ -85,17 +58,21 @@ mod tests {
             let requests = Arc::new(StdMutex::new(Vec::new()));
             let shutdown = tokio_util::sync::CancellationToken::new();
             let response = Arc::new(StdMutex::new(response));
+            let observed = Arc::new(tokio::sync::Notify::new());
+            let completed = Arc::new(tokio::sync::Notify::new());
             let state = (
                 calls.clone(),
                 requests.clone(),
                 response.clone(),
                 shutdown.clone(),
                 initializations.clone(),
+                observed.clone(),
+                completed.clone(),
             );
             let router = axum::Router::new().route(
                 "/mcp",
                 axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
-                    let (calls, requests, response, shutdown, initializations) = state.clone();
+                    let (calls, requests, response, shutdown, initializations, observed, completed) = state.clone();
                     async move {
                         let Some(id) = body.get("id") else {
                             return axum::http::StatusCode::ACCEPTED.into_response();
@@ -118,12 +95,17 @@ mod tests {
                                     scope: arguments["scope"].as_str().unwrap().to_owned(),
                                     limit: arguments["limit"].as_u64().unwrap() as usize,
                                 });
+                                observed.notify_one();
                                 let response = response.lock().unwrap().clone();
                                 match response {
                                     MockResponse::Value(value) => json!({
                                         "content": [{"type": "text", "text": value.to_string()}],
                                         "isError": false,
                                     }),
+                                    MockResponse::Gated(value, release) => {
+                                        release.acquire().await.unwrap().forget();
+                                        json!({"content": [{"type": "text", "text": value.to_string()}], "isError": false})
+                                    }
                                     MockResponse::Error => {
                                         return axum::Json(json!({
                                             "jsonrpc": "2.0", "id": id,
@@ -143,6 +125,7 @@ mod tests {
                             }
                             other => panic!("unexpected fixture method {other}"),
                         };
+                        if body["method"] == "tools/call" { completed.notify_one(); }
                         axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": result}))
                             .into_response()
                     }
@@ -165,6 +148,8 @@ mod tests {
                 response,
                 shutdown,
                 server,
+                observed,
+                completed,
             }
         }
     }
@@ -755,5 +740,125 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cfg.bell_rings.trigger, dione_config::BellTrigger::All);
+    }
+
+    fn loaded_mode(
+        provider: &McpFixture,
+        mode: dione_config::BellMode,
+    ) -> dione_config::LoadedConfig {
+        let mut settings = config();
+        settings.mode = mode;
+        settings.providers[0].url = BellProviderUrl::parse(&provider.endpoint).unwrap();
+        settings.providers[0].alias = Some("fixture".into());
+        dione_config::LoadedConfig::try_from_raw(Config {
+            bell_rings: settings,
+            ..Config::default()
+        })
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn shadow_returns_existing_metadata_before_gated_provider_and_never_injects() {
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let provider = McpFixture::start(MockResponse::Gated(
+            envelope(vec![hit("new", "retrieved", 0.1, "semantic")]),
+            release.clone(),
+        ))
+        .await;
+        let cfg = loaded_mode(&provider, dione_config::BellMode::Shadow);
+        let mut msg = message(MessageTargeting::DirectMessage);
+        msg.bells = Some("existing bell".into());
+        msg.bells_status = Some(BellStatus::PartialError);
+        let event = NotificationEvent::Message(msg);
+        let before = event.clone().fixture_notification().await;
+        let evaluator = Arc::new(BellEvaluator::new());
+        let returned = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::select! {
+                biased;
+                returned = prepare_bells(event, &cfg, &evaluator) => returned,
+                _ = provider.observed.notified() => {
+                    panic!("shadow must return before awaiting the actual provider request")
+                }
+            }
+        })
+        .await
+        .expect("shadow must return while provider is held");
+        assert_eq!(returned.fixture_notification().await, before);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            provider.observed.notified(),
+        )
+        .await
+        .expect("actual provider request");
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        release.add_permits(1);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            provider.completed.notified(),
+        )
+        .await
+        .expect("fixture response produced");
+    }
+
+    #[tokio::test]
+    async fn live_injects_literal_render_and_empty_skip_error_preserve_existing_metadata() {
+        let provider =
+            McpFixture::value(envelope(vec![hit("new", "retrieved", 0.1, "semantic")])).await;
+        let cfg = loaded_mode(&provider, dione_config::BellMode::Live);
+        let evaluator = Arc::new(BellEvaluator::new());
+        let returned = prepare_bells(
+            NotificationEvent::Message(message(MessageTargeting::DirectMessage)),
+            &cfg,
+            &evaluator,
+        )
+        .await;
+        let wire = returned.fixture_notification().await;
+        assert_eq!(
+            wire["params"]["meta"]["bells"],
+            "2s syne/retrieved@fixture d=0.1 id=new rid=r_test"
+        );
+        assert_eq!(wire["params"]["meta"]["bells_status"], "ok");
+        let mut old = message(MessageTargeting::DirectMessage);
+        old.content = "distinct empty query".into();
+        old.bells = Some("existing bell".into());
+        old.bells_status = Some(BellStatus::PartialError);
+        *provider.response.lock().unwrap() = MockResponse::Value(envelope(vec![]));
+        let returned =
+            prepare_bells(NotificationEvent::Message(old.clone()), &cfg, &evaluator).await;
+        let wire = returned.fixture_notification().await;
+        assert_eq!(wire["params"]["meta"]["bells"], "existing bell");
+        assert_eq!(wire["params"]["meta"]["bells_status"], "ok");
+        let mut skipped = cfg.raw.clone();
+        skipped.bell_rings.enabled = false;
+        let skipped = dione_config::LoadedConfig::try_from_raw(skipped).unwrap();
+        let original = NotificationEvent::Message(old.clone());
+        let before = original.clone().fixture_notification().await;
+        assert_eq!(
+            prepare_bells(original, &skipped, &evaluator)
+                .await
+                .fixture_notification()
+                .await,
+            before
+        );
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+        old.content = "distinct error query".into();
+        *provider.response.lock().unwrap() = MockResponse::ToolError;
+        let wire = prepare_bells(NotificationEvent::Message(old), &cfg, &evaluator)
+            .await
+            .fixture_notification()
+            .await;
+        assert_eq!(wire["params"]["meta"]["bells"], "existing bell");
+        assert_eq!(wire["params"]["meta"]["bells_status"], "error");
+        let control = NotificationEvent::ConfigError {
+            error: "unchanged control".into(),
+        };
+        let before = control.clone().fixture_notification().await;
+        assert_eq!(
+            prepare_bells(control, &cfg, &evaluator)
+                .await
+                .fixture_notification()
+                .await,
+            before
+        );
     }
 }

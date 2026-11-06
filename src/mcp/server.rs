@@ -11,7 +11,6 @@
 //! - Error    → `{"jsonrpc":"2.0","id":N,"error":{"code":-32000,"message":"..."}}`
 //! - Notification (no id) → `{"jsonrpc":"2.0","method":"...","params":{...}}`
 
-use crate::bell_rings::evaluate_native;
 use crate::discord::access::AccessCtx;
 use crate::discord::messaging::MessagingCtx;
 use crate::discord::scheduling::DeliveryBuffer;
@@ -28,12 +27,12 @@ use dione_access_requests::AccessQueue;
 use dione_attention::delivery::AttentionGuardFailure;
 use dione_attention::types::Admission;
 use dione_attention::types::DeliveryState;
-use dione_bell_rings::{BellEvaluator, render_bells};
-use dione_config::BellMode;
+use dione_bell_rings::BellEvaluator;
 use dione_contracts::ModuleInstanceId;
 #[cfg(test)]
 use dione_contracts::{ModuleSlotId, ProviderId};
 use dione_delivery_scheduler::BufferResult;
+use dione_discord_bells::prepare_bells;
 use dione_discord_events::MessageEvent;
 use dione_discord_events::NotificationEvent;
 use dione_discord_presence::PresenceCapability;
@@ -2012,37 +2011,6 @@ mod tests {
         assert_eq!(notification["method"], "notifications/claude/channel");
         assert_eq!(notification["params"]["meta"]["chat_id"], "42");
     }
-}
-
-async fn prepare_bells(
-    mut event: NotificationEvent,
-    cfg: &dione_config::LoadedConfig,
-    evaluator: &Arc<BellEvaluator>,
-) -> NotificationEvent {
-    match cfg.bell_rings.mode {
-        BellMode::Shadow => {
-            let evaluator = evaluator.clone();
-            let shadow_event = event.clone();
-            let shadow_config = cfg.bell_rings.clone();
-            tokio::spawn(async move {
-                let _ = evaluate_native(shadow_event, &shadow_config, &evaluator).await;
-            });
-        }
-        BellMode::Live => {
-            let (returned, bells, status) =
-                evaluate_native(event, &cfg.bell_rings, evaluator).await;
-            event = returned;
-            if let NotificationEvent::Message(message) = &mut event {
-                if let Some(status) = status {
-                    message.bells_status = Some(status);
-                }
-                if !bells.is_empty() {
-                    message.bells = Some(render_bells(&bells));
-                }
-            }
-        }
-    }
-    event
 }
 
 /// The same forwarding unit serves off, log, direct, and failure fallback paths.

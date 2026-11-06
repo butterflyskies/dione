@@ -268,7 +268,7 @@ entering the gateway channel is not a durable inbox commit.
 admission. Its runtime owns source validation, evaluation, learned-policy
 receipts, and transport outcome records. It is disabled by default. The
 [attention guide](docs/attention.md) describes modes and promotion requirements.
-[Bell evaluation](src/bell_rings.rs) can attach memory recall metadata from
+[Bell evaluation](crates/dione-discord-bells/src/lib.rs) can attach memory recall metadata from
 configured MCP providers in shadow or live mode.
 
 ## Tools and outbound actions
@@ -388,7 +388,7 @@ Publishing a new snapshot does not reconstruct those captured values.
 | Codex app-server | [Delivery worker](crates/dione-codex/src/app_server.rs) addresses an exact local thread. |
 | PluralKit | [Identity resolver](src/pluralkit.rs) resolves supported proxy identity. |
 | Pronouns and nameplates | [Pronoun service](crates/dione-identity-display/src/pronouns.rs) and [nameplate service](crates/dione-identity-display/src/nameplates.rs) enrich display metadata when enabled. |
-| Memory MCP providers | [Bell evaluator](src/bell_rings.rs) uses `rmcp` Streamable HTTP clients for configured recall providers. This is separate from Dione's stdio MCP server. |
+| Memory MCP providers | [Bell evaluator](crates/dione-discord-bells/src/lib.rs) uses `rmcp` Streamable HTTP clients for configured recall providers. This is separate from Dione's stdio MCP server. |
 | TypeSafe System One | [Attention provider](crates/dione-attention/src/provider.rs) scores eligible ambient text with bounded requests. It does not replace the agent host's generative inference. |
 | Vaelii | [Receipt bridge](crates/dione-vaelii/src/lib.rs) writes provenance for explicit message reads when configured. Sentex locators are handled by [dione-evidence](crates/dione-evidence/src/lib.rs). |
 
@@ -434,3 +434,7 @@ reply inheritance; native admission and canonical fallback retain their policy c
 
 The [permission owner](crates/dione-permissions/src/lib.rs) sends admin prompts and
 handles current-admin acknowledgements, sibling cleanup, and decision forwarding.
+
+The [native Bell owner](crates/dione-discord-bells/src/lib.rs) selects message
+eligibility and orchestrates shadow/live enrichment. Generic retrieval and rendering
+remain separate from native delivery admission and source revalidation.
