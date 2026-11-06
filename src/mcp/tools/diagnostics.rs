@@ -1,6 +1,6 @@
 //! Diagnostics tools: runtime trace-level control and version info.
 
-use crate::tracing_channel::TraceLevelController;
+use dione_tracing_channel::TraceLevelController;
 use serde_json::{Value, json};
 
 /// Context for diagnostics tools.

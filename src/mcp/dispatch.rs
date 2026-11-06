@@ -1170,7 +1170,7 @@ mod tests {
             http,
             state_dir.clone(),
             notification_tx,
-            crate::tracing_channel::TraceLevelController::noop(),
+            dione_tracing_channel::TraceLevelController::noop(),
             dione_claude::connect(
                 dione_harness::ProtocolOutput::new(tokio::io::stdout()),
                 dione_codex::TOOL_NAMES,
@@ -1415,7 +1415,7 @@ mod tests {
             std::sync::Arc::new(serenity::http::Http::new("fake")),
             state_dir.clone(),
             notification_tx,
-            crate::tracing_channel::TraceLevelController::noop(),
+            dione_tracing_channel::TraceLevelController::noop(),
             dione_claude::connect(
                 dione_harness::ProtocolOutput::new(tokio::io::stdout()),
                 dione_codex::TOOL_NAMES,

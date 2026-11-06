@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.121.0] - 2026-11-05
+
+### Changed
+
+- Extract trace capture, live filter control, and awaited event forwarding into
+  `dione-tracing-channel`, preserving process initialization and diagnostic routing.
+
 ## [0.120.0] - 2026-11-05
 
 ### Changed

@@ -541,7 +541,7 @@ impl Fixture {
             self.network.http(),
             self.path.clone(),
             tx,
-            crate::tracing_channel::TraceLevelController::noop(),
+            dione_tracing_channel::TraceLevelController::noop(),
             test_connection_for_queue(self.queue.clone()),
             Arc::new(dione_outbound_consent::consent::ConsentGate::new(
                 &self.path,

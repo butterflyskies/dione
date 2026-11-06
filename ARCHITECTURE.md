@@ -409,7 +409,7 @@ describe the repository's code-change checks.
 resident control, and mute expiry. The running harness session owns the Codex
 delivery worker or optional OMP Teams session actor. Config watching, trace forwarding, coordination
 forwarding, and access-request pruning also run as background tasks.
-The trace channel is bounded by [tracing_channel.rs](src/tracing_channel.rs).
+The trace channel is bounded by [the tracing channel owner](crates/dione-tracing-channel/src/lib.rs).
 
 SIGINT, SIGTERM, or internal cancellation starts shutdown. Startup cancels the
 shared token, aborts Discord and mute expiry, joins Teams ingress, resident

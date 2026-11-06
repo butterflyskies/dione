@@ -1,0 +1,18 @@
+[package]
+name = "dione-tracing-channel"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Tracing capture, live filter control and awaited event forwarding"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["tracing", "async", "events"]
+categories = ["asynchronous"]
+
+[dependencies]
+dione-discord-events.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+native-tls.workspace = true

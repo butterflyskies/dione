@@ -4,14 +4,12 @@
 //! and `event_to_notification` (via `test_helpers::make_notification`) without
 //! a real Discord connection. Tool calls that require Discord HTTP are tested
 //! either up to the gate-rejection path or against a local mock HTTP server.
+use dione_tracing_channel::TraceLevelController;
 
 #[path = "support/codex_projection.rs"]
 mod codex_projection;
 
-use dione::{
-    mcp::server::{DioneServer, test_helpers},
-    tracing_channel::TraceLevelController,
-};
+use dione::mcp::server::{DioneServer, test_helpers};
 use dione_access_requests::AccessQueue;
 use dione_discord_events::{AttachmentMeta, MessageEvent, NotificationEvent};
 use dione_discord_state::new_state;

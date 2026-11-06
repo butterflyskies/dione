@@ -228,7 +228,7 @@ impl OwnerProcess {
             std::sync::Arc::new(serenity::http::Http::new("fake")),
             path.clone(),
             notification_tx,
-            crate::tracing_channel::TraceLevelController::noop(),
+            dione_tracing_channel::TraceLevelController::noop(),
             connection,
             std::sync::Arc::new(dione_outbound_consent::consent::ConsentGate::new(&path)),
             std::sync::Arc::new(crate::ingress_ledger::IngressLedger::new()),

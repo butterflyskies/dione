@@ -4,6 +4,7 @@ use dione_access_requests::AccessQueue;
 use dione_contracts::MessageRef;
 use dione_harness::{HarnessDelivery, HarnessError, HarnessProtocol};
 use dione_messages::delivery::Delivery;
+use dione_tracing_channel::TraceLevelController;
 use futures_util::future::BoxFuture;
 use serenity::model::id::{ChannelId, MessageId};
 use std::sync::Mutex as StdMutex;

@@ -1,4 +1,5 @@
 //! Registration behavior through MCP requests and the resident socket.
+use dione_tracing_channel::TraceLevelController;
 
 use super::*;
 use dione_access_requests::AccessQueue;

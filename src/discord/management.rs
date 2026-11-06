@@ -951,7 +951,7 @@ mod tests {
             ctx.http.clone(),
             path.clone(),
             tokio::sync::mpsc::channel(1).0,
-            crate::tracing_channel::TraceLevelController::noop(),
+            dione_tracing_channel::TraceLevelController::noop(),
             dione_claude::connect(
                 dione_harness::ProtocolOutput::new(tokio::io::stdout()),
                 dione_codex::TOOL_NAMES,

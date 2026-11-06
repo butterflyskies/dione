@@ -15,7 +15,6 @@ pub mod principal_policy;
     reason = "standalone receipt-gate fixture is runtime-wired in a follow-up PR"
 )]
 pub(crate) mod receipt_gate;
-pub mod tracing_channel;
 
 /// Agent harness integration.
 pub mod harness;

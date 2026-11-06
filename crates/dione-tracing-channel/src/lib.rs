@@ -3,6 +3,15 @@
 //! Events captured by this layer are sent over an mpsc channel to the MCP
 //! notification pipeline, where they appear as channel notifications with
 //! `type="trace"` metadata — differentiated from Discord events.
+//!
+//! The field visitor is private.
+//!
+//! ```compile_fail
+//! use dione_tracing_channel::MessageVisitor;
+//! let _ = MessageVisitor::default();
+//! ```
+
+#![warn(missing_docs)]
 
 use dione_discord_events::NotificationEvent;
 use std::sync::Arc;
@@ -10,11 +19,16 @@ use tokio::sync::mpsc;
 use tracing::Subscriber;
 use tracing_subscriber::{EnvFilter, Layer, registry::LookupSpan, reload};
 
-// ── TraceLevelController ─────────────────────────────────────────────────────
-
 type ReloadFn = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
 /// Type-erased controller for reloading tracing filters at runtime.
+///
+/// Reload closures remain private.
+///
+/// ```compile_fail
+/// use dione_tracing_channel::TraceLevelController;
+/// let _ = TraceLevelController::noop().reload_channel;
+/// ```
 ///
 /// Wraps reload handles behind closures so the concrete subscriber type
 /// doesn't leak into the server struct.
@@ -80,6 +94,13 @@ impl TraceLevelController {
 }
 
 /// A tracing layer that sends events to an mpsc channel as [`NotificationEvent::Trace`].
+///
+/// Its sender cannot be replaced outside the owner.
+///
+/// ```compile_fail
+/// use dione_tracing_channel::TracingChannelLayer;
+/// let _ = TracingChannelLayer::new().0.tx;
+/// ```
 pub struct TracingChannelLayer {
     tx: mpsc::Sender<NotificationEvent>,
 }
@@ -149,4 +170,23 @@ impl tracing::field::Visit for MessageVisitor {
                 .push((field.name().to_string(), value.to_string()));
         }
     }
+}
+
+/// Spawn the detached trace forwarder using the application's event queue.
+///
+/// Sends await downstream capacity. Buffered upstream events are drained until
+/// upstream closes or downstream rejects a send. Dropping the returned handle
+/// leaves the task running, as in process startup.
+pub fn spawn_forwarder(
+    channel_event_rx: mpsc::Receiver<NotificationEvent>,
+    trace_event_tx: mpsc::Sender<NotificationEvent>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut rx = channel_event_rx;
+        while let Some(trace_event) = rx.recv().await {
+            if trace_event_tx.send(trace_event).await.is_err() {
+                break;
+            }
+        }
+    })
 }

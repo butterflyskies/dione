@@ -23,7 +23,6 @@ use crate::mcp::protocol::initialize_response;
 use crate::mcp::protocol::tools_list;
 use crate::mcp::tools::diagnostics::DiagnosticsCtx;
 use crate::mcp::tools::no_rly::NoRlyCtx;
-pub use crate::tracing_channel::TraceLevelController;
 use camino::Utf8PathBuf;
 use dione_access_requests::AccessQueue;
 use dione_attention::delivery::AttentionGuardFailure;
@@ -55,6 +54,7 @@ use dione_rate_limiter::ChannelRef;
 use dione_rate_limiter::ParticipantId;
 use dione_rate_limiter::RateLimitDecision;
 use dione_rate_limiter::RateLimiter;
+use dione_tracing_channel::TraceLevelController;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,

@@ -5,6 +5,7 @@ use dione_teams::{
     edge::{ClientSecretTokenProvider, TeamsEdge},
     runtime::{TeamsReplyAuthority, TeamsResidentBridge},
 };
+use dione_tracing_channel::{TraceLevelController, TracingChannelLayer};
 mod error;
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::Parser;
@@ -34,7 +35,6 @@ use {
         discord::events::Handler,
         harness::{CodexSessionOptions, HarnessSelection, HarnessSession, HarnessSessionError},
         mcp::server::DioneServer,
-        tracing_channel::{TraceLevelController, TracingChannelLayer},
     },
     dione_harness::AttentionPolicy,
 };
@@ -326,15 +326,7 @@ pub async fn run() -> Result<(), StartupError> {
         .mode
         .stdio_exit_policy(resident_control_handle.is_some());
 
-    let trace_event_tx = event_tx.clone();
-    tokio::spawn(async move {
-        let mut rx = channel_event_rx;
-        while let Some(trace_event) = rx.recv().await {
-            if trace_event_tx.send(trace_event).await.is_err() {
-                break;
-            }
-        }
-    });
+    dione_tracing_channel::spawn_forwarder(channel_event_rx, event_tx.clone());
 
     let mut coordination_rx = dione_coordination::subscribe_shared();
     let coordination_tx = event_tx.clone();
