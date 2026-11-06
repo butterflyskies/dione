@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.123.0] - 2026-11-06
+
+### Changed
+
+- Extract scoped dropped-message retention and reply inheritance into
+  dione-drop-ledger, sharing one singleton across native admission and fallback.
+
 ## [0.122.0] - 2026-11-05
 
 ### Changed

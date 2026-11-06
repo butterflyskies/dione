@@ -395,7 +395,7 @@ impl EventHandler for Handler {
                         .is_some_and(|store| store.is_guild_muted(gid))
                 });
                 match guild_message_preflight(
-                    crate::drop_ledger::global(),
+                    dione_drop_ledger::global(),
                     ChannelId::new(resolved.gate_channel_id),
                     msg.id,
                     reply_parent_id,
@@ -538,7 +538,7 @@ impl EventHandler for Handler {
             // reply-parent is resolved only for an admitted message (below), so
             // an ignored parent redacts the preview rather than dropping.
             let admission = admit_direct_guild_message(
-                crate::drop_ledger::global(),
+                dione_drop_ledger::global(),
                 &config,
                 ChannelId::new(resolved.gate_channel_id),
                 msg.id,
@@ -1164,7 +1164,7 @@ enum GuildPreflight {
     reason = "each argument is one preflight fact; bundling them would hide which check consumes which fact"
 )]
 fn guild_message_preflight(
-    ledger: &crate::drop_ledger::DropLedger,
+    ledger: &dione_drop_ledger::DropLedger,
     gate_scope: ChannelId,
     message_id: MessageId,
     reply_parent_id: Option<MessageId>,
@@ -1380,7 +1380,7 @@ enum DirectGuildAdmission {
     reason = "each argument is one admission fact; bundling them would hide which check consumes which fact"
 )]
 fn admit_direct_guild_message(
-    ledger: &crate::drop_ledger::DropLedger,
+    ledger: &dione_drop_ledger::DropLedger,
     config: &dione_config::LoadedConfig,
     gate_scope: ChannelId,
     message_id: MessageId,
@@ -2223,7 +2223,7 @@ mod tests {
     /// dropped hop by hop.
     #[test]
     fn preflight_records_configured_drop_roots_and_replies_inherit() {
-        let ledger = crate::drop_ledger::DropLedger::new();
+        let ledger = dione_drop_ledger::DropLedger::new();
         assert_eq!(
             guild_message_preflight(&ledger, scope(), mid(2), None, true, false, true, false),
             GuildPreflight::GuildMuted
@@ -2273,7 +2273,7 @@ mod tests {
     /// check, not by inheritance.
     #[test]
     fn unconfigured_channels_suppress_without_minting_scopes() {
-        let ledger = crate::drop_ledger::DropLedger::new();
+        let ledger = dione_drop_ledger::DropLedger::new();
         assert_eq!(
             guild_message_preflight(&ledger, scope(), mid(1), None, false, false, false, false),
             GuildPreflight::NotOptedIn
@@ -2315,7 +2315,7 @@ mod tests {
     /// message is judged on its own.
     #[test]
     fn preflight_negatives_proceed_and_record_nothing() {
-        let ledger = crate::drop_ledger::DropLedger::new();
+        let ledger = dione_drop_ledger::DropLedger::new();
         assert_eq!(
             guild_message_preflight(&ledger, scope(), mid(1), None, true, false, false, false),
             GuildPreflight::Proceed
@@ -2409,7 +2409,7 @@ mod tests {
     /// reply-inheritance roots. Un-ignoring takes effect on the next message.
     #[test]
     fn identity_ignore_drops_without_polluting_the_ledger() {
-        let ledger = crate::drop_ledger::DropLedger::new();
+        let ledger = dione_drop_ledger::DropLedger::new();
         let ignored = admission_config_ignored(SCOPE, vec!["900"]);
 
         // Ignored author → IdentityIgnored, and nothing recorded.
@@ -2484,12 +2484,12 @@ mod tests {
     /// and gate drops (sender outside `allow_from`) record for inheritance.
     #[test]
     fn admission_authority_controls_delivery_and_inheritance() {
-        let ledger = crate::drop_ledger::DropLedger::new();
+        let ledger = dione_drop_ledger::DropLedger::new();
         let open = admission_config(SCOPE, false, vec![]);
         let restricted = admission_config(SCOPE, false, vec!["42"]);
         let mention_gated = admission_config(SCOPE, true, vec![]);
         let admit = |config: &LoadedConfig,
-                     ledger: &crate::drop_ledger::DropLedger,
+                     ledger: &dione_drop_ledger::DropLedger,
                      message_id: u64,
                      reply_to: Option<u64>,
                      muted: bool,
@@ -2535,7 +2535,7 @@ mod tests {
         );
 
         // Mention-required root is recorded; the mentioning reply inherits.
-        let ledger2 = crate::drop_ledger::DropLedger::new();
+        let ledger2 = dione_drop_ledger::DropLedger::new();
         assert_eq!(
             admit(&mention_gated, &ledger2, 5, None, false, 42, false),
             DirectGuildAdmission::Preflight(GuildPreflight::MentionRequired)
@@ -2546,7 +2546,7 @@ mod tests {
         );
 
         // Muted-guild root is recorded; the post-unmute reply inherits.
-        let ledger3 = crate::drop_ledger::DropLedger::new();
+        let ledger3 = dione_drop_ledger::DropLedger::new();
         assert_eq!(
             admit(&open, &ledger3, 7, None, true, 42, false),
             DirectGuildAdmission::Preflight(GuildPreflight::GuildMuted)
@@ -2557,7 +2557,7 @@ mod tests {
         );
 
         // Unconfigured channel: suppressed, nothing recorded.
-        let ledger4 = crate::drop_ledger::DropLedger::new();
+        let ledger4 = dione_drop_ledger::DropLedger::new();
         let unconfigured = admission_config(999, false, vec![]);
         assert_eq!(
             admit(&unconfigured, &ledger4, 9, None, false, 42, false),
@@ -4490,7 +4490,7 @@ mod tests {
             )
             .await;
         assert_eq!(prepared.outcome, DispatchOutcome::Offered);
-        let drops = crate::drop_ledger::DropLedger::new();
+        let drops = dione_drop_ledger::DropLedger::new();
         assert!(matches!(
             admit_direct_guild_message(
                 &drops,

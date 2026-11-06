@@ -428,3 +428,6 @@ Several spawned task handles are not retained by startup. The final
 `dione stopped` log is therefore
 not proof that every task drained, every buffered event reached a consumer,
 or every journal write reached disk.
+
+The [drop ledger](crates/dione-drop-ledger/src/lib.rs) owns per-scope retention and
+reply inheritance; native admission and canonical fallback retain their policy checks.
