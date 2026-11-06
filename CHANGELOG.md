@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.92.1]
+
+### Fixed
+
+- Preserve the real-child lifecycle test's 120-second bind-response allowance
+  alongside the evidence extraction, retaining its shutdown and backlog checks.
+
 ## [0.92.0]
 
 ### Changed
@@ -26,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   shared Markdown scanner into `dione-evidence`. Preserve canonical encodings,
   validation order, and private handle representations. Migrate message,
   chunking, lint, and filtering callers directly.
+
+## [0.91.1]
+
+### Fixed
+
+- Allow the real-child lifecycle test up to 120 seconds for each bind response
+  on slower test runners, preserving its shutdown and backlog assertions.
 
 ## [0.91.0]
 
