@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.127.0] - 2026-11-06
+
+### Changed
+
+- Extract the complete stateless one-shot sender into dione-oneshot, retaining
+  the real CLI, explicit test feature, privacy, and ambiguous-delivery contracts.
+
 ## [0.126.0] - 2026-11-06
 
 ### Changed

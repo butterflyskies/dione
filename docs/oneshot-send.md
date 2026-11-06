@@ -65,7 +65,7 @@ message text) into the log.
 
 There is no way to point a production build at anything but Discord: the
 API-base override used by the test suite's mock (`--discord-api-base`,
-`oneshot::run_with_api_base`) exists only in builds with the
+`dione_oneshot::run_with_api_base`) exists only in builds with the
 `oneshot-test-seam` cargo feature, which is off by default and never part
 of a release build; a production binary refuses the flag as `usage`. All Discord snowflakes are JSON **strings**,
 and `retryable` and `delivery_ambiguous` are required booleans on every shape.

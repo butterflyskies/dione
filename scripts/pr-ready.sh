@@ -105,6 +105,7 @@ drop_ledger_version=$(sh scripts/workspace-package-version.sh dione-drop-ledger)
 permissions_version=$(sh scripts/workspace-package-version.sh dione-permissions)
 discord_bells_version=$(sh scripts/workspace-package-version.sh dione-discord-bells)
 discord_gate_version=$(sh scripts/workspace-package-version.sh dione-discord-gate)
+oneshot_version=$(sh scripts/workspace-package-version.sh dione-oneshot)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-coordination-${coordination_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-teams-identities-${teams_identities_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-discord-identities-${discord_identities_version}.crate"
@@ -124,6 +125,7 @@ sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-drop-le
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-permissions-${permissions_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-discord-bells-${discord_bells_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-discord-gate-${discord_gate_version}.crate"
+sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-oneshot-${oneshot_version}.crate"
 pre_send_version=$(sh scripts/workspace-package-version.sh dione-pre-send)
 outbound_consent_version=$(sh scripts/workspace-package-version.sh dione-outbound-consent)
 config_version=$(sh scripts/workspace-package-version.sh dione-config)

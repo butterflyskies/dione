@@ -338,7 +338,7 @@ resolved outcomes go to the journal. These are different mechanisms.
 
 [permissions.rs](crates/dione-permissions/src/lib.rs) relays Claude Code permission requests to
 configured Discord admins. Permission button responses are separate from
-ordinary message admission. [oneshot.rs](src/oneshot.rs) implements the bounded
+ordinary message admission. [one-shot owner](crates/dione-oneshot/src/lib.rs) implements the bounded
 one-shot send path with an explicit expected bot identity, described in the
 [one-shot guide](docs/oneshot-send.md).
 

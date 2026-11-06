@@ -1,0 +1,30 @@
+[package]
+name = "dione-oneshot"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Stateless one-shot Discord sending with identity preflight"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["discord", "send", "cli"]
+categories = ["asynchronous"]
+
+[features]
+default = []
+oneshot-test-seam = []
+
+[dependencies]
+dione-config.workspace = true
+dione-discord-gate.workspace = true
+dione-outbound-consent.workspace = true
+dione-pre-send.workspace = true
+camino.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serenity.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+dione-contradictionary.workspace = true
+tempfile.workspace = true

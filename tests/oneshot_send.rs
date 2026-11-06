@@ -8,16 +8,16 @@
 //! the config-path oracles and the seam-absence guard compile.
 #![cfg_attr(not(feature = "oneshot-test-seam"), allow(unused_imports, dead_code))]
 
-use dione::oneshot::Outcome;
-use dione::oneshot::Reason;
-use dione::oneshot::SendRequest;
-use dione::oneshot::TokenSource;
-#[cfg(feature = "oneshot-test-seam")]
-use dione::oneshot::run_with_api_base as run;
 use dione_config::ChannelConfig;
 use dione_config::ChunkMode;
 use dione_config::Config;
 use dione_config::LoadedConfig;
+use dione_oneshot::Outcome;
+use dione_oneshot::Reason;
+use dione_oneshot::SendRequest;
+use dione_oneshot::TokenSource;
+#[cfg(feature = "oneshot-test-seam")]
+use dione_oneshot::run_with_api_base as run;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::{
@@ -236,7 +236,7 @@ async fn sends_one_chunk_and_reports_contract_json() {
     .unwrap();
     let before = dir_snapshot(state_dir.path());
     assert_eq!(before.len(), 1);
-    let cfg = dione::oneshot::load_config_for_send(&config_path).expect("config loads");
+    let cfg = dione_oneshot::load_config_for_send(&config_path).expect("config loads");
 
     let outcome = run(&cfg, &request("drumbeat"), &proxy).await;
     server.abort();
@@ -284,7 +284,7 @@ fn malformed_config_refuses_without_echoing_token_bytes() {
         camino::Utf8PathBuf::from_path_buf(state_dir.path().join("config.toml")).unwrap();
     std::fs::write(&config_path, "token = \"SECRETTOKENBYTES\n").unwrap();
     let before = dir_snapshot(state_dir.path());
-    let refusal = dione::oneshot::load_config_for_send(&config_path).unwrap_err();
+    let refusal = dione_oneshot::load_config_for_send(&config_path).unwrap_err();
     let stdout = Outcome::Refused(refusal).to_json().to_string();
     assert!(!stdout.contains("SECRETTOKENBYTES"), "{stdout}");
     assert!(stdout.contains("\"reason\":\"config_invalid\""), "{stdout}");
