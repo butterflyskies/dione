@@ -549,7 +549,7 @@ The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, `dione-provider-delivery`, `dione-teams`, `dione-omp`, `dione-codex`, `dione-claude`, `dione-discord-presence`, `dione-discord-state`, `dione-discord-events`, and `dione-tracing-channel`.
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, `dione-provider-delivery`, `dione-teams`, `dione-omp`, `dione-codex`, `dione-claude`, `dione-discord-presence`, `dione-discord-state`, `dione-discord-events`, `dione-tracing-channel`, and `dione-config-watcher`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -571,7 +571,7 @@ Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, `dione-provider-delivery`, `dione-teams`, `dione-omp`, `dione-codex`, `dione-claude`, `dione-discord-presence`, `dione-discord-state`, `dione-discord-events`, and `dione-tracing-channel`,
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, `dione-provider-delivery`, `dione-teams`, `dione-omp`, `dione-codex`, `dione-claude`, `dione-discord-presence`, `dione-discord-state`, `dione-discord-events`, `dione-tracing-channel`, and `dione-config-watcher`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
@@ -653,3 +653,10 @@ Private process fixtures preserve actual root dispatch and native admission effe
 stderr filter controllers, and awaited forwarding. Process destinations and
 subscriber installation stay in startup. The inherited string errors and detached
 lifecycle are preserved limits. Publication waits for Discord events reconciliation.
+
+
+`dione-config-watcher` owns actual filesystem observation, canonical event
+selection, coalescing, reload triggering and error forwarding. ConfigRuntime
+retains its single publication/writer authority. Startup drops the returned
+watch task handle, preserving detached lifecycle and inherited callback/error
+backpressure limits. Publication waits for config and Discord events.

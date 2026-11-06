@@ -169,7 +169,7 @@ pub async fn run() -> Result<(), StartupError> {
 
     let (event_tx, event_rx) = mpsc::channel::<NotificationEvent>(256);
 
-    crate::config_watcher::spawn(state_dir.clone(), event_tx.clone(), cancel.clone());
+    dione_config_watcher::spawn(state_dir.clone(), event_tx.clone(), cancel.clone());
 
     let (notif_tx, _notif_rx) = mpsc::channel::<serde_json::Value>(64);
 

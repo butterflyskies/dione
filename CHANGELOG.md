@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.122.0] - 2026-11-05
+
+### Changed
+
+- Extract filesystem configuration watching, reload triggering, and error
+  forwarding into `dione-config-watcher`, retaining the existing config authority.
+
 ## [0.121.0] - 2026-11-05
 
 ### Changed
