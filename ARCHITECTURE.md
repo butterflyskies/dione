@@ -34,6 +34,10 @@ The public `dione-rook` package owns durable recipients, callback scheduling,
 context reads, and publication slots. Its private snapshot keeps claim and
 publication commits together. Discord retains current policy checks, native
 observation conversion, and HTTP transport behind Rook's existing provider traits.
+The public `dione-attention` package owns judgments, source-bound metadata,
+feedback, replay, evaluation, and learning. Dione retains attention admission,
+current source policy, runtime scheduling, and controls. The engine preserves
+its existing Serenity identity types and provider HTTP implementation.
 See the [crate split plan](docs/design/plugin-crates.md) for the next boundaries
 and the package release requirements.
 

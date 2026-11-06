@@ -1,9 +1,9 @@
 [workspace]
-members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook"]
+members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention"]
 
 [package]
 name = "dione"
-version = "0.90.0"
+version = "0.91.1"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -14,6 +14,7 @@ keywords = ["discord", "mcp", "claude-code", "codex", "bot"]
 categories = ["command-line-utilities"]
 
 [workspace.dependencies]
+dione-attention = { version = "=0.1.0", path = "crates/dione-attention" }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
 dione-rook = { version = "=0.1.0", path = "crates/dione-rook" }
 futures-util = "0.3"
@@ -46,7 +47,11 @@ typst-assets = { version = "0.14.2", features = ["fonts"] }
 typst-as-lib = "0.15.4"
 mitex = "0.2.4"
 
+serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "http", "native_tls_backend", "cache"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 [dependencies]
+dione-attention.workspace = true
 dione-rook.workspace = true
 dione-contracts.workspace = true
 dione-durable.workspace = true
@@ -54,10 +59,10 @@ dione-rendering.workspace = true
 arc-swap = "1"
 axum = "0.8"
 clap = { version = "4", features = ["derive", "env"] }
-serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "http", "native_tls_backend", "cache"] }
+serenity.workspace = true
 native-tls.workspace = true
 tokio.workspace = true
-tokio-util = { version = "0.7", features = ["rt"] }
+tokio-util.workspace = true
 serde.workspace = true
 serde_path_to_error.workspace = true
 serde_json.workspace = true
@@ -78,7 +83,7 @@ chrono-tz = "0.10"
 camino.workspace = true
 futures-util.workspace = true
 notify = "8"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest.workspace = true
 jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
 secrecy.workspace = true
 url = "2"
@@ -95,6 +100,7 @@ tempfile.workspace = true
 oneshot-test-seam = []
 
 [dev-dependencies]
+dione-attention = { workspace = true, features = ["test-support"] }
 dione-rook = { workspace = true, features = ["test-support"] }
 dione-durable = { workspace = true, features = ["test-support"] }
 png.workspace = true

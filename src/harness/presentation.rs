@@ -1,20 +1,22 @@
 //! Compact host presentation of scoped delivery observations.
 
-use crate::{
-    attention::delivery::AttentionDirective,
-    core::{
-        delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
-        events::{
-            ControlEvent, CoordinationNotice, MessageCreated, ObservedText, OrdinaryEvent,
-            PermissionDecision,
-        },
-    },
-    evidence::locators::SentexRole,
-    timestamp::format_compact,
-};
 use dione_contracts::{ActorRef, ConversationRef, MessageRef};
 use serde::{Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
+use {
+    crate::{
+        core::{
+            delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
+            events::{
+                ControlEvent, CoordinationNotice, MessageCreated, ObservedText, OrdinaryEvent,
+                PermissionDecision,
+            },
+        },
+        evidence::locators::SentexRole,
+        timestamp::format_compact,
+    },
+    dione_attention::delivery::AttentionDirective,
+};
 
 #[derive(Debug)]
 pub(crate) enum Presentation {
@@ -592,7 +594,7 @@ mod single_tests {
             message_id: MessageId::new(200),
             user: "bob".into(),
             user_id: UserId::new(300),
-            author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
+            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
             content: "hello from channel".into(),
             targeting: crate::discord::events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -618,7 +620,7 @@ mod single_tests {
             message_id: MessageId::new(200),
             user: "bob".into(),
             user_id: UserId::new(300),
-            author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
+            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
             content: "hello from thread".into(),
             targeting: crate::discord::events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -646,7 +648,7 @@ mod single_tests {
             message_id: MessageId::new(200),
             user: "alice".into(),
             user_id: UserId::new(300),
-            author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
+            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
             content: "replying to you".into(),
             targeting: crate::discord::events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -672,7 +674,7 @@ mod single_tests {
             message_id: MessageId::new(200),
             user: "alice".into(),
             user_id: UserId::new(300),
-            author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
+            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
             content: "not a reply".into(),
             targeting: crate::discord::events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -698,7 +700,7 @@ mod single_tests {
             message_id: MessageId::new(200),
             user: "alice".into(),
             user_id: UserId::new(300),
-            author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
+            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
             content: "replying to you".into(),
             targeting: crate::discord::events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -726,7 +728,7 @@ mod single_tests {
             message_id: MessageId::new(200),
             user: "alice".into(),
             user_id: UserId::new(300),
-            author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
+            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
             content: "not a reply".into(),
             targeting: crate::discord::events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -754,7 +756,7 @@ mod single_tests {
             message_id: MessageId::new(200),
             user: "alice".into(),
             user_id: UserId::new(300),
-            author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
+            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
             content: "reply without hydrated parent".into(),
             targeting: crate::discord::events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -783,7 +785,7 @@ mod single_tests {
             message_id: MessageId::new(200),
             user: "alice".into(),
             user_id: UserId::new(300),
-            author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
+            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
             content: "hello with bells".into(),
             targeting: crate::discord::events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -813,7 +815,7 @@ mod single_tests {
             message_id: MessageId::new(200),
             user: "alice".into(),
             user_id: UserId::new(300),
-            author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
+            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
             content: "hello without bells".into(),
             targeting: crate::discord::events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -839,7 +841,7 @@ mod single_tests {
             message_id: MessageId::new(200),
             user: "alice".into(),
             user_id: UserId::new(300),
-            author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
+            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
             content: "reply to attachment-only parent".into(),
             targeting: crate::discord::events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -901,7 +903,7 @@ mod single_tests {
             message_id: MessageId::new(200),
             user: "alice".into(),
             user_id: UserId::new(4242),
-            author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
+            author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
             content: "hello".into(),
             targeting: MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),

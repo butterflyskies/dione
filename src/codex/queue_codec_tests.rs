@@ -311,7 +311,7 @@ async fn dual_replay_invalidation_rolls_back_then_removes_both_indices() {
     value["entries"][0]["payload"] = json!({"method":"notifications/claude/channel","params":{"content":"managed","meta":{"message_id":"42","chat_id":"43","user_id":"44","attention_delivery":"prompt","attention_record":"record-1"}}});
     let (root, original) = write(&directory, &value);
     let queue = CodexEventQueue::open(&root, scope()).await.unwrap();
-    let record = crate::attention::types::RecordId::new("record-1").unwrap();
+    let record = dione_attention::types::RecordId::new("record-1").unwrap();
     let codec = LegacyQueueCodec::new(scope());
     let before = codec.encode(&queue.test_snapshot().await).unwrap();
     queue

@@ -82,6 +82,28 @@ No compatibility module remains in Dione. The source and behavior checks retain
 the existing wire formats, access revocation checks, uncertain-dispatch policy,
 and callback completion barriers.
 
+## Attention engine boundary
+
+`dione-attention` owns configuration values, source-bound decisions, delivery
+descriptors, the TypeSafe client, metadata storage, and learning. Private store
+state keeps representative sampling, evaluation provenance, and promotion
+together. Application callers use existing record lookup and review operations
+instead of reading storage internals.
+
+Dione keeps admission, source resolution, runtime scheduling, and controls.
+Those modules own current source access, export consent, config generations,
+and transport. The application's string-operation adapter error stays with
+them; concrete initialization, store, and receipt error causes move with the
+engine. No compatibility re-export remains.
+
+The engine retains Serenity ID types and existing HTTP/TLS settings. A separate
+provider crate is possible, but has no independent consumer today. This split
+does not introduce a provider trait or change source identity representation.
+
+The default-off `test-support` feature preserves the loopback-only provider
+constructor used by runtime and MCP fixtures. Its URL validation remains
+unchanged. Production dependency features leave that constructor disabled.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -90,16 +112,17 @@ and callback completion barriers.
 3. The narrow provider identity and context contracts needed by Rook. Moving
    all of `core` would create a dependency cycle with attention.
 4. Rook, after its shared contracts and persistence dependencies have owners.
+5. The attention engine, with application admission and runtime retained.
 
 Each PR migrates callers and tests before removing the old module. Attention
-and whole platform adapters need further dependency work and are outside this
+orchestration and whole platform adapters need further dependency work and are outside this
 first sequence. Compare native Linux dependency builds, warm application edits,
 test preparation, and release builds separately before making speed claims.
 
 ## Package and release requirements
 
 The application uses versioned path dependencies on `dione-rendering`,
-`dione-durable`, `dione-contracts`, and `dione-rook`.
+`dione-durable`, `dione-contracts`, `dione-rook`, and `dione-attention`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -117,14 +140,16 @@ Dione retains exact archive checks. Capability comparisons ignore only the
 root `.cargo_vcs_info.json` receipt so an unchanged renderer version can survive
 later application commits; every other archived byte remains protected.
 The already-published path remains mandatory.
-Before the first release, an authorized operator must reserve `dione-rendering`, `dione-durable`, `dione-contracts`, and `dione-rook`,
+Before the first release, an authorized operator must reserve `dione-rendering`,
+`dione-durable`, `dione-contracts`, `dione-rook`, and `dione-attention`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all four capabilities. Each reconciliation verifies the
+publishing waits for all five capabilities. Attention publishing waits for
+contracts reconciliation. Each reconciliation verifies the
 archive contents after registry resolution.
 
 The new publishing and reconciliation jobs have not been exercised against a

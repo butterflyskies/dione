@@ -21,9 +21,13 @@ const MAX_FIT_ITERATIONS: usize = 10_000;
 /// Fixed-score replay baseline; thresholds do not themselves authorize enforcement.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct FixedThresholdPolicy {
+    /// Minimum wanted score that admits a record to delivery.
     pub wanted: f64,
+    /// Minimum prompt score that selects prompt rather than next-turn delivery.
     pub prompt: f64,
+    /// Minimum participation score that admits a record even below the wanted threshold.
     pub participation: f64,
+    /// Minimum change score that admits a record even below the wanted threshold.
     pub change: f64,
 }
 
@@ -61,22 +65,34 @@ impl FixedThresholdPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactAvailability {
+    /// All required source membership is currently usable.
     Available,
+    /// Source membership needs a fresh validation before use.
     AwaitingRevalidation,
+    /// Source membership has been invalidated or cannot support use.
     Invalid,
 }
 
 /// Two recipient-label classifiers with reproducible fitting parameters and thresholds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LogisticCandidate {
+    /// Wanted classifier coefficients for intercept, wanted, prompt, participation, and change.
     pub wanted_weights: [f64; FEATURE_COUNT],
+    /// Timeliness classifier coefficients in the same feature order as `wanted_weights`.
     pub timely_weights: [f64; FEATURE_COUNT],
+    /// Minimum wanted classifier probability that admits a record.
     pub wanted_threshold: f64,
+    /// Minimum timeliness classifier probability that selects prompt delivery.
     pub timely_threshold: f64,
+    /// Nonnegative L2 penalty used when fitting both classifiers.
     pub regularization: f64,
+    /// Number of gradient updates used to fit each classifier.
     pub iterations: usize,
+    /// Positive step size used for each gradient update.
     pub learning_rate: f64,
+    /// Seed used to initialize the reproducible classifier fits.
     pub seed: u64,
+    /// Caller-supplied fitting environment identity retained in the artifact digest.
     pub environment: String,
 }
 
@@ -97,64 +113,100 @@ impl LogisticCandidate {
 /// Recipient-owned model bound to compatibility, source membership, and expiry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LearnedArtifact {
+    /// Digest binding this model to its recipient, compatibility, training membership, and lifetime.
     pub digest: ArtifactDigest,
+    /// Recipient whose attributed feedback trained this artifact.
     pub recipient: RecipientId,
+    /// Model, rubric, feature, and brief identity required when using the artifact.
     pub compatibility: Compatibility,
+    /// Fitted wanted and timeliness classifiers.
     pub model: LogisticCandidate,
+    /// Exact source versions represented by the training records.
     pub members: Vec<SourceVersion>,
     /// Held-out source versions supporting the most recent explicit promotion. Rollback and
     /// enforcement revalidate these along with training membership.
     pub promotion_sources: Vec<SourceVersion>,
+    /// Decision records whose recipient labels contributed to fitting.
     pub training_records: Vec<RecordId>,
+    /// Artifact creation time in milliseconds since the Unix epoch.
     pub created_at_ms: u64,
+    /// Candidate expiry in milliseconds since the Unix epoch.
     pub expires_at_ms: u64,
+    /// Current usability of retained training and promotion source membership.
     pub availability: ArtifactAvailability,
+    /// Whether this artifact has previously been selected by explicit promotion.
     pub ever_promoted: bool,
 }
 
 /// Explicit data sufficiency and optimization settings for fitting an unpromoted candidate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FitOptions {
+    /// Minimum number of usable, non-unsure recipient labels across training records.
     pub minimum_labels: usize,
+    /// Minimum number of training records labeled wanted promptly or wanted later.
     pub minimum_wanted: usize,
+    /// Minimum number of training records labeled not needed.
     pub minimum_not_needed: usize,
+    /// Minimum number of training records labeled wanted promptly.
     pub minimum_promptly: usize,
+    /// Minimum number of training records labeled wanted later.
     pub minimum_later: usize,
+    /// Nonnegative L2 penalty for classifier weights other than the intercept.
     pub regularization: f64,
+    /// Number of gradient updates per classifier, from one through 10,000.
     pub iterations: usize,
+    /// Finite, positive step size for each gradient update.
     pub learning_rate: f64,
+    /// Seed used to initialize both reproducible classifier fits.
     pub seed: u64,
+    /// Nonempty caller-supplied fitting environment identity stored in the candidate.
     pub environment: String,
+    /// Wanted classifier probability cutoff, between zero and one inclusive.
     pub wanted_threshold: f64,
+    /// Timeliness classifier probability cutoff, between zero and one inclusive.
     pub timely_threshold: f64,
+    /// Candidate lifetime in milliseconds, bounded by the store artifact lifetime limit.
     pub candidate_ttl_ms: u64,
 }
 
 /// Millisecond cutoffs for conversation-grouped chronological holdouts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TemporalPartitionSpec {
+    /// Inclusive training cutoff in milliseconds since the Unix epoch.
     pub training_end_ms: u64,
+    /// Inclusive validation cutoff in milliseconds since the Unix epoch, after training.
     pub validation_end_ms: u64,
 }
 
 /// Record IDs partitioned without splitting a conversation across time boundaries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TemporalPartitions {
+    /// Records from conversations whose latest timestamp is at or before the training cutoff.
     pub training: Vec<RecordId>,
+    /// Records from conversations after training and at or before the validation cutoff.
     pub validation: Vec<RecordId>,
+    /// Records from conversations whose latest timestamp is after the validation cutoff.
     pub evaluation: Vec<RecordId>,
 }
 
 /// Predeclared coverage, recall, noise, reduction, and uncertainty requirements.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromotionLimits {
+    /// Minimum number of non-unsure recipient labels in the evaluation holdout.
     pub minimum_labeled: usize,
+    /// Minimum effective sample size for wanted-label recall.
     pub minimum_wanted: usize,
+    /// Minimum effective sample size for promptly wanted recall.
     pub minimum_promptly: usize,
+    /// Lowest acceptable weighted fraction of wanted records admitted to delivery.
     pub minimum_wanted_recall: f64,
+    /// Lowest acceptable weighted fraction of promptly wanted records delivered without delay.
     pub minimum_timely_recall: f64,
+    /// Lowest acceptable fraction of holdout records excluded from delivery.
     pub minimum_volume_reduction: f64,
+    /// Highest acceptable weighted fraction of not-needed records admitted to delivery.
     pub maximum_unwanted_delivery_rate: f64,
+    /// Largest allowed standard error for wanted recall, timely recall, and unwanted delivery.
     pub maximum_standard_error: f64,
 }
 
@@ -183,57 +235,89 @@ impl PromotionLimits {
 /// Recipient-supplied holdout membership and limits, declared before evaluation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvaluationPlan {
+    /// Recipient-chosen identity for this holdout declaration and its eventual receipt.
     pub id: EvaluationId,
+    /// Decision records to seal as the evaluation holdout.
     pub record_ids: Vec<RecordId>,
+    /// Fixed-score thresholds declared before inspecting evaluation results.
     pub fixed_baseline: FixedThresholdPolicy,
+    /// Promotion requirements declared before evaluation.
     pub limits: PromotionLimits,
+    /// Holdout declaration time in milliseconds since the Unix epoch.
     pub opened_at_ms: u64,
 }
 
 /// Persisted holdout declaration whose conversation reuse and source loss are tracked.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpenedEvaluation {
+    /// Identity of the persisted holdout declaration.
     pub id: EvaluationId,
+    /// Recipient who owns the declaration and its feedback targets.
     pub recipient: RecipientId,
+    /// Sorted, unique decision records sealed for evaluation.
     pub record_ids: Vec<RecordId>,
+    /// Conversation groups reserved by the holdout against later fitting or reuse.
     pub conversations: Vec<String>,
+    /// Fixed-score comparison policy sealed when the holdout opened.
     pub fixed_baseline: FixedThresholdPolicy,
+    /// Promotion requirements sealed when the holdout opened.
     pub limits: PromotionLimits,
+    /// Holdout declaration time in milliseconds since the Unix epoch.
     pub opened_at_ms: u64,
+    /// Whether fitting reused a conversation reserved by this holdout.
     pub invalidated_for_tuning: bool,
+    /// Whether source changes or loss invalidated this holdout.
     pub invalidated_source: bool,
 }
 
 /// A weighted estimate with uncertainty and effective sample size; absent values are unknown.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Estimate {
+    /// Inverse-probability-weighted proportion, absent when its weighted denominator is zero.
     pub value: Option<f64>,
+    /// Binomial standard error based on the weighted effective sample size.
     pub standard_error: Option<f64>,
+    /// Squared sum of inverse-probability weights divided by the sum of squared weights.
     pub effective_sample_size: f64,
 }
 
 /// Recall, timeliness, unwanted delivery, and source-volume measurements for one policy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PolicyMetrics {
+    /// Weighted fraction of wanted records admitted to ordinary, prompt, or next-turn delivery.
     pub wanted_recall: Estimate,
+    /// Weighted fraction of promptly wanted records admitted to ordinary or prompt delivery.
     pub timely_recall: Estimate,
+    /// Weighted fraction of wanted records scheduled for the next turn.
     pub wanted_delay_rate: Estimate,
+    /// Weighted fraction of not-needed records admitted to any delivery.
     pub unwanted_delivery_rate: Estimate,
+    /// Unweighted count of records admitted to ordinary, prompt, or next-turn delivery.
     pub admitted_records: usize,
+    /// Total number of source versions attached to admitted records, including repetitions.
     pub admitted_source_volume: usize,
+    /// One minus the fraction of records admitted, or zero for an empty holdout.
     pub volume_reduction: f64,
+    /// One minus the fraction of source-version entries admitted, or zero when none exist.
     pub source_volume_reduction: f64,
 }
 
 /// Recipient label coverage with explicit unsure and unlabeled populations.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReviewCoverage {
+    /// Number of records in the observed evaluation holdout.
     pub total_records: usize,
+    /// Records with a non-unsure label attributed to the recipient.
     pub recipient_labeled: usize,
+    /// Records whose latest recipient label is unsure.
     pub unsure: usize,
+    /// Records with no recipient label.
     pub unlabeled: usize,
+    /// Non-unsure recipient labels with a server-recorded sampling probability.
     pub labels_with_recorded_propensity: usize,
+    /// Sum of inverse sampling probabilities for non-unsure recipient labels.
     pub inverse_probability_population_estimate: f64,
+    /// Effective sample size of non-unsure labels with recorded sampling probabilities.
     pub effective_sample_size: f64,
 }
 
@@ -241,27 +325,44 @@ pub struct ReviewCoverage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvaluationFailure {
+    /// No complete server-issued representative sample supports the labeled holdout.
     MissingRepresentativeSample,
+    /// The holdout has fewer non-unsure recipient labels than required.
     InsufficientLabeled,
+    /// Wanted-label recall has insufficient effective sample size.
     InsufficientWanted,
+    /// Promptly wanted recall has insufficient effective sample size.
     InsufficientPromptlyWanted,
+    /// Wanted recall is below the declared minimum.
     WantedRecall,
+    /// Timely recall is below the declared minimum.
     TimelyRecall,
+    /// Record-volume reduction is below the declared minimum.
     VolumeReduction,
+    /// Unwanted delivery exceeds the declared maximum.
     UnwantedDelivery,
+    /// A reported rate estimate exceeds the permitted standard error.
     Uncertainty,
 }
 
 /// Exact source-bound rows used to reproduce every reported evaluation metric.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MetricInput {
+    /// Decision record used for this evaluation row.
     pub record_id: RecordId,
+    /// Latest recipient-attributed label, absent when the record is unlabeled.
     pub recipient_label: Option<FeedbackLabel>,
+    /// Server-recorded review sampling probability, absent without a matching sealed sample.
     pub inclusion_probability: Option<f64>,
+    /// Number of source versions attached to this record.
     pub source_volume: usize,
+    /// Provider observations retained with the original judgment, when reported.
     pub provider_telemetry: Option<ProviderTelemetry>,
+    /// Candidate admission after the record-specific unknown fallback.
     pub candidate: Admission,
+    /// Ordinary-delivery baseline admission for this row.
     pub normal_delivery: Admission,
+    /// Fixed-threshold admission after the record-specific unknown fallback.
     pub fixed_baseline: Admission,
 }
 
@@ -269,16 +370,22 @@ pub struct MetricInput {
 /// into the total as zero; the total is absent when no row reported the field.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObservedU64Aggregate {
+    /// Rows that reported the aggregated field.
     pub observed_records: usize,
+    /// Rows whose provider telemetry omitted the aggregated field.
     pub missing_records: usize,
+    /// Checked sum of reported values, absent when no row reported the field.
     pub total: Option<u64>,
 }
 
 /// Aggregated observed provider usage; missing telemetry is not treated as zero.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvaluationUsage {
+    /// Reported provider request attempts across evaluation rows.
     pub attempts: ObservedU64Aggregate,
+    /// Reported input-token usage across evaluation rows.
     pub input_tokens: ObservedU64Aggregate,
+    /// Reported output-token usage across evaluation rows.
     pub output_tokens: ObservedU64Aggregate,
 }
 
@@ -286,41 +393,62 @@ pub struct EvaluationUsage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BilledCost {
+    /// The provider did not report a billed price, so no cost is inferred.
     UnavailableNoBilledPrice,
 }
 
 /// Provider latency and usage observations, without inferred billing amounts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvaluationProviderMetrics {
+    /// Reported provider latency in milliseconds across evaluation rows.
     pub latency_ms: ObservedU64Aggregate,
+    /// Observed request attempts and token usage.
     pub usage: EvaluationUsage,
+    /// Explicit absence of a provider-reported billed price.
     pub billed_cost: BilledCost,
 }
 
 /// Source-bound, reproducible comparison against normal delivery and fixed thresholds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvaluationReceipt {
+    /// Identity of the previously opened holdout declaration.
     pub evaluation_id: EvaluationId,
+    /// Recipient whose labels and holdout produced the comparison.
     pub recipient: RecipientId,
+    /// Candidate artifact evaluated by this receipt.
     pub artifact_digest: ArtifactDigest,
+    /// Model, rubric, feature, and brief identity of the evaluated candidate.
     pub compatibility: Compatibility,
+    /// Evaluation time in milliseconds since the Unix epoch.
     pub evaluated_at_ms: u64,
+    /// Sorted, unique source versions represented in the holdout.
     pub evaluation_sources: Vec<SourceVersion>,
+    /// Per-record inputs retained to reproduce the reported aggregates.
     pub metric_inputs: Vec<MetricInput>,
+    /// Observed latency and token usage for the holdout judgments.
     pub provider: EvaluationProviderMetrics,
+    /// Recipient-label coverage and recorded sampling probabilities.
     pub coverage: ReviewCoverage,
+    /// Measured admissions and weighted rates for the learned candidate.
     pub candidate: PolicyMetrics,
+    /// Comparison metrics when every holdout record receives ordinary delivery.
     pub normal_delivery: PolicyMetrics,
+    /// Comparison metrics for the predeclared fixed-score policy.
     pub fixed_baseline: PolicyMetrics,
+    /// Promotion requirements copied from the sealed holdout declaration.
     pub limits: PromotionLimits,
+    /// Every promotion requirement that this evaluation did not meet.
     pub failures: Vec<EvaluationFailure>,
+    /// Whether the evaluation met every declared promotion requirement; this does not activate it.
     pub passed: bool,
 }
 
 /// The policy selection produced by an explicit promotion or compatible rollback.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PromotionResult {
+    /// Artifact selected for the recipient after promotion or rollback.
     pub active_digest: ArtifactDigest,
+    /// Artifact active before this selection, absent when there was none.
     pub previous_digest: Option<ArtifactDigest>,
 }
 
@@ -328,38 +456,55 @@ pub struct PromotionResult {
 #[derive(Debug, Error)]
 pub enum LearningError {
     #[error(transparent)]
+    /// A durable metadata operation failed with its original store error.
     Store(#[from] StoreError),
     #[error("authenticated actor is not the recipient")]
+    /// The authenticated actor differs from the target recipient.
     ActorMismatch,
     #[error("invalid fixed or learned policy: {0}")]
+    /// A policy parameter or fitting option violates its bounds.
     InvalidPolicy(&'static str),
     #[error("invalid predeclared promotion limits")]
+    /// Predeclared promotion limits are empty, non-finite, or outside probability bounds.
     InvalidLimits,
     #[error("record `{0}` cannot be used for this recipient or compatibility")]
+    /// A decision record cannot be used for the requested recipient or compatibility.
     IneligibleRecord(RecordId),
     #[error("record `{0}` combines multiple conversation groups")]
+    /// One decision record contains source versions from different conversations.
     MixedConversationRecord(RecordId),
     #[error("insufficient recipient labels for fitting")]
+    /// Usable recipient labels do not meet the fitting requirements.
     InsufficientLabels,
     #[error("evaluation `{0}` already exists")]
+    /// The evaluation identity already has a declaration or persisted result.
     EvaluationExists(EvaluationId),
     #[error("evaluation `{0}` was not found")]
+    /// No opened evaluation exists for the requested identity.
     EvaluationNotFound(EvaluationId),
     #[error("evaluation holdout was already touched by fitting")]
+    /// The holdout was reused for tuning or its sealed membership is no longer usable.
     HoldoutTouched,
     #[error("opened evaluation conversations were reused for tuning: {0:?}")]
+    /// Fitting reused conversations reserved by the listed open evaluations.
     OpenedEvaluationReused(Vec<EvaluationId>),
     #[error("artifact `{0}` was not found")]
+    /// No retained artifact has the requested digest.
     ArtifactNotFound(ArtifactDigest),
     #[error("artifact is not compatible with the current policy identity")]
+    /// The artifact differs from the current policy compatibility identity.
     IncompatibleArtifact,
     #[error("artifact membership is invalid or awaiting revalidation")]
+    /// Required source membership is invalid, stale, expired, or unavailable.
     InvalidMembership,
     #[error("held-out evidence does not pass its predeclared limits")]
+    /// Held-out evidence does not satisfy its predeclared promotion requirements.
     EvaluationDidNotPass,
     #[error("artifact was never promoted and is not eligible for rollback")]
+    /// The requested rollback artifact has never been explicitly promoted.
     NotRollbackArtifact,
     #[error("arithmetic produced a non-finite value")]
+    /// A classifier weight became non-finite during fitting.
     NonFinite,
 }
 
@@ -1489,7 +1634,7 @@ fn evaluation_failures(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attention::{
+    use crate::{
         store::{StoreLimits, ValidationFact, ValidationStatus},
         types::{
             Compatibility, DeliveryState, Probability, ProviderTelemetry, RawJudgment, SourceKey,
@@ -1531,7 +1676,7 @@ mod tests {
                     message_id: MessageId::new(id),
                 },
                 author_id: UserId::new(2),
-                author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
+                author_kind: crate::types::SourceAuthorKind::DirectHuman,
                 conversation: conversation.into(),
                 content_hash: content_hash(&format!("source-{id}")),
                 observed_at_ms: at,

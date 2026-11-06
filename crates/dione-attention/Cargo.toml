@@ -1,0 +1,36 @@
+[package]
+name = "dione-attention"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Source-bound attention judgments, metadata, and local learning for Dione"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["attention", "learning", "feedback"]
+categories = ["data-structures"]
+
+[features]
+test-support = []
+
+[dependencies]
+camino.workspace = true
+chrono.workspace = true
+dione-contracts.workspace = true
+fs2.workspace = true
+futures-util.workspace = true
+libc.workspace = true
+native-tls.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+serenity.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

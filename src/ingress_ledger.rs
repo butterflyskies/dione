@@ -12,10 +12,6 @@
 //! remain independent lineages: the ledger does not suppress either event based
 //! on timing or content similarity.
 
-use crate::{
-    attention::types::{DirectAuthorKind, SourceAuthorKind},
-    discord::verified_action::{LifecycleAdmissionFacts, LifecycleContext, LifecycleProvenance},
-};
 use serenity::model::{
     Timestamp,
     id::{ChannelId, MessageId, UserId, WebhookId},
@@ -26,6 +22,12 @@ use std::{
     fmt,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
+};
+use {
+    crate::discord::verified_action::{
+        LifecycleAdmissionFacts, LifecycleContext, LifecycleProvenance,
+    },
+    dione_attention::types::{DirectAuthorKind, SourceAuthorKind},
 };
 
 const ACTIVE_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);

@@ -1,5 +1,5 @@
 use super::*;
-use crate::attention::{
+use dione_attention::{
     learning::{
         ArtifactAvailability, EvaluationPlan, FitOptions, FixedThresholdPolicy, LearnedArtifact,
         PromotionLimits,
@@ -312,15 +312,15 @@ fn unavailable_final_guard_retries_committed_fifo_without_replay_or_source_leaka
             ["43001", "43002", "43003"]
         );
         for event in &delivered {
-            crate::attention::delivery::AttentionDeliveryGuard::receipt(
+            dione_attention::delivery::AttentionDeliveryGuard::receipt(
                 fixture.attention.clone(),
-                &crate::attention::types::RecordId::new(
+                &dione_attention::types::RecordId::new(
                     event["params"]["meta"]["attention_record"]
                         .as_str()
                         .unwrap(),
                 )
                 .unwrap(),
-                crate::attention::delivery::AttentionDeliveryReceipt::Accepted,
+                dione_attention::delivery::AttentionDeliveryReceipt::Accepted,
             )
             .await
             .unwrap();
@@ -685,7 +685,7 @@ fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipt
             confirmed_event.event["params"]["meta"]["attention_record"].as_str(),
             Some(confirmed.id.as_str())
         );
-        crate::attention::delivery::AttentionDeliveryGuard::check(
+        dione_attention::delivery::AttentionDeliveryGuard::check(
             fixture.attention.as_ref(),
             &crate::codex::decode_legacy_attention_for_test(
                 &confirmed_event.event,
@@ -703,7 +703,7 @@ fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipt
         .unwrap()
         .unwrap();
         let valid = observed.descriptor();
-        let wrong_record = crate::attention::types::RecordId::new("unrelated-decision").unwrap();
+        let wrong_record = dione_attention::types::RecordId::new("unrelated-decision").unwrap();
         let wrong_module = dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("other").unwrap(),
@@ -740,11 +740,11 @@ fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipt
             .unwrap(),
         );
         let wrong_directive = match valid.directive() {
-            crate::attention::delivery::AttentionDirective::Prompt => {
-                crate::attention::delivery::AttentionDirective::NextTurn
+            dione_attention::delivery::AttentionDirective::Prompt => {
+                dione_attention::delivery::AttentionDirective::NextTurn
             }
-            crate::attention::delivery::AttentionDirective::NextTurn => {
-                crate::attention::delivery::AttentionDirective::Prompt
+            dione_attention::delivery::AttentionDirective::NextTurn => {
+                dione_attention::delivery::AttentionDirective::Prompt
             }
         };
         for (record, directive, source, author, text) in [
@@ -812,28 +812,28 @@ fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipt
                 "substituted content",
             ),
         ] {
-            let descriptor = crate::attention::delivery::AttentionDescriptor::new(
+            let descriptor = dione_attention::delivery::AttentionDescriptor::new(
                 record, directive, source, author, text,
             );
             assert_eq!(
-                crate::attention::delivery::AttentionDeliveryGuard::check(
+                dione_attention::delivery::AttentionDeliveryGuard::check(
                     fixture.attention.as_ref(),
                     &descriptor
                 ),
-                Err(crate::attention::delivery::AttentionGuardFailure::Invalidated)
+                Err(dione_attention::delivery::AttentionGuardFailure::Invalidated)
             );
             assert_eq!(
-                crate::attention::delivery::AttentionDeliveryGuard::check(
+                dione_attention::delivery::AttentionDeliveryGuard::check(
                     fixture.attention.as_ref(),
                     &valid
                 ),
                 Ok(())
             );
         }
-        crate::attention::delivery::AttentionDeliveryGuard::receipt(
+        dione_attention::delivery::AttentionDeliveryGuard::receipt(
             fixture.attention.clone(),
             &confirmed.id,
-            crate::attention::delivery::AttentionDeliveryReceipt::Accepted,
+            dione_attention::delivery::AttentionDeliveryReceipt::Accepted,
         )
         .await
         .unwrap();
@@ -853,7 +853,7 @@ fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipt
             uncertain_event.event["params"]["meta"]["attention_record"].as_str(),
             Some(uncertain.id.as_str())
         );
-        crate::attention::delivery::AttentionDeliveryGuard::check(
+        dione_attention::delivery::AttentionDeliveryGuard::check(
             fixture.attention.as_ref(),
             &crate::codex::decode_legacy_attention_for_test(
                 &uncertain_event.event,
@@ -864,10 +864,10 @@ fn restart_recovers_held_work_and_distinguishes_confirmed_from_uncertain_receipt
             .descriptor(),
         )
         .unwrap();
-        crate::attention::delivery::AttentionDeliveryGuard::receipt(
+        dione_attention::delivery::AttentionDeliveryGuard::receipt(
             fixture.attention.clone(),
             &uncertain.id,
-            crate::attention::delivery::AttentionDeliveryReceipt::Uncertain,
+            dione_attention::delivery::AttentionDeliveryReceipt::Uncertain,
         )
         .await
         .unwrap();
@@ -2060,7 +2060,7 @@ fn revoked_bot_is_fenced_before_final_delivery_and_offline_pending_recovery() {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ObservedReceipt {
-    outcome: crate::attention::delivery::AttentionDeliveryReceipt,
+    outcome: dione_attention::delivery::AttentionDeliveryReceipt,
     failure: Option<std::io::ErrorKind>,
 }
 
@@ -2070,33 +2070,41 @@ struct ReceiptObserver {
     outcomes: Arc<std::sync::Mutex<Vec<ObservedReceipt>>>,
 }
 
-impl crate::attention::delivery::AttentionDeliveryGuard for ReceiptObserver {
+impl dione_attention::delivery::AttentionDeliveryGuard for ReceiptObserver {
     fn check(
         &self,
-        descriptor: &crate::attention::delivery::AttentionDescriptor<'_>,
-    ) -> Result<(), crate::attention::delivery::AttentionGuardFailure> {
-        crate::attention::delivery::AttentionDeliveryGuard::check(self.runtime.as_ref(), descriptor)
+        descriptor: &dione_attention::delivery::AttentionDescriptor<'_>,
+    ) -> Result<(), dione_attention::delivery::AttentionGuardFailure> {
+        dione_attention::delivery::AttentionDeliveryGuard::check(self.runtime.as_ref(), descriptor)
     }
 
     fn receipt<'a>(
         self: Arc<Self>,
-        record: &'a crate::attention::types::RecordId,
-        outcome: crate::attention::delivery::AttentionDeliveryReceipt,
+        record: &'a dione_attention::types::RecordId,
+        outcome: dione_attention::delivery::AttentionDeliveryReceipt,
     ) -> futures_util::future::BoxFuture<
         'a,
-        Result<(), crate::attention::delivery::AttentionReceiptError>,
+        Result<(), dione_attention::delivery::AttentionReceiptError>,
     > {
         Box::pin(async move {
-            let result = crate::attention::delivery::AttentionDeliveryGuard::receipt(
+            let result = dione_attention::delivery::AttentionDeliveryGuard::receipt(
                 self.runtime.clone(),
                 record,
                 outcome,
             )
             .await;
             let cause = result.as_ref().err().map(|error| {
-                let crate::attention::store_access::AttentionReceiptErrorKind::Store(crate::attention::store_access::AttentionStoreAccessError {
-                    kind: crate::attention::store_access::AttentionStoreAccessErrorKind::Operation(crate::attention::store::StoreError::Io { source, .. }),
-                }) = error.kind() else { panic!("receipt lost the concrete I/O cause: {error:?}"); };
+                let dione_attention::store_access::AttentionReceiptErrorKind::Store(
+                    dione_attention::store_access::AttentionStoreAccessError {
+                        kind:
+                            dione_attention::store_access::AttentionStoreAccessErrorKind::Operation(
+                                dione_attention::store::StoreError::Io { source, .. },
+                            ),
+                    },
+                ) = error.kind()
+                else {
+                    panic!("receipt lost the concrete I/O cause: {error:?}");
+                };
                 source.kind()
             });
             self.outcomes.lock().unwrap().push(ObservedReceipt {
@@ -2213,7 +2221,7 @@ fn accepted_live_turn_is_not_replayed_after_real_receipt_write_failure() {
         assert_eq!(
             receipts,
             [ObservedReceipt {
-                outcome: crate::attention::delivery::AttentionDeliveryReceipt::Accepted,
+                outcome: dione_attention::delivery::AttentionDeliveryReceipt::Accepted,
                 failure: Some(std::io::ErrorKind::NotADirectory),
             }]
         );

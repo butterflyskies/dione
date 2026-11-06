@@ -109,7 +109,9 @@ impl From<Probability> for f64 {
 /// Discord channel/message identity, independent of content version or access rights.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SourceKey {
+    /// Discord channel containing the observed message.
     pub channel_id: ChannelId,
+    /// Discord message identity within the channel.
     pub message_id: MessageId,
 }
 
@@ -163,14 +165,18 @@ impl From<DirectAuthorKind> for SourceAuthorKind {
 /// Content-version evidence with attributed transport provenance; not an authorization grant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceVersion {
+    /// Exact channel and message identity for this observation.
     pub key: SourceKey,
+    /// Observed Discord author identity; current authority is checked separately.
     pub author_id: UserId,
     /// Verified author/transport class used by delayed authority checks.
     #[serde(default)]
     pub author_kind: SourceAuthorKind,
     /// Stable conversation group supplied by the source resolver, not a semantic guess.
     pub conversation: String,
+    /// Lowercase SHA-256 digest of the exact UTF-8 source text.
     pub content_hash: String,
+    /// Unix time in milliseconds when the source version was observed.
     pub observed_at_ms: u64,
 }
 
@@ -189,18 +195,26 @@ pub fn content_hash(text: &str) -> String {
 /// Complete model, rubric, feature and recipient-brief identity required for reuse.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Compatibility {
+    /// Exact provider model identity used to produce the scores.
     pub model: String,
+    /// Question-rubric version bound into the decision.
     pub rubric: String,
+    /// Calibration feature version and ordering bound into the decision.
     pub features: String,
+    /// Digest binding the recipient brief text, expiry, and export grant.
     pub brief_version: String,
 }
 
 /// Independent wantedness, timeliness, participation and incremental-change probabilities.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Scores {
+    /// Probability that the trigger is useful to the recipient.
     pub wanted: Probability,
+    /// Probability that the trigger warrants attention at the next safe opportunity.
     pub prompt: Probability,
+    /// Probability that the conversation invites the recipient to participate.
     pub participation: Probability,
+    /// Probability that the trigger updates relevant facts or work state.
     pub change: Probability,
 }
 
@@ -219,19 +233,27 @@ impl Scores {
 /// Bounded provider timing and usage metadata, without source text or credentials.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderTelemetry {
+    /// Total elapsed judgment time in milliseconds, including retries.
     pub elapsed_ms: u64,
+    /// Number of provider request attempts made for this judgment.
     pub attempts: u32,
+    /// Provider-reported input token count when supplied.
     pub input_tokens: Option<u64>,
+    /// Provider-reported output token count when supplied.
     pub output_tokens: Option<u64>,
 }
 
 /// Reusable provider scores and context sufficiency, not an admission decision.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RawJudgment {
+    /// Provider model identity returned with this judgment.
     pub model: String,
+    /// Independent relevance, timeliness, participation, and change probabilities.
     pub scores: Scores,
+    /// Probability that the authorized evidence is sufficient to judge the other dimensions.
     pub context_sufficient: Probability,
     #[serde(default)]
+    /// Optional bounded timing and usage metadata from the provider boundary.
     pub telemetry: Option<ProviderTelemetry>,
 }
 
@@ -239,10 +261,15 @@ pub struct RawJudgment {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Admission {
+    /// Preserve ordinary delivery without attention-specific scheduling.
     Ordinary,
+    /// Schedule the trigger at the next supported safe idle opportunity.
     Prompt,
+    /// Deliver the trigger at the recipient's next supported safe turn.
     NextTurn,
+    /// Retain the trigger for explicit retrieval without scheduling delivery.
     RetrievalOnly,
+    /// No usable attention decision is available.
     Unknown,
 }
 
@@ -250,32 +277,53 @@ pub enum Admission {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeliveryState {
+    /// The source is recorded without an attention-managed dispatch.
     Observed,
+    /// The source is retained while pending attention work completes.
     Held,
+    /// The trigger is retained for retrieval without scheduled dispatch.
     Deferred,
+    /// The trigger is eligible for attention-managed dispatch.
     Admitted,
+    /// The transport acknowledged dispatch of the admitted trigger.
     Dispatched,
+    /// The transport outcome is uncertain and does not authorize replay.
     ReceiptUncertain,
+    /// The retained source evidence no longer permits delivery.
     Invalidated,
 }
 
 /// Recipient-local decision tied to exact sources, compatibility and controller lifetime.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DecisionRecord {
+    /// Durable identity of this source-bound decision.
     pub id: RecordId,
+    /// Recipient whose local attention store owns the decision.
     pub recipient: RecipientId,
+    /// Exact source versions on which the decision depends.
     pub sources: Vec<SourceVersion>,
+    /// Model, rubric, feature, and brief identities required to reuse the decision.
     pub compatibility: Compatibility,
+    /// Application configuration generation captured for the decision.
     pub config_generation: u64,
+    /// Controller process lifetime that created the decision.
     pub incarnation: IncarnationId,
+    /// Unix time in milliseconds when the record was created.
     pub created_at_ms: u64,
+    /// Unix time in milliseconds after which the record is expired.
     pub expires_at_ms: u64,
+    /// Provider scores when evaluation completed successfully.
     pub judgment: Option<RawJudgment>,
     #[serde(default)]
+    /// Selected learned artifact used for this decision, when present.
     pub policy_digest: Option<ArtifactDigest>,
+    /// Policy outcome calculated independently of the active delivery mode.
     pub hypothetical: Admission,
+    /// Delivery policy outcome applied under the active mode.
     pub actual: Admission,
+    /// Durable state of attention-managed transport handling.
     pub delivery: DeliveryState,
+    /// Recorded review-selection probability when sampled for feedback.
     pub selection_probability: Option<Probability>,
 }
 
@@ -283,18 +331,27 @@ pub struct DecisionRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FeedbackLabel {
+    /// The recipient wanted the source at the next safe opportunity.
     WantedPromptly,
+    /// The recipient wanted the source without a prompt interruption.
     WantedLater,
+    /// The recipient did not need the source.
     NotNeeded,
+    /// The recipient supplied no definite wantedness or timeliness target.
     Unsure,
 }
 
 /// Actor-attributed assessment bound to the exact source versions reviewed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Feedback {
+    /// Decision whose exact source versions were assessed.
     pub record_id: RecordId,
+    /// Actor identity attributed to this assessment.
     pub annotator: RecipientId,
+    /// Explicit assessment supplied by the actor.
     pub label: FeedbackLabel,
+    /// Unix time in milliseconds when the assessment was made.
     pub assessed_at_ms: u64,
+    /// Exact source versions reviewed when the assessment was supplied.
     pub source_versions: Vec<SourceVersion>,
 }

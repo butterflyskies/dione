@@ -1,13 +1,4 @@
 use super::*;
-use crate::{
-    attention::delivery::{AttentionDeliveryReceipt, AttentionGuardFailure},
-    delivery::ProviderEventKey,
-    teams::{
-        ReplyHandle,
-        delivery::{TeamsAdmissionOutcome, TeamsResidentEvent},
-    },
-    timestamp::Timestamp,
-};
 use camino::Utf8PathBuf;
 use futures_util::{SinkExt, StreamExt, future::BoxFuture};
 use serde_json::{Value, json};
@@ -20,21 +11,32 @@ use tokio::{
     time::timeout,
 };
 use tokio_tungstenite::{accept_async, tungstenite::Message};
+use {
+    crate::{
+        delivery::ProviderEventKey,
+        teams::{
+            ReplyHandle,
+            delivery::{TeamsAdmissionOutcome, TeamsResidentEvent},
+        },
+        timestamp::Timestamp,
+    },
+    dione_attention::delivery::{AttentionDeliveryReceipt, AttentionGuardFailure},
+};
 
 #[derive(Debug)]
 pub(crate) struct Guard;
 impl AttentionDeliveryGuard for Guard {
     fn check(
         &self,
-        _: &crate::attention::delivery::AttentionDescriptor<'_>,
+        _: &dione_attention::delivery::AttentionDescriptor<'_>,
     ) -> Result<(), AttentionGuardFailure> {
         Ok(())
     }
     fn receipt<'a>(
         self: Arc<Self>,
-        _: &'a crate::attention::types::RecordId,
+        _: &'a dione_attention::types::RecordId,
         _: AttentionDeliveryReceipt,
-    ) -> BoxFuture<'a, Result<(), crate::attention::delivery::AttentionReceiptError>> {
+    ) -> BoxFuture<'a, Result<(), dione_attention::delivery::AttentionReceiptError>> {
         Box::pin(async { Ok(()) })
     }
 }

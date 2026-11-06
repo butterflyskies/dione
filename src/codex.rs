@@ -13,11 +13,11 @@ mod legacy_tests;
 #[cfg(test)]
 mod owned_tests;
 
-use crate::attention::types::RecordId;
 pub use app_server::{
     CodexDeliveryConfig, CodexDeliveryError, CodexDeliveryErrorKind, run_delivery_worker,
 };
 use chrono::{DateTime, Utc};
+use dione_attention::types::RecordId;
 pub use dione_durable::{
     AllocationKind, CodecError, CodecErrorKind, ConsumerId, ConsumerRegistrationResult,
     ConsumerStatus, DeliveryToken, EndpointId, EventId, HandoffResult, IdentityError,

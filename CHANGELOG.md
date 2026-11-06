@@ -18,6 +18,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.91.1]
+
+### Fixed
+
+- Allow the real-child lifecycle test up to 120 seconds for each bind response
+  on slower test runners, preserving its shutdown and backlog assertions.
+
+## [0.91.0]
+
+### Changed
+
+- Extract attention judgments, metadata, learning, and delivery contracts into
+  `dione-attention`. Keep admission, current source access, runtime scheduling,
+  and controls in Dione. Preserve stored records, provider requests, and sampling
+  provenance while migrating callers directly.
+
 ## [0.90.0]
 
 ### Changed

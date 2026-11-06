@@ -40,14 +40,23 @@ const DEFAULT_REVALIDATION_INTERVAL_MS: u64 = 24 * 60 * 60 * 1_000;
 /// Hard bounds for one recipient-local metadata store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoreLimits {
+    /// Maximum number of retained decision records.
     pub max_records: usize,
+    /// Maximum number of attributed feedback entries.
     pub max_feedback: usize,
+    /// Maximum number of retained learned artifacts.
     pub max_artifacts: usize,
+    /// Maximum number of retained completed evaluation receipts.
     pub max_evaluations: usize,
+    /// Maximum number of predeclared evaluations awaiting completion.
     pub max_opened_evaluations: usize,
+    /// Maximum number of source-bound members in one artifact.
     pub max_members_per_artifact: usize,
+    /// Maximum number of records requested in one representative review selection.
     pub max_review_batch: usize,
+    /// Maximum decision lifetime in milliseconds between creation and expiry.
     pub max_record_ttl_ms: u64,
+    /// Maximum age in milliseconds of source evidence used to keep an artifact available.
     pub revalidation_interval_ms: u64,
 }
 
@@ -71,51 +80,72 @@ impl Default for StoreLimits {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ValidationStatus {
+    /// Current lookup confirmed access and the exact source version.
     Known,
+    /// Current lookup could not establish whether the source is still usable.
     Unknown,
+    /// Current lookup confirmed denied access or a source-version mismatch.
     Invalid,
 }
 
 /// Resolver-observed validation of one exact source version at a recorded time.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ValidationFact {
+    /// Exact source version checked by the resolver.
     pub source: SourceVersion,
+    /// Resolver result for current access and version agreement.
     pub status: ValidationStatus,
+    /// Unix time in milliseconds when the resolver performed the check.
     pub checked_at_ms: u64,
 }
 
 /// Durable consequences of withdrawing a source version and dependent calibration evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InvalidationReport {
+    /// Number of retained decisions depending on the withdrawn source.
     pub affected_records: usize,
+    /// Number of feedback entries removed with invalid source evidence.
     pub removed_feedback: usize,
+    /// Artifact digests whose retained source evidence was invalidated.
     pub withdrawn_artifacts: Vec<ArtifactDigest>,
+    /// Whether a selected artifact was withdrawn or became unavailable.
     pub active_withdrawn: bool,
 }
 
 /// Durable consequences of retention expiry, including dependent artifact withdrawal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PruneReport {
+    /// Number of decision records removed by retention expiry.
     pub expired_records: usize,
+    /// Number of feedback entries removed with expired records.
     pub removed_feedback: usize,
+    /// Artifact digests withdrawn because retained source evidence expired.
     pub withdrawn_artifacts: Vec<ArtifactDigest>,
+    /// Whether a selected artifact was withdrawn or became unavailable.
     pub active_withdrawn: bool,
 }
 
 /// Artifact availability changes caused by one current-source observation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RevalidationReport {
+    /// Current-source result applied to dependent artifact availability.
     pub status: ValidationStatus,
+    /// Artifact digests whose availability changed for this source.
     pub affected_artifacts: Vec<ArtifactDigest>,
+    /// Whether a selected artifact was withdrawn or became unavailable.
     pub active_withdrawn: bool,
 }
 
 /// A sampled review candidate with its true inclusion probability for unbiased estimates.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReviewItem {
+    /// Decision selected for recipient review.
     pub record_id: RecordId,
+    /// Provider wantedness probability for the selected decision.
     pub wanted_score: f64,
+    /// Whether the hypothetical policy outcome was retrieval-only.
     pub would_be_deferred: bool,
+    /// Actual probability that this sampling procedure includes the record.
     pub inclusion_probability: f64,
 }
 
@@ -134,7 +164,9 @@ pub(super) struct ReviewBatch {
 /// Explicit recipient labels converted to wantedness and timeliness training targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct RecipientTarget {
+    /// Whether the explicit recipient label supplies a positive wantedness target.
     pub wanted: bool,
+    /// Whether the explicit recipient label supplies a prompt-attention target.
     pub timely: bool,
 }
 
@@ -144,42 +176,64 @@ pub enum StoreError {
     /// Durable input failed validation at the reported field path.
     #[error("attention store `{path}` is invalid")]
     Decode {
+        /// UTF-8 path of the durable document being decoded.
         path: Utf8PathBuf,
         #[source]
+        /// Path-aware typed decoding failure from the durable document.
         source: serde_path_to_error::Error<serde_json::Error>,
     },
+    /// A filesystem operation failed while accessing the store.
     #[error("failed to access attention store `{path}`")]
     Io {
+        /// UTF-8 path involved in the failed filesystem operation.
         path: Utf8PathBuf,
         #[source]
+        /// Original filesystem failure.
         source: std::io::Error,
     },
+    /// Another process holds the store's exclusive ownership lock.
     #[error("another process owns attention store at {path}")]
-    Locked { path: Utf8PathBuf },
+    Locked {
+        /// UTF-8 path whose exclusive ownership lock is held elsewhere.
+        path: Utf8PathBuf,
+    },
+    /// The stored document could not be decoded as JSON.
     #[error("attention store `{path}` is corrupt")]
     Corrupt {
+        /// UTF-8 path of the malformed JSON document.
         path: Utf8PathBuf,
         #[source]
+        /// Original JSON decoding failure.
         source: serde_json::Error,
     },
+    /// The persisted schema version is not supported by this implementation.
     #[error("unsupported attention store schema {0}")]
     UnsupportedSchema(u32),
+    /// A new decision reused an existing durable identity.
     #[error("attention record `{0}` already exists")]
     DuplicateRecord(RecordId),
+    /// The requested decision does not exist in the store.
     #[error("attention record `{0}` was not found")]
     RecordNotFound(RecordId),
+    /// The decision already has a final result.
     #[error("attention record {0} was already finalized")]
     RecordAlreadyFinalized(RecordId),
+    /// Finalization attempted to change immutable decision identity.
     #[error("attention record {0} finalization changed immutable identity")]
     FinalizationMismatch(RecordId),
+    /// The decision expired before finalization.
     #[error("attention record {0} expired before finalization")]
     RecordExpired(RecordId),
+    /// Feedback did not name the decision's exact source versions.
     #[error("feedback source versions do not match attention record `{0}`")]
     FeedbackSourceMismatch(RecordId),
+    /// The feedback annotator differed from the authenticated actor.
     #[error("feedback annotator does not match authenticated actor")]
     FeedbackActorMismatch,
+    /// A bounded collection cannot admit another entry.
     #[error("attention store capacity exceeded for {0}")]
     Capacity(&'static str),
+    /// Attention metadata violated a required invariant.
     #[error("invalid attention metadata: {0}")]
     Invalid(&'static str),
 }
@@ -1623,9 +1677,7 @@ fn remove_artifact_references(state: &mut StoreState, affected: &BTreeSet<Artifa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attention::types::{
-        Admission, Compatibility, Probability, RawJudgment, Scores, content_hash,
-    };
+    use crate::types::{Admission, Compatibility, Probability, RawJudgment, Scores, content_hash};
     use serenity::model::id::{ChannelId, MessageId, UserId};
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
@@ -1645,7 +1697,7 @@ mod tests {
                 message_id: MessageId::new(id),
             },
             author_id: UserId::new(8),
-            author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
+            author_kind: crate::types::SourceAuthorKind::DirectHuman,
             conversation: conversation.to_owned(),
             content_hash: content_hash(&format!("message-{id}")),
             observed_at_ms: id,

@@ -11,9 +11,12 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AttentionMode {
+    /// Use ordinary delivery without attention evaluation.
     #[default]
     Off,
+    /// Record hypothetical attention decisions while preserving ordinary delivery.
     Log,
+    /// Allow attention decisions to filter and schedule delivery.
     On,
 }
 
@@ -21,8 +24,11 @@ pub enum AttentionMode {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NoticeMode {
+    /// Suppress attention health notices.
     Off,
+    /// Report attention failures without recovery notices.
     Failures,
+    /// Report both attention failures and subsequent recovery.
     #[default]
     FailuresAndRecovery,
 }
@@ -31,8 +37,11 @@ pub enum NoticeMode {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RoomAttention {
+    /// Overrides the seat delivery mode for this exact room when present.
     pub mode: Option<AttentionMode>,
+    /// Explicitly allows this room to export authorized source text to the provider.
     pub provider_eligible: bool,
+    /// Routes this room through ordinary delivery without attention filtering.
     pub direct: bool,
 }
 
@@ -40,8 +49,11 @@ pub struct RoomAttention {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AttentionBrief {
+    /// Recipient-supplied context used to judge whether source text is useful.
     pub text: String,
+    /// Unix time in milliseconds after which this brief is unusable.
     pub expires_at_ms: u64,
+    /// Explicitly allows the brief text to be sent to the provider.
     pub provider_eligible: bool,
 }
 
@@ -77,24 +89,39 @@ pub struct RecipientNoticeRoute {
 pub struct AttentionConfig {
     /// One recipient per authenticated Dione seat. Records never pool recipients.
     pub recipient: RecipientId,
+    /// Default delivery policy for rooms without an explicit override.
     pub mode: AttentionMode,
+    /// Disables attention delivery in every room before applying room overrides.
     pub emergency_off: bool,
     /// Exact room grants: parent-room permission never implicitly exports a thread.
     pub rooms: BTreeMap<ChannelId, RoomAttention>,
+    /// Optional recipient context with its own expiry and export grant.
     pub brief: Option<AttentionBrief>,
+    /// Explicit provider model identity bound into decision compatibility.
     pub model: String,
     /// Environment variable NAME, never an inline credential value.
     pub api_key_env: String,
+    /// Maximum duration of one provider judgment, including retries, in milliseconds.
     pub request_timeout_ms: u64,
+    /// Delay in milliseconds before retrying attention after a provider outage.
     pub outage_retry_ms: u64,
+    /// Maximum combined UTF-8 bytes in the trigger and preceding source excerpts.
     pub max_segment_bytes: usize,
+    /// Maximum number of preceding source excerpts sent with a trigger.
     pub max_antecedents: usize,
+    /// Maximum number of concurrent provider judgments for this seat.
     pub max_in_flight: usize,
+    /// Maximum lifetime of a decision record in milliseconds.
     pub retention_ms: u64,
+    /// Maximum age in milliseconds of current-source validation evidence.
     pub revalidate_ms: u64,
+    /// Maximum number of durable decision records retained for this seat.
     pub max_records: usize,
+    /// Health transitions eligible for an operator notice.
     pub notices: NoticeMode,
+    /// Minimum interval in milliseconds between eligible operator notices.
     pub notice_cooldown_ms: u64,
+    /// Requested notice destination, checked against the independent operator route.
     pub notice_channel: Option<ChannelId>,
 }
 
