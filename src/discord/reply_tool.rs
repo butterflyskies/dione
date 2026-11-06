@@ -11,18 +11,6 @@ use super::{
         parse_id, parse_optional_bool, parse_optional_id, sentex_handles_schema,
     },
 };
-use crate::{
-    config::load_config,
-    evidence::SentexHandles,
-    ingress_ledger::IngressLedger,
-    mcp::tool_registry::{
-        McpTool, RegisteredTool, ToolCallError, ToolCallErrorKind, ToolDefinition,
-        ToolDiscoveryContext, ToolName, ToolNameError,
-    },
-    no_rly::consent::ConsentGate,
-    pre_send::HookName,
-    state::State,
-};
 use camino::Utf8PathBuf;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -32,6 +20,20 @@ use serenity::{
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use {
+    crate::{
+        config::load_config,
+        ingress_ledger::IngressLedger,
+        mcp::tool_registry::{
+            McpTool, RegisteredTool, ToolCallError, ToolCallErrorKind, ToolDefinition,
+            ToolDiscoveryContext, ToolName, ToolNameError,
+        },
+        no_rly::consent::ConsentGate,
+        pre_send::HookName,
+        state::State,
+    },
+    dione_evidence::SentexHandles,
+};
 
 pub(crate) struct ReplyServices {
     http: Arc<Http>,
@@ -213,8 +215,8 @@ impl<'a> ReplyRequest<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{evidence::SentexError, pre_send::PipelineError};
     use std::error::Error;
+    use {crate::pre_send::PipelineError, dione_evidence::SentexError};
 
     #[test]
     fn reply_evidence_errors_preserve_typed_parser_cause() {
@@ -245,7 +247,7 @@ mod tests {
         let valid = json!({"channel_id":"42", "content":"text", "claim_handles":["18446744073709551615"], "citation_handles":["1"]});
         let request = ReplyRequest::parse(&valid, true).unwrap();
         assert_eq!(
-            crate::evidence::append_markers(request.content, &request.handles),
+            dione_evidence::append_markers(request.content, &request.handles),
             "text [🔍=v3:claim:__________8] [🔍=v3:citation:AQ]"
         );
     }

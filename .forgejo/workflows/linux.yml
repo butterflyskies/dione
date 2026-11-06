@@ -167,6 +167,8 @@ jobs:
           scripts/verify-public-package-privacy.sh "target/package/dione-rook-${rook_version}.crate"
           attention_version="$(scripts/workspace-package-version.sh dione-attention)"
           scripts/verify-public-package-privacy.sh "target/package/dione-attention-${attention_version}.crate"
+          evidence_version="$(scripts/workspace-package-version.sh dione-evidence)"
+          scripts/verify-public-package-privacy.sh "target/package/dione-evidence-${evidence_version}.crate"
 
   msrv:
     name: Rust 1.98 minimum supported version

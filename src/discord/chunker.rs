@@ -1,9 +1,9 @@
-use crate::{
-    config::ChunkMode,
-    markdown::{FenceTransition, fence_transition, is_fence_delimiter},
-};
 use std::ops::Range;
 use thiserror::Error;
+use {
+    crate::config::ChunkMode,
+    dione_evidence::markdown::{FenceTransition, fence_transition, is_fence_delimiter},
+};
 
 /// Splits `text` into chunks of at most `limit` bytes, respecting UTF-8
 /// character boundaries and (in `Paragraph` mode) preferring paragraph or
@@ -93,7 +93,7 @@ pub(crate) struct FenceContext {
 /// The owning form of the fence transition, for the one caller that must
 /// reproduce the delimiter later when reopening a split fence.
 ///
-/// The grammar itself lives in [`crate::markdown::fence_transition`]; this
+/// The grammar itself lives in [`dione_evidence::markdown::fence_transition`]; this
 /// only adds ownership of the tag.
 pub(crate) fn advance_fence(state: &Option<FenceContext>, line: &str) -> Option<FenceContext> {
     match fence_transition(state.as_ref().map(|open| open.backticks), line) {

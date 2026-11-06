@@ -1,12 +1,12 @@
 //! Markdown block structure, in one place.
 //!
-//! Three call sites need to know whether a given line is ordinary prose or
+//! Four call sites need to know whether a given line is ordinary prose or
 //! excluded syntax: the Discord chunker (fences only, so it can reopen a split
 //! fence), evidence parsing (so a locator inside code or a quote is not read as
 //! an offered claim), and the status lint (so an example is not audited as an
-//! asserted work state).
+//! asserted work state). Contradictionary also uses the scanner for excluded spans.
 //!
-//! Each of the three grew its own answer, and they disagreed. The chunker knew
+//! The original three consumers grew separate answers that disagreed. The chunker knew
 //! that at most three leading spaces may precede a fence; evidence knew that an
 //! inline span carries across lines and that indented code cannot interrupt a
 //! paragraph; the status lint knew neither and reimplemented both badly. This
@@ -23,13 +23,18 @@
 /// fence's tag.
 ///
 /// Callers that only need "am I inside a fence" drive this and keep an
-/// `Option<usize>`. [`crate::discord::chunker::advance_fence`] is the owning
+/// `Option<usize>`. `advance_fence` in Dione's Discord chunker is the owning
 /// form, for the one caller that must reproduce the delimiter later.
-pub(crate) enum FenceTransition<'a> {
+pub enum FenceTransition<'a> {
     /// Not a fence delimiter: state is unchanged.
     Unchanged,
     /// Opens a fence of this width, carrying this tag.
-    Opens { backticks: usize, tag: &'a str },
+    Opens {
+        /// Number of opening backticks that a closing delimiter must match or exceed.
+        backticks: usize,
+        /// Trimmed text following the opening backticks.
+        tag: &'a str,
+    },
     /// Closes the fence that was open.
     Closes,
 }
@@ -50,7 +55,7 @@ fn parse_fence_delimiter(line: &str) -> Option<(usize, &str)> {
 }
 
 /// True when the line is a structural fence delimiter, open or close.
-pub(crate) fn is_fence_delimiter(line: &str) -> bool {
+pub fn is_fence_delimiter(line: &str) -> bool {
     parse_fence_delimiter(line).is_some()
 }
 
@@ -59,7 +64,7 @@ pub(crate) fn is_fence_delimiter(line: &str) -> bool {
 /// The fence grammar lives here and only here: at most three leading spaces,
 /// at least three backticks, and a closing delimiter at least as wide as its
 /// opener carrying no trailing tag.
-pub(crate) fn fence_transition(open: Option<usize>, line: &str) -> FenceTransition<'_> {
+pub fn fence_transition(open: Option<usize>, line: &str) -> FenceTransition<'_> {
     let Some((backticks, tag)) = parse_fence_delimiter(line) else {
         return FenceTransition::Unchanged;
     };
@@ -138,7 +143,7 @@ fn walk_inline_code_spans(
 /// Collecting form of the span walk, for callers that need the ranges
 /// themselves rather than only the delimiter state.
 #[cfg(test)]
-pub(crate) fn inline_code_spans(line: &str, delimiter: &mut Option<usize>) -> Vec<(usize, usize)> {
+pub fn inline_code_spans(line: &str, delimiter: &mut Option<usize>) -> Vec<(usize, usize)> {
     let mut spans = Vec::new();
     walk_inline_code_spans(line, delimiter, |begin, end| spans.push((begin, end)));
     spans
@@ -149,7 +154,7 @@ pub(crate) fn inline_code_spans(line: &str, delimiter: &mut Option<usize>) -> Ve
 /// Only [`LineClass::Content`] is ordinary prose. Every other class is
 /// excluded syntax: it is not audited, and it does not advance inline state.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum LineClass {
+pub enum LineClass {
     /// Ordinary paragraph or heading content. Inline spans were scanned.
     Content,
     /// A blockquote line. Whether an unterminated span in it reaches the
@@ -165,7 +170,7 @@ pub(crate) enum LineClass {
 
 impl LineClass {
     /// True when the line is ordinary prose a caller may audit.
-    pub(crate) fn is_content(self) -> bool {
+    pub fn is_content(self) -> bool {
         matches!(self, LineClass::Content)
     }
 }
@@ -194,7 +199,7 @@ impl LineClass {
 /// The two consumers want opposite things from an unterminated backtick inside
 /// a blockquote, and both are defensible, so the scanner takes it as a
 /// parameter rather than picking one and being wrong for somebody.
-pub(crate) struct BlockScanner {
+pub struct BlockScanner {
     fence: Option<usize>,
     inline: Option<usize>,
     quote_rest: bool,
@@ -210,7 +215,7 @@ pub(crate) struct BlockScanner {
 /// context ends with the block. But the two consumers here are protecting
 /// different things, and the difference is which way each one fails.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum InlineScope {
+pub enum InlineScope {
     /// A span opened in a quote continues into the following blocks.
     ///
     /// Evidence parsing's long-standing behaviour. It is not CommonMark, and
@@ -227,14 +232,20 @@ pub(crate) enum InlineScope {
     WithinBlock,
 }
 
+impl Default for BlockScanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BlockScanner {
     /// A scanner with evidence parsing's semantics.
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::with_inline_scope(InlineScope::AcrossBlocks)
     }
 
     /// A scanner whose inline state does not cross a blockquote boundary.
-    pub(crate) fn block_scoped() -> Self {
+    pub fn block_scoped() -> Self {
         Self::with_inline_scope(InlineScope::WithinBlock)
     }
 
@@ -251,18 +262,14 @@ impl BlockScanner {
     }
 
     /// Advances by one line, discarding span ranges.
-    pub(crate) fn push(&mut self, line: &str) -> LineClass {
+    pub fn push(&mut self, line: &str) -> LineClass {
         self.push_with_spans(line, |_, _| {})
     }
 
     /// Advances by one line, reporting the inline code-span byte ranges found
     /// within it. Ranges are only ever reported for scanned classes; excluded
     /// syntax reports none, because it was never scanned.
-    pub(crate) fn push_with_spans(
-        &mut self,
-        line: &str,
-        on_span: impl FnMut(usize, usize),
-    ) -> LineClass {
+    pub fn push_with_spans(&mut self, line: &str, on_span: impl FnMut(usize, usize)) -> LineClass {
         let structural = line.trim_start();
         let indentation = line
             .bytes()
@@ -347,13 +354,13 @@ impl BlockScanner {
     }
 
     /// True while a `>>>` multiline quote is in force.
-    pub(crate) fn quote_rest(&self) -> bool {
+    pub fn quote_rest(&self) -> bool {
         self.quote_rest
     }
 
     /// True when the position after the consumed lines sits inside a quote,
     /// a fence, an inline span, or an indented code block.
-    pub(crate) fn inside_quote_or_code(&self) -> bool {
+    pub fn inside_quote_or_code(&self) -> bool {
         self.last_line_was_quote
             || self.quote_rest
             || self.fence.is_some()

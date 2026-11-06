@@ -1,23 +1,33 @@
-//! Discord author binding and tool-wire projection for sentex locators.
+//! Terminal sentex syntax and JSON projection from supplied identities.
+//!
+//! The caller supplies authenticated source identities. Parsing does not
+//! authenticate authors, establish current access, or prove evidence truth.
+#![warn(missing_docs)]
 
 mod error;
-use error::{HandleError, HandleErrorKind, SentexField};
-pub(crate) use error::{SentexError, SentexErrorKind};
-pub(crate) mod locators;
-pub(crate) use locators::*;
+pub use error::{HandleError, HandleErrorKind, SentexError, SentexErrorKind, SentexField};
+pub mod locators;
+pub use locators::*;
+pub mod markdown;
 use serde_json::{Value, json};
 use serenity::model::id::UserId;
 
 /// A role-bearing sentex reference offered by the Discord message author.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OfferedSentex {
-    pub(crate) locator: SentexLocator,
-    pub(crate) author_id: UserId,
+pub struct OfferedSentex {
+    /// Canonical locator and role parsed from the supplied message text.
+    pub locator: SentexLocator,
+    /// Author identity supplied by the caller; this value does not authenticate it.
+    pub author_id: UserId,
 }
 
 /// Parses the role-separated `claim_handles` and `citation_handles` arguments.
 /// The removed `evidence_keys` name is rejected rather than silently ignored.
-pub(crate) fn parse_tool_sentex_handles(args: &Value) -> Result<SentexHandles, SentexError> {
+///
+/// # Errors
+/// Rejects removed arguments, non-array role values, excessive combined counts,
+/// noncanonical or out-of-range decimal handles, and oversized encoded suffixes.
+pub fn parse_tool_sentex_handles(args: &Value) -> Result<SentexHandles, SentexError> {
     if args.get("evidence_keys").is_some() {
         return Err(SentexError {
             kind: SentexErrorKind::RemovedLegacyField,
@@ -70,7 +80,10 @@ fn parse_handle_array(
 }
 
 /// Binds author-free parsed locators to Discord's system-derived author.
-pub(crate) fn parse_offered_sentexes(content: &str, author_id: UserId) -> Vec<OfferedSentex> {
+///
+/// The caller supplies and authenticates that identity. Parsing does not verify
+/// authorship or the truth of the offered evidence.
+pub fn parse_offered_sentexes(content: &str, author_id: UserId) -> Vec<OfferedSentex> {
     parse_sentex_locators(content)
         .into_iter()
         .map(|locator| OfferedSentex { locator, author_id })
@@ -91,7 +104,7 @@ fn offered_sentex_json(offerings: &[OfferedSentex], role: SentexRole) -> Vec<Val
 }
 
 /// Projects already parsed offerings without changing empty response shapes.
-pub(crate) fn project_offered_sentexes(target: &mut Value, offerings: &[OfferedSentex]) {
+pub fn project_offered_sentexes(target: &mut Value, offerings: &[OfferedSentex]) {
     let claims = offered_sentex_json(offerings, SentexRole::Claim);
     let citations = offered_sentex_json(offerings, SentexRole::Citation);
     if !claims.is_empty() {

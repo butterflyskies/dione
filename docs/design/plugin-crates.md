@@ -104,6 +104,25 @@ The default-off `test-support` feature preserves the loopback-only provider
 constructor used by runtime and MCP fixtures. Its URL validation remains
 unchanged. Production dependency features leave that constructor disabled.
 
+## Evidence and text grammar boundary
+
+`dione-evidence` owns the complete sentex facade, locator encoding, typed
+validation failures, and shared Markdown scanner. Checked handle construction
+and decoder tests stay with their private representation. Keeping the facade
+beside the parser preserves count-before-decode error precedence without a new
+constructor or fixture API.
+
+Chunking, status lint, and contradictionary consume this grammar independently
+of delivery. A separate evidence crate keeps those consumers outside the
+attention-bound message dependency. Shared events and delivery values can move
+next on top of the evidence and attention crates.
+
+Supplied-author projection remains a pure association with a caller-provided
+Discord ID. The library does not authenticate authors or verify evidence truth.
+Canonical markers, role separation, byte/count bounds, and code/quote exclusion
+retain their existing implementations and tests. Compiler privacy examples
+protect the handle and handle-collection fields.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -113,6 +132,8 @@ unchanged. Production dependency features leave that constructor disabled.
    all of `core` would create a dependency cycle with attention.
 4. Rook, after its shared contracts and persistence dependencies have owners.
 5. The attention engine, with application admission and runtime retained.
+6. Evidence and Markdown grammar, independent of attention-bound delivery.
+7. Shared message events, presentation, and delivery values.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -122,7 +143,8 @@ test preparation, and release builds separately before making speed claims.
 ## Package and release requirements
 
 The application uses versioned path dependencies on `dione-rendering`,
-`dione-durable`, `dione-contracts`, `dione-rook`, and `dione-attention`.
+`dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`, and
+`dione-evidence`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -141,14 +163,15 @@ root `.cargo_vcs_info.json` receipt so an unchanged renderer version can survive
 later application commits; every other archived byte remains protected.
 The already-published path remains mandatory.
 Before the first release, an authorized operator must reserve `dione-rendering`,
-`dione-durable`, `dione-contracts`, `dione-rook`, and `dione-attention`,
+`dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`, and
+`dione-evidence`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all five capabilities. Attention publishing waits for
+publishing waits for all six capabilities. Attention publishing waits for
 contracts reconciliation. Each reconciliation verifies the
 archive contents after registry resolution.
 

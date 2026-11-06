@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.91.1"
+version = "0.92.1"
 dependencies = [
  "aho-corasick",
  "arc-swap",
@@ -943,6 +943,7 @@ dependencies = [
  "dione-attention",
  "dione-contracts",
  "dione-durable",
+ "dione-evidence",
  "dione-rendering",
  "dione-rook",
  "fs2",
@@ -1032,6 +1033,17 @@ dependencies = [
  "tokio",
  "toml 1.1.6+spec-1.1.0",
  "tracing",
+]
+
+[[package]]
+name = "dione-evidence"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "native-tls",
+ "serde_json",
+ "serenity",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -785,7 +785,7 @@ fn strip_list_marker(line: &str) -> Option<&str> {
 /// emails, and markdown link targets. An `auto` hit touching one is not
 /// rewritten.
 ///
-/// Block structure and code spans come from [`crate::markdown::BlockScanner`],
+/// Block structure and code spans come from [`dione_evidence::markdown::BlockScanner`],
 /// the one Markdown contract the chunker, evidence parsing and the status
 /// lint also drive. Purely syntactic and deliberately greedy: an unclosed
 /// fence, code span or quotation runs to the end of its region, since
@@ -793,7 +793,7 @@ fn strip_list_marker(line: &str) -> Option<&str> {
 fn marked_spans(text: &str) -> Vec<std::ops::Range<usize>> {
     let mut marked = Vec::new();
     let mut prose: Vec<std::ops::Range<usize>> = Vec::new();
-    let mut scanner = crate::markdown::BlockScanner::new();
+    let mut scanner = dione_evidence::markdown::BlockScanner::new();
     let mut offset = 0;
     for raw in text.split_inclusive('\n') {
         let start = offset;
@@ -808,7 +808,7 @@ fn marked_spans(text: &str) -> Vec<std::ops::Range<usize>> {
                 Some(segment) if segment.end == start => segment.end = offset,
                 _ => prose.push(start..offset),
             }
-        } else if class != crate::markdown::LineClass::Blank {
+        } else if class != dione_evidence::markdown::LineClass::Blank {
             marked.push(start..offset);
         }
     }

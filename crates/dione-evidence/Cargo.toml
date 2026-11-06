@@ -1,0 +1,18 @@
+[package]
+name = "dione-evidence"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Terminal evidence syntax, Markdown structure, and supplied-author projection for Dione"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["evidence", "markdown", "parsing"]
+categories = ["parsing", "text-processing"]
+
+[dependencies]
+base64.workspace = true
+native-tls.workspace = true
+serde_json.workspace = true
+serenity.workspace = true
+thiserror.workspace = true

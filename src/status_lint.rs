@@ -27,15 +27,15 @@
 //! policy. Anyone implementing from a remembered rule that "the house does not
 //! do use/mention exemptions" will get this backwards.
 
-use crate::{
-    markdown::BlockScanner,
-    pre_send::{
+use regex::Regex;
+use std::sync::LazyLock;
+use {
+    crate::pre_send::{
         Assessment, AuditTrail, ConstructFeedback, HookContext, HookDecision, HookName, HookOutput,
         PreSendHook,
     },
+    dione_evidence::markdown::BlockScanner,
 };
-use regex::Regex;
-use std::sync::LazyLock;
 
 /// Ceilings on the scan itself. Generous against any real status packet —
 /// the longest this seat has sent is well under a hundred lines — and small
@@ -960,7 +960,7 @@ mod tests {
     // Excluded syntax must not mutate the state that decides later content: a
     // fence delimiter, an indented line, or a quote may not leave an inline
     // span open across the item after it. The classification these rest on
-    // lives in `markdown::BlockScanner` and is shared with evidence parsing,
+    // lives in `dione_evidence::markdown::BlockScanner` and is shared with evidence parsing,
     // so a failure here may be a change to that contract rather than to this
     // module.
     #[test]

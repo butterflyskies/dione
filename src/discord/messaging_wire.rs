@@ -1,19 +1,21 @@
 //! MCP projections of typed Discord messaging outcomes.
-use crate::{
-    contradictionary::AutoRewrite,
-    discord::messaging::{
-        DeliveryReceipt, DmDeliveryRoute, DmOutcome, MessagingError, MessagingErrorKind,
-        ReplyOutcome, Report, TargetError,
-    },
-    evidence::SentexRole,
-    no_rly::{
-        consent::{BounceTicket, RejectedHandle, Released, Rephrased},
-        delivery::{DeliveryProgress, PostedMessages},
-        queue::HoldHandle,
-    },
-};
 use serde_json::{Value, json};
 use serenity::model::id::MessageId;
+use {
+    crate::{
+        contradictionary::AutoRewrite,
+        discord::messaging::{
+            DeliveryReceipt, DmDeliveryRoute, DmOutcome, MessagingError, MessagingErrorKind,
+            ReplyOutcome, Report, TargetError,
+        },
+        no_rly::{
+            consent::{BounceTicket, RejectedHandle, Released, Rephrased},
+            delivery::{DeliveryProgress, PostedMessages},
+            queue::HoldHandle,
+        },
+    },
+    dione_evidence::SentexRole,
+};
 /// Make every `auto` rewrite visible to the sender: one
 /// `auto: <match> → <replace>` line each, under `auto_rewrites`.
 fn add_auto_rewrite_lines(response: &mut Value, rewrites: &[AutoRewrite]) {
@@ -87,7 +89,7 @@ fn receipt(delivery: DeliveryReceipt) -> Value {
             .locators
             .iter()
             .filter(|locator| locator.role() == role)
-            .map(crate::evidence::SentexLocator::as_str)
+            .map(dione_evidence::SentexLocator::as_str)
             .collect::<Vec<_>>();
         if !locators.is_empty() {
             value[key] = json!(locators);
