@@ -24,7 +24,7 @@ use std::{
 use thiserror::Error;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use {
-    crate::teams::{
+    crate::{
         AuthenticatedTeamsEnvelope,
         edge::{BotTokenProvider, LiveReplyReceipt, TeamsEdge, TeamsEdgeError},
         reply_store::{
@@ -409,7 +409,7 @@ pub(crate) async fn messages<P: BotTokenProvider + 'static>(
         Err(TeamsRuntimeError {
             kind:
                 TeamsRuntimeErrorKind::Edge(TeamsEdgeError {
-                    kind: crate::teams::TeamsEdgeErrorKind::Probe(error),
+                    kind: crate::TeamsEdgeErrorKind::Probe(error),
                 }),
         }) => {
             log_ingress_rejection(
@@ -642,11 +642,8 @@ impl From<ReplyStoreError> for TeamsRuntimeError {
 mod tests {
     use super::*;
     use crate::{
-        codex::CodexEventQueue,
-        teams::{
-            AdmissionPolicy, AuthenticatedConversationReference, ProbeError, ProbeErrorKind,
-            edge::{BotAccessToken, TeamsEdgeError},
-        },
+        AdmissionPolicy, AuthenticatedConversationReference, ProbeError, ProbeErrorKind,
+        edge::{BotAccessToken, TeamsEdgeError},
     };
     use axum::{
         extract::Request,
@@ -760,7 +757,7 @@ mod tests {
 
     #[tokio::test]
     async fn http_ingress_logs_rejections_without_changing_scoped_admission() {
-        let fixture = crate::teams::edge::tests::ConnectorFixture::start().await;
+        let fixture = crate::edge::tests::ConnectorFixture::start().await;
         let deliveries = Arc::new(AtomicUsize::new(0));
         let bridge = Arc::new(TeamsResidentBridge::new(
             fixture.edge.clone(),
@@ -879,43 +876,6 @@ mod tests {
         server.abort();
     }
 
-    #[test]
-    fn teams_error_display_fragments_start_lowercase() {
-        assert_eq!(
-            TeamsRuntimeError {
-                kind: TeamsRuntimeErrorKind::ReplyRegistryFull
-            }
-            .to_string(),
-            "teams reply registry is full"
-        );
-        assert_eq!(
-            ReplyStoreError {
-                kind: crate::teams::ReplyStoreErrorKind::Full
-            }
-            .to_string(),
-            "teams reply registry is full"
-        );
-        assert_eq!(
-            TeamsEdgeError {
-                kind: crate::teams::TeamsEdgeErrorKind::MetadataTooLarge
-            }
-            .to_string(),
-            "teams metadata response exceeds its size limit"
-        );
-        assert_eq!(
-            crate::codex::LiveQueueError {
-                kind: crate::codex::LiveQueueErrorKind::ReplayCapacity(
-                    crate::codex::QueueError::new(
-                        "resident admission",
-                        crate::codex::QueueErrorKind::ReplayCapacity
-                    )
-                )
-            }
-            .to_string(),
-            "teams replay-identity capacity is full"
-        );
-    }
-
     #[tokio::test]
     async fn owned_reply_task_preserves_panic_classification_without_public_payload() {
         let failed: tokio::task::JoinHandle<Result<LiveReplyReceipt, TeamsRuntimeError>> =
@@ -967,6 +927,19 @@ mod tests {
         ));
     }
 
+    struct UnusedDelivery;
+
+    impl TeamsEventSink for UnusedDelivery {
+        fn deliver<'a>(
+            &'a self,
+            _event: TeamsResidentEvent,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<TeamsAdmissionOutcome, TeamsDeliveryError>> + Send + 'a>,
+        > {
+            Box::pin(async { panic!("native-only runtime test must not deliver a resident event") })
+        }
+    }
+
     #[derive(Clone)]
     struct UnusedTokenProvider;
 
@@ -983,7 +956,7 @@ mod tests {
         async fn access_token(&self) -> Result<BotAccessToken, TeamsEdgeError> {
             self.0.fetch_add(1, Ordering::SeqCst);
             Err(TeamsEdgeError {
-                kind: crate::teams::TeamsEdgeErrorKind::InvalidTokenEndpoint,
+                kind: crate::TeamsEdgeErrorKind::InvalidTokenEndpoint,
             })
         }
     }
@@ -1001,24 +974,13 @@ mod tests {
             self.started.notify_one();
             self.release.notified().await;
             Err(TeamsEdgeError {
-                kind: crate::teams::TeamsEdgeErrorKind::InvalidTokenEndpoint,
+                kind: crate::TeamsEdgeErrorKind::InvalidTokenEndpoint,
             })
         }
     }
 
     #[tokio::test]
     async fn cancellation_during_token_acquisition_keeps_reply_handle_retryable() {
-        let queue_dir = TempDir::new().expect("create queue directory");
-        let queue_path = camino::Utf8PathBuf::from_path_buf(queue_dir.path().to_owned())
-            .expect("UTF-8 queue path");
-        let queue = CodexEventQueue::load(
-            &queue_path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-                dione_contracts::ProviderId::new("discord").unwrap(),
-                dione_contracts::ModuleSlotId::new("primary").unwrap(),
-            )),
-        )
-        .expect("load queue");
         let attempts = Arc::new(AtomicUsize::new(0));
         let started = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
@@ -1040,7 +1002,7 @@ mod tests {
         .expect("construct edge");
         let bridge = Arc::new(TeamsResidentBridge::new(
             edge,
-            crate::composition::teams_admission::from_codex(queue),
+            TeamsDelivery::new(UnusedDelivery),
         ));
         bridge.pending.lock().expect("Teams reply registry").insert(
             ReplyHandle::parse("teams-00000000-0000-4000-8000-000000000001").unwrap(),
@@ -1088,7 +1050,7 @@ mod tests {
                 .await,
             Err(TeamsRuntimeError {
                 kind: TeamsRuntimeErrorKind::Edge(TeamsEdgeError {
-                    kind: crate::teams::TeamsEdgeErrorKind::InvalidTokenEndpoint
+                    kind: crate::TeamsEdgeErrorKind::InvalidTokenEndpoint
                 })
             })
         ));
@@ -1097,17 +1059,6 @@ mod tests {
 
     #[tokio::test]
     async fn token_failure_before_send_keeps_reply_handle_retryable() {
-        let queue_dir = TempDir::new().expect("create queue directory");
-        let queue_path = camino::Utf8PathBuf::from_path_buf(queue_dir.path().to_owned())
-            .expect("UTF-8 queue path");
-        let queue = CodexEventQueue::load(
-            &queue_path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-                dione_contracts::ProviderId::new("discord").unwrap(),
-                dione_contracts::ModuleSlotId::new("primary").unwrap(),
-            )),
-        )
-        .expect("load queue");
         let attempts = Arc::new(AtomicUsize::new(0));
         let edge = TeamsEdge::new(
             reqwest::Client::new(),
@@ -1121,8 +1072,7 @@ mod tests {
             },
         )
         .expect("construct edge");
-        let bridge =
-            TeamsResidentBridge::new(edge, crate::composition::teams_admission::from_codex(queue));
+        let bridge = TeamsResidentBridge::new(edge, TeamsDelivery::new(UnusedDelivery));
         bridge.pending.lock().expect("Teams reply registry").insert(
             ReplyHandle::parse("teams-00000000-0000-4000-8000-000000000001").unwrap(),
             PendingReply {
@@ -1151,7 +1101,7 @@ mod tests {
                 .await,
             Err(TeamsRuntimeError {
                 kind: TeamsRuntimeErrorKind::Edge(TeamsEdgeError {
-                    kind: crate::teams::TeamsEdgeErrorKind::InvalidTokenEndpoint
+                    kind: crate::TeamsEdgeErrorKind::InvalidTokenEndpoint
                 })
             })
         ));
@@ -1168,7 +1118,7 @@ mod tests {
                 &retry,
                 TeamsRuntimeError {
                     kind: TeamsRuntimeErrorKind::Edge(TeamsEdgeError {
-                        kind: crate::teams::TeamsEdgeErrorKind::InvalidTokenEndpoint
+                        kind: crate::TeamsEdgeErrorKind::InvalidTokenEndpoint
                     })
                 }
             ),
@@ -1182,14 +1132,6 @@ mod tests {
         let temp = TempDir::new().expect("create queue directory");
         let state_dir =
             camino::Utf8PathBuf::from_path_buf(temp.path().to_owned()).expect("UTF-8 state path");
-        let queue = CodexEventQueue::load(
-            &state_dir,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-                dione_contracts::ProviderId::new("discord").unwrap(),
-                dione_contracts::ModuleSlotId::new("primary").unwrap(),
-            )),
-        )
-        .expect("load queue");
         let attempts = Arc::new(AtomicUsize::new(0));
         let mut policy = AdmissionPolicy {
             app_id: "app".parse().unwrap(),
@@ -1200,7 +1142,7 @@ mod tests {
         };
         policy.channels.insert(
             "msteams".to_owned(),
-            crate::teams::ChannelPolicy {
+            crate::ChannelPolicy {
                 requires_key_endorsement: true,
             },
         );
@@ -1226,7 +1168,7 @@ mod tests {
         let now = chrono::Utc::now();
         let bridge = TeamsResidentBridge::new_durable(
             edge.clone(),
-            crate::composition::teams_admission::from_codex(queue.clone()),
+            TeamsDelivery::new(UnusedDelivery),
             &state_dir,
         )
         .await
@@ -1251,23 +1193,20 @@ mod tests {
             bridge.reply(&handle, "reply").await,
             Err(TeamsRuntimeError {
                 kind: TeamsRuntimeErrorKind::Edge(TeamsEdgeError {
-                    kind: crate::teams::TeamsEdgeErrorKind::InvalidTokenEndpoint
+                    kind: crate::TeamsEdgeErrorKind::InvalidTokenEndpoint
                 })
             })
         ));
         drop(bridge);
-        let restored = TeamsResidentBridge::new_durable(
-            edge,
-            crate::composition::teams_admission::from_codex(queue),
-            &state_dir,
-        )
-        .await
-        .expect("restore handle after token failure");
+        let restored =
+            TeamsResidentBridge::new_durable(edge, TeamsDelivery::new(UnusedDelivery), &state_dir)
+                .await
+                .expect("restore handle after token failure");
         assert!(matches!(
             restored.reply(&handle, "reply").await,
             Err(TeamsRuntimeError {
                 kind: TeamsRuntimeErrorKind::Edge(TeamsEdgeError {
-                    kind: crate::teams::TeamsEdgeErrorKind::InvalidTokenEndpoint
+                    kind: crate::TeamsEdgeErrorKind::InvalidTokenEndpoint
                 })
             })
         ));
@@ -1280,17 +1219,6 @@ mod tests {
             .await
             .expect("occupy local port");
         let listen = occupied.local_addr().expect("occupied address");
-        let queue_dir = TempDir::new().expect("create queue directory");
-        let queue_path = camino::Utf8PathBuf::from_path_buf(queue_dir.path().to_owned())
-            .expect("UTF-8 queue path");
-        let queue = CodexEventQueue::load(
-            &queue_path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-                dione_contracts::ProviderId::new("discord").unwrap(),
-                dione_contracts::ModuleSlotId::new("primary").unwrap(),
-            )),
-        )
-        .expect("load queue");
         let edge = TeamsEdge::new(
             reqwest::Client::new(),
             UnusedTokenProvider,
@@ -1307,7 +1235,7 @@ mod tests {
         let error = run_listener(
             Arc::new(TeamsResidentBridge::new(
                 edge,
-                crate::composition::teams_admission::from_codex(queue),
+                TeamsDelivery::new(UnusedDelivery),
             )),
             listen,
             lifecycle.clone(),
@@ -1325,17 +1253,6 @@ mod tests {
         let reserved = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve local port");
         let listen = reserved.local_addr().expect("reserved address");
         drop(reserved);
-        let queue_dir = TempDir::new().expect("create queue directory");
-        let queue_path = camino::Utf8PathBuf::from_path_buf(queue_dir.path().to_owned())
-            .expect("UTF-8 queue path");
-        let queue = CodexEventQueue::load(
-            &queue_path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
-                dione_contracts::ProviderId::new("discord").unwrap(),
-                dione_contracts::ModuleSlotId::new("primary").unwrap(),
-            )),
-        )
-        .expect("load queue");
         let edge = TeamsEdge::new(
             reqwest::Client::new(),
             UnusedTokenProvider,
@@ -1353,7 +1270,7 @@ mod tests {
         let mut listener = tokio::spawn(run_listener(
             Arc::new(TeamsResidentBridge::new(
                 edge,
-                crate::composition::teams_admission::from_codex(queue),
+                TeamsDelivery::new(UnusedDelivery),
             )),
             listen,
             task_lifecycle,

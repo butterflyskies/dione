@@ -1,0 +1,15 @@
+error[E0603]: function `messages` is private
+ --> tests/ui/native_handler.rs:1:27
+  |
+1 | use dione_teams::runtime::messages;
+  |                           ^^^^^^^^ private function
+  |
+note: the function `messages` is defined here
+ --> src/runtime.rs
+  |
+  | / pub(crate) async fn messages<P: BotTokenProvider + 'static>(
+  | |     State(bridge): State<Arc<TeamsResidentBridge<P>>>,
+  | |     headers: HeaderMap,
+  | |     body: Bytes,
+  | | ) -> impl IntoResponse {
+  | |______________________^

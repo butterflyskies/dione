@@ -1,0 +1,11 @@
+error[E0603]: module `reply_store` is private
+ --> tests/ui/raw_store.rs:1:18
+  |
+1 | use dione_teams::reply_store::AsyncTeamsReplyStore;
+  |                  ^^^^^^^^^^^ private module
+  |
+note: the module `reply_store` is defined here
+ --> src/lib.rs
+  |
+  | mod reply_store;
+  | ^^^^^^^^^^^^^^^

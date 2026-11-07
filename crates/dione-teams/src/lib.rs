@@ -1,9 +1,11 @@
 //! Teams authentication, ingress, reply authority, and resident delivery.
 
+#![warn(missing_docs)]
+
 mod auth;
 pub mod edge;
 mod json;
-pub(crate) mod reply_store;
+mod reply_store;
 pub mod runtime;
 mod tools;
 
@@ -16,3 +18,6 @@ pub use edge::TeamsEdgeErrorKind;
 pub use reply_store::{InvalidRecordKind, ReplyStoreError, ReplyStoreErrorKind};
 pub use runtime::TeamsRuntimeErrorKind;
 pub use tools::mcp_tools;
+
+#[cfg(test)]
+pub(crate) mod fixture_process;

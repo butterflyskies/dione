@@ -114,7 +114,7 @@ jobs:
           python3 -B .forgejo/scripts/ci-resource-snapshot.py before-nextest ||
             printf '%s\n' '{"schema":"dione-ci-resources-v1","phase":"before-nextest","status":"unknown","reason":"snapshot-helper-failed"}'
       - name: Run full suite including compile-time contracts
-        run: cargo nextest run --workspace --locked --no-fail-fast --features oneshot-test-seam
+        run: python3 scripts/run-tests.py --workspace --locked --no-fail-fast --features oneshot-test-seam
       - name: Record resource counters after Nextest
         if: ${{ always() }}
         run: |
@@ -127,7 +127,7 @@ jobs:
           if [ -d target ]; then du -h -d 2 target; fi
       # Production feature set: proves the endpoint-override seam is absent.
       - name: Verify production oneshot behavior
-        run: cargo nextest run --workspace --locked --no-fail-fast --test oneshot_send
+        run: python3 scripts/run-tests.py --workspace --locked --no-fail-fast --test oneshot_send
       - name: Check rendering public API contracts
         run: cargo test --workspace --doc --locked
       - name: Record storage after production tests
@@ -185,12 +185,14 @@ jobs:
           pluralkit_identities_version="$(scripts/workspace-package-version.sh dione-pluralkit-identities)"
           mcp_tools_version="$(scripts/workspace-package-version.sh dione-mcp-tools)"
           provider_delivery_version="$(scripts/workspace-package-version.sh dione-provider-delivery)"
+          teams_version="$(scripts/workspace-package-version.sh dione-teams)"
           scripts/verify-public-package-privacy.sh "target/package/dione-coordination-${coordination_version}.crate"
           scripts/verify-public-package-privacy.sh "target/package/dione-teams-identities-${teams_identities_version}.crate"
           scripts/verify-public-package-privacy.sh "target/package/dione-discord-identities-${discord_identities_version}.crate"
           scripts/verify-public-package-privacy.sh "target/package/dione-pluralkit-identities-${pluralkit_identities_version}.crate"
           scripts/verify-public-package-privacy.sh "target/package/dione-mcp-tools-${mcp_tools_version}.crate"
           scripts/verify-public-package-privacy.sh "target/package/dione-provider-delivery-${provider_delivery_version}.crate"
+          scripts/verify-public-package-privacy.sh "target/package/dione-teams-${teams_version}.crate"
           pre_send_version="$(scripts/workspace-package-version.sh dione-pre-send)"
           outbound_consent_version="$(scripts/workspace-package-version.sh dione-outbound-consent)"
           config_version="$(scripts/workspace-package-version.sh dione-config)"

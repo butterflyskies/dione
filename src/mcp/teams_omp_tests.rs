@@ -1,10 +1,6 @@
 //! Authenticated Teams ingress and private OMP controls share the assembled MCP route.
 use super::*;
-use crate::{
-    harness::omp_session::OmpSession,
-    teams::{edge::tests::ConnectorFixture, runtime::TeamsResidentBridge},
-};
-use axum::response::IntoResponse;
+use crate::{harness::omp_session::OmpSession, teams_test_process::FixtureProcess};
 use sha2::{Digest as _, Sha256};
 use std::{
     io::{Read as _, Write as _},
@@ -16,26 +12,6 @@ use tokio::{
     signal::unix::{SignalKind, signal},
 };
 use tokio_util::sync::CancellationToken;
-
-async fn ingress(
-    bridge: &Arc<TeamsResidentBridge<crate::teams::edge::ClientSecretTokenProvider>>,
-    authorization: &str,
-    body: &[u8],
-) -> axum::http::StatusCode {
-    let mut headers = axum::http::HeaderMap::new();
-    headers.insert(
-        axum::http::header::AUTHORIZATION,
-        authorization.parse().unwrap(),
-    );
-    crate::teams::runtime::messages(
-        axum::extract::State(bridge.clone()),
-        headers,
-        axum::body::Bytes::copy_from_slice(body),
-    )
-    .await
-    .into_response()
-    .status()
-}
 
 async fn control(server: &DioneServer, name: &str, arguments: Value) -> Value {
     let response = handle_request_from(
@@ -62,7 +38,6 @@ async fn event(reader: &mut BufReader<DuplexStream>) -> Value {
 
 #[tokio::test]
 async fn authenticated_teams_replays_after_restart_and_replies_through_registered_tool() {
-    let fixture = ConnectorFixture::start().await;
     let directory = tempfile::TempDir::new().unwrap();
     let path = Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
     let session = OmpSession::open(&path).await.unwrap();
@@ -70,25 +45,20 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
     let output = ProtocolOutput::new(writer);
     let harness =
         crate::harness::oh_my_pi_with_control_and_output(session.control(), output.clone());
-    let bridge = Arc::new(
-        TeamsResidentBridge::new_durable(
-            fixture.edge.clone(),
-            crate::composition::teams_admission::from_omp(session.admission()),
-            &path,
-        )
-        .await
-        .unwrap(),
-    );
+    let mut fixture = FixtureProcess::start(
+        crate::composition::teams_admission::from_omp(session.admission()),
+        "activity/id%2F?",
+    )
+    .await;
     let running = session.start(output, CancellationToken::new());
     let (_server_dir, assembled) = server(harness).await;
     let assembled = assembled
-        .with_module_tools(crate::teams::mcp_tools(Some(bridge.clone())).unwrap())
+        .with_module_tools(dione_teams::mcp_tools(Some(fixture.authority())).unwrap())
         .unwrap();
     let mut reader = BufReader::new(reader);
-    let authorization = fixture.authorization();
     let activity = fixture.activity("activity/id%2F?");
     assert_eq!(
-        ingress(&bridge, &authorization, &activity).await,
+        fixture.ingress(&activity).await,
         axum::http::StatusCode::SERVICE_UNAVAILABLE
     );
     handle_request(&assembled, json!({"method":"notifications/initialized"})).await;
@@ -102,25 +72,22 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
     let mut denied: Value = serde_json::from_slice(&activity).unwrap();
     denied["conversation"]["id"] = json!("excluded/conversation");
     assert_eq!(
-        ingress(
-            &bridge,
-            &authorization,
-            &serde_json::to_vec(&denied).unwrap()
-        )
-        .await,
+        fixture.ingress(&serde_json::to_vec(&denied).unwrap()).await,
         axum::http::StatusCode::UNAUTHORIZED
     );
     assert_eq!(
-        ingress(&bridge, "Bearer invalid", &activity).await,
+        fixture
+            .ingress_with_authorization("Bearer invalid", &activity)
+            .await,
         axum::http::StatusCode::UNAUTHORIZED
     );
-    assert_eq!(fixture.token_requests(), 0);
+    assert_eq!(fixture.snapshot().await.token_requests, 0);
     assert_eq!(
-        ingress(&bridge, &authorization, &activity).await,
+        fixture.ingress(&activity).await,
         axum::http::StatusCode::ACCEPTED
     );
     assert_eq!(
-        ingress(&bridge, &authorization, &activity).await,
+        fixture.ingress(&activity).await,
         axum::http::StatusCode::ACCEPTED
     );
     let first = event(&mut reader).await;
@@ -171,7 +138,7 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
         .unwrap();
     running.shutdown().await.unwrap();
     drop(assembled);
-    drop(bridge);
+    fixture.close().await;
 
     let session = OmpSession::open(&path)
         .await
@@ -180,19 +147,15 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
     let output = ProtocolOutput::new(writer);
     let harness =
         crate::harness::oh_my_pi_with_control_and_output(session.control(), output.clone());
-    let bridge = Arc::new(
-        TeamsResidentBridge::new_durable(
-            fixture.edge.clone(),
-            crate::composition::teams_admission::from_omp(session.admission()),
-            &path,
-        )
-        .await
-        .unwrap(),
-    );
+    fixture
+        .reopen(crate::composition::teams_admission::from_omp(
+            session.admission(),
+        ))
+        .await;
     let running = session.start(output, CancellationToken::new());
     let (_server_dir, assembled) = server(harness).await;
     let assembled = assembled
-        .with_module_tools(crate::teams::mcp_tools(Some(bridge.clone())).unwrap())
+        .with_module_tools(dione_teams::mcp_tools(Some(fixture.authority())).unwrap())
         .unwrap();
     handle_request(&assembled, json!({"method":"notifications/initialized"})).await;
     let binding = control(
@@ -226,7 +189,7 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
         .unwrap();
     assert!(reply.get("error").is_none(), "{reply}");
     assert_ne!(reply["result"]["isError"], true, "{reply}");
-    let captured = fixture.replies();
+    let captured = fixture.snapshot().await.replies;
     assert_eq!(captured.len(), 1);
     assert_eq!(
         captured[0].0,
@@ -236,9 +199,9 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
     assert_eq!(captured[0].1["text"], "reply through MCP");
     let repeated = handle_request(&assembled, reply_request).await.unwrap();
     assert!(repeated.get("error").is_some(), "{repeated}");
-    assert_eq!(fixture.replies().len(), 1);
+    assert_eq!(fixture.snapshot().await.replies.len(), 1);
     assert_eq!(
-        ingress(&bridge, &authorization, &activity).await,
+        fixture.ingress(&activity).await,
         axum::http::StatusCode::ACCEPTED
     );
     let mut unexpected = String::new();
@@ -251,6 +214,7 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
         .is_err()
     );
     running.shutdown().await.unwrap();
+    fixture.shutdown().await;
 }
 
 const CHILD_STATE: &str = "DIONE_OMP_LIFECYCLE_FIXTURE_STATE";

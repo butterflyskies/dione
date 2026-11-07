@@ -1,0 +1,43 @@
+[package]
+name = "dione-teams"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Native Teams authentication, durable reply authority, ingress and lifecycle"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["teams", "mcp", "authentication"]
+categories = ["asynchronous"]
+
+[dependencies]
+dione-messages.workspace = true
+dione-teams-identities.workspace = true
+dione-provider-delivery.workspace = true
+dione-mcp-tools.workspace = true
+axum.workspace = true
+camino.workspace = true
+chrono.workspace = true
+fs2.workspace = true
+futures-util.workspace = true
+jsonwebtoken.workspace = true
+libc.workspace = true
+reqwest.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+axum-server.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
+tempfile.workspace = true
+tracing-subscriber.workspace = true
+trybuild.workspace = true

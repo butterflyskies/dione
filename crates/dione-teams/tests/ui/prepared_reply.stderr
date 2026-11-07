@@ -1,0 +1,11 @@
+error[E0603]: struct `PreparedReply` is private
+ --> tests/ui/prepared_reply.rs:1:24
+  |
+1 | use dione_teams::edge::PreparedReply;
+  |                        ^^^^^^^^^^^^^ private struct
+  |
+note: the struct `PreparedReply` is defined here
+ --> src/edge.rs
+  |
+  | pub(crate) struct PreparedReply {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

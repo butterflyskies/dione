@@ -485,6 +485,25 @@ producers retain authenticated envelopes, sealed store and current authorization
 including prepare/consume/send order and no send on uncertain consume. Concrete
 composition adapters remain application-owned.
 
+## Whole Teams owner
+
+`dione-teams` owns the existing authentication, JSON boundary, native edge,
+reply store, resident bridge, listener and Teams tool as one unit. Direct
+application consumers use its public service operations; no root forwarding
+module or reverse application dependency remains. Authenticated envelopes,
+metadata clients, tokens, correlated/prepared requests, sealed authority and
+store/fault machinery remain private.
+
+Native-only tests stay beside the owner. Actual Codex and OMP queue/readiness,
+restart, cancellation and tool cases use the owner's private unit-test process.
+Only descriptive events, classified receipts and reply operations cross that
+test boundary. Actual root JoinError assertions happen before serialization;
+native typed-source forwarding is separately exercised locally. IPC does not
+preserve Rust cause identity. Existing consume-fault/native HTTP-count assertions
+remain together in the member. Verification supplies the exact current fixture
+compiler artifact before each Nextest run, with no nested Cargo or public fixture
+API.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -516,6 +535,7 @@ composition adapters remain application-owned.
 25. Cohesive outbound consent, held retries, diary, journal and fence-aware chunks.
 26. Immutable MCP tool registration and owner handler contracts.
 27. Shared provider replay identity, Teams delivery and reply-handle contracts.
+28. Whole native Teams runtime and private authority.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -528,7 +548,7 @@ The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, and `dione-provider-delivery`.
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, `dione-provider-delivery`, and `dione-teams`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -550,7 +570,7 @@ Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, and `dione-provider-delivery`,
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, `dione-provider-delivery`, and `dione-teams`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
@@ -600,3 +620,5 @@ wait for its reconciliation before publishing the application.
 
 Provider delivery publication and tokenless reconciliation wait for messages
 and Teams identities; root waits for provider delivery reconciliation.
+
+Teams publication and tokenless reconciliation wait for messages, Teams identities, provider delivery and MCP tools. Root waits for Teams reconciliation.

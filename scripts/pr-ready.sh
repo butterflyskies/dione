@@ -55,8 +55,8 @@ EVENT_NAME=pull_request PR_BASE=$base_commit PR_HEAD=$head_commit \
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy --workspace --all-targets --locked --features oneshot-test-seam -- -D warnings
-cargo nextest run --workspace --locked --no-fail-fast --features oneshot-test-seam
-cargo nextest run --workspace --locked --no-fail-fast --test oneshot_send
+python3 scripts/run-tests.py --workspace --locked --no-fail-fast --features oneshot-test-seam
+python3 scripts/run-tests.py --workspace --locked --no-fail-fast --test oneshot_send
 cargo test --workspace --doc --locked
 python3 -B -m unittest discover -s .forgejo/scripts -p 'test_*.py'
 cargo +1.98.0 check --workspace --all-targets --locked
@@ -92,12 +92,14 @@ discord_identities_version=$(sh scripts/workspace-package-version.sh dione-disco
 pluralkit_identities_version=$(sh scripts/workspace-package-version.sh dione-pluralkit-identities)
 mcp_tools_version=$(sh scripts/workspace-package-version.sh dione-mcp-tools)
 provider_delivery_version=$(sh scripts/workspace-package-version.sh dione-provider-delivery)
+teams_version=$(sh scripts/workspace-package-version.sh dione-teams)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-coordination-${coordination_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-teams-identities-${teams_identities_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-discord-identities-${discord_identities_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-pluralkit-identities-${pluralkit_identities_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-mcp-tools-${mcp_tools_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-provider-delivery-${provider_delivery_version}.crate"
+sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-teams-${teams_version}.crate"
 pre_send_version=$(sh scripts/workspace-package-version.sh dione-pre-send)
 outbound_consent_version=$(sh scripts/workspace-package-version.sh dione-outbound-consent)
 config_version=$(sh scripts/workspace-package-version.sh dione-config)

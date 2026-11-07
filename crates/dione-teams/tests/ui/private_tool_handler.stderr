@@ -1,0 +1,11 @@
+error[E0603]: module `tools` is private
+ --> tests/ui/private_tool_handler.rs:1:18
+  |
+1 | use dione_teams::tools::TeamsReplyTool;
+  |                  ^^^^^ private module
+  |
+note: the module `tools` is defined here
+ --> src/lib.rs
+  |
+  | mod tools;
+  | ^^^^^^^^^

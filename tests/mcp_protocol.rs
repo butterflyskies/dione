@@ -7,6 +7,10 @@
 
 use dione_access_requests::AccessQueue;
 use dione_outbound_consent::consent::ConsentGate;
+use dione_teams::{
+    edge::LiveReplyReceipt,
+    runtime::{TeamsReplyAuthority, TeamsRuntimeError},
+};
 use serde_json::json;
 use serenity::{
     http::{Http, HttpBuilder},
@@ -25,10 +29,6 @@ use {
         discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
         mcp::server::{DioneServer, test_helpers},
         state::new_state,
-        teams::{
-            edge::LiveReplyReceipt,
-            runtime::{TeamsReplyAuthority, TeamsRuntimeError},
-        },
         tracing_channel::TraceLevelController,
     },
     dione_harness::HarnessConnection,
@@ -217,7 +217,7 @@ impl TeamsReplyAuthority for CapturingTeamsReply {
                 .push((handle.as_str().to_owned(), text.to_owned()));
             if self.reject_unknown_handle {
                 return Err(TeamsRuntimeError {
-                    kind: dione::teams::TeamsRuntimeErrorKind::UnknownReplyHandle,
+                    kind: dione_teams::TeamsRuntimeErrorKind::UnknownReplyHandle,
                 });
             }
             Ok(LiveReplyReceipt {
@@ -807,7 +807,7 @@ async fn teams_reply_tool_forwards_only_opaque_handle_and_resident_speech() {
     let server = make_server(&state_dir)
         .await
         .with_module_tools(
-            dione::teams::mcp_tools(Some(authority.clone())).expect("valid Teams definition"),
+            dione_teams::mcp_tools(Some(authority.clone())).expect("valid Teams definition"),
         )
         .expect("disjoint module tools");
     let response = test_helpers::dispatch_request(
@@ -877,7 +877,7 @@ async fn teams_reply_boundary_preserves_errors_and_borrowed_text() {
     let authority = Arc::new(CapturingTeamsReply::default());
     let server = server
         .with_module_tools(
-            dione::teams::mcp_tools(Some(authority.clone())).expect("valid Teams definition"),
+            dione_teams::mcp_tools(Some(authority.clone())).expect("valid Teams definition"),
         )
         .expect("disjoint module tools");
     for arguments in [
@@ -933,7 +933,7 @@ async fn teams_reply_boundary_preserves_errors_and_borrowed_text() {
     });
     let server = server
         .with_module_tools(
-            dione::teams::mcp_tools(Some(failing.clone())).expect("valid Teams definition"),
+            dione_teams::mcp_tools(Some(failing.clone())).expect("valid Teams definition"),
         )
         .expect("disjoint module tools");
     let response = test_helpers::dispatch_request(

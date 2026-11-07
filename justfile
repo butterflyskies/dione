@@ -16,9 +16,9 @@ lint:
 
 # Run tests with nextest (parallel, fail-fast off)
 test:
-    cargo nextest run --workspace --no-fail-fast --features oneshot-test-seam
+    python3 scripts/run-tests.py --workspace --no-fail-fast --features oneshot-test-seam
     # Production feature set: proves the endpoint-override seam is absent.
-    cargo nextest run --workspace --no-fail-fast --test oneshot_send
+    python3 scripts/run-tests.py --workspace --no-fail-fast --test oneshot_send
 
 # Verify documentation builds without warnings
 doc:

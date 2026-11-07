@@ -1,4 +1,9 @@
 //! Process startup, offline commands, and ordered shutdown.
+use dione_teams::{
+    AdmissionPolicy, ChannelPolicy,
+    edge::{ClientSecretTokenProvider, TeamsEdge},
+    runtime::{TeamsReplyAuthority, TeamsResidentBridge},
+};
 mod error;
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::Parser;
@@ -28,11 +33,6 @@ use {
         harness::{CodexSessionOptions, HarnessSelection, HarnessSession, HarnessSessionError},
         mcp::server::DioneServer,
         state::SharedState,
-        teams::{
-            AdmissionPolicy, ChannelPolicy,
-            edge::{ClientSecretTokenProvider, TeamsEdge},
-            runtime::{TeamsReplyAuthority, TeamsResidentBridge},
-        },
         tracing_channel::{TraceLevelController, TracingChannelLayer},
     },
     dione_harness::AttentionPolicy,
@@ -279,7 +279,7 @@ pub async fn run() -> Result<(), StartupError> {
         authority
     });
     let tools =
-        crate::teams::mcp_tools(teams_reply).map_err(StartupErrorKind::ModuleToolDefinition)?;
+        dione_teams::mcp_tools(teams_reply).map_err(StartupErrorKind::ModuleToolDefinition)?;
     let server = Arc::new(
         server
             .with_module_tools(tools)
@@ -293,7 +293,7 @@ pub async fn run() -> Result<(), StartupError> {
         let shutdown_on_failure = cancel.clone();
         Some(tokio::spawn(async move {
             if let Err(error) =
-                crate::teams::runtime::run_listener(bridge, listen, ingress_cancel).await
+                dione_teams::runtime::run_listener(bridge, listen, ingress_cancel).await
             {
                 tracing::error!(%error, "Teams resident listener failed");
                 shutdown_on_failure.cancel();

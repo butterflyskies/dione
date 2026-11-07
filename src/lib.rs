@@ -17,7 +17,6 @@ pub mod principal_policy;
 )]
 pub(crate) mod receipt_gate;
 pub mod state;
-pub mod teams;
 pub mod tracing_channel;
 
 /// Agent harness integration.
@@ -41,3 +40,9 @@ fn config_test_guard() -> std::sync::MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(|error| error.into_inner())
 }
+
+#[cfg(test)]
+mod teams_test_process;
+
+#[cfg(test)]
+mod teams_application_tests;

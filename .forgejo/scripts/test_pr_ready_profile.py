@@ -21,6 +21,7 @@ class PrReadyProfileTests(unittest.TestCase):
         self.binary_log = Path(self.directory.name) / "binary.log"
         (self.root / "scripts").mkdir()
         shutil.copyfile(SOURCE / "scripts/pr-ready.sh", self.root / "scripts/pr-ready.sh")
+        shutil.copyfile(SOURCE / "scripts/run-tests.py", self.root / "scripts/run-tests.py")
         (self.root / ".forgejo/scripts").mkdir(parents=True)
         (self.root / ".forgejo/scripts/test_fixture.py").write_text(
             "from pathlib import Path\nimport unittest\n"
@@ -46,6 +47,11 @@ class PrReadyProfileTests(unittest.TestCase):
             "args = sys.argv[1:]\n"
             "with open(os.environ['TEST_CARGO_LOG'], 'a') as log:\n"
             "    log.write(json.dumps(args) + '\\n')\n"
+            "if args[:2] == ['nextest', 'list']:\n"
+            "    fixture = str(pathlib.Path(__file__).resolve())\n"
+            "    print(json.dumps({'rust-suites': {'dione-teams': {'package-name': 'dione-teams', 'kind': 'lib', 'binary-path': fixture, 'testcases': {'fixture_process::native_fixture_service': {'ignored': True}}}}}))\n"
+            "if args[:2] == ['nextest', 'run']:\n"
+            "    assert os.environ.get('DIONE_TEAMS_FIXTURE_EXECUTABLE') == str(pathlib.Path(__file__).resolve())\n"
             "if args[0] == 'build':\n"
             "    profile = args[args.index('--profile') + 1]\n"
             "    binary = pathlib.Path(os.environ['CARGO_TARGET_DIR']) / profile / 'dione'\n"

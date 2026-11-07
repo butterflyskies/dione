@@ -6,7 +6,7 @@ use axum::{
     response::IntoResponse,
     routing::post,
 };
-use dione::teams::{
+use dione_teams::{
     AdmissionPolicy, ChannelPolicy,
     edge::{ClientSecretTokenProvider, TeamsEdge, TeamsEdgeError},
 };
@@ -110,7 +110,7 @@ async fn messages(
             StatusCode::ACCEPTED
         }
         Err(TeamsEdgeError {
-            kind: dione::teams::TeamsEdgeErrorKind::Probe(_),
+            kind: dione_teams::TeamsEdgeErrorKind::Probe(_),
         }) => StatusCode::UNAUTHORIZED,
         Err(error) => {
             tracing::error!(%error, "Teams edge canary failed");
