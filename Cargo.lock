@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.125.2"
+version = "0.126.2"
 dependencies = [
  "arc-swap",
  "axum",
@@ -951,6 +951,7 @@ dependencies = [
  "dione-delivery-scheduler",
  "dione-discord-bells",
  "dione-discord-events",
+ "dione-discord-gate",
  "dione-discord-identities",
  "dione-discord-presence",
  "dione-discord-state",
@@ -1229,6 +1230,20 @@ dependencies = [
  "dione-messages",
  "serenity",
  "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
+name = "dione-discord-gate"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "dione-config",
+ "dione-discord-events",
+ "dione-mutes",
+ "regex",
+ "tempfile",
+ "tokio",
  "tracing",
 ]
 

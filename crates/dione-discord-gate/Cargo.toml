@@ -1,0 +1,23 @@
+[package]
+name = "dione-discord-gate"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Native Discord admission, principal, mention, and outbound policy"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["discord", "access", "policy"]
+categories = ["authentication"]
+
+[dependencies]
+dione-config.workspace = true
+dione-discord-events.workspace = true
+dione-mutes.workspace = true
+regex.workspace = true
+camino.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true

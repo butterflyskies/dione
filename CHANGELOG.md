@@ -18,6 +18,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.126.2]
+
+### Fixed
+
+- Inherit the accepted Teams/OMP test allowances and contained guidance while
+  preserving this extraction and its assertions.
+
+## [0.126.1]
+
+### Fixed
+
+- Allow 120 seconds for authenticated Teams test event reads, child socket
+  readiness, and parent control connections on slower CI workers, preserving
+  assertions and production deadlines.
+
+## [0.126.0] - 2026-11-06
+
+### Changed
+
+- Extract complete native Discord gate and principal policy into dione-discord-gate,
+  with borrowed live mute-store wiring at native admission and source recovery.
+
 ## [0.125.2]
 
 ### Fixed

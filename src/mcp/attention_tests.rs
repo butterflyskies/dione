@@ -1988,3 +1988,61 @@ fn native_bells_enrich_both_ordinary_and_attention_queue_deliveries() {
         assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     });
 }
+
+#[test]
+fn source_recovery_reads_the_live_mute_store_at_current_policy_gate() {
+    scenario(|| async {
+        let fixture = Fixture::new(AttentionMode::Off).await;
+        crate::composition::mutes::init_global(dione_mutes::MuteStore::from_state(
+            dione_mutes::MuteState::default(),
+            &fixture.path,
+        ));
+        let store = crate::composition::mutes::global().unwrap();
+        let resolver = &fixture.attention.resolver;
+        fixture
+            .network
+            .insert(100, 27_101, "allowed before mute", None);
+        fixture
+            .network
+            .insert(100, 27_102, "allowed after unmute", None);
+        let key = |id| SourceKey {
+            channel_id: ChannelId::new(100),
+            message_id: MessageId::new(id),
+        };
+        assert_eq!(
+            resolver
+                .resolve(key(27_101), None, false)
+                .await
+                .unwrap()
+                .text,
+            "allowed before mute"
+        );
+        store
+            .mute_guild(500, 60, "fixture".into(), None)
+            .await
+            .unwrap();
+        assert!(matches!(
+            resolver.resolve(key(27_102), None, false).await,
+            Err(crate::attention::source::SourceFailure::Access)
+        ));
+        store.unmute_guild(500).await.unwrap();
+        assert_eq!(
+            resolver
+                .resolve(key(27_102), None, false)
+                .await
+                .unwrap()
+                .text,
+            "allowed after unmute"
+        );
+        assert_eq!(fixture.network.provider_requests(), Vec::<Value>::new());
+        let requests = fixture.network.state.lock();
+        assert_eq!(
+            requests
+                .requests
+                .iter()
+                .filter(|request| request.path.ends_with("/messages/27102"))
+                .count(),
+            2
+        );
+    });
+}

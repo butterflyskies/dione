@@ -1,7 +1,7 @@
 //! Discord typing notifications with live channel authorization.
 
-use crate::gate::OutboundGate;
 use dione_config::LoadedConfig;
+use dione_discord_gate::OutboundGate;
 use dione_discord_state::State;
 use serenity::{http::Http, model::id::ChannelId};
 use std::{future::Future, sync::Arc};

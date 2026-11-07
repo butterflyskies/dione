@@ -2,8 +2,8 @@
 use crate::discord::messaging::MessagingCtx;
 use crate::discord::messaging::queries::MessageView;
 use crate::discord::messaging::queries::ObservationError;
-use crate::gate::OutboundGate;
 use dione_config::LoadedConfig;
+use dione_discord_gate::OutboundGate;
 use dione_discord_identities::Snowflake;
 use serde::Deserialize;
 use serde_json::Value;

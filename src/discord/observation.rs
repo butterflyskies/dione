@@ -321,7 +321,7 @@ impl ObservationIngress {
                 if !policy.sender(author.id)
                     || author.bot && !config.is_allowed(author.id.get())
                     || channel_policy.is_some_and(|policy| {
-                        !crate::gate::direct_sender_allowed(policy, author.id.get())
+                        !dione_discord_gate::direct_sender_allowed(policy, author.id.get())
                     })
                 {
                     return Err(DispatchOutcome::Filtered(Exclusion::Sender));
@@ -698,7 +698,7 @@ impl ObservationIngress {
         };
         if !policy.sender(principal)
             || (!verified
-                && (!crate::gate::direct_sender_allowed(channel, principal.get())
+                && (!dione_discord_gate::direct_sender_allowed(channel, principal.get())
                     || message.author.bot && !config.is_allowed(message.author.id.get())))
         {
             return DispatchOutcome::Filtered(Exclusion::Sender);
@@ -866,12 +866,12 @@ fn same_attachments(left: &[Attachment], right: &[Attachment]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gate::GateDecision;
-    use crate::gate::InboundGate;
     use dione_access_requests::AccessQueue;
     use dione_config::ChannelConfig;
     use dione_config::Config;
     use dione_contracts::{ModuleSlotId, ProviderId};
+    use dione_discord_gate::GateDecision;
+    use dione_discord_gate::InboundGate;
     use std::num::NonZeroUsize;
 
     fn source() -> ModuleInstanceId {
@@ -943,7 +943,14 @@ mod tests {
         let (ingress, mut receiver, _) = enabled();
         let message = message();
         assert_eq!(
-            InboundGate::check_guild(&config(), 10, 20, false, Some(40)),
+            InboundGate::check_guild(
+                &config(),
+                10,
+                20,
+                false,
+                Some(40),
+                crate::composition::mutes::global().as_deref()
+            ),
             GateDecision::Drop
         );
         assert_eq!(
@@ -963,7 +970,14 @@ mod tests {
         assert_eq!(observed.native.message_id(), message.id);
         assert!(observed.thread_parent.is_none());
         assert_eq!(
-            InboundGate::check_guild(&config(), 10, 20, true, Some(40)),
+            InboundGate::check_guild(
+                &config(),
+                10,
+                20,
+                true,
+                Some(40),
+                crate::composition::mutes::global().as_deref()
+            ),
             GateDecision::Deliver
         );
     }
@@ -1113,7 +1127,14 @@ mod tests {
             DispatchOutcome::Full
         );
         assert_eq!(
-            InboundGate::check_guild(&config(), 10, 20, true, Some(40)),
+            InboundGate::check_guild(
+                &config(),
+                10,
+                20,
+                true,
+                Some(40),
+                crate::composition::mutes::global().as_deref()
+            ),
             GateDecision::Deliver
         );
         drop(receiver);

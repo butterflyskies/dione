@@ -694,8 +694,8 @@ impl IngressLedger {
         let lineage = LifecycleView { record };
         match record.context {
             LifecycleContext::DirectMessage => matches!(
-                crate::gate::InboundGate::check_dm(config, record.actor_id.get()),
-                crate::gate::GateDecision::Deliver
+                dione_discord_gate::InboundGate::check_dm(config, record.actor_id.get()),
+                dione_discord_gate::GateDecision::Deliver
             ),
             LifecycleContext::Guild(guild) => {
                 let scope = if config.channel_policy(channel_id.get()).is_some() {

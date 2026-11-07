@@ -4,9 +4,9 @@ use crate::discord::messaging::TargetError;
 use crate::discord::messaging::TargetOperation;
 use crate::discord::messaging::TargetPolicy;
 use crate::discord::messaging::verify_message_target;
-use crate::gate::OutboundGate;
 use crate::ingress_ledger::IngressLedger;
 use dione_config::LoadedConfig;
+use dione_discord_gate::OutboundGate;
 use dione_discord_state::State;
 use serenity::{
     builder::CreateThread,

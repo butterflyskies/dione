@@ -245,7 +245,7 @@ fn a04_production_ingress_gate_receipts_cover_denied_and_muted_direct_variants()
         assert!(mute_store.is_guild_muted(MUTED_GUILD));
 
         let config = dione_config::load_config(&fixture.path);
-        use crate::gate::GateDecision::{Drop, Queue};
+        use dione_discord_gate::GateDecision::{Drop, Queue};
 
         // The production gateway receipt
         // `discord::events::tests::admission_authority_controls_delivery_and_inheritance`
@@ -253,24 +253,59 @@ fn a04_production_ingress_gate_receipts_cover_denied_and_muted_direct_variants()
         // covers GateDrop, NotOptedIn, and GuildMuted. Exercise the missing ambient,
         // explicitly directed, and DM variants at those exact production gates.
         assert_eq!(
-            crate::gate::InboundGate::check_guild(&config, 100, 8, false, Some(500)),
+            dione_discord_gate::InboundGate::check_guild(
+                &config,
+                100,
+                8,
+                false,
+                Some(500),
+                crate::composition::mutes::global().as_deref()
+            ),
             Drop
         );
         assert_eq!(
-            crate::gate::InboundGate::check_guild(&config, 999, 7, false, Some(500)),
+            dione_discord_gate::InboundGate::check_guild(
+                &config,
+                999,
+                7,
+                false,
+                Some(500),
+                crate::composition::mutes::global().as_deref()
+            ),
             Drop
         );
         assert_eq!(
-            crate::gate::InboundGate::check_guild(&config, 100, 8, true, Some(500)),
+            dione_discord_gate::InboundGate::check_guild(
+                &config,
+                100,
+                8,
+                true,
+                Some(500),
+                crate::composition::mutes::global().as_deref()
+            ),
             Drop
         );
-        assert_eq!(crate::gate::InboundGate::check_dm(&config, 8), Queue);
+        assert_eq!(dione_discord_gate::InboundGate::check_dm(&config, 8), Queue);
         assert_eq!(
-            crate::gate::InboundGate::check_guild(&config, 100, 7, false, Some(MUTED_GUILD)),
+            dione_discord_gate::InboundGate::check_guild(
+                &config,
+                100,
+                7,
+                false,
+                Some(MUTED_GUILD),
+                crate::composition::mutes::global().as_deref()
+            ),
             Drop
         );
         assert_eq!(
-            crate::gate::InboundGate::check_guild(&config, 100, 7, true, Some(MUTED_GUILD)),
+            dione_discord_gate::InboundGate::check_guild(
+                &config,
+                100,
+                7,
+                true,
+                Some(MUTED_GUILD),
+                crate::composition::mutes::global().as_deref()
+            ),
             Drop
         );
 

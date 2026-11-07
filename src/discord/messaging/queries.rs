@@ -501,7 +501,7 @@ pub async fn download_attachment(
     let mut saved_paths = Vec::new();
 
     for attachment in &msg.attachments {
-        let safe_name = crate::gate::sanitize_filename(&attachment.filename);
+        let safe_name = dione_discord_gate::sanitize_filename(&attachment.filename);
         match download_url(&attachment.url).await {
             Ok(bytes) => match save_attachment(&inbox_dir, &safe_name, &bytes).await {
                 Ok(dest) => saved_paths.push(dest),
@@ -990,9 +990,9 @@ mod tests {
         *,
     };
     use crate::discord::query_wire;
-    use crate::gate::OutboundGate;
     use dione_config::ChannelConfig;
     use dione_config::Config;
+    use dione_discord_gate::OutboundGate;
     use dione_outbound_consent::consent::ConsentGate;
     use serde_json::{Value, json};
     use std::{collections::BTreeMap, fmt, sync::Arc};

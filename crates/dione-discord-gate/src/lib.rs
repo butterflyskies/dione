@@ -1,3 +1,9 @@
+//! Native inbound, outbound, mention, reply-parent, and principal policy.
+//!
+//! These policy decisions do not mint verified-action or transport authority.
+#![warn(missing_docs)]
+pub mod principal_policy;
+
 use camino::Utf8Path;
 use dione_config::DmPolicy;
 use dione_config::LoadedConfig;
@@ -36,14 +42,14 @@ pub enum GateDecision {
 ///   drops legitimate replies whose parent was merely deleted / un-fetchable).
 ///
 /// TODO(#369): confirm the fail direction with Pace/Lain before this ships.
-pub(crate) const IGNORE_REPLY_PARENT_FAIL_CLOSED: bool = false;
+const IGNORE_REPLY_PARENT_FAIL_CLOSED: bool = false;
 
 /// How a reply's referenced parent resolved for the identity-ignore gate.
 ///
 /// Produced by the (impure, HTTP/ledger-touching) resolver in
 /// `discord::events`; consumed by the pure [`classify_reply_parent_ignore`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReplyParentResolution {
+pub enum ReplyParentResolution {
     /// Not a reply, OR a reply whose parent author resolved and is NOT ignored.
     /// Nothing to do — deliver with the quoted preview intact.
     Clear,
@@ -62,7 +68,7 @@ pub(crate) enum ReplyParentResolution {
 /// the quoted preview stripped, because that preview is the sole content-leak
 /// vector a reply carries from the ignored person.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReplyParentAction {
+pub enum ReplyParentAction {
     /// Deliver, keeping the quoted preview.
     Admit,
     /// Deliver, but force `reply_to_content_preview = None` (parent ignored, or
@@ -75,12 +81,12 @@ pub(crate) enum ReplyParentAction {
 
 impl ReplyParentAction {
     /// Whether the quoted parent preview must be blanked before delivery.
-    pub(crate) fn redacts_preview(self) -> bool {
+    pub fn redacts_preview(self) -> bool {
         matches!(self, Self::AdmitRedactPreview)
     }
 
     /// Whether the handler must suppress the reply entirely.
-    pub(crate) fn drops(self) -> bool {
+    pub fn drops(self) -> bool {
         matches!(self, Self::DropUnresolved)
     }
 }
@@ -88,11 +94,11 @@ impl ReplyParentAction {
 /// Decide the delivery action for a reply from how its parent resolved.
 ///
 /// Pure and stateless. The fail policy is a **parameter** (`fail_closed`) — NOT
-/// a direct read of [`IGNORE_REPLY_PARENT_FAIL_CLOSED`] — so both directions are
+/// a direct read of `IGNORE_REPLY_PARENT_FAIL_CLOSED` — so both directions are
 /// exercised by the unit tests regardless of the shipped constant. Runtime
 /// callers use [`classify_reply_parent_ignore_default`], which supplies the
 /// constant.
-pub(crate) fn classify_reply_parent_ignore(
+pub fn classify_reply_parent_ignore(
     resolution: ReplyParentResolution,
     fail_closed: bool,
 ) -> ReplyParentAction {
@@ -113,8 +119,8 @@ pub(crate) fn classify_reply_parent_ignore(
 }
 
 /// Runtime wrapper that applies the shipped flagged fail policy
-/// ([`IGNORE_REPLY_PARENT_FAIL_CLOSED`]) to [`classify_reply_parent_ignore`].
-pub(crate) fn classify_reply_parent_ignore_default(
+/// (`IGNORE_REPLY_PARENT_FAIL_CLOSED`) to [`classify_reply_parent_ignore`].
+pub fn classify_reply_parent_ignore_default(
     resolution: ReplyParentResolution,
 ) -> ReplyParentAction {
     classify_reply_parent_ignore(resolution, IGNORE_REPLY_PARENT_FAIL_CLOSED)
@@ -130,7 +136,7 @@ pub(crate) fn classify_reply_parent_ignore_default(
 /// #369 v2: only the author drops a message. A reply to an ignored *parent* is
 /// handled separately via [`classify_reply_parent_ignore`] (preview redaction),
 /// not here.
-pub(crate) fn author_ignored(config: &LoadedConfig, author_id: u64) -> bool {
+pub fn author_ignored(config: &LoadedConfig, author_id: u64) -> bool {
     config.is_ignored(author_id)
 }
 
@@ -173,18 +179,20 @@ impl InboundGate {
 
     /// Decides what to do with an inbound guild message. O(1) channel + sender lookup.
     ///
-    /// When `guild_id` is `Some`, checks the guild mute store first — a muted
+    /// When `guild_id` and the borrowed live mute store are present, checks that
+    /// store after identity-ignore — a muted
     /// guild drops all push delivery regardless of channel or sender policy.
     ///
     /// This is the direct-human gate. Verified app actions use the separate
     /// linear `VerifiedActionGate`; accepting an origin/proof surrogate here
     /// would recreate the bypass that boundary is designed to prevent.
-    pub(crate) fn check_guild(
+    pub fn check_guild(
         config: &LoadedConfig,
         channel_id: u64,
         sender_id: u64,
         is_mentioned: bool,
         guild_id: Option<u64>,
+        mute_store: Option<&dione_mutes::MuteStore>,
     ) -> GateDecision {
         // #369: identity-level ignore is a stateless blocklist that overrides
         // channel policy. Drop when the sender is ignored — every channel, any
@@ -199,7 +207,7 @@ impl InboundGate {
             return GateDecision::Drop;
         }
         if let Some(gid) = guild_id
-            && let Some(store) = crate::composition::mutes::global()
+            && let Some(store) = mute_store
             && store.is_guild_muted(gid)
         {
             tracing::debug!(
@@ -263,7 +271,7 @@ impl InboundGate {
     ///
     /// [`check_dm`]: Self::check_dm
     /// [`check_guild`]: Self::check_guild
-    pub(crate) fn check_reaction(config: &LoadedConfig, reactor_id: u64) -> GateDecision {
+    pub fn check_reaction(config: &LoadedConfig, reactor_id: u64) -> GateDecision {
         if author_ignored(config, reactor_id) {
             tracing::debug!(
                 reactor_id,
@@ -453,7 +461,7 @@ pub fn sanitize_filename(name: &str) -> String {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 /// Provider-specific identity selectors cannot authorize a direct Discord author.
-pub(crate) fn direct_sender_allowed(policy: &dione_config::ChannelPolicy, sender_id: u64) -> bool {
+pub fn direct_sender_allowed(policy: &dione_config::ChannelPolicy, sender_id: u64) -> bool {
     !policy.has_identity_filter() || policy.allow_from.contains(&sender_id)
 }
 
@@ -581,7 +589,7 @@ mod tests {
     fn ignored_author_dropped_in_guild() {
         let config = ignore_config(&["900"]);
         assert_eq!(
-            InboundGate::check_guild(&config, 500, 900, false, None),
+            InboundGate::check_guild(&config, 500, 900, false, None, None),
             GateDecision::Drop,
             "a guild message from an identity-ignored author must drop"
         );
@@ -628,7 +636,7 @@ mod tests {
         );
         // Sender 123 delivers ambiently in the guild (require_mention=false).
         assert_eq!(
-            InboundGate::check_guild(&config, 500, 123, false, None),
+            InboundGate::check_guild(&config, 500, 123, false, None, None),
             GateDecision::Deliver,
             "a guild reply from a non-ignored sender is not dropped for an ignored parent"
         );
@@ -640,7 +648,7 @@ mod tests {
         // Allowed sender, no reply → deliver in both transports.
         assert_eq!(InboundGate::check_dm(&config, 100), GateDecision::Deliver);
         assert_eq!(
-            InboundGate::check_guild(&config, 500, 100, false, None),
+            InboundGate::check_guild(&config, 500, 100, false, None, None),
             GateDecision::Deliver
         );
     }
@@ -656,7 +664,7 @@ mod tests {
             "ignore_from overrides allow_from in DMs"
         );
         assert_eq!(
-            InboundGate::check_guild(&config, 500, 100, false, None),
+            InboundGate::check_guild(&config, 500, 100, false, None, None),
             GateDecision::Drop,
             "ignore_from overrides allow_from in guilds"
         );
@@ -747,7 +755,7 @@ mod tests {
     fn test_guild_opted_in_with_mention_delivers() {
         let config = loaded(base_config());
         assert_eq!(
-            InboundGate::check_guild(&config, 500, 999, true, None),
+            InboundGate::check_guild(&config, 500, 999, true, None, None),
             GateDecision::Deliver
         );
     }
@@ -756,7 +764,7 @@ mod tests {
     fn test_guild_not_opted_drops() {
         let config = loaded(base_config());
         assert_eq!(
-            InboundGate::check_guild(&config, 9999, 100, true, None),
+            InboundGate::check_guild(&config, 9999, 100, true, None, None),
             GateDecision::Drop
         );
     }
@@ -765,7 +773,7 @@ mod tests {
     fn test_guild_no_mention_in_require_mention_drops() {
         let config = loaded(base_config());
         assert_eq!(
-            InboundGate::check_guild(&config, 500, 100, false, None),
+            InboundGate::check_guild(&config, 500, 100, false, None, None),
             GateDecision::Drop
         );
     }
@@ -779,12 +787,12 @@ mod tests {
 
         // Allowed user delivers.
         assert_eq!(
-            InboundGate::check_guild(&config, 500, 200, false, None),
+            InboundGate::check_guild(&config, 500, 200, false, None, None),
             GateDecision::Deliver
         );
         // Non-allowed user drops.
         assert_eq!(
-            InboundGate::check_guild(&config, 500, 999, false, None),
+            InboundGate::check_guild(&config, 500, 999, false, None, None),
             GateDecision::Drop
         );
     }
@@ -798,7 +806,7 @@ mod tests {
         let config = loaded(raw);
 
         assert_eq!(
-            InboundGate::check_guild(&config, 500, 999, false, None),
+            InboundGate::check_guild(&config, 500, 999, false, None, None),
             GateDecision::Drop
         );
     }
@@ -812,7 +820,7 @@ mod tests {
         let config = loaded(raw);
 
         assert_eq!(
-            InboundGate::check_guild(&config, 500, 999, false, None),
+            InboundGate::check_guild(&config, 500, 999, false, None, None),
             GateDecision::Deliver
         );
     }
@@ -825,7 +833,7 @@ mod tests {
         let config = loaded(raw);
 
         assert_eq!(
-            InboundGate::check_guild(&config, 500, 999, false, None),
+            InboundGate::check_guild(&config, 500, 999, false, None, None),
             GateDecision::Drop
         );
     }
@@ -855,7 +863,7 @@ mod tests {
                             }
                             let config = loaded(raw);
                             let legacy =
-                                InboundGate::check_guild(&config, 500, 999, mentioned, None);
+                                InboundGate::check_guild(&config, 500, 999, mentioned, None, None);
                             let typed = LegacyPolicyTranslation::guild(LegacyGuildPolicyInput {
                                 channel_is_configured,
                                 require_mention,

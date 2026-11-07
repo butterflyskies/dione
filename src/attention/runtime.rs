@@ -1573,7 +1573,7 @@ mod tests {
 
             let fixture = NoticeFixture::new(AttentionMode::Log, NoticeMode::Failures, 200).await;
             let current = load_config(&fixture.path);
-            assert!(crate::gate::OutboundGate::check_channel(
+            assert!(dione_discord_gate::OutboundGate::check_channel(
                 &current,
                 101,
                 &std::collections::HashSet::new()

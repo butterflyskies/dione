@@ -2,7 +2,7 @@
 //!
 //! This module first captures the exact behavior of Dione's legacy
 //! `allow_from`, `dm_policy`, and `require_mention` configuration. Runtime
-//! integration remains in [`crate::gate`] until the typed policy cutover is
+//! integration remains in [`crate::InboundGate`] until the typed policy cutover is
 //! complete.
 
 use dione_config::DmPolicy;
