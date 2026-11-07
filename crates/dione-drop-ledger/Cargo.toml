@@ -1,0 +1,15 @@
+[package]
+name = "dione-drop-ledger"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Scoped dropped-message retention and direct-reply inheritance"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["discord", "retention"]
+categories = ["data-structures"]
+
+[dependencies]
+serenity.workspace = true
+native-tls.workspace = true

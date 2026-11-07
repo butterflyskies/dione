@@ -1,36 +1,21 @@
-//! Recently-dropped inbound message ledger (#361, reply-inheritance atom).
+//! Recently dropped message retention and direct-reply inheritance.
 //!
-//! When the inbound gate drops a guild message — muted guild, mention
-//! required, sender outside the identity lists — the message id is recorded
-//! here. A later message that is a **direct reply** to a recorded id
-//! inherits the drop unconditionally, and its own id is recorded in turn,
-//! so a reply chain rooted in a dropped message stays dropped without any
-//! per-hop policy re-derivation.
+//! Native Dione admission records configured mute, mention, bot and non-identity
+//! gate drops under an effective gate scope (thread parent or channel). Native
+//! identity-ignore policy remains stateless. These policies live in the native
+//! application's guild_message_preflight and admit_direct_guild_message functions,
+//! not in this ledger. A ChannelId or record call is not authorization.
 //!
-//! The ledger is bounded in-memory state: no receipts, no persistence, no
-//! TTL. Restart forgets it — a reply that arrives after a restart is judged
-//! by the ordinary gate alone, which fails open to exactly the pre-#361
-//! behavior. The configurable articulation point (making inheritance a
-//! per-channel toggle) is deliberately a later atom; this one is
-//! unconditional by design.
+//! A direct reply inherits only when its caller supplies the scope containing
+//! the recorded parent. Callers record each inherited hop to extend a chain.
+//! Oldest ids are evicted within each scope; activity in another scope cannot
+//! evict them. There is no TTL, persistence or bound on the number of scopes.
+//! Restart forgets retention and native callers apply their ordinary gating.
 //!
-//! Entries are partitioned by **effective gate scope** (the gate channel:
-//! thread parent for threads, the channel itself otherwise). Discord
-//! replies are same-channel, so a lookup always lands in the scope that
-//! recorded the parent.
-//!
-//! **Scopes are derived from trusted configuration.** Callers record only
-//! under gate scopes that carry a channel policy (see
-//! `guild_message_preflight` / `admit_direct_guild_message` in
-//! `discord::events`): traffic in unconfigured channels records nothing, so
-//! untrusted senders cannot mint scopes. Because the scope set is bounded
-//! by the operator's own config, every configured scope is retained
-//! independently for the process lifetime — there is no cross-scope
-//! eviction of any kind, and a flood in one scope can never erase another
-//! scope's suppression history. Within a scope, the ring evicts
-//! oldest-first at [`SCOPE_CAPACITY`].
-//!
-//! Reads and writes are one short critical section on the delivery path.
+//! Reads and writes take one short mutex critical section. A poisoned mutex
+//! panics, preserving the original behavior. The process-wide singleton belongs
+//! here and is shared by native ingress and canonical egress fallback.
+#![warn(missing_docs)]
 
 use serenity::model::id::{ChannelId, MessageId};
 use std::{
@@ -67,14 +52,16 @@ impl ScopeRing {
     }
 }
 
-/// Scope-partitioned set of recently dropped inbound message ids. Scope
-/// count is bounded by the operator's channel configuration (see module
-/// docs); per-scope retention is bounded by [`SCOPE_CAPACITY`].
+/// Scope-partitioned retention of dropped inbound message ids.
+///
+/// Each scope retains at most [`SCOPE_CAPACITY`] ids. The number of scopes is
+/// unbounded here; callers must derive scopes from their admitted configuration.
 pub struct DropLedger {
     scopes: Mutex<HashMap<ChannelId, ScopeRing>>,
 }
 
 impl DropLedger {
+    /// Create an empty ledger. Restarting or replacing it forgets all drops.
     pub fn new() -> Self {
         Self {
             scopes: Mutex::new(HashMap::new()),

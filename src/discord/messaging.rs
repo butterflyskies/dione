@@ -228,7 +228,7 @@ async fn verify_message_target_with_mute_store(
                             .as_deref()
                             .map(|parent| parent.id)
                     });
-                let drops = crate::drop_ledger::global();
+                let drops = dione_drop_ledger::global();
                 let guild_muted = match mute_store_override {
                     Some(store) => store.is_guild_muted(guild_id.get()),
                     None => crate::composition::mutes::global()
@@ -2531,7 +2531,7 @@ mod tests {
         let (http, requests, server) = fake_discord_http().await;
         let ctx = messaging_ctx_with_http(configured_ingress_test_config(), http);
         let channel = ChannelId::new(42);
-        crate::drop_ledger::global().record(channel, MessageId::new(9006));
+        dione_drop_ledger::global().record(channel, MessageId::new(9006));
         for id in [9004, 9006, 9007] {
             let result = crate::discord::messaging_wire::reply(
                 reply(
