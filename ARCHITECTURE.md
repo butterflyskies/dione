@@ -368,7 +368,7 @@ not imply that all writes have the same durability guarantee.
 | Attention | [AttentionRuntime](src/attention/runtime.rs) uses `attention/records.json` through the [attention store](crates/dione-attention/src/store.rs), plus `attention-status.json` for health reporting. |
 | Consent outcomes | [JournalHandle](crates/dione-outbound-consent/src/journal.rs) serializes writes to `no_rly_journal.jsonl`. Pending consent handles are owned by [HoldQueue](crates/dione-outbound-consent/src/queue.rs). |
 | Attachments | [Discord queries](src/discord/messaging/queries.rs) download Discord attachments into the state directory's `inbox/`. |
-| Transient Discord state | [SharedState](src/state.rs) holds entity caches, DM indexes, sent-message identities, and permission requests. The [ingress ledger](src/ingress_ledger.rs), delivery buffer, and rate limiter are also process-local. |
+| Transient Discord state | [shared Discord state](crates/dione-discord-state/src/lib.rs) holds entity caches, DM indexes, sent-message identities, and permission requests. The [ingress ledger](src/ingress_ledger.rs), delivery buffer, and rate limiter are also process-local. |
 | Archive data | The separate [GAIE archive](crates/dione-gaie/src/archive.rs) owns corpus NDJSON, checkpoints, attachment data, origin evidence, and archive locks. See the [archive guide](docs/gaie-archive.md). |
 
 The [config watcher](src/config_watcher.rs) reloads changed files through

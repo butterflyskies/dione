@@ -659,7 +659,7 @@ mod tests {
         provider: DiscordPublicationProvider,
         config: Arc<Mutex<LoadedConfig>>,
         requests: Arc<Mutex<Vec<Value>>>,
-        state: crate::state::State,
+        state: dione_discord_state::State,
         server: tokio::task::JoinHandle<()>,
         _directory: tempfile::TempDir,
     }
@@ -721,7 +721,7 @@ mod tests {
                 LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
             ));
             let current = config.clone();
-            let state = crate::state::new_state();
+            let state = dione_discord_state::new_state();
             let shared_state = state.clone();
             let directory = tempfile::TempDir::new().unwrap();
             let path = camino::Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).unwrap();

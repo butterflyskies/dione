@@ -1474,7 +1474,7 @@ mod tests {
                 AttentionRuntime::new(
                     SourceResolver {
                         http: network.http(),
-                        state: crate::state::new_state(),
+                        state: dione_discord_state::new_state(),
                         state_dir: path.clone(),
                         ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
                     },

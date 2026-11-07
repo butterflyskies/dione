@@ -1,8 +1,8 @@
 //! Discord typing notifications with live channel authorization.
 
 use crate::gate::OutboundGate;
-use crate::state::State;
 use dione_config::LoadedConfig;
+use dione_discord_state::State;
 use serenity::{http::Http, model::id::ChannelId};
 use std::{future::Future, sync::Arc};
 use thiserror::Error;
@@ -83,9 +83,9 @@ async fn send_authorized_typing(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::new_state;
     use dione_config::ChannelConfig;
     use dione_config::Config;
+    use dione_discord_state::new_state;
     use std::{error::Error as _, sync::Mutex};
 
     struct FakeTyping {

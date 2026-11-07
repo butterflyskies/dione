@@ -1,3 +1,7 @@
+//! Shared Discord runtime caches, permission bookkeeping, and observed creator facts.
+
+#![warn(missing_docs)]
+
 use chrono::{DateTime, Utc};
 use serenity::{
     http::Http,
@@ -10,12 +14,13 @@ use std::{
 };
 use tokio::sync::RwLock;
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
 /// A pending permission relay request waiting for admin response.
 pub struct PendingPermission {
+    /// Relay identifier grouping sibling permission prompts.
     pub request_id: String,
+    /// Discord channel containing the permission prompt.
     pub channel_id: ChannelId,
+    /// Time at which the pending relay entry was created.
     pub created_at: DateTime<Utc>,
 }
 
@@ -38,24 +43,12 @@ pub struct SharedState {
     /// `None` means the channel was looked up and confirmed **not** to be a thread
     /// (negative cache), avoiding repeated HTTP calls.
     pub thread_parents: BTreeMap<u64, Option<u64>>,
-    /// Cache of webhook ID → observed creator facts (not a classification verdict).
-    /// Stores the creator bot's user ID so provider semantics can be re-derived
-    /// at use time under current policy (P3 — webhook cache stores facts).
-    ///
-    /// Uses HashMap + VecDeque for FIFO eviction (oldest insertion evicted
-    /// first), avoiding the BTreeMap bias of evicting by smallest key.
     webhook_creators: HashMap<u64, WebhookCreatorInfo>,
     webhook_creator_order: std::collections::VecDeque<u64>,
 }
 
-/// Observed facts about a webhook's creator.
-///
-/// Stores the creator's bot user ID (if available) rather than a derived
-/// classification verdict, so provider semantics can be re-evaluated under
-/// current policy without cache invalidation.
 #[derive(Debug, Clone)]
 struct WebhookCreatorInfo {
-    /// The Discord user ID of the bot that created the webhook, if available.
     creator_bot_id: u64,
     observed_at: Instant,
 }
@@ -63,14 +56,11 @@ struct WebhookCreatorInfo {
 /// Thread-safe shared state handle.
 pub type State = Arc<RwLock<SharedState>>;
 
-/// Maximum recent-sent-ID entries kept in memory.
 const SENT_IDS_CAP: usize = 200;
 
 const THREAD_CACHE_CAP: usize = 200;
 const WEBHOOK_CACHE_CAP: usize = 200;
 const WEBHOOK_CREATOR_TTL: Duration = Duration::from_secs(300);
-
-// ── Implementation ────────────────────────────────────────────────────────────
 
 impl SharedState {
     /// Creates a new, empty shared state.
@@ -149,7 +139,6 @@ impl SharedState {
     /// cache a channel that is not a thread (avoids repeated HTTP lookups).
     pub fn record_thread_parent(&mut self, thread_id: u64, parent_id: Option<u64>) {
         self.thread_parents.insert(thread_id, parent_id);
-        // Prune if over cap — BTreeMap with snowflake keys evicts oldest first.
         while self.thread_parents.len() > THREAD_CACHE_CAP {
             if let Some(&oldest) = self.thread_parents.keys().next() {
                 self.thread_parents.remove(&oldest);
@@ -173,8 +162,6 @@ impl SharedState {
         }
     }
 
-    /// Caches observed webhook creator facts (not a classification verdict).
-    /// FIFO eviction: oldest insertion is evicted first, regardless of key value.
     fn record_webhook_creator(&mut self, webhook_id: u64, creator_bot_id: u64) {
         self.webhook_creator_order
             .retain(|queued| *queued != webhook_id);
@@ -195,7 +182,6 @@ impl SharedState {
         }
     }
 
-    /// Returns a fresh observed creator fact, physically removing stale facts.
     fn cached_webhook_creator(&mut self, webhook_id: u64) -> Option<u64> {
         let now = Instant::now();
         self.webhook_creators.retain(|_, info| {
@@ -241,7 +227,8 @@ impl SharedState {
 ///
 /// Callers can request an observation but cannot seed creator facts. Only a
 /// successful Discord lookup publishes a positive fact into the bounded cache.
-pub(crate) async fn observe_webhook_creator(
+/// The returned creator ID is an ordinary observation, not an authorization verdict.
+pub async fn observe_webhook_creator(
     http: &Http,
     state: &State,
     webhook_id: WebhookId,
@@ -290,11 +277,27 @@ pub fn new_state() -> State {
     Arc::new(RwLock::new(SharedState::new()))
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn webhook_creator_cache_uses_insertion_order_and_refreshes_existing_entries() {
+        let mut state = SharedState::new();
+        for id in (801..=1000).rev() {
+            state.record_webhook_creator(id, id + 1);
+        }
+        state.record_webhook_creator(1000, 9999);
+        state.record_webhook_creator(2000, 2001);
+        assert_eq!(state.cached_webhook_creator(1000), Some(9999));
+        assert_eq!(state.cached_webhook_creator(999), None);
+        assert_eq!(state.cached_webhook_creator(801), Some(802));
+        assert_eq!(state.cached_webhook_creator(2000), Some(2001));
+        assert_eq!(state.webhook_creators.len(), 200);
+        assert_eq!(state.webhook_creator_order.len(), 200);
+        assert_eq!(state.webhook_creator_order.front(), Some(&998));
+        assert_eq!(state.webhook_creator_order.back(), Some(&2000));
+    }
 
     #[test]
     fn test_prune_sent_ids() {

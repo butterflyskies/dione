@@ -385,7 +385,7 @@ impl Fixture {
             AttentionRuntime::new(
                 SourceResolver {
                     http: network.http(),
-                    state: crate::state::new_state(),
+                    state: dione_discord_state::new_state(),
                     state_dir: path.clone(),
                     ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
                 },
@@ -1612,7 +1612,7 @@ fn recipient_workflow_promotes_only_evaluated_policy_and_recovers_only_unconfirm
             AttentionRuntime::new(
                 SourceResolver {
                     http: fixture.network.http(),
-                    state: crate::state::new_state(),
+                    state: dione_discord_state::new_state(),
                     state_dir: fixture.path.clone(),
                     ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
                 },

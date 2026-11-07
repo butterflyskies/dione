@@ -1,4 +1,4 @@
-use crate::state::{PendingPermission, State};
+use dione_discord_state::{PendingPermission, State};
 use serenity::{
     builder::{CreateActionRow, CreateButton, CreateMessage},
     model::channel::ReactionType,

@@ -11,10 +11,10 @@ use super::verified_action::{
 use crate::pluralkit::PkResolveError;
 use crate::pluralkit::PkResolver;
 use crate::pluralkit::VerifiedPkFacts;
-use crate::state::State;
-use crate::state::observe_webhook_creator;
 use chrono::Utc;
 use dione_config::TrustedWebhookCreators;
+use dione_discord_state::State;
+use dione_discord_state::observe_webhook_creator;
 use serenity::{
     http::Http,
     model::{channel::Message, event::MessageUpdateEvent},
@@ -576,6 +576,38 @@ mod tests {
                 .expect("consistent")
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn observed_creator_cache_rechecks_current_trust_without_another_http_request() {
+        let creator = dione_pluralkit_identities::PLURALKIT_APPLICATION_ID;
+        let (ctx, server) = super::super::introspection_wire::tests::fixture(vec![(
+            "200 OK",
+            serde_json::json!({"id":"40", "type":1, "guild_id":"30", "channel_id":"20", "name":"fixture", "user":{"id":creator.to_string(), "username":"creator", "discriminator":"0", "bot":true}}),
+        )]).await;
+        let state = dione_discord_state::new_state();
+        let verifier = DiscordTransportVerifier::new();
+        let trusted = verifier
+            .verify(
+                &ctx.http,
+                &state,
+                &TrustedWebhookCreators::from_ids([creator]),
+                message(10, 20, Some(30), Some(40)),
+            )
+            .await
+            .expect("HTTP-observed trusted creator");
+        assert_eq!(trusted.provider(), TransportProvider::PluralKit);
+        let reclassified = verifier
+            .verify(
+                &ctx.http,
+                &state,
+                &TrustedWebhookCreators::from_ids([]),
+                message(11, 20, Some(30), Some(40)),
+            )
+            .await
+            .expect("cached ordinary fact still verifies");
+        assert_eq!(reclassified.provider(), TransportProvider::GenericWebhook);
+        assert_eq!(server.await.unwrap(), ["GET /api/v10/webhooks/40 HTTP/1.1"]);
     }
 
     // #323: trust comes from `access.trusted_webhook_creators`, not from a

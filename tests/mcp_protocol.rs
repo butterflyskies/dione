@@ -11,10 +11,10 @@ mod codex_projection;
 use dione::{
     discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
     mcp::server::{DioneServer, test_helpers},
-    state::new_state,
     tracing_channel::TraceLevelController,
 };
 use dione_access_requests::AccessQueue;
+use dione_discord_state::new_state;
 use dione_harness::HarnessConnection;
 use dione_messages::timestamp::Timestamp;
 use dione_outbound_consent::consent::ConsentGate;

@@ -6,8 +6,8 @@ use crate::discord::messaging::TargetPolicy;
 use crate::discord::messaging::verify_message_target;
 use crate::gate::OutboundGate;
 use crate::ingress_ledger::IngressLedger;
-use crate::state::State;
 use dione_config::LoadedConfig;
+use dione_discord_state::State;
 use serenity::{
     builder::CreateThread,
     http::Http,
@@ -167,11 +167,11 @@ pub(crate) async fn create_thread(
 mod tests {
     use super::*;
     use crate::discord::management_wire;
-    use crate::state::new_state;
     use dione_access_requests::AccessQueue;
     use dione_config::ChannelConfig;
     use dione_config::Config;
     use dione_config::LoadedConfig;
+    use dione_discord_state::new_state;
     use serde_json::{Value, json};
     use serenity::model::id::{ChannelId, UserId};
     use std::{error::Error as _, sync::Arc, time::Duration};

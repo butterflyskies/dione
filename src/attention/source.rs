@@ -6,13 +6,13 @@ use crate::gate::GateDecision;
 use crate::gate::InboundGate;
 use crate::gate::OutboundGate;
 use crate::ingress_ledger::IngressLedger;
-use crate::state::State;
 use camino::Utf8PathBuf;
 use dione_attention::{
     provider::SourceExcerpt,
     types::{DirectAuthorKind, SourceAuthorKind, SourceKey, SourceVersion, content_hash},
 };
 use dione_config::load_config;
+use dione_discord_state::State;
 use serenity::{http::Http, model::channel::Channel};
 use std::{sync::Arc, time::Duration};
 

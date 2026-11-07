@@ -8,6 +8,7 @@ mod error;
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::Parser;
 use dione_access_requests::AccessQueue;
+use dione_discord_state::SharedState;
 use dione_mutes::MuteStore;
 pub use error::{SecretEnvironmentError, StartupError, StartupErrorKind};
 use std::{
@@ -32,7 +33,6 @@ use {
         discord::events::{Handler, NotificationEvent},
         harness::{CodexSessionOptions, HarnessSelection, HarnessSession, HarnessSessionError},
         mcp::server::DioneServer,
-        state::SharedState,
         tracing_channel::{TraceLevelController, TracingChannelLayer},
     },
     dione_harness::AttentionPolicy,

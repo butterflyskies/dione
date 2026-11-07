@@ -9,7 +9,6 @@ use crate::discord::events::NotificationEvent;
 use crate::gate::OutboundGate;
 use crate::ingress_ledger::IngressLedger;
 use crate::ingress_ledger::VerifyResult;
-use crate::state::State;
 use camino::Utf8PathBuf;
 use dione_config::ChunkMode;
 use dione_config::DmPolicy;
@@ -18,6 +17,7 @@ use dione_contradictionary::Action;
 use dione_contradictionary::AutoRewrite;
 use dione_contradictionary::AutoRewritten;
 use dione_coordination::{ClaimOutcome, Coordinator};
+use dione_discord_state::State;
 use dione_evidence::SentexHandles;
 use dione_evidence::SentexRole;
 use dione_evidence::SentexTransport;
@@ -1987,13 +1987,13 @@ fn parse_reaction_type(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::new_state;
     use dione_access_requests::AccessQueue;
     use dione_config::ChannelConfig;
     use dione_config::Config;
     use dione_contradictionary::Action;
     use dione_contradictionary::Entry;
     use dione_contradictionary::MatchMode;
+    use dione_discord_state::new_state;
     use dione_mutes::{GuildMute, MuteState};
     use dione_pre_send::{
         Assessment, AuditSink, AuditTrail, ConstructFeedback, FeedbackSink, HookContext,

@@ -1,0 +1,11 @@
+error[E0603]: struct `WebhookCreatorInfo` is private
+ --> tests/ui/creator_info.rs:1:26
+  |
+1 | use dione_discord_state::WebhookCreatorInfo;
+  |                          ^^^^^^^^^^^^^^^^^^ private struct
+  |
+note: the struct `WebhookCreatorInfo` is defined here
+ --> src/lib.rs
+  |
+  | struct WebhookCreatorInfo {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^

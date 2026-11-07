@@ -142,7 +142,7 @@ impl DioneServer {
         self.discord.http()
     }
     /// Borrows the shared Discord state.
-    pub fn state(&self) -> &crate::state::State {
+    pub fn state(&self) -> &dione_discord_state::State {
         self.discord.state()
     }
     /// Borrows the state directory shared by every tool.
@@ -169,7 +169,7 @@ impl DioneServer {
         reason = "composition supplies the shared services and event sender together so registered and legacy tools use one authority"
     )]
     pub async fn new(
-        state: crate::state::State,
+        state: dione_discord_state::State,
         queue: Arc<Mutex<AccessQueue>>,
         http: Arc<serenity::http::Http>,
         state_dir: Utf8PathBuf,
@@ -1496,7 +1496,7 @@ mod tests {
         let (notification_tx, _notification_rx) = mpsc::channel(1);
         let (_queue_dir, harness) = test_codex_connection();
         let server = DioneServer::new(
-            crate::state::new_state(),
+            dione_discord_state::new_state(),
             Arc::new(Mutex::new(AccessQueue::load(&state_dir))),
             Arc::new(serenity::http::Http::new("fake")),
             state_dir.clone(),
@@ -1585,7 +1585,7 @@ mod tests {
             camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf-8 path");
         let (notification_tx, _notification_rx) = mpsc::channel(1);
         let server = DioneServer::new(
-            crate::state::new_state(),
+            dione_discord_state::new_state(),
             Arc::new(Mutex::new(AccessQueue::load(&state_dir))),
             Arc::new(serenity::http::Http::new("fake")),
             state_dir.clone(),

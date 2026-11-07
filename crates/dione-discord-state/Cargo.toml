@@ -1,0 +1,23 @@
+[package]
+name = "dione-discord-state"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Shared Discord caches, permission bookkeeping and HTTP-observed creator facts"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["discord", "cache", "state"]
+categories = ["asynchronous"]
+
+[dependencies]
+chrono.workspace = true
+serenity.workspace = true
+native-tls.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+serde_json.workspace = true
+trybuild.workspace = true

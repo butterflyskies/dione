@@ -88,7 +88,7 @@ async fn third_adapter_routes_notifications_invalidation_and_protocol() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
     let server = DioneServer::new(
-        crate::state::new_state(),
+        dione_discord_state::new_state(),
         Arc::new(Mutex::new(AccessQueue::load(&path))),
         Arc::new(serenity::http::Http::new("fake")),
         path.clone(),
@@ -225,7 +225,7 @@ async fn notification_loop_invalidates_edits_and_deletes_before_delivery() {
     let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
     let server = Arc::new(
         DioneServer::new(
-            crate::state::new_state(),
+            dione_discord_state::new_state(),
             Arc::new(Mutex::new(AccessQueue::load(&path))),
             Arc::new(serenity::http::Http::new("fake")),
             path.clone(),
@@ -316,7 +316,7 @@ async fn oh_my_pi_ordinary_mcp_tools_remain_available() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
     let server = DioneServer::new(
-        crate::state::new_state(),
+        dione_discord_state::new_state(),
         Arc::new(Mutex::new(AccessQueue::load(&path))),
         Arc::new(serenity::http::Http::new("fake")),
         path.clone(),
