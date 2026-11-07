@@ -1,6 +1,7 @@
 //! Teams events and acceptance receipts at the resident delivery boundary.
 
-use super::{ActivityId, ActorId, BotId, ConversationId, ReplyHandle, TenantId};
+use super::ReplyHandle;
+use dione_teams_identities::{ActivityId, ActorId, BotId, ConversationId, TenantId};
 use std::{future::Future, pin::Pin, sync::Arc};
 use thiserror::Error;
 use {crate::delivery::ProviderEventKey, dione_messages::timestamp::Timestamp};

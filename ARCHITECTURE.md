@@ -102,6 +102,11 @@ retains partial-write uncertainty and closes waiting connections; ordinary claim
 subscribe to pushes. Dione retains configuration, current authorization, Rook
 publication policy and bookkeeping.
 
+The public dione-teams-identities package owns six distinct validated opaque
+Teams coordinates and their typed errors. Configuration, native authentication
+and persisted reply authority import the owning crate directly. Original spelling
+is preserved; valid coordinate syntax grants no authorization.
+
 ## Processes and transports
 
 ```mermaid

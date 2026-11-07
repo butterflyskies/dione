@@ -1,10 +1,10 @@
 //! Minimal live Microsoft Bot Connector edge used by the Teams canary.
 
-use super::{ActivityId, ApplicationId, ConversationId, TenantId};
 use crate::teams::{
     AdmissionPolicy, AuthenticatedTeamsEnvelope, CorrelatedReplyRequest, ProbeError,
     authenticate_activity, correlated_reply, parse_connector_metadata,
 };
+use dione_teams_identities::{ActivityId, ApplicationId, ConversationId, TenantId};
 use reqwest::{Client, Url};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};

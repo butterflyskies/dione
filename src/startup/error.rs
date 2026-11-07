@@ -35,7 +35,7 @@ impl From<HarnessSessionError> for StartupError {
 pub enum StartupErrorKind {
     /// A configured Teams identity violates its wire constraints.
     #[error("invalid Teams configuration identity")]
-    TeamsIdentity(#[source] crate::teams::IdentityError),
+    TeamsIdentity(#[source] dione_teams_identities::IdentityError),
     /// The configured module identity is invalid.
     #[error(transparent)]
     ModuleIdentity(dione_contracts::IdentityError),

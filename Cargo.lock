@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.106.2"
+version = "0.107.2"
 dependencies = [
  "arc-swap",
  "axum",
@@ -958,6 +958,7 @@ dependencies = [
  "dione-rate-limiter",
  "dione-rendering",
  "dione-rook",
+ "dione-teams-identities",
  "dione-vaelii",
  "fs2",
  "futures-util",
@@ -1267,6 +1268,15 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "dione-teams-identities"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

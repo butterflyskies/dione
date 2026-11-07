@@ -1,11 +1,11 @@
 //! Bounded, owner-only persistence for authenticated Teams reply authority.
 
-use super::{ActivityId, ActorId, ApplicationId, BotId, ConversationId, TenantId};
 use crate::teams::{
     AdmissionPolicy, AuthenticatedConversationReference, AuthenticatedTeamsEnvelope, ReplyHandle,
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::{DateTime, Utc};
+use dione_teams_identities::{ActivityId, ActorId, ApplicationId, BotId, ConversationId, TenantId};
 use fs2::FileExt;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};

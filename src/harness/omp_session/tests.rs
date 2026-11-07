@@ -9,8 +9,9 @@ use tokio::{
     time::timeout,
 };
 use {
-    crate::teams::{ActivityId, BotId, ConversationId, ReplyHandle, TenantId},
+    crate::teams::ReplyHandle,
     dione_messages::timestamp::Timestamp,
+    dione_teams_identities::{ActivityId, BotId, ConversationId, TenantId},
 };
 
 fn event(activity: &str) -> TeamsResidentEvent {
