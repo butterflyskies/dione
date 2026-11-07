@@ -11,7 +11,6 @@ pub(crate) mod delivery;
 pub mod delivery_buffer;
 pub mod discord;
 pub mod drop_ledger;
-pub mod gaie;
 pub mod gate;
 pub mod ingress_ledger;
 pub mod mcp;

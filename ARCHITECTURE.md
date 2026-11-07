@@ -53,6 +53,10 @@ The public `dione-vaelii` package owns the optional provenance receipt client.
 Discord retains message authorization, lookup, exact-target checking, projection,
 and receipt failure handling. The client records supplied identifiers without
 message content or an authority claim.
+The public `dione-gaie` package owns durable archives, retained origin bytes,
+scoped Discord backfill, attachment budgets, and latest-state replay. Its private
+origin and checkpoint protocol stays together. Dione retains archive configuration,
+credential loading, channel allowlists, and the archive executable.
 See the [crate split plan](docs/design/plugin-crates.md) for the next boundaries
 and the package release requirements.
 
@@ -272,7 +276,7 @@ not imply that all writes have the same durability guarantee.
 | Consent outcomes | [JournalHandle](src/no_rly/journal.rs) serializes writes to `no_rly_journal.jsonl`. Pending consent handles are owned by [HoldQueue](src/no_rly/queue.rs). |
 | Attachments | [Discord queries](src/discord/messaging/queries.rs) download Discord attachments into the state directory's `inbox/`. |
 | Transient Discord state | [SharedState](src/state.rs) holds entity caches, DM indexes, sent-message identities, and permission requests. The [ingress ledger](src/ingress_ledger.rs), delivery buffer, and rate limiter are also process-local. |
-| Archive data | The separate [GAIE archive](src/gaie/archive.rs) owns corpus NDJSON, checkpoints, attachment data, origin evidence, and archive locks. See the [archive guide](docs/gaie-archive.md). |
+| Archive data | The separate [GAIE archive](crates/dione-gaie/src/archive.rs) owns corpus NDJSON, checkpoints, attachment data, origin evidence, and archive locks. See the [archive guide](docs/gaie-archive.md). |
 
 The [config watcher](src/config_watcher.rs) reloads changed files through
 ConfigRuntime. Loading a snapshot does not re-read TOML on every message.

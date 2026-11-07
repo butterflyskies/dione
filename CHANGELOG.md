@@ -18,6 +18,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.96.2]
+
+### Fixed
+
+- Inherit the accepted Teams/OMP test allowances and contained guidance while
+  preserving this extraction and its assertions.
+
+## [0.96.1]
+
+### Fixed
+
+- Allow 120 seconds for authenticated Teams test event reads, child socket
+  readiness, and parent control connections on slower CI workers, preserving
+  assertions and production deadlines.
+
+## [0.96.0]
+
+### Changed
+
+- Extract the complete GAIE archive, origin evidence, backfill, and replay owner
+  into `dione-gaie`. Move the unchanged attachment-budget defaults with it.
+  Keep archive CLI composition, settings, credential loading, and oracle
+  integration fixtures in Dione.
+
 ## [0.95.2]
 
 ### Fixed

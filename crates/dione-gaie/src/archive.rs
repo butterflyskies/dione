@@ -1,4 +1,4 @@
-use crate::gaie::{CorpusId, Event, backfill::parse_or_migrate_checkpoint};
+use crate::{CorpusId, Event, backfill::parse_or_migrate_checkpoint};
 use camino::{Utf8Path, Utf8PathBuf};
 use fs2::FileExt as _;
 use serde::{Deserialize, Serialize};
@@ -71,6 +71,7 @@ impl ArchivePaths {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct StreamCheckpoint {
+    /// Last captured message identifier for this stream, when present.
     pub after_message_id: Option<String>,
 }
 
@@ -79,11 +80,17 @@ pub struct StreamCheckpoint {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct Checkpoint {
+    /// Checkpoint schema version.
     pub version: u8,
+    /// Owning corpus identifier.
     pub corpus_id: String,
+    /// Capture-root guild identifier.
     pub guild_id: String,
+    /// Capture-root parent channel identifier.
     pub parent_channel_id: String,
+    /// Independent cursors keyed by capture stream.
     pub streams: BTreeMap<String, StreamCheckpoint>,
+    /// Checkpoint update timestamp.
     pub updated_at: String,
 }
 
@@ -95,7 +102,9 @@ pub struct ReadResult {
     /// Structurally committed events whose claimed origin evidence did not verify.
     /// These are never mixed into `events`; callers must opt in to handling them.
     pub quarantined_events: Vec<QuarantinedEvent>,
+    /// Whether a final incomplete or uncommitted tail was encountered.
     pub torn_or_uncommitted_tail: bool,
+    /// Highest structurally committed archive sequence.
     pub last_sequence: u64,
     committed_prefix: Vec<u8>,
 }
@@ -103,7 +112,9 @@ pub struct ReadResult {
 /// A structurally committed event whose claimed origin evidence failed validation.
 #[derive(Debug)]
 pub struct QuarantinedEvent {
+    /// Structurally committed event withheld from normal replay.
     pub event: Event,
+    /// Reason its claimed origin evidence failed validation.
     pub origin_error: String,
 }
 
@@ -124,22 +135,31 @@ impl StoredOriginEvidence {
 #[non_exhaustive]
 pub enum ArchiveError {
     #[error("unsafe archive path `{0}`")]
+    /// A supplied filesystem path was rejected.
     UnsafePath(Utf8PathBuf),
     #[error("another archive process owns `{0}`")]
+    /// Exclusive archive lock acquisition failed.
     Locked(Utf8PathBuf),
     #[error("archive I/O failed for `{path}`")]
+    /// A filesystem operation failed.
     Io {
+        /// Path of the failed operation.
         path: Utf8PathBuf,
         #[source]
+        /// Underlying concrete failure.
         source: io::Error,
     },
     #[error("archive JSON is invalid at physical line {line}")]
+    /// JSON serialization or deserialization failed.
     Json {
+        /// Physical archive line, or zero when no physical line applies.
         line: usize,
         #[source]
+        /// Underlying concrete failure.
         source: serde_json::Error,
     },
     #[error("archive integrity failure: {0}")]
+    /// Archive structure or committed data failed validation.
     Integrity(String),
 }
 
@@ -639,7 +659,7 @@ fn validate_event_origin(
     let Some(origin) = &event.origin_evidence else {
         return Ok(());
     };
-    if origin.adapter.name != crate::gaie::origin::DISCORD_HTTP_ADAPTER_NAME
+    if origin.adapter.name != crate::origin::DISCORD_HTTP_ADAPTER_NAME
         || origin.media_type != "application/json"
         || origin.harness.is_some()
         || !is_sha256(&origin.sha256)
@@ -650,7 +670,7 @@ fn validate_event_origin(
     }
     let validate_projection: fn(&Value, &str, &Event) -> Result<(), &'static str> =
         match origin.adapter.version.as_str() {
-            "1" => crate::gaie::origin::validate_discord_projection,
+            "1" => crate::origin::validate_discord_projection,
             version => {
                 return Err(ArchiveError::Integrity(format!(
                     "unsupported origin-evidence adapter version `{version}`"
@@ -866,7 +886,7 @@ pub(crate) fn hex_sha256(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gaie::{
+    use crate::{
         EventKind, Ingest, Lineage, MessageContext, Payload, Relations, Source,
         service::{MessageOriginEvidence, message_batch_with_origin},
     };

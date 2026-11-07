@@ -7,6 +7,7 @@ pub struct CorpusId(String);
 
 #[derive(Debug, Error)]
 #[error("corpus_id must contain only ASCII letters, digits, `_`, or `-`")]
+/// The supplied corpus identifier does not match the accepted grammar.
 pub struct CorpusIdError;
 
 impl CorpusId {
@@ -86,73 +87,107 @@ mod proofs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
+    /// Observed creation or first captured state of a message.
     MessageCreate,
+    /// Observed change to message content.
     MessageEdit,
+    /// Observed message deletion.
     MessageDelete,
+    /// Observed aggregate reaction count.
     ReactionSnapshot,
+    /// Observed reaction count increment.
     ReactionAdd,
+    /// Observed reaction count decrement.
     ReactionRemove,
 }
 
 /// The Discord origin of an event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Source {
+    /// Source platform name.
     pub platform: String,
+    /// Source guild identifier.
     pub guild_id: String,
+    /// Source channel identifier.
     pub channel_id: String,
+    /// Source thread identifier when present.
     pub thread_id: Option<String>,
+    /// Source message identifier.
     pub message_id: String,
+    /// Supplied source actor identifier when present.
     pub actor_id: Option<String>,
+    /// Source creation timestamp when available.
     pub created_at: Option<String>,
+    /// Source edit timestamp when available.
     pub edited_at: Option<String>,
 }
 
 /// A downloaded Discord attachment descriptor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Attachment {
+    /// Source attachment identifier.
     pub id: String,
+    /// Supplied attachment filename.
     pub filename: String,
+    /// Supplied media type when available.
     pub media_type: Option<String>,
+    /// Declared attachment size in bytes.
     pub size: u64,
+    /// Content digest when the attachment was retained.
     pub sha256: Option<String>,
+    /// Source attachment URL.
     pub url: String,
 }
 
 /// Event content and optional reaction fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Payload {
+    /// Observed message content when present.
     pub content: Option<String>,
+    /// Content digest when present.
     pub content_sha256: Option<String>,
+    /// Observed attachment descriptors.
     pub attachments: Vec<Attachment>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Reaction identifier when present.
     pub emoji_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Aggregate reaction count when present.
     pub count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Normal reaction count when present.
     pub normal_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Burst reaction count when present.
     pub burst_count: Option<u64>,
 }
 
 /// Message relationships carried by an event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Relations {
+    /// Referenced message identifier when present.
     pub reply_to_message_id: Option<String>,
+    /// Parent channel identifier for a thread when present.
     pub thread_parent_channel_id: Option<String>,
 }
 
 /// Version-chain information carried by an event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lineage {
+    /// Observed version number when known.
     pub observed_version_ordinal: Option<u64>,
+    /// Previous event identifier when known.
     pub predecessor_event_id: Option<String>,
+    /// Collector's description of history completeness.
     pub history_status: String,
 }
 
 /// Collector provenance for an event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ingest {
+    /// Collector implementation version.
     pub collector_version: String,
+    /// Digest of the collector's raw payload representation.
     pub raw_payload_sha256: String,
 }
 
@@ -160,7 +195,9 @@ pub struct Ingest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct OriginAdapter {
+    /// Origin adapter implementation name.
     pub name: String,
+    /// Origin adapter implementation version.
     pub version: String,
 }
 
@@ -168,7 +205,9 @@ pub struct OriginAdapter {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct OriginHarness {
+    /// Supplied harness implementation name.
     pub name: String,
+    /// Supplied harness implementation version.
     pub version: String,
 }
 
@@ -176,30 +215,48 @@ pub struct OriginHarness {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct OriginEvidenceRef {
+    /// Adapter used to project retained source bytes.
     pub adapter: OriginAdapter,
+    /// Digest of the retained source bytes.
     pub sha256: String,
+    /// Archive-relative location of retained source bytes.
     pub location: String,
+    /// Retained source media type.
     pub media_type: String,
+    /// Selector identifying the source object within retained bytes.
     pub selector: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Optional supplied harness identity.
     pub harness: Option<OriginHarness>,
 }
 
 /// A typed GAIE schema-v1 event inside a format-v2 archive.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
+    /// Event schema version.
     pub schema_version: String,
+    /// Owning archive corpus identifier.
     pub corpus_id: String,
+    /// Sequence number within the archive.
     pub archive_seq: u64,
+    /// Event identifier.
     pub event_id: String,
+    /// Observed event category.
     pub event_kind: EventKind,
+    /// Collector observation timestamp.
     pub observed_at: String,
+    /// Supplied source coordinates and timestamps.
     pub source: Source,
+    /// Observed content, attachments, or reaction values.
     pub payload: Payload,
+    /// Observed message relationships.
     pub relations: Relations,
+    /// Observed version-chain metadata.
     pub lineage: Lineage,
+    /// Collector provenance metadata.
     pub ingest: Ingest,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Optional reference to retained exact source bytes.
     pub origin_evidence: Option<OriginEvidenceRef>,
 }
 

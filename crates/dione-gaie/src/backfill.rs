@@ -1,13 +1,11 @@
 //! Verified capture targets and deterministic Atom 1b backfill planning.
 
 use crate::{
-    config::{DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES, DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES},
-    gaie::{
-        Archive, ArchiveError, ArchivePaths, Checkpoint, CorpusId, DiscordArchiveClient,
-        DiscordArchiveError, MessageContext, StreamCheckpoint,
-        archive::StoredOriginEvidence,
-        service::{MessageOriginEvidence, message_batch_with_origin},
-    },
+    Archive, ArchiveError, ArchivePaths, Checkpoint, CorpusId,
+    DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES, DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES,
+    DiscordArchiveClient, DiscordArchiveError, MessageContext, StreamCheckpoint,
+    archive::StoredOriginEvidence,
+    service::{MessageOriginEvidence, message_batch_with_origin},
 };
 use serde_json::Value;
 use std::{
@@ -18,6 +16,7 @@ use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
+/// A capture root checked against the requested Discord scope.
 pub struct CaptureRoot {
     pub(crate) corpus_id: String,
     pub(crate) guild_id: String,
@@ -40,6 +39,7 @@ impl RootKind {
 }
 
 impl CaptureRoot {
+    /// Return the parent's message stream when the root supports one.
     pub fn parent_target(&self) -> Option<CaptureTarget> {
         self.kind
             .has_parent_message_stream()
@@ -85,6 +85,7 @@ pub(crate) struct DiscoveryPage {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
+/// A discovered message stream within a checked capture root.
 pub struct CaptureTarget {
     pub(crate) channel_id: String,
     pub(crate) thread_id: Option<String>,
@@ -92,14 +93,17 @@ pub struct CaptureTarget {
 }
 
 impl CaptureTarget {
+    /// Return the channel to fetch for this stream.
     pub fn channel_id(&self) -> &str {
         &self.channel_id
     }
 
+    /// Return the thread identifier when this stream is a thread.
     pub fn thread_id(&self) -> Option<&str> {
         self.thread_id.as_deref()
     }
 
+    /// Return a thread's parent channel identifier when present.
     pub fn thread_parent_channel_id(&self) -> Option<&str> {
         self.thread_parent_channel_id.as_deref()
     }
@@ -117,32 +121,49 @@ pub(crate) enum BackfillContractError {
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
+/// Failure to capture and commit an archive backfill.
 pub enum BackfillRunError {
     #[error(transparent)]
+    /// A Discord archive operation failed.
     Discord(#[from] DiscordArchiveError),
     #[error(transparent)]
+    /// An archive operation failed.
     Archive(#[from] ArchiveError),
     #[error("Discord message response is malformed")]
+    /// A source message response has an invalid shape.
     InvalidMessage,
     #[error("parent-only mode is unavailable for forum/media roots")]
+    /// Parent-only capture was requested for a root without that stream.
     ParentStreamUnavailable,
     #[error("attachment byte limits must be nonzero and the run limit must cover one attachment")]
+    /// Supplied download limits cannot cover a nonzero attachment.
     InvalidAttachmentLimits,
     #[error(
         "attachment `{attachment_id}` declares {size} bytes, exceeding the {maximum} byte per-attachment limit"
     )]
+    /// A declared attachment exceeds its individual budget.
     AttachmentDeclaredTooLarge {
+        /// Source attachment identifier.
         attachment_id: String,
+        /// Declared attachment size in bytes.
         size: u64,
+        /// Applicable byte limit.
         maximum: u64,
     },
     #[error(
         "attachment downloads encountered in this run require {total} bytes, exceeding the {maximum} byte cumulative download limit"
     )]
-    AttachmentDownloadBudgetExceeded { total: u64, maximum: u64 },
+    /// Cumulative charged download bytes exceed the run budget.
+    AttachmentDownloadBudgetExceeded {
+        /// Cumulative charged download bytes.
+        total: u64,
+        /// Applicable byte limit.
+        maximum: u64,
+    },
 }
 
 #[non_exhaustive]
+/// Supplied archive scope and download limits for one backfill.
 pub struct BackfillOptions<'a> {
     corpus_id: &'a str,
     guild_id: &'a str,
@@ -153,6 +174,7 @@ pub struct BackfillOptions<'a> {
 }
 
 impl<'a> BackfillOptions<'a> {
+    /// Construct options with the existing default attachment budgets.
     pub fn new(
         corpus_id: &'a str,
         guild_id: &'a str,
@@ -249,6 +271,7 @@ impl AttachmentDownloadBudget {
     }
 }
 
+/// Capture checked streams, commit new message batches, and update durable cursors.
 pub async fn run_backfill(
     client: &DiscordArchiveClient,
     token: &str,
@@ -301,13 +324,13 @@ pub async fn run_backfill(
         .collect();
     let mut seen: HashSet<String> = committed_events
         .iter()
-        .filter(|event| matches!(event.event_kind, crate::gaie::EventKind::MessageCreate))
+        .filter(|event| matches!(event.event_kind, crate::EventKind::MessageCreate))
         .map(|event| event.source.message_id.clone())
         .collect();
     let mut committed_stream_max = BTreeMap::<String, u64>::new();
     for event in committed_events
         .iter()
-        .filter(|event| matches!(event.event_kind, crate::gaie::EventKind::MessageCreate))
+        .filter(|event| matches!(event.event_kind, crate::EventKind::MessageCreate))
     {
         let message_id = parse_snowflake(&event.source.message_id)
             .map_err(|_| BackfillRunError::InvalidMessage)?;

@@ -1,5 +1,6 @@
 use arc_swap::ArcSwap;
 use camino::{Utf8Path, Utf8PathBuf};
+use dione_gaie::{DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES, DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES};
 use regex::RegexSet;
 use serde::{Deserialize, Deserializer, de::Error as _};
 use serenity::model::id::{ChannelId, UserId};
@@ -25,11 +26,6 @@ use {
     },
     dione_messages::timestamp::Timestamp,
 };
-
-/// Default maximum size of one GAIE attachment (25 MiB).
-pub const DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;
-/// Default cumulative GAIE attachment download budget for one backfill run (250 MiB).
-pub const DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES: u64 = 250 * 1024 * 1024;
 
 // ── Error type ───────────────────────────────────────────────────────────────
 
@@ -214,7 +210,7 @@ impl ArchiveConfig {
         if guild_id == 0 {
             return Err("archive.guild_id must be a nonzero Discord ID".to_owned());
         }
-        crate::gaie::CorpusId::parse(&self.corpus_id).map_err(|error| error.to_string())?;
+        dione_gaie::CorpusId::parse(&self.corpus_id).map_err(|error| error.to_string())?;
         if self.data_dir.as_str().is_empty()
             || !self.data_dir.is_absolute()
             || self

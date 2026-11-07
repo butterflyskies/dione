@@ -741,7 +741,9 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         remaining.split_once("\n  reconcile-rate-limiter:").unwrap();
     let (reconcile_rate_limiter, remaining) = remaining.split_once("\n  publish-vaelii:").unwrap();
     let (publish_vaelii, remaining) = remaining.split_once("\n  reconcile-vaelii:").unwrap();
-    let (reconcile_vaelii, remaining) = remaining.split_once("\n  publish-crate:").unwrap();
+    let (reconcile_vaelii, remaining) = remaining.split_once("\n  publish-gaie:").unwrap();
+    let (publish_gaie, remaining) = remaining.split_once("\n  reconcile-gaie:").unwrap();
+    let (reconcile_gaie, remaining) = remaining.split_once("\n  publish-crate:").unwrap();
     let (publish_dione, reconcile_dione) = remaining.split_once("\n  reconcile-dione:").unwrap();
 
     assert_eq!(
@@ -749,7 +751,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
             .matches("scripts/verify-public-package-privacy.sh")
             .count(),
         workflow.matches("cargo package -p").count()
-            + 10 * workflow.matches("cargo package --workspace").count(),
+            + 11 * workflow.matches("cargo package --workspace").count(),
         "every workspace archive must cross the privacy verifier"
     );
     for job in [
@@ -763,6 +765,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         reconcile_messages,
         reconcile_rate_limiter,
         reconcile_vaelii,
+        reconcile_gaie,
         reconcile_dione,
     ] {
         assert!(!job.contains("CARGO_REGISTRY_TOKEN"));
@@ -774,11 +777,11 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     assert!(workflow.contains("github:butterflyskies:lacuna-blinkers"));
     assert!(workflow.contains("github:butterflyskies:superadmins"));
     assert!(publish_dione.contains(
-        "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii]"
+        "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie]"
     ));
     assert!(
         reconcile_dione.contains(
-            "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, publish-crate]"
+            "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, publish-crate]"
         )
     );
     assert!(reconcile_dione.contains("needs.reconcile-rendering.result == 'success'"));
@@ -808,6 +811,11 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     assert!(publish_vaelii.contains("needs: verify-dione"));
     assert!(reconcile_vaelii.contains("needs: [verify-dione, publish-vaelii]"));
     assert!(reconcile_vaelii.contains("--ignore-vcs-info"));
+    assert!(publish_gaie.contains("needs: verify-dione"));
+    assert!(reconcile_gaie.contains("needs: [verify-dione, publish-gaie]"));
+    assert!(reconcile_gaie.contains("--ignore-vcs-info"));
+    assert!(reconcile_dione.contains("needs.reconcile-gaie.result == 'success'"));
+    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-gaie "));
     assert!(reconcile_dione.contains("needs.reconcile-vaelii.result == 'success'"));
     assert!(workflow.contains("scripts/crates-io-package-state.sh dione-vaelii "));
     assert!(reconcile_dione.contains("needs.reconcile-rate-limiter.result == 'success'"));
@@ -839,6 +847,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         publish_messages,
         publish_rate_limiter,
         publish_vaelii,
+        publish_gaie,
         publish_dione,
     ] {
         assert!(upload_job.contains("id-token: write"));
@@ -931,7 +940,7 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
         package
             .matches("scripts/verify-public-package-privacy.sh")
             .count(),
-        10 * archive_package_calls.len(),
+        11 * archive_package_calls.len(),
         "every archive-producing workspace package call must cross the privacy verifier"
     );
     for (index, _) in archive_package_calls {

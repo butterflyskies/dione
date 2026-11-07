@@ -1,7 +1,7 @@
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
-use dione::gaie::{Archive, ArchivePaths, CorpusId, DiscordArchiveClient, build_latest_state};
+use dione_gaie::{Archive, ArchivePaths, CorpusId, DiscordArchiveClient, build_latest_state};
 
 #[derive(Debug, Parser)]
 #[command(about = "Explicit one-shot GAIE archive operations")]
@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn report_quarantine(read: &dione::gaie::ReadResult) {
+fn report_quarantine(read: &dione_gaie::ReadResult) {
     for quarantined in &read.quarantined_events {
         eprintln!(
             "WARNING: quarantined GAIE event {} (message {}): {}",
@@ -84,10 +84,10 @@ async fn backfill_parent(
     let token = dione::config::resolve_token(config)
         .ok_or_else(|| color_eyre::eyre::eyre!("no Discord bot token found"))?;
     let client = DiscordArchiveClient::new();
-    let added = dione::gaie::run_backfill(
+    let added = dione_gaie::run_backfill(
         &client,
         &token,
-        dione::gaie::BackfillOptions::new(
+        dione_gaie::BackfillOptions::new(
             &config.archive.corpus_id,
             &config.archive.guild_id,
             &config.archive.channel_id,

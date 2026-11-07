@@ -1,4 +1,4 @@
-use crate::gaie::{
+use crate::{
     Attachment, CaptureRoot, CaptureTarget, Event, EventKind, Ingest, Lineage, OriginAdapter,
     OriginEvidenceRef, Payload, Relations, Source,
     archive::StoredOriginEvidence,
@@ -34,18 +34,26 @@ pub(crate) struct DownloadedAttachment {
 /// Summary returned by a one-shot backfill.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackfillReport {
+    /// Messages newly committed during this run.
     pub new_messages: usize,
+    /// Previously captured messages skipped during this run.
     pub skipped_messages: usize,
 }
 
 /// Stable archive context applied while converting one Discord message.
 #[derive(Debug, Clone, Copy)]
 pub struct MessageContext<'a> {
+    /// Target corpus identifier.
     pub corpus_id: &'a str,
+    /// Capture guild identifier.
     pub guild_id: &'a str,
+    /// Capture channel identifier.
     pub channel_id: &'a str,
+    /// Captured thread identifier when present.
     pub thread_id: Option<&'a str>,
+    /// Thread parent channel identifier when present.
     pub thread_parent_channel_id: Option<&'a str>,
+    /// Collector observation timestamp.
     pub observed_at: &'a str,
 }
 
@@ -139,33 +147,57 @@ impl Default for DiscordArchiveClient {
 #[non_exhaustive]
 pub enum DiscordArchiveError {
     #[error("archive request failed")]
+    /// The HTTP client failed to execute an archive request.
     Request(#[source] reqwest::Error),
     #[error("archive request exceeded its total retry deadline")]
+    /// The total request retry deadline expired.
     RequestTimeout,
     #[error("Discord returned a non-success archive response")]
+    /// Discord returned a non-success status.
     Status,
     #[error("archive response did not have the expected shape")]
+    /// A source response has an unexpected shape.
     Shape,
     #[error("origin-evidence selector does not resolve to the normalized source object")]
+    /// A retained-origin selector does not identify the projected source object.
     Selector,
     #[error("injected archive API origin must be loopback HTTP")]
+    /// An injected API origin is not loopback HTTP.
     UnsafeBaseUrl,
     #[error("attachment URL is not an allowed Discord CDN or test origin")]
+    /// An attachment URL is outside the accepted origin policy.
     UnsafeAttachmentUrl,
     #[error("attachment request failed")]
+    /// An attachment HTTP operation failed.
     AttachmentRequest,
     #[error("attachment storage failed for `{path}`")]
+    /// An attachment filesystem operation failed.
     AttachmentIo {
+        /// Path of the failed attachment operation.
         path: Utf8PathBuf,
         #[source]
+        /// Underlying concrete filesystem failure.
         source: std::io::Error,
     },
     #[error("stored attachment hash does not match its content-addressed filename")]
+    /// Stored attachment bytes do not match their content address.
     AttachmentIntegrity,
     #[error("attachment is {size} bytes, exceeding the {maximum} byte archive limit")]
-    AttachmentTooLarge { size: u64, maximum: u64 },
+    /// Attachment bytes exceed the individual limit.
+    AttachmentTooLarge {
+        /// Attachment size in bytes.
+        size: u64,
+        /// Applicable byte limit.
+        maximum: u64,
+    },
     #[error("channel `{requested}` is outside the configured archive scope `{allowed}`")]
-    OutsideScope { requested: String, allowed: String },
+    /// A requested channel is outside the supplied archive scope.
+    OutsideScope {
+        /// Requested channel identifier.
+        requested: String,
+        /// Supplied allowed channel identifier.
+        allowed: String,
+    },
 }
 
 impl DiscordArchiveClient {
@@ -496,7 +528,7 @@ impl DiscordArchiveClient {
         self.download_attachment_limited(
             url,
             directory,
-            crate::config::DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES,
+            crate::DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES,
         )
         .await
         .map(|download| download.sha256)
@@ -1683,7 +1715,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_v1_checkpoint_is_persisted_as_v2_once_on_remote_noop() {
-        use crate::gaie::{Archive, ArchivePaths, BackfillOptions, CorpusId, run_backfill};
+        use crate::{Archive, ArchivePaths, BackfillOptions, CorpusId, run_backfill};
 
         let temp = tempfile::tempdir().unwrap();
         let directory = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
@@ -1737,9 +1769,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_atom_1b_library_backfill_transcript_reaches_durable_archive() {
-        use crate::gaie::{
-            Archive, ArchivePaths, BackfillOptions, CorpusId, EventKind, run_backfill,
-        };
+        use crate::{Archive, ArchivePaths, BackfillOptions, CorpusId, EventKind, run_backfill};
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1816,9 +1846,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn test_atom_1b_multirun_backfill_preserves_alias_relations_and_noop_bytes() {
-        use crate::gaie::{
-            Archive, ArchivePaths, BackfillOptions, CorpusId, EventKind, run_backfill,
-        };
+        use crate::{Archive, ArchivePaths, BackfillOptions, CorpusId, EventKind, run_backfill};
 
         let temp = tempfile::tempdir().unwrap();
         let directory = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
@@ -2003,7 +2031,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_incremental_short_after_page_wrong_direction_fails_closed() {
-        use crate::gaie::{
+        use crate::{
             Archive, ArchivePaths, BackfillOptions, BackfillRunError, Checkpoint, CorpusId,
             StreamCheckpoint, run_backfill,
         };
@@ -2055,9 +2083,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fresh_backfill_short_before_page_wrong_direction_fails_closed() {
-        use crate::gaie::{
-            ArchivePaths, BackfillOptions, BackfillRunError, CorpusId, run_backfill,
-        };
+        use crate::{ArchivePaths, BackfillOptions, BackfillRunError, CorpusId, run_backfill};
 
         let page = serde_json::to_string(
             &(101_u64..=200)
@@ -2104,7 +2130,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_incremental_backfill_paginates_backward_over_150_new_messages_exactly_once() {
-        use crate::gaie::{
+        use crate::{
             Archive, ArchivePaths, BackfillOptions, Checkpoint, CorpusId, StreamCheckpoint,
             run_backfill,
         };
@@ -2221,7 +2247,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_backfill_repairs_stale_stream_cursor_from_durable_commit_when_remote_empty() {
-        use crate::gaie::{
+        use crate::{
             Archive, ArchivePaths, BackfillOptions, Checkpoint, CorpusId, StreamCheckpoint,
             run_backfill,
         };
@@ -2329,7 +2355,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_attachment_budget_retry_skips_committed_prefix_before_recharging() {
-        use crate::gaie::{
+        use crate::{
             Archive, ArchivePaths, BackfillOptions, BackfillRunError, CorpusId, EventKind,
             run_backfill,
         };
