@@ -43,7 +43,7 @@ use crate::queue::HoldQueue;
 use camino::Utf8Path;
 use serenity::model::id::{ChannelId, MessageId};
 use std::{
-    sync::Mutex as StdMutex,
+    sync::{Arc, Mutex as StdMutex},
     time::{Duration, Instant},
 };
 use thiserror::Error;
@@ -237,6 +237,19 @@ pub enum RejectedHandle {
         /// Why the message had bounced.
         reason: RejectReason,
     },
+    /// The attempt may have published. The consumed handle must not be retried.
+    #[error(
+        "delivery completion unknown: {error}; handle {handle} consumed; reconcile before resending"
+    )]
+    DeliveryUnknown {
+        /// The terminally consumed handle.
+        handle: HoldHandle,
+        /// The original publication cause.
+        #[source]
+        error: DeliveryCause,
+        /// Confirmed messages, excluding the uncertain chunk.
+        confirmed: Vec<MessageId>,
+    },
     /// Delivery failed. The handle is still live until its deadline.
     #[error("send failed: {error} (handle {handle} still live for {}s)", expires_in.as_secs())]
     SendFailed {
@@ -263,8 +276,107 @@ pub enum RejectedHandle {
 /// in-flight reservation.
 #[derive(Debug)]
 pub struct ConsentGate {
-    queue: Mutex<HoldQueue<ReplyRequest>>,
+    queue: Arc<Mutex<HoldQueue<ReplyRequest>>>,
     journal: JournalHandle,
+}
+
+// Own a reservation across every await, including the queue settlement await.
+// A dropped send future cannot release authority to repeat an uncertain POST.
+struct AttemptGuard {
+    queue: Arc<Mutex<HoldQueue<ReplyRequest>>>,
+    journal: JournalHandle,
+    handle: HoldHandle,
+    entry: Held<ReplyRequest>,
+    replacement: Option<ReplyRequest>,
+    record: Option<journal::JournalRecord>,
+    started: bool,
+}
+
+fn unknown_record(
+    handle: &HoldHandle,
+    entry: &Held<ReplyRequest>,
+    replacement: Option<&str>,
+    now: Instant,
+) -> journal::JournalRecord {
+    let original = entry
+        .withdrawn_original
+        .as_deref()
+        .or(entry.original_message.as_deref())
+        .unwrap_or(&entry.payload.content);
+    let replacement = replacement.or_else(|| {
+        entry.withdrawn_original.as_ref().map(|_| {
+            entry
+                .original_message
+                .as_deref()
+                .unwrap_or(&entry.payload.content)
+        })
+    });
+    journal::ResolvedBounce {
+        handle: handle.as_str(),
+        parent: entry.parent.as_ref().map(HoldHandle::as_str),
+        message: original,
+        reason: entry.reason.clone(),
+        outcome: Outcome::Unknown,
+        replacement,
+        bounced_at: entry.bounced_at.clone(),
+        latency_ms: entry.latency(now).as_millis() as u64,
+    }
+    .into_record()
+}
+
+impl AttemptGuard {
+    fn new(
+        gate: &ConsentGate,
+        handle: &HoldHandle,
+        entry: &Held<ReplyRequest>,
+        now: Instant,
+    ) -> Self {
+        Self {
+            queue: gate.queue.clone(),
+            journal: gate.journal.clone(),
+            handle: handle.clone(),
+            entry: entry.clone(),
+            replacement: None,
+            record: Some(unknown_record(handle, entry, None, now)),
+            started: false,
+        }
+    }
+    fn with_replacement(mut self, request: ReplyRequest, sent: &str, now: Instant) -> Self {
+        self.record = Some(unknown_record(&self.handle, &self.entry, Some(sent), now));
+        self.replacement = Some(request);
+        self
+    }
+    fn disarm(&mut self) {
+        self.record = None;
+    }
+}
+
+impl Drop for AttemptGuard {
+    fn drop(&mut self) {
+        let Some(record) = self.record.take() else {
+            return;
+        };
+        let queue = self.queue.clone();
+        let journal = self.journal.clone();
+        let handle = self.handle.clone();
+        let started = self.started;
+        let replacement = self.replacement.take();
+        let original = self.entry.payload.content.clone();
+        tokio::spawn(async move {
+            let mut queue = queue.lock().await;
+            if started {
+                if queue.settle(&handle).is_some() {
+                    journal.append(&record);
+                }
+            } else {
+                if let Some(replacement) = replacement {
+                    queue.set_withdrawn_original(&handle, original);
+                    queue.update_payload(&handle, replacement);
+                }
+                queue.release_reservation(&handle);
+            }
+        });
+    }
 }
 
 impl ConsentGate {
@@ -272,7 +384,7 @@ impl ConsentGate {
     /// single-writer task, so it must be constructed within a Tokio runtime.
     pub fn new(state_dir: &Utf8Path) -> Self {
         Self {
-            queue: Mutex::new(HoldQueue::new()),
+            queue: Arc::new(Mutex::new(HoldQueue::new())),
             journal: JournalHandle::spawn(state_dir),
         }
     }
@@ -341,11 +453,14 @@ impl ConsentGate {
             self.reserve_live(&mut queue, handle, now)?
         };
 
+        let mut attempt = AttemptGuard::new(self, handle, &entry, now);
+        attempt.started = true;
         match deliver.deliver(&entry.payload).await {
             Ok(ids) => {
                 {
                     let mut queue = self.queue.lock().await;
                     queue.settle(handle);
+                    attempt.disarm();
                 }
                 let latency_ms = entry.latency(now).as_millis() as u64;
                 let mut message_ids = entry.sent_ids.clone();
@@ -356,10 +471,30 @@ impl ConsentGate {
                     latency_ms,
                 })
             }
+            Err(DeliverError::Unknown(failure)) => {
+                let mut queue = self.queue.lock().await;
+                if queue.settle(handle).is_some() {
+                    self.journal
+                        .append(attempt.record.as_ref().expect("owned uncertain resolution"));
+                }
+                attempt.disarm();
+                let mut confirmed = entry.sent_ids.clone();
+                if let Some(sent) = failure.sent {
+                    confirmed.extend(sent.iter());
+                }
+                Err(RejectedHandle::DeliveryUnknown {
+                    handle: handle.clone(),
+                    error: failure.cause,
+                    confirmed,
+                })
+            }
             Err(failure) => {
                 let progress = failure.progress();
                 let mut queue = self.queue.lock().await;
                 let cause = match failure {
+                    DeliverError::Unknown(_) => {
+                        unreachable!("uncertain failure handled terminally")
+                    }
                     DeliverError::Partial(failure) => {
                         let full = entry
                             .original_message
@@ -383,6 +518,7 @@ impl ConsentGate {
                         failure.cause
                     }
                 };
+                attempt.disarm();
                 drop(queue);
                 Err(RejectedHandle::SendFailed {
                     handle: handle.clone(),
@@ -442,63 +578,95 @@ impl ConsentGate {
             .pending_diary_records
             .extend(replacement.diary_records);
 
+        let mut attempt = AttemptGuard::new(self, handle, &entry, now).with_replacement(
+            as_written.clone(),
+            replacement.send,
+            now,
+        );
         match judge.judge(replacement.send) {
-            Verdict::Clear => match deliver.deliver(&request).await {
-                Ok(ids) => {
-                    {
-                        let mut queue = self.queue.lock().await;
-                        queue.settle(handle);
+            Verdict::Clear => {
+                attempt.started = true;
+                match deliver.deliver(&request).await {
+                    Ok(ids) => {
+                        {
+                            let mut queue = self.queue.lock().await;
+                            queue.settle(handle);
+                            attempt.disarm();
+                        }
+                        let latency_ms = entry.latency(now).as_millis() as u64;
+                        let mut message_ids = entry.sent_ids.clone();
+                        message_ids.extend(ids);
+                        self.journal_rephrase(handle, &entry, replacement.send, latency_ms);
+                        Ok(Rephrased::Sent { message_ids })
                     }
-                    let latency_ms = entry.latency(now).as_millis() as u64;
-                    let mut message_ids = entry.sent_ids.clone();
-                    message_ids.extend(ids);
-                    self.journal_rephrase(handle, &entry, replacement.send, latency_ms);
-                    Ok(Rephrased::Sent { message_ids })
-                }
-                Err(failure) => {
-                    let progress = failure.progress();
-                    let original = entry
-                        .withdrawn_original
-                        .clone()
-                        .unwrap_or_else(|| entry.payload.content.clone());
-                    let mut queue = self.queue.lock().await;
-                    queue.set_withdrawn_original(handle, original);
-                    let cause = match failure {
-                        DeliverError::Partial(failure) => {
-                            let remainder_req = ReplyRequest {
-                                content: failure.remainder,
-                                pending_diary_records: failure.diary,
-                                ..request.clone()
-                            };
-                            queue.record_partial(
-                                handle,
-                                remainder_req,
-                                failure.sent.iter().collect(),
-                                request.content,
+                    Err(DeliverError::Unknown(failure)) => {
+                        let mut queue = self.queue.lock().await;
+                        if queue.settle(handle).is_some() {
+                            self.journal.append(
+                                attempt.record.as_ref().expect("owned uncertain resolution"),
                             );
-                            failure.cause
                         }
-                        DeliverError::Total(failure) => {
-                            queue.update_payload(handle, as_written);
-                            queue.release_reservation(handle);
-                            failure.cause
+                        attempt.disarm();
+                        let mut confirmed = entry.sent_ids.clone();
+                        if let Some(sent) = failure.sent {
+                            confirmed.extend(sent.iter());
                         }
-                    };
-                    queue.refresh_deadline(handle, now.checked_add(ttl).unwrap_or(now));
-                    drop(queue);
-                    Err(RejectedHandle::SendFailed {
-                        handle: handle.clone(),
-                        error: cause,
-                        progress,
-                        expires_in: ttl,
-                    })
+                        Err(RejectedHandle::DeliveryUnknown {
+                            handle: handle.clone(),
+                            error: failure.cause,
+                            confirmed,
+                        })
+                    }
+                    Err(failure) => {
+                        let progress = failure.progress();
+                        let original = entry
+                            .withdrawn_original
+                            .clone()
+                            .unwrap_or_else(|| entry.payload.content.clone());
+                        let mut queue = self.queue.lock().await;
+                        queue.set_withdrawn_original(handle, original);
+                        let cause = match failure {
+                            DeliverError::Unknown(_) => {
+                                unreachable!("uncertain failure handled terminally")
+                            }
+                            DeliverError::Partial(failure) => {
+                                let remainder_req = ReplyRequest {
+                                    content: failure.remainder,
+                                    pending_diary_records: failure.diary,
+                                    ..request.clone()
+                                };
+                                queue.record_partial(
+                                    handle,
+                                    remainder_req,
+                                    failure.sent.iter().collect(),
+                                    request.content,
+                                );
+                                failure.cause
+                            }
+                            DeliverError::Total(failure) => {
+                                queue.update_payload(handle, as_written);
+                                queue.release_reservation(handle);
+                                failure.cause
+                            }
+                        };
+                        queue.refresh_deadline(handle, now.checked_add(ttl).unwrap_or(now));
+                        attempt.disarm();
+                        drop(queue);
+                        Err(RejectedHandle::SendFailed {
+                            handle: handle.clone(),
+                            error: cause,
+                            progress,
+                            expires_in: ttl,
+                        })
+                    }
                 }
-            },
+            }
             Verdict::Bounce(new_reason) => {
                 let latency_ms = entry.latency(now).as_millis() as u64;
                 let new_handle = {
                     let mut queue = self.queue.lock().await;
                     queue.settle(handle);
+                    attempt.disarm();
                     queue.hold(
                         as_written,
                         new_reason.clone(),
@@ -849,6 +1017,212 @@ mod tests {
         let bounces = journal_bounces(&gate).await;
         assert_eq!(bounces.len(), 1);
         assert_eq!(bounces[0].outcome, Outcome::Expired);
+    }
+
+    struct UncertainDeliver;
+    impl DeliverReply for UncertainDeliver {
+        async fn deliver(&self, _: &ReplyRequest) -> Result<Vec<MessageId>, DeliverError> {
+            Err(DeliverError::unknown(
+                DeliveryCause::ChunkSend {
+                    index: 1,
+                    source: Box::new(serenity::Error::Other("synthetic uncertain send")),
+                },
+                Some(PostedMessages::new(MessageId::new(1001), vec![])),
+                Vec::new(),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn uncertain_delivery_consumes_handle_and_journals_unknown_once() {
+        for rephrase in [false, true] {
+            let (_dir, gate) = gate();
+            let now = Instant::now();
+            let ticket = gate
+                .bounce(request("original"), reason(), TTL, MAX_PENDING, now)
+                .await;
+            let confirmed = if rephrase {
+                match gate
+                    .rephrase(
+                        &UncertainDeliver,
+                        &judge(),
+                        &ticket.handle,
+                        "replacement",
+                        TTL,
+                        now,
+                    )
+                    .await
+                    .unwrap_err()
+                {
+                    RejectedHandle::DeliveryUnknown { confirmed, .. } => confirmed,
+                    other => panic!("expected unknown {other:?}"),
+                }
+            } else {
+                match gate
+                    .release(&UncertainDeliver, &ticket.handle, now)
+                    .await
+                    .unwrap_err()
+                {
+                    RejectedHandle::DeliveryUnknown { confirmed, .. } => confirmed,
+                    other => panic!("expected unknown {other:?}"),
+                }
+            };
+            assert_eq!(confirmed, vec![MessageId::new(1001)]);
+            assert!(matches!(
+                gate.release(&MockDeliver::ok(), &ticket.handle, now).await,
+                Err(RejectedHandle::Unknown(_))
+            ));
+            assert!(matches!(
+                gate.rephrase(
+                    &MockDeliver::ok(),
+                    &judge(),
+                    &ticket.handle,
+                    "another",
+                    TTL,
+                    now
+                )
+                .await,
+                Err(RejectedHandle::Unknown(_))
+            ));
+            assert_eq!(gate.pending().await, 0);
+            assert_eq!(gate.expire_due(now + TTL).await, 0);
+            assert_eq!(gate.drain_shutdown().await, 0);
+            let records = journal_bounces(&gate).await;
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].outcome, Outcome::Unknown);
+            assert_eq!(
+                records[0].replacement.as_deref(),
+                rephrase.then_some("replacement")
+            );
+        }
+    }
+
+    struct PendingDeliver(tokio::sync::Notify);
+    impl DeliverReply for PendingDeliver {
+        async fn deliver(&self, _: &ReplyRequest) -> Result<Vec<MessageId>, DeliverError> {
+            self.0.notify_one();
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_attempt_settles_unknown_after_contended_queue_lock_without_replay() {
+        for rephrase in [false, true] {
+            let (_dir, gate) = gate();
+            let gate = Arc::new(gate);
+            let deliver = Arc::new(PendingDeliver(tokio::sync::Notify::new()));
+            let now = Instant::now();
+            let ticket = gate
+                .bounce(request("original"), reason(), TTL, MAX_PENDING, now)
+                .await;
+            let worker_gate = gate.clone();
+            let worker_deliver = deliver.clone();
+            let handle = ticket.handle.clone();
+            let worker = tokio::spawn(async move {
+                if rephrase {
+                    let _ = worker_gate
+                        .rephrase(&*worker_deliver, &judge(), &handle, "replacement", TTL, now)
+                        .await;
+                } else {
+                    let _ = worker_gate.release(&*worker_deliver, &handle, now).await;
+                }
+            });
+            deliver.0.notified().await;
+            let locked = gate.queue.lock().await;
+            worker.abort();
+            let _ = worker.await;
+            assert_eq!(
+                locked.len(),
+                1,
+                "cancellation retains ownership until cleanup gets lock"
+            );
+            drop(locked);
+            tokio::time::timeout(Duration::from_secs(120), async {
+                while gate.pending().await != 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(matches!(
+                gate.release(&MockDeliver::ok(), &ticket.handle, now).await,
+                Err(RejectedHandle::Unknown(_))
+            ));
+            assert_eq!(gate.expire_due(now + TTL).await, 0);
+            assert_eq!(gate.drain_shutdown().await, 0);
+            let records = journal_bounces(&gate).await;
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].outcome, Outcome::Unknown);
+            assert_eq!(
+                records[0].replacement.as_deref(),
+                rephrase.then_some("replacement")
+            );
+        }
+    }
+
+    struct SettlingDeliver {
+        entered: tokio::sync::Notify,
+        finish: tokio::sync::Notify,
+        returned: tokio::sync::Notify,
+    }
+    impl DeliverReply for SettlingDeliver {
+        async fn deliver(&self, request: &ReplyRequest) -> Result<Vec<MessageId>, DeliverError> {
+            self.entered.notify_one();
+            self.finish.notified().await;
+            self.returned.notify_one();
+            UncertainDeliver.deliver(request).await
+        }
+    }
+    #[tokio::test]
+    async fn cancellation_during_settlement_retains_ownership_until_atomic_resolution() {
+        for rephrase in [false, true] {
+            let (_dir, gate) = gate();
+            let gate = Arc::new(gate);
+            let deliver = Arc::new(SettlingDeliver {
+                entered: tokio::sync::Notify::new(),
+                finish: tokio::sync::Notify::new(),
+                returned: tokio::sync::Notify::new(),
+            });
+            let now = Instant::now();
+            let ticket = gate
+                .bounce(request("original"), reason(), TTL, MAX_PENDING, now)
+                .await;
+            let worker_gate = gate.clone();
+            let worker_deliver = deliver.clone();
+            let handle = ticket.handle.clone();
+            let worker = tokio::spawn(async move {
+                if rephrase {
+                    let _ = worker_gate
+                        .rephrase(&*worker_deliver, &judge(), &handle, "replacement", TTL, now)
+                        .await;
+                } else {
+                    let _ = worker_gate.release(&*worker_deliver, &handle, now).await;
+                }
+            });
+            deliver.entered.notified().await;
+            let locked = gate.queue.lock().await;
+            deliver.finish.notify_one();
+            deliver.returned.notified().await;
+            worker.abort();
+            let _ = worker.await;
+            assert_eq!(locked.len(), 1);
+            drop(locked);
+            tokio::time::timeout(Duration::from_secs(120), async {
+                while gate.pending().await != 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(matches!(
+                gate.release(&MockDeliver::ok(), &ticket.handle, now).await,
+                Err(RejectedHandle::Unknown(_))
+            ));
+            assert_eq!(gate.drain_shutdown().await, 0);
+            let records = journal_bounces(&gate).await;
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].outcome, Outcome::Unknown);
+        }
     }
 
     #[tokio::test]

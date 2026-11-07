@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.130.11]
+
+### Fixed
+
+- Treat uncertain Discord POST completion, including successful-response decode
+  failures, as non-retryable ambiguity while preserving confirmed earlier IDs.
+- Terminally consume uncertain or cancelled held-send handles and journal an
+  honest `unknown` outcome; preserve known no-effect retries and prefix ordering.
+- Minor-version the outbound consent API for typed uncertainty; patch-version
+  oneshot and the root application in its exact normal dependency closure.
+
 ## [0.130.10]
 
 ### Fixed

@@ -162,6 +162,9 @@ fn public_constructors_retain_nonempty_progress() {
     match partial.progress() {
         DeliveryProgress::Partial(messages) => assert_eq!(messages.iter().count(), 2),
         DeliveryProgress::None => panic!("partial construction requires posted messages"),
+        DeliveryProgress::Unknown(_) => {
+            panic!("known partial construction cannot become uncertain")
+        }
     }
 }
 
@@ -189,6 +192,7 @@ fn terminal_projection_preserves_typed_progress_cause_and_diary() {
         matches!(cause, DeliveryCause::OutboundDenied(channel) if channel == ChannelId::new(43))
     );
     match progress {
+        DeliveryProgress::Unknown(_) => panic!("known partial projection cannot become uncertain"),
         DeliveryProgress::None => {
             panic!("terminal partial projection must retain nonempty posted progress")
         }
@@ -198,4 +202,19 @@ fn terminal_projection_preserves_typed_progress_cause_and_diary() {
         ),
     }
     assert_eq!(diary, records);
+}
+
+#[test]
+fn uncertain_terminal_projection_preserves_only_confirmed_prefix() {
+    for sent in [None, Some(PostedMessages::new(MessageId::new(123), vec![]))] {
+        let failure = DeliverError::unknown(
+            DeliveryCause::OutboundDenied(ChannelId::new(42)),
+            sent.clone(),
+            Vec::new(),
+        );
+        assert_eq!(failure.progress(), DeliveryProgress::Unknown(sent.clone()));
+        let (_, progress, diary) = failure.into_parts();
+        assert_eq!(progress, DeliveryProgress::Unknown(sent));
+        assert!(diary.is_empty());
+    }
 }

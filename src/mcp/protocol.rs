@@ -58,11 +58,11 @@ pub(crate) fn tools_list(
                     "content": { "type": "string", "description": "Replacement message text" }
                 }
             })),
-            tool("no_rly_stats", "Query the no_rly audit journal: bounce counts by outcome (released/rephrased/expired) and by pattern, bounce-to-action latency (min/p50/mean/max), rephrase chains, plus validation counters (dangling chain parents, malformed lines) and the live held-message count.", json!({
+            tool("no_rly_stats", "Query the no_rly audit journal: bounce counts by outcome (released/rephrased/expired/unknown) and by pattern, bounce-to-action latency (min/p50/mean/max), rephrase chains, plus validation counters (dangling chain parents, malformed lines) and the live held-message count.", json!({
                 "type": "object",
                 "properties": {
                     "since_days": { "type": "integer", "minimum": 0, "description": "Only bounces resolved within the last N days" },
-                    "outcome": { "type": "string", "enum": ["released", "rephrased", "expired"], "description": "Only bounces with this outcome" },
+                    "outcome": { "type": "string", "enum": ["released", "rephrased", "expired", "unknown"], "description": "Only bounces with this outcome" },
                     "pattern": { "type": "string", "description": "Only bounces whose reason includes this pattern" }
                 }
             })),
@@ -371,6 +371,32 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn unknown_delivery_outcome_is_queryable_in_advertised_journal_schema() {
+        let list = tools_list(
+            &dione_claude::connect(
+                dione_harness::ProtocolOutput::new(tokio::io::stdout()),
+                dione_codex::TOOL_NAMES,
+            ),
+            false,
+            dione_evidence::EvidenceMarkerVersion::V3,
+        );
+        let stats = list["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "no_rly_stats")
+            .unwrap();
+        assert_eq!(
+            stats["inputSchema"]["properties"]["outcome"]["enum"],
+            json!(["released", "rephrased", "expired", "unknown"])
+        );
+        assert_eq!(
+            dione_outbound_consent::journal::Outcome::parse("unknown"),
+            Some(dione_outbound_consent::journal::Outcome::Unknown)
+        );
     }
 
     #[test]

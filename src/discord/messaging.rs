@@ -1138,6 +1138,13 @@ async fn deliver_prepared_text(
         Err(error) => {
             let (cause, progress, diary) = error.into_parts();
             match progress {
+                DeliveryProgress::Unknown(sent) => {
+                    if let (Some(ref_id), Some(sent)) = (claimed, sent.as_ref()) {
+                        report_reply_done(ctx, channel_id, ref_id, sent.first()).await;
+                    }
+                    let confirmed = sent.map(|sent| sent.iter().collect()).unwrap_or_default();
+                    Err(MessagingErrorKind::DeliveryUnknown { cause, confirmed }.into())
+                }
                 DeliveryProgress::None => {
                     if let Some(ref_id) = claimed {
                         release_reply_claim(ctx, channel_id, ref_id).await;
@@ -1375,17 +1382,24 @@ async fn deliver_reply(
                 // remainder (so a retry resumes from there). When nothing has
                 // landed yet the remainder is left `None` — a retry re-sends
                 // the whole payload.
+                let unknown = dione_outbound_consent::delivery::post_completion_is_unknown(&e);
                 let cause = DeliveryCause::ChunkSend {
                     index: i,
                     source: e.into(),
                 };
                 let mut ids = sent_ids.into_iter();
-                return Err(match ids.next() {
-                    Some(first) => {
+                let posted = ids
+                    .next()
+                    .map(|first| PostedMessages::new(first, ids.collect()));
+                if unknown {
+                    return Err(DeliverError::unknown(cause, posted, pending_diary_records));
+                }
+                return Err(match posted {
+                    Some(sent) => {
                         request.set_fence_context(chunks[i].incoming_context().cloned());
                         DeliverError::partial(
                             cause,
-                            PostedMessages::new(first, ids.collect()),
+                            sent,
                             content[chunks[i].source.start..].to_owned(),
                             pending_diary_records,
                         )
@@ -2943,6 +2957,7 @@ mod tests {
             // Each posted message gets its own id (9001, 9002, ...), so a
             // test can tell one chunk's id from another's.
             let mut next_post_id = 9001u64;
+            let mut rejected_known_once = false;
             loop {
                 let Ok((mut stream, _)) = listener.accept().await else {
                     return;
@@ -3100,6 +3115,26 @@ mod tests {
                     ("204 No Content", String::new())
                 } else if request_line.starts_with("POST ")
                     && path.ends_with("/messages")
+                    && body.contains("known-no-effect")
+                    && !rejected_known_once
+                {
+                    rejected_known_once = true;
+                    (
+                        "403 Forbidden",
+                        json!({"message":"Missing Permissions","code":50013}).to_string(),
+                    )
+                } else if request_line.starts_with("POST ")
+                    && path.ends_with("/messages")
+                    && body.contains("force-pending")
+                {
+                    std::future::pending::<(&str, String)>().await
+                } else if request_line.starts_with("POST ")
+                    && path.ends_with("/messages")
+                    && body.contains("force-uncertain")
+                {
+                    ("200 OK", "{\"id\":\"9999\"}".to_owned())
+                } else if request_line.starts_with("POST ")
+                    && path.ends_with("/messages")
                     && body.contains("force-delivery-failure")
                 {
                     (
@@ -3162,6 +3197,247 @@ mod tests {
         let ctx = messaging_ctx(config);
         let ctx = ctx.with_pre_send_pipeline(Arc::new(pipeline));
         (ctx, surfaces)
+    }
+
+    #[tokio::test]
+    async fn known_no_effect_actual_sdk_failure_retries_only_unsent_remainder() {
+        for rephrase in [false, true] {
+            for prefix in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let path = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
+                let mut raw = Config::default();
+                raw.channels.push(dione_config::ChannelConfig {
+                    id: "42".into(),
+                    ..Default::default()
+                });
+                raw.delivery.text_chunk_limit = 20;
+                let (http, requests, server) = fake_discord_http().await;
+                let gate = Arc::new(ConsentGate::new(&path));
+                let ctx = MessagingCtx::new(
+                    http,
+                    new_state(),
+                    Arc::new(LoadedConfig::try_from_raw(raw).unwrap()),
+                    path,
+                    gate.clone(),
+                    Arc::new(IngressLedger::new()),
+                );
+                let text = if prefix {
+                    "confirmed prefix\n\nknown-no-effect"
+                } else {
+                    "known-no-effect"
+                };
+                let reason =
+                    serde_json::from_value(json!({"matches":[{"pattern":"synthetic"}]})).unwrap();
+                let ticket = gate
+                    .bounce(
+                        ReplyRequest::new(ChannelId::new(42), text.into(), None, false, false),
+                        reason,
+                        std::time::Duration::from_secs(180),
+                        32,
+                        Instant::now(),
+                    )
+                    .await;
+                if rephrase {
+                    rephrase_held(&ctx, &ticket.handle, text).await.unwrap_err();
+                } else {
+                    release_held(&ctx, &ticket.handle).await.unwrap_err();
+                }
+                assert_eq!(
+                    gate.pending().await,
+                    1,
+                    "known no effect keeps retry authority"
+                );
+                let sent = release_held(&ctx, &ticket.handle).await.unwrap();
+                assert_eq!(sent.message_ids.len(), if prefix { 2 } else { 1 });
+                let posts = posted_contents(&requests);
+                assert_eq!(posts.len(), if prefix { 3 } else { 2 });
+                assert_eq!(
+                    posts
+                        .iter()
+                        .filter(|text| text.contains("confirmed prefix"))
+                        .count(),
+                    usize::from(prefix),
+                    "confirmed prefix is never resent"
+                );
+                assert_eq!(gate.pending().await, 0);
+                gate.journal().flush().await;
+                let records = gate.journal().load().unwrap().records;
+                assert_eq!(records.len(), 1);
+                assert!(
+                    matches!(&records[0], dione_outbound_consent::journal::JournalRecord::Bounce(record) if record.outcome == if rephrase { dione_outbound_consent::journal::Outcome::Rephrased } else { dione_outbound_consent::journal::Outcome::Released })
+                );
+                server.abort();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_observed_sdk_post_consumes_handle_without_replay() {
+        for rephrase in [false, true] {
+            for prefix in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let path = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
+                let mut raw = Config::default();
+                raw.channels.push(dione_config::ChannelConfig {
+                    id: "42".into(),
+                    ..Default::default()
+                });
+                raw.delivery.text_chunk_limit = 20;
+                let (http, requests, server) = fake_discord_http().await;
+                let gate = Arc::new(ConsentGate::new(&path));
+                let ctx = MessagingCtx::new(
+                    http,
+                    new_state(),
+                    Arc::new(LoadedConfig::try_from_raw(raw).unwrap()),
+                    path,
+                    gate.clone(),
+                    Arc::new(IngressLedger::new()),
+                );
+                let text = if prefix {
+                    "confirmed prefix\n\nforce-pending"
+                } else {
+                    "force-pending"
+                };
+                let reason =
+                    serde_json::from_value(json!({"matches":[{"pattern":"synthetic"}]})).unwrap();
+                let ticket = gate
+                    .bounce(
+                        ReplyRequest::new(ChannelId::new(42), text.into(), None, false, false),
+                        reason,
+                        std::time::Duration::from_secs(180),
+                        32,
+                        Instant::now(),
+                    )
+                    .await;
+                let ctx = Arc::new(ctx);
+                let worker_ctx = ctx.clone();
+                let handle = ticket.handle.clone();
+                let worker = tokio::spawn(async move {
+                    if rephrase {
+                        let _ = rephrase_held(&worker_ctx, &handle, text).await;
+                    } else {
+                        let _ = release_held(&worker_ctx, &handle).await;
+                    }
+                });
+                tokio::time::timeout(std::time::Duration::from_secs(120), async {
+                    while posted_contents(&requests).len() != if prefix { 2 } else { 1 } {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .expect("real HTTP fixture must observe complete POST before cancellation");
+                worker.abort();
+                let _ = worker.await;
+                tokio::time::timeout(std::time::Duration::from_secs(120), async {
+                    while gate.pending().await != 0 {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .expect("cancelled observed POST must terminally settle");
+                assert!(release_held(&ctx, &ticket.handle).await.is_err());
+                assert!(
+                    rephrase_held(&ctx, &ticket.handle, "another attempt")
+                        .await
+                        .is_err()
+                );
+                assert_eq!(
+                    posted_contents(&requests).len(),
+                    if prefix { 2 } else { 1 },
+                    "no replay after observed POST cancellation"
+                );
+                assert_eq!(
+                    gate.expire_due(Instant::now() + std::time::Duration::from_secs(1000))
+                        .await,
+                    0
+                );
+                assert_eq!(gate.drain_shutdown().await, 0);
+                gate.journal().flush().await;
+                let records = gate.journal().load().unwrap().records;
+                assert_eq!(records.len(), 1);
+                assert!(
+                    matches!(&records[0], dione_outbound_consent::journal::JournalRecord::Bounce(record) if record.outcome == dione_outbound_consent::journal::Outcome::Unknown)
+                );
+                server.abort();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn uncertain_actual_sdk_post_terminally_fences_release_and_rephrase_with_prefix() {
+        for rephrase in [false, true] {
+            for prefix in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let path = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
+                let mut raw = Config::default();
+                raw.channels.push(dione_config::ChannelConfig {
+                    id: "42".into(),
+                    ..Default::default()
+                });
+                raw.delivery.text_chunk_limit = 20;
+                let (http, requests, server) = fake_discord_http().await;
+                let gate = Arc::new(ConsentGate::new(&path));
+                let ctx = MessagingCtx::new(
+                    http,
+                    new_state(),
+                    Arc::new(LoadedConfig::try_from_raw(raw).unwrap()),
+                    path,
+                    gate.clone(),
+                    Arc::new(IngressLedger::new()),
+                );
+                let text = if prefix {
+                    "confirmed prefix\n\nforce-uncertain"
+                } else {
+                    "force-uncertain"
+                };
+                let reason =
+                    serde_json::from_value(json!({"matches":[{"pattern":"synthetic"}]})).unwrap();
+                let ticket = gate
+                    .bounce(
+                        ReplyRequest::new(ChannelId::new(42), text.into(), None, false, false),
+                        reason,
+                        std::time::Duration::from_secs(180),
+                        32,
+                        Instant::now(),
+                    )
+                    .await;
+                let response = if rephrase {
+                    crate::discord::messaging_wire::error(
+                        rephrase_held(&ctx, &ticket.handle, text).await.unwrap_err(),
+                    )
+                } else {
+                    crate::discord::messaging_wire::rejected_handle_json(
+                        release_held(&ctx, &ticket.handle).await.unwrap_err(),
+                    )
+                };
+                assert_eq!(response["delivery_ambiguous"], true);
+                assert_eq!(response["retryable"], false);
+                assert!(response.get("handle_still_live").is_none());
+                if prefix {
+                    assert_eq!(response["message_ids"], json!([9001]));
+                }
+                assert!(release_held(&ctx, &ticket.handle).await.is_err());
+                assert!(
+                    rephrase_held(&ctx, &ticket.handle, "new attempt")
+                        .await
+                        .is_err()
+                );
+                assert_eq!(posted_contents(&requests).len(), if prefix { 2 } else { 1 });
+                assert_eq!(gate.pending().await, 0);
+                assert_eq!(
+                    gate.expire_due(Instant::now() + std::time::Duration::from_secs(1000))
+                        .await,
+                    0
+                );
+                gate.journal().flush().await;
+                let records = gate.journal().load().unwrap().records;
+                assert_eq!(records.len(), 1);
+                assert!(
+                    matches!(&records[0], dione_outbound_consent::journal::JournalRecord::Bounce(record) if record.outcome == dione_outbound_consent::journal::Outcome::Unknown)
+                );
+                server.abort();
+            }
+        }
     }
 
     #[tokio::test]

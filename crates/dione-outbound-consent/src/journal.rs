@@ -52,6 +52,8 @@ pub const JOURNAL_MAX_MESSAGE_LEN: usize = 2000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Outcome {
+    /// The attempt may have published; its handle was terminally consumed.
+    Unknown,
     /// The construct sent the byte-identical held message.
     Released,
     /// The construct provided replacement text. Whether the replacement
@@ -65,10 +67,15 @@ pub enum Outcome {
 
 impl Outcome {
     /// Every variant, for iterating the wire forms.
-    const ALL: [Self; 3] = [Self::Released, Self::Rephrased, Self::Expired];
+    const ALL: [Self; 4] = [
+        Self::Released,
+        Self::Rephrased,
+        Self::Expired,
+        Self::Unknown,
+    ];
 
     /// Parse a tool-argument string (`"released"`, `"rephrased"`,
-    /// `"expired"`). Defined as the inverse of [`Outcome::as_str`], so the
+    /// `"expired"`, `"unknown"`). Defined as the inverse of [`Outcome::as_str`], so the
     /// serde `rename_all` annotation stays the single source of truth for
     /// valid strings (see the `outcome_wire_forms_agree_with_serde` test).
     pub fn parse(s: &str) -> Option<Self> {
@@ -81,6 +88,7 @@ impl Outcome {
             Self::Released => "released",
             Self::Rephrased => "rephrased",
             Self::Expired => "expired",
+            Self::Unknown => "unknown",
         }
     }
 }

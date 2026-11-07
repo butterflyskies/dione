@@ -196,6 +196,15 @@ pub enum MessagingErrorKind {
     /// Delivery failed before any message was published.
     #[error(transparent)]
     Delivery(#[from] DeliveryCause),
+    /// A message POST may have published beyond the confirmed prefix.
+    #[error("delivery completion unknown: {cause}; reconcile before resending")]
+    DeliveryUnknown {
+        /// Original publication failure.
+        #[source]
+        cause: DeliveryCause,
+        /// Only messages whose publication is confirmed.
+        confirmed: Vec<MessageId>,
+    },
     /// A replacement requires non-whitespace text.
     #[error("rephrase content must not be empty")]
     EmptyRephrase,

@@ -743,6 +743,8 @@ async fn run_inner(
             Ok(message) => message_ids.push(message.id.get()),
             Err(error) => {
                 let class = classify_rest_error(&error, &token);
+                let ambiguous =
+                    dione_outbound_consent::delivery::post_completion_is_unknown(&error);
                 if message_ids.is_empty() {
                     let detail = format!(
                         "POST /channels/{}/messages failed on chunk 1 of {}: {}",
@@ -750,7 +752,7 @@ async fn run_inner(
                         chunks.len(),
                         class.detail
                     );
-                    if class.class.post_is_ambiguous() {
+                    if ambiguous {
                         return Err(Refusal::send_ambiguous(detail));
                     }
                     return Err(Refusal::send_failed(
@@ -775,7 +777,7 @@ async fn run_inner(
                     ),
                     false,
                 );
-                if class.class.post_is_ambiguous() {
+                if ambiguous {
                     return Err(Refusal::send_ambiguous(partial.detail));
                 }
                 return Err(partial);
@@ -806,7 +808,7 @@ pub enum FailureClass {
     Timeout,
     /// Other transport failure after the request may have been written.
     Transport,
-    /// Non-HTTP client error (URL, header, decode...): deterministic.
+    /// Local client construction error (such as URL or header validation).
     Other,
 }
 
@@ -896,6 +898,11 @@ pub fn classify_rest_error(error: &serenity::Error, token: &str) -> RestFailure 
                 format!("transport error ({class:?}): {request_error}"),
             )
         }
+        serenity::Error::Json(_) => (
+            None,
+            FailureClass::Transport,
+            "Discord JSON response could not be decoded".to_owned(),
+        ),
         serenity::Error::Http(other) => (
             None,
             FailureClass::Other,
@@ -946,6 +953,83 @@ mod tests {
             bot_user_id: 7,
             username: "trundle".into(),
             token_source: TokenSource::Config,
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_post_decode_failure_is_ambiguous_and_never_retried() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        for post_body in ["not-json", "{\"id\":\"9001\"}"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let posts = Arc::new(AtomicUsize::new(0));
+            let observed = posts.clone();
+            let server = tokio::spawn(async move {
+                loop {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut bytes = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    loop {
+                        let read = socket.read(&mut buf).await.unwrap();
+                        if read == 0 {
+                            break;
+                        }
+                        bytes.extend_from_slice(&buf[..read]);
+                        if let Some(end) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
+                            let headers = String::from_utf8_lossy(&bytes[..end]);
+                            let length = headers
+                                .lines()
+                                .find_map(|line| {
+                                    let (name, value) = line.split_once(':')?;
+                                    name.eq_ignore_ascii_case("content-length")
+                                        .then(|| value.trim().parse::<usize>().unwrap())
+                                })
+                                .unwrap_or(0);
+                            if bytes.len() >= end + 4 + length {
+                                break;
+                            }
+                        }
+                    }
+                    let is_post = bytes.starts_with(b"POST ");
+                    let body = if is_post {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        post_body.to_owned()
+                    } else {
+                        serde_json::json!({"id":"7","username":"synthetic-bot","discriminator":"0","avatar":null,"bot":true}).to_string()
+                    };
+                    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).as_bytes()).await.unwrap();
+                }
+            });
+            let config = config_with("42", |raw| raw.token = Some("synthetic-token".into()));
+            let request = SendRequest {
+                channel_id: 42,
+                expect_identity: 7,
+                message: "synthetic message".into(),
+                token_source: TokenSource::Config,
+                allow_multi_chunk: false,
+                dry_run: false,
+                nonce: None,
+            };
+            let refusal = run_inner(&config, &request, |token| {
+                HttpBuilder::new(token)
+                    .ratelimiter_disabled(true)
+                    .proxy(&base)
+                    .build()
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(posts.load(Ordering::SeqCst), 1, "one actual POST only");
+            assert!(
+                refusal.delivery_ambiguous,
+                "successful POST decode cannot prove no publication"
+            );
+            assert!(!refusal.retryable);
+            assert!(refusal.detail.contains("reconcile before resending"));
+            server.abort();
         }
     }
 
