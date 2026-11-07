@@ -1,15 +1,17 @@
 //! Fault-injected forwarding tests through the production scheduling path.
 
 use super::*;
-use crate::{
-    core::delivery::{Delivery, DeliveryKind},
-    harness::{HarnessDelivery, HarnessError},
-    mcp::harness_wire::HarnessProtocol,
-};
 use dione_contracts::{MessageRef, ModuleInstanceId, ModuleSlotId, ProviderId};
 use futures_util::future::BoxFuture;
 use serenity::model::id::MessageId;
 use std::{io, sync::Mutex as StdMutex};
+use {
+    crate::{
+        harness::{HarnessDelivery, HarnessError},
+        mcp::harness_wire::HarnessProtocol,
+    },
+    dione_messages::delivery::{Delivery, DeliveryKind},
+};
 
 #[derive(Default)]
 struct SinkState {

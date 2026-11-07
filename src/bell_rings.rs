@@ -721,17 +721,19 @@ fn record_outcome(outcome: &BellOutcome) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{BellProviderConfig, BellProviderUrl, BellScope, Config},
-        discord::events::MessageTargeting,
-        gate::MentionKind,
-        harness::test_support::FixtureNotification,
-        timestamp::Timestamp,
-    };
     use serenity::model::id::{ChannelId, MessageId, UserId};
     use std::sync::{
         Mutex as StdMutex,
         atomic::{AtomicUsize, Ordering},
+    };
+    use {
+        crate::{
+            config::{BellProviderConfig, BellProviderUrl, BellScope, Config},
+            discord::events::MessageTargeting,
+            gate::MentionKind,
+            harness::test_support::FixtureNotification,
+        },
+        dione_messages::timestamp::Timestamp,
     };
 
     struct MockProvider {

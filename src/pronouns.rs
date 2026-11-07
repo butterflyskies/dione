@@ -179,7 +179,10 @@ impl PronounService {
         }
 
         let pronouns = self.provider.lookup(user_id).await;
-        crate::core::identity_display::display_name_with_pronouns(display_name, pronouns.as_deref())
+        dione_messages::identity_display::display_name_with_pronouns(
+            display_name,
+            pronouns.as_deref(),
+        )
     }
 
     pub fn is_excluded(&self, user_id: u64) -> bool {

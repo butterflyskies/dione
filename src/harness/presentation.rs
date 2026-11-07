@@ -4,18 +4,16 @@ use dione_contracts::{ActorRef, ConversationRef, MessageRef};
 use serde::{Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
 use {
-    crate::{
-        core::{
-            delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
-            events::{
-                ControlEvent, CoordinationNotice, MessageCreated, ObservedText, OrdinaryEvent,
-                PermissionDecision,
-            },
+    dione_attention::delivery::AttentionDirective,
+    dione_evidence::locators::SentexRole,
+    dione_messages::{
+        delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
+        events::{
+            ControlEvent, CoordinationNotice, MessageCreated, ObservedText, OrdinaryEvent,
+            PermissionDecision,
         },
         timestamp::format_compact,
     },
-    dione_attention::delivery::AttentionDirective,
-    dione_evidence::locators::SentexRole,
 };
 
 #[derive(Debug)]
@@ -75,7 +73,10 @@ impl ChannelPresentation {
         self.text("user_id", author.local());
         self.text(
             "user",
-            crate::core::identity_display::format_identity(&author.local().to_string(), Some(name)),
+            dione_messages::identity_display::format_identity(
+                &author.local().to_string(),
+                Some(name),
+            ),
         );
     }
     fn parent(&mut self, parent: Option<&ConversationRef>) {
@@ -392,7 +393,7 @@ fn group(
         content.push_str("[users");
         for (actor, name) in roster {
             content.push(' ');
-            content.push_str(&crate::core::identity_display::format_identity(
+            content.push_str(&dione_messages::identity_display::format_identity(
                 &actor.local().to_string(),
                 Some(name),
             ));
@@ -470,14 +471,16 @@ fn group(
 
 #[cfg(test)]
 mod single_tests {
-    use crate::{
-        bell_rings::BellStatus,
-        discord::events::{MessageEvent, MessageTargeting, NotificationEvent},
-        harness::test_support::FixtureNotification,
-        timestamp::Timestamp,
-    };
     use serde_json::json;
     use serenity::model::id::{ChannelId, MessageId, UserId};
+    use {
+        crate::{
+            bell_rings::BellStatus,
+            discord::events::{MessageEvent, MessageTargeting, NotificationEvent},
+            harness::test_support::FixtureNotification,
+        },
+        dione_messages::timestamp::Timestamp,
+    };
 
     #[test]
     fn test_message_edit_includes_thread_parent_id() {

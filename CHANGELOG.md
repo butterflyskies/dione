@@ -18,6 +18,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.93.2]
+
+### Fixed
+
+- Allow 120 seconds for authenticated Teams test event reads, child socket
+  readiness, and parent control connections on slower CI workers, preserving
+  assertions and production deadlines.
+
+## [0.93.1]
+
+### Fixed
+
+- Preserve the real-child lifecycle test's 120-second bind-response allowance
+  alongside the messages extraction, retaining its shutdown and backlog checks.
+
+## [0.93.0]
+
+### Changed
+
+- Extract observed messages, typed deliveries, identity presentation, and
+  timestamps into `dione-messages`. Keep configuration localization policy in
+  Dione and use the existing timestamp conversion. Preserve event, presentation,
+  and timestamp behavior while migrating callers directly.
+
 ## [0.92.1]
 
 ### Fixed

@@ -511,7 +511,7 @@ impl WireMessage {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DiaryEntry {
-    timestamp: crate::timestamp::Timestamp,
+    timestamp: dione_messages::timestamp::Timestamp,
     pattern: String,
     message: String,
     action: Action,

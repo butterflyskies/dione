@@ -1,19 +1,21 @@
 //! Durable Codex delivery and MCP extension.
 use super::{AttentionPolicy, HarnessConnection, HarnessDelivery, HarnessError, ProtocolOutput};
-use crate::{
-    codex::{
-        CodexBindingController, CodexEventQueue, CodexThreadId, ConsumerId, DeliveryToken,
-        consumer_ttl, lease_duration, timeout_response, wait_duration,
-    },
-    core::delivery::Delivery,
-    mcp::{harness_wire::HarnessProtocol, protocol::tool},
-};
 use dione_contracts::MessageRef;
 use dione_durable::EndpointId;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use thiserror::Error;
 use tokio::sync::watch;
+use {
+    crate::{
+        codex::{
+            CodexBindingController, CodexEventQueue, CodexThreadId, ConsumerId, DeliveryToken,
+            consumer_ttl, lease_duration, timeout_response, wait_duration,
+        },
+        mcp::{harness_wire::HarnessProtocol, protocol::tool},
+    },
+    dione_messages::delivery::Delivery,
+};
 
 pub(super) const ATTENTION_POLICY: AttentionPolicy = AttentionPolicy::SafeTurn;
 

@@ -1,16 +1,18 @@
 //! Pending Discord access requests and configuration-backed decisions.
 
-use crate::{
-    config::{ConfigDurability, ConfigRuntime, LoadedConfig},
-    config_store::BoxError,
-    queue::AccessQueue,
-    timestamp::Timestamp,
-};
 use camino::Utf8PathBuf;
 use serenity::model::id::UserId;
 use std::{fmt, sync::Arc};
 use thiserror::Error;
 use tokio::sync::Mutex;
+use {
+    crate::{
+        config::{ConfigDurability, ConfigRuntime, LoadedConfig},
+        config_store::BoxError,
+        queue::AccessQueue,
+    },
+    dione_messages::timestamp::Timestamp,
+};
 
 /// An observed persisted user ID, including historical zero values.
 #[derive(Debug, Clone, Copy)]

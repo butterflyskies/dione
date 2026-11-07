@@ -76,6 +76,8 @@ attention_version=$(sh scripts/workspace-package-version.sh dione-attention)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-attention-${attention_version}.crate"
 evidence_version=$(sh scripts/workspace-package-version.sh dione-evidence)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-evidence-${evidence_version}.crate"
+messages_version=$(sh scripts/workspace-package-version.sh dione-messages)
+sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-messages-${messages_version}.crate"
 cargo deny check
 cargo build --profile "$build_profile" --workspace --bins --locked
 "${target_dir}/${build_profile}/dione" --version

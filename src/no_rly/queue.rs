@@ -18,7 +18,6 @@
 //! Time is passed in explicitly (`now: Instant`) so every invariant is
 //! testable without sleeping — the same convention as `rate_limiter`.
 
-use crate::{no_rly::judge::RejectReason, timestamp::Timestamp};
 use serde::{Deserialize, Serialize};
 use serenity::model::id::MessageId;
 use std::{
@@ -27,6 +26,7 @@ use std::{
     hash::{BuildHasher, Hasher, RandomState},
     time::{Duration, Instant},
 };
+use {crate::no_rly::judge::RejectReason, dione_messages::timestamp::Timestamp};
 
 /// A single-use claim ticket for one bounced message.
 ///

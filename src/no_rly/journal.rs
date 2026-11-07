@@ -25,11 +25,6 @@
 //! Both rewrite atomically (temp file + rename), so a crash mid-maintenance
 //! leaves the original journal intact.
 
-use crate::{
-    no_rly::{judge::RejectReason, queue::HoldHandle},
-    timestamp::Timestamp,
-    util::truncate_chars,
-};
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
@@ -39,6 +34,13 @@ use std::{
     io::Write,
 };
 use tokio::sync::{mpsc, oneshot};
+use {
+    crate::{
+        no_rly::{judge::RejectReason, queue::HoldHandle},
+        util::truncate_chars,
+    },
+    dione_messages::timestamp::Timestamp,
+};
 
 /// Name of the journal file, created under the channel state directory
 /// (`~/.claude/channels/dione/no_rly_journal.jsonl`).

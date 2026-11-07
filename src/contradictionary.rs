@@ -1,8 +1,8 @@
-use crate::{timestamp::Timestamp, util::truncate_chars};
 use aho_corasick::AhoCorasick;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use {crate::util::truncate_chars, dione_messages::timestamp::Timestamp};
 
 /// Action to take when a pattern matches outbound text.
 ///

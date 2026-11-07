@@ -1,9 +1,5 @@
 //! Lifecycle regressions exercise the retained command owner and persisted inbox.
 use super::*;
-use crate::{
-    teams::{ActivityId, BotId, ConversationId, ReplyHandle, TenantId},
-    timestamp::Timestamp,
-};
 use camino::Utf8PathBuf;
 use chrono::Utc;
 use dione_durable::{PersistFailure, QueueCodec};
@@ -11,6 +7,10 @@ use tempfile::TempDir;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     time::timeout,
+};
+use {
+    crate::teams::{ActivityId, BotId, ConversationId, ReplyHandle, TenantId},
+    dione_messages::timestamp::Timestamp,
 };
 
 fn event(activity: &str) -> TeamsResidentEvent {

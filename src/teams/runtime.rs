@@ -1,18 +1,5 @@
 //! Teams ingress bridge into Dione's existing resident delivery machinery.
 
-use crate::{
-    delivery::ProviderEventKey,
-    teams::{
-        AuthenticatedTeamsEnvelope, ReplyHandle,
-        delivery::{TeamsAdmissionOutcome, TeamsDelivery, TeamsDeliveryError, TeamsResidentEvent},
-        edge::{BotTokenProvider, LiveReplyReceipt, TeamsEdge, TeamsEdgeError},
-        reply_store::{
-            AsyncTeamsReplyStore, ReplyStoreError, ReplyStoreErrorKind, SealedReplyAuthority,
-            StoreReceipt, TeamsEventKey,
-        },
-    },
-    timestamp::Timestamp,
-};
 use axum::{
     Router,
     body::Bytes,
@@ -30,6 +17,23 @@ use std::{
 };
 use thiserror::Error;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use {
+    crate::{
+        delivery::ProviderEventKey,
+        teams::{
+            AuthenticatedTeamsEnvelope, ReplyHandle,
+            delivery::{
+                TeamsAdmissionOutcome, TeamsDelivery, TeamsDeliveryError, TeamsResidentEvent,
+            },
+            edge::{BotTokenProvider, LiveReplyReceipt, TeamsEdge, TeamsEdgeError},
+            reply_store::{
+                AsyncTeamsReplyStore, ReplyStoreError, ReplyStoreErrorKind, SealedReplyAuthority,
+                StoreReceipt, TeamsEventKey,
+            },
+        },
+    },
+    dione_messages::timestamp::Timestamp,
+};
 
 const DEFAULT_PENDING_LIMIT: usize = 256;
 const REPLY_HANDLE_TTL: Duration = Duration::from_secs(15 * 60);

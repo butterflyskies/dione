@@ -1,13 +1,3 @@
-use crate::{
-    config_candidate::{compose_candidate, resolve_sidecar_path},
-    config_store::{BoxError, ConfigStore},
-    contradictionary::{Contradictionary, ContradictionaryConfig, Entry, load_sidecar_entries},
-    coordination::{CoordinationConfig, Coordinator},
-    discord::verified_action::PLURALKIT_APPLICATION_ID,
-    pre_send::ConstructId,
-    teams::ConversationId,
-    timestamp::Timestamp,
-};
 use arc_swap::ArcSwap;
 use camino::{Utf8Path, Utf8PathBuf};
 use regex::RegexSet;
@@ -23,6 +13,18 @@ use std::{
     },
 };
 use thiserror::Error;
+use {
+    crate::{
+        config_candidate::{compose_candidate, resolve_sidecar_path},
+        config_store::{BoxError, ConfigStore},
+        contradictionary::{Contradictionary, ContradictionaryConfig, Entry, load_sidecar_entries},
+        coordination::{CoordinationConfig, Coordinator},
+        discord::verified_action::PLURALKIT_APPLICATION_ID,
+        pre_send::ConstructId,
+        teams::ConversationId,
+    },
+    dione_messages::timestamp::Timestamp,
+};
 
 /// Default maximum size of one GAIE attachment (25 MiB).
 pub const DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;
@@ -1421,7 +1423,7 @@ impl LoadedConfig {
             Some(tz) => utc.with_timezone(&tz).fixed_offset(),
             None => utc.fixed_offset(),
         };
-        Timestamp(dt)
+        Timestamp::from(dt)
     }
 
     /// Convert an RFC3339 timestamp string to a [`Timestamp`] in the configured timezone.
@@ -1444,7 +1446,7 @@ impl LoadedConfig {
             Some(tz) => dt.with_timezone(&tz).fixed_offset(),
             None => dt,
         };
-        Timestamp(localized)
+        Timestamp::from(localized)
     }
 }
 
@@ -5675,3 +5677,6 @@ action = "celebrate"
         assert_eq!(config.bell_rings.providers[0].alias(), "personal");
     }
 }
+
+#[cfg(test)]
+mod timestamp_tests;

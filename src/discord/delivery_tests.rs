@@ -1,10 +1,8 @@
 use super::*;
 use {
-    crate::{
-        core::delivery::DeliveryKind, discord::events::AttachmentMeta, harness::test_support,
-        timestamp::Timestamp,
-    },
+    crate::{discord::events::AttachmentMeta, harness::test_support},
     dione_attention::{delivery::AttentionDirective, types::RecordId},
+    dione_messages::{delivery::DeliveryKind, timestamp::Timestamp},
 };
 
 fn fixture() -> MessageEvent {

@@ -1,14 +1,14 @@
 //! Typed fixtures shared by adapter and routing tests.
 
-use crate::{
-    core::{
+use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
+use serde_json::Value;
+use {
+    crate::discord::{delivery, events::NotificationEvent},
+    dione_messages::{
         delivery::{Delivery, EvidenceVisibility, PresentationContext},
         events::{ControlEvent, TraceLevel},
     },
-    discord::{delivery, events::NotificationEvent},
 };
-use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
-use serde_json::Value;
 
 pub(crate) fn module() -> ModuleInstanceId {
     ModuleInstanceId::new(

@@ -485,7 +485,8 @@ fn duplicate_overlap_edit_delete_and_reconnect_never_reintroduce_an_old_excerpt(
                 user: "fixture".into(),
                 user_id: UserId::new(7),
                 new_content: edit_text.into(),
-                timestamp: crate::timestamp::Timestamp::parse("2026-09-21T10:00:01Z").unwrap(),
+                timestamp: dione_messages::timestamp::Timestamp::parse("2026-09-21T10:00:01Z")
+                    .unwrap(),
                 thread_parent_id: None,
                 reply_to_message_id: None,
             },

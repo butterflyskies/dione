@@ -7,21 +7,16 @@ use dione_contracts::{
 use serenity::model::id::{ChannelId, MessageId as DiscordMessageId, UserId};
 use thiserror::Error;
 use {
-    crate::{
-        bell_rings,
-        coordination::CoordinationEvent,
-        core::{
-            delivery::{Delivery, PresentationContext},
-            events::{
-                AuthorOrigin, BellObservation, BellStatus, ByteSize, ControlError, ControlEvent,
-                CoordinationNotice, MessageCreated, MessageEdited, ObservedAttachment,
-                ObservedAuthor, OrdinaryEvent, PermissionDecision, PermissionRequestId,
-                ReplyObservation, Targeting,
-            },
-        },
-        gate::MentionKind,
-    },
+    crate::{bell_rings, coordination::CoordinationEvent, gate::MentionKind},
     dione_attention::types::SourceAuthorKind,
+    dione_messages::{
+        delivery::{Delivery, PresentationContext},
+        events::{
+            AuthorOrigin, BellObservation, BellStatus, ByteSize, ControlError, ControlEvent,
+            CoordinationNotice, MessageCreated, MessageEdited, ObservedAttachment, ObservedAuthor,
+            OrdinaryEvent, PermissionDecision, PermissionRequestId, ReplyObservation, Targeting,
+        },
+    },
 };
 
 pub(crate) enum ConvertedEvent {

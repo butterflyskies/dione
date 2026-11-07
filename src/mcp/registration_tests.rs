@@ -1,25 +1,28 @@
 //! Registration behavior through MCP requests and the resident socket.
 
 use super::*;
-use crate::{
-    core::delivery::Delivery,
-    harness::HarnessDelivery,
-    mcp::{
-        harness_wire::HarnessProtocol,
-        tool_registry::{
-            McpTool, RegisteredTool, RegistrationErrorKind, ToolCallError, ToolDefinition, ToolName,
-        },
-    },
-    teams::{
-        ReplyHandle,
-        edge::LiveReplyReceipt,
-        runtime::{TeamsReplyAuthority, TeamsRuntimeError},
-    },
-};
 use dione_contracts::MessageRef;
 use futures_util::future::BoxFuture;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::io::AsyncWriteExt;
+use {
+    crate::{
+        harness::HarnessDelivery,
+        mcp::{
+            harness_wire::HarnessProtocol,
+            tool_registry::{
+                McpTool, RegisteredTool, RegistrationErrorKind, ToolCallError, ToolDefinition,
+                ToolName,
+            },
+        },
+        teams::{
+            ReplyHandle,
+            edge::LiveReplyReceipt,
+            runtime::{TeamsReplyAuthority, TeamsRuntimeError},
+        },
+    },
+    dione_messages::delivery::Delivery,
+};
 
 struct FakeTool;
 impl McpTool for FakeTool {

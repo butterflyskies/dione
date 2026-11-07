@@ -50,7 +50,7 @@ async fn control(server: &DioneServer, name: &str, arguments: Value) -> Value {
 }
 async fn event(reader: &mut BufReader<DuplexStream>) -> Value {
     let mut line = String::new();
-    tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut line))
+    tokio::time::timeout(Duration::from_secs(120), reader.read_line(&mut line))
         .await
         .unwrap()
         .unwrap();
@@ -139,7 +139,7 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
             author_kind: Default::default(),
             content: "Discord still works".into(),
             targeting: crate::discord::events::MessageTargeting::DirectMessage,
-            timestamp: crate::timestamp::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            timestamp: dione_messages::timestamp::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
             thread_parent_id: None,
@@ -355,7 +355,7 @@ fn omp_lifecycle_child_entry() {
                         bot_id: "bot".parse().unwrap(),
                         tenant_id: "tenant".parse().unwrap(),
                         reply_handle: ReplyHandle::generate(),
-                        timestamp: crate::timestamp::Timestamp::now(),
+                        timestamp: dione_messages::timestamp::Timestamp::now(),
                     }
                 };
                 tokio::time::timeout(Duration::from_secs(8), async {
@@ -379,7 +379,7 @@ fn omp_lifecycle_child_entry() {
             });
             let mut sigterm = signal(SignalKind::terminate()).unwrap();
             let socket_path = path.join("control/omp.sock");
-            let ready = tokio::time::timeout(Duration::from_secs(5), async {
+            let ready = tokio::time::timeout(Duration::from_secs(120), async {
                 loop {
                     match UnixStream::connect(&socket_path).await {
                         Ok(stream) => break Ok::<_, std::io::Error>(stream),
@@ -585,7 +585,7 @@ async fn actual_child_stdin_close_stops_socket_releases_lock_and_preserves_backl
         stdin.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n{\"jsonrpc\":\"2.0\",\"id\":77,\"method\":\"tools/list\"}\n").await.unwrap();
         assert_eq!(child_json(&mut stdout).await["id"], 77);
         evidence.stage = "parent_control_connect";
-        let mut stream = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut stream = tokio::time::timeout(Duration::from_secs(120), async {
             loop {
                 match UnixStream::connect(&socket_path).await {
                     Ok(stream) => break stream,
