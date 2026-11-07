@@ -556,7 +556,7 @@ async fn prepare_teams(
             dione_codex::teams_delivery(queue)
         }
         dione_harness_runtime::ResidentAdmission::Omp(admission) => {
-            crate::composition::teams_admission::from_omp(admission)
+            dione_omp::teams_delivery(admission)
         }
     };
     let tenant_id = environment("TEAMS_TENANT_ID").map_err(StartupErrorKind::TeamsTenant)?;

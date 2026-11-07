@@ -18,6 +18,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.130.2]
+
+### Fixed
+
+- Inherit the accepted Teams/OMP test allowances and contained guidance while
+  preserving this extraction and its assertions.
+
+## [0.130.1]
+
+### Fixed
+
+- Allow 120 seconds for authenticated Teams test event reads, child socket
+  readiness, and parent control connections on slower CI workers, preserving
+  assertions and production deadlines.
+
+## [0.130.0] - 2026-11-06
+
+### Changed
+
+- Move complete OMP Teams admission into dione-omp 0.2.0, preserving typed
+  outcomes and sources. Bump dependent dione-harness-runtime to 0.1.1 so its
+  normalized package manifest truthfully records the new OMP version.
+
 ## [0.129.2]
 
 ### Fixed

@@ -50,7 +50,7 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
         dione_codex::TOOL_NAMES,
     );
     let mut fixture = FixtureProcess::start(
-        crate::composition::teams_admission::from_omp(session.admission()),
+        dione_omp::teams_delivery(session.admission()),
         "activity/id%2F?",
     )
     .await;
@@ -155,9 +155,7 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
         dione_codex::TOOL_NAMES,
     );
     fixture
-        .reopen(crate::composition::teams_admission::from_omp(
-            session.admission(),
-        ))
+        .reopen(dione_omp::teams_delivery(session.admission()))
         .await;
     let running = session.start(output, CancellationToken::new());
     let (_server_dir, assembled) = server(harness).await;

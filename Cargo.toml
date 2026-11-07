@@ -3,7 +3,7 @@ members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-
 
 [package]
 name = "dione"
-version = "0.129.2"
+version = "0.130.2"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -15,7 +15,7 @@ categories = ["command-line-utilities"]
 
 [workspace.dependencies]
 dione-discord-scheduling = { version = "=0.1.0", path = "crates/dione-discord-scheduling" }
-dione-harness-runtime = { version = "=0.1.0", path = "crates/dione-harness-runtime" }
+dione-harness-runtime = { version = "=0.1.1", path = "crates/dione-harness-runtime" }
 clap = { version = "4", features = ["derive", "env"] }
 dione-oneshot = { version = "=0.1.0", path = "crates/dione-oneshot" }
 dione-discord-gate = { version = "=0.1.0", path = "crates/dione-discord-gate" }
@@ -31,7 +31,7 @@ dione-discord-presence = { version = "=0.1.0", path = "crates/dione-discord-pres
 dione-claude = { version = "=0.1.0", path = "crates/dione-claude" }
 dione-codex = { version = "=0.1.0", path = "crates/dione-codex" }
 tokio-tungstenite = { version = "0.21", default-features = false, features = ["handshake"] }
-dione-omp = { version = "=0.1.0", path = "crates/dione-omp" }
+dione-omp = { version = "=0.2.0", path = "crates/dione-omp" }
 dione-teams = { version = "=0.1.0", path = "crates/dione-teams" }
 axum = "0.8"
 jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
