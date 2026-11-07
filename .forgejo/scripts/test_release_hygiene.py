@@ -39,14 +39,15 @@ class ReleaseHygieneTests(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "--quiet", "-m", "fixture")
 
-    def check(self, path, bump=False, member_bump=False):
+    def check(self, path, bump=False, member_bump=False, matching_changelog=True):
         if path is not None:
             source = self.root / path
             source.parent.mkdir(parents=True, exist_ok=True)
             source.write_text("fixture\n")
         if bump:
             (self.root / "Cargo.toml").write_text('[package]\nname = "fixture"\nversion = "1.1.0"\n')
-            (self.root / "CHANGELOG.md").write_text("## [1.1.0]\n")
+            if matching_changelog:
+                (self.root / "CHANGELOG.md").write_text("## [1.1.0]\n")
         if member_bump:
             manifest = self.root / "crates/renderer/Cargo.toml"
             manifest.write_text(manifest.read_text().replace('"0.1.0"', '"0.2.0"'))
@@ -60,6 +61,21 @@ class ReleaseHygieneTests(unittest.TestCase):
         result = self.check("crates/renderer/src/lib.rs")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("not greater than current base version", result.stdout)
+
+    def test_member_source_with_member_bump_requires_root_bump(self):
+        result = self.check("crates/renderer/src/lib.rs", member_bump=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Cargo.toml version 1.0.0 is not greater", result.stdout)
+        self.assertNotIn("crates/renderer changed", result.stdout)
+
+    def test_member_source_with_both_bumps_requires_matching_changelog(self):
+        result = self.check(
+            "crates/renderer/src/lib.rs", bump=True, member_bump=True,
+            matching_changelog=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("CHANGELOG.md has no '## [1.1.0]' entry", result.stdout)
+        self.assertNotIn("not greater than current base version", result.stdout)
 
     def test_member_source_accepts_matching_release(self):
         result = self.check("crates/renderer/src/lib.rs", bump=True, member_bump=True)

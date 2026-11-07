@@ -19,12 +19,16 @@ See [AGENTS.md](AGENTS.md) for the full knowledge index.
 ```bash
 cargo xfmt                     # format (custom import grouping)
 cargo clippy -- -W clippy::all # lint
-cargo nextest run              # test
+python3 scripts/run-tests.py --workspace --locked # test with current fixture artifacts
 cargo build --profile review --workspace --bins --locked # PR build
 cargo build --release          # full distribution build
 ```
 
-For the full native Linux PR gate, run `sh scripts/pr-ready.sh <base-ref>`.
+For a focused selection, add `-E 'test(name)'` to the wrapper; it still discovers
+the exact current Teams and Codex fixture executables before running Nextest.
+
+For the full native Linux PR gate, run `sh scripts/pr-ready.sh origin/main`.
+Replace `origin/main` with the actual target branch for a stacked PR.
 It defaults to the review profile. Pass `release` as the second argument for an
 explicit full release check. Main CI and tagged distributions retain release
 builds.

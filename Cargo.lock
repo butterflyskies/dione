@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.130.4"
+version = "0.130.5"
 dependencies = [
  "arc-swap",
  "axum",

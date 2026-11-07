@@ -124,619 +124,222 @@ jobs:
           dione_version="$(scripts/workspace-package-version.sh dione)"
           dione_crate="target/package/dione-${dione_version}.crate"
           cargo package --workspace --locked
-          scripts/verify-public-package-privacy.sh "${dione_crate}"
-          scripts/verify-crates-io-owners.sh dione \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione "${dione_version}" "${dione_crate}")"
-          case "$package_state" in
-            published) echo "publish-dione=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-dione=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione "${dione_version}" "${dione_crate}" exact verify "${GITHUB_OUTPUT}" publish-dione butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "dione-version=${dione_version}" >> "${GITHUB_OUTPUT}"
 
           rendering_version="$(scripts/workspace-package-version.sh dione-rendering)"
           rendering_crate="target/package/dione-rendering-${rendering_version}.crate"
-          scripts/verify-public-package-privacy.sh "${rendering_crate}"
-          scripts/verify-crates-io-owners.sh dione-rendering \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-rendering "${rendering_version}" "${rendering_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-rendering=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-rendering=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-rendering "${rendering_version}" "${rendering_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-rendering butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "rendering-version=${rendering_version}" >> "${GITHUB_OUTPUT}"
 
           durable_version="$(scripts/workspace-package-version.sh dione-durable)"
           durable_crate="target/package/dione-durable-${durable_version}.crate"
-          scripts/verify-public-package-privacy.sh "${durable_crate}"
-          scripts/verify-crates-io-owners.sh dione-durable \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-durable "${durable_version}" "${durable_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-durable=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-durable=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-durable "${durable_version}" "${durable_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-durable butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "durable-version=${durable_version}" >> "${GITHUB_OUTPUT}"
 
           contracts_version="$(scripts/workspace-package-version.sh dione-contracts)"
           contracts_crate="target/package/dione-contracts-${contracts_version}.crate"
-          scripts/verify-public-package-privacy.sh "${contracts_crate}"
-          scripts/verify-crates-io-owners.sh dione-contracts \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-contracts "${contracts_version}" "${contracts_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-contracts=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-contracts=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-contracts "${contracts_version}" "${contracts_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-contracts butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "contracts-version=${contracts_version}" >> "${GITHUB_OUTPUT}"
           rook_version="$(scripts/workspace-package-version.sh dione-rook)"
           rook_crate="target/package/dione-rook-${rook_version}.crate"
-          scripts/verify-public-package-privacy.sh "${rook_crate}"
-          scripts/verify-crates-io-owners.sh dione-rook \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-rook "${rook_version}" "${rook_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-rook=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-rook=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-rook "${rook_version}" "${rook_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-rook butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "rook-version=${rook_version}" >> "${GITHUB_OUTPUT}"
 
           attention_version="$(scripts/workspace-package-version.sh dione-attention)"
           attention_crate="target/package/dione-attention-${attention_version}.crate"
-          scripts/verify-public-package-privacy.sh "${attention_crate}"
-          scripts/verify-crates-io-owners.sh dione-attention \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-attention "${attention_version}" "${attention_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-attention=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-attention=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-attention "${attention_version}" "${attention_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-attention butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "attention-version=${attention_version}" >> "${GITHUB_OUTPUT}"
 
           evidence_version="$(scripts/workspace-package-version.sh dione-evidence)"
           evidence_crate="target/package/dione-evidence-${evidence_version}.crate"
-          scripts/verify-public-package-privacy.sh "${evidence_crate}"
-          scripts/verify-crates-io-owners.sh dione-evidence \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-evidence "${evidence_version}" "${evidence_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-evidence=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-evidence=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-evidence "${evidence_version}" "${evidence_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-evidence butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "evidence-version=${evidence_version}" >> "${GITHUB_OUTPUT}"
 
           messages_version="$(scripts/workspace-package-version.sh dione-messages)"
           messages_crate="target/package/dione-messages-${messages_version}.crate"
-          scripts/verify-public-package-privacy.sh "${messages_crate}"
-          scripts/verify-crates-io-owners.sh dione-messages \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-messages "${messages_version}" "${messages_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-messages=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-messages=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-messages "${messages_version}" "${messages_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-messages butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "messages-version=${messages_version}" >> "${GITHUB_OUTPUT}"
 
           rate_limiter_version="$(scripts/workspace-package-version.sh dione-rate-limiter)"
           rate_limiter_crate="target/package/dione-rate-limiter-${rate_limiter_version}.crate"
-          scripts/verify-public-package-privacy.sh "${rate_limiter_crate}"
-          scripts/verify-crates-io-owners.sh dione-rate-limiter \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-rate-limiter "${rate_limiter_version}" "${rate_limiter_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-rate-limiter=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-rate-limiter=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-rate-limiter "${rate_limiter_version}" "${rate_limiter_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-rate-limiter butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "rate-limiter-version=${rate_limiter_version}" >> "${GITHUB_OUTPUT}"
 
           vaelii_version="$(scripts/workspace-package-version.sh dione-vaelii)"
           vaelii_crate="target/package/dione-vaelii-${vaelii_version}.crate"
-          scripts/verify-public-package-privacy.sh "${vaelii_crate}"
-          scripts/verify-crates-io-owners.sh dione-vaelii \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-vaelii "${vaelii_version}" "${vaelii_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-vaelii=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-vaelii=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-vaelii "${vaelii_version}" "${vaelii_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-vaelii butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "vaelii-version=${vaelii_version}" >> "${GITHUB_OUTPUT}"
 
           gaie_version="$(scripts/workspace-package-version.sh dione-gaie)"
           gaie_crate="target/package/dione-gaie-${gaie_version}.crate"
-          scripts/verify-public-package-privacy.sh "${gaie_crate}"
-          scripts/verify-crates-io-owners.sh dione-gaie \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-gaie "${gaie_version}" "${gaie_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-gaie=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-gaie=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-gaie "${gaie_version}" "${gaie_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-gaie butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "gaie-version=${gaie_version}" >> "${GITHUB_OUTPUT}"
 
           identity_display_version="$(scripts/workspace-package-version.sh dione-identity-display)"
           identity_display_crate="target/package/dione-identity-display-${identity_display_version}.crate"
-          scripts/verify-public-package-privacy.sh "${identity_display_crate}"
-          scripts/verify-crates-io-owners.sh dione-identity-display \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-identity-display "${identity_display_version}" "${identity_display_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-identity-display=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-identity-display=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-identity-display "${identity_display_version}" "${identity_display_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-identity-display butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "identity-display-version=${identity_display_version}" >> "${GITHUB_OUTPUT}"
 
           harness_version="$(scripts/workspace-package-version.sh dione-harness)"
           harness_crate="target/package/dione-harness-${harness_version}.crate"
-          scripts/verify-public-package-privacy.sh "${harness_crate}"
-          scripts/verify-crates-io-owners.sh dione-harness \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-harness "${harness_version}" "${harness_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-harness=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-harness=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-harness "${harness_version}" "${harness_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-harness butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "harness-version=${harness_version}" >> "${GITHUB_OUTPUT}"
 
           presentation_version="$(scripts/workspace-package-version.sh dione-presentation)"
           presentation_crate="target/package/dione-presentation-${presentation_version}.crate"
-          scripts/verify-public-package-privacy.sh "${presentation_crate}"
-          scripts/verify-crates-io-owners.sh dione-presentation \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-presentation "${presentation_version}" "${presentation_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-presentation=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-presentation=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-presentation "${presentation_version}" "${presentation_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-presentation butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "presentation-version=${presentation_version}" >> "${GITHUB_OUTPUT}"
 
           contradictionary_version="$(scripts/workspace-package-version.sh dione-contradictionary)"
           contradictionary_crate="target/package/dione-contradictionary-${contradictionary_version}.crate"
-          scripts/verify-public-package-privacy.sh "${contradictionary_crate}"
-          scripts/verify-crates-io-owners.sh dione-contradictionary \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-contradictionary "${contradictionary_version}" "${contradictionary_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-contradictionary=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-contradictionary=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-contradictionary "${contradictionary_version}" "${contradictionary_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-contradictionary butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "contradictionary-version=${contradictionary_version}" >> "${GITHUB_OUTPUT}"
 
           bell_rings_version="$(scripts/workspace-package-version.sh dione-bell-rings)"
           bell_rings_crate="target/package/dione-bell-rings-${bell_rings_version}.crate"
-          scripts/verify-public-package-privacy.sh "${bell_rings_crate}"
-          scripts/verify-crates-io-owners.sh dione-bell-rings \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-bell-rings "${bell_rings_version}" "${bell_rings_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-bell-rings=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-bell-rings=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-bell-rings "${bell_rings_version}" "${bell_rings_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-bell-rings butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "bell-rings-version=${bell_rings_version}" >> "${GITHUB_OUTPUT}"
 
           delivery_scheduler_version="$(scripts/workspace-package-version.sh dione-delivery-scheduler)"
           delivery_scheduler_crate="target/package/dione-delivery-scheduler-${delivery_scheduler_version}.crate"
-          scripts/verify-public-package-privacy.sh "${delivery_scheduler_crate}"
-          scripts/verify-crates-io-owners.sh dione-delivery-scheduler \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-delivery-scheduler "${delivery_scheduler_version}" "${delivery_scheduler_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-delivery-scheduler=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-delivery-scheduler=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-delivery-scheduler "${delivery_scheduler_version}" "${delivery_scheduler_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-delivery-scheduler butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "delivery-scheduler-version=${delivery_scheduler_version}" >> "${GITHUB_OUTPUT}"
 
           access_requests_version="$(scripts/workspace-package-version.sh dione-access-requests)"
           access_requests_crate="target/package/dione-access-requests-${access_requests_version}.crate"
-          scripts/verify-public-package-privacy.sh "${access_requests_crate}"
-          scripts/verify-crates-io-owners.sh dione-access-requests \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-access-requests "${access_requests_version}" "${access_requests_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-access-requests=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-access-requests=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-access-requests "${access_requests_version}" "${access_requests_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-access-requests butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "access-requests-version=${access_requests_version}" >> "${GITHUB_OUTPUT}"
 
           mutes_version="$(scripts/workspace-package-version.sh dione-mutes)"
           mutes_crate="target/package/dione-mutes-${mutes_version}.crate"
-          scripts/verify-public-package-privacy.sh "${mutes_crate}"
-          scripts/verify-crates-io-owners.sh dione-mutes \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-mutes "${mutes_version}" "${mutes_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-mutes=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-mutes=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-mutes "${mutes_version}" "${mutes_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-mutes butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "mutes-version=${mutes_version}" >> "${GITHUB_OUTPUT}"
 
           coordination_version="$(scripts/workspace-package-version.sh dione-coordination)"
           coordination_crate="target/package/dione-coordination-${coordination_version}.crate"
-          scripts/verify-public-package-privacy.sh "${coordination_crate}"
-          scripts/verify-crates-io-owners.sh dione-coordination \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-coordination "${coordination_version}" "${coordination_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-coordination=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-coordination=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-coordination "${coordination_version}" "${coordination_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-coordination butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "coordination-version=${coordination_version}" >> "${GITHUB_OUTPUT}"
 
           teams_identities_version="$(scripts/workspace-package-version.sh dione-teams-identities)"
           teams_identities_crate="target/package/dione-teams-identities-${teams_identities_version}.crate"
-          scripts/verify-public-package-privacy.sh "${teams_identities_crate}"
-          scripts/verify-crates-io-owners.sh dione-teams-identities \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-teams-identities "${teams_identities_version}" "${teams_identities_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-teams-identities=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-teams-identities=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-teams-identities "${teams_identities_version}" "${teams_identities_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-teams-identities butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "teams-identities-version=${teams_identities_version}" >> "${GITHUB_OUTPUT}"
 
           discord_identities_version="$(scripts/workspace-package-version.sh dione-discord-identities)"
           discord_identities_crate="target/package/dione-discord-identities-${discord_identities_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_identities_crate}"
-          scripts/verify-crates-io-owners.sh dione-discord-identities \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-discord-identities "${discord_identities_version}" "${discord_identities_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-discord-identities=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-discord-identities=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-discord-identities "${discord_identities_version}" "${discord_identities_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-discord-identities butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "discord-identities-version=${discord_identities_version}" >> "${GITHUB_OUTPUT}"
 
           pluralkit_identities_version="$(scripts/workspace-package-version.sh dione-pluralkit-identities)"
           pluralkit_identities_crate="target/package/dione-pluralkit-identities-${pluralkit_identities_version}.crate"
-          scripts/verify-public-package-privacy.sh "${pluralkit_identities_crate}"
-          scripts/verify-crates-io-owners.sh dione-pluralkit-identities \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-pluralkit-identities "${pluralkit_identities_version}" "${pluralkit_identities_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-pluralkit-identities=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-pluralkit-identities=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-pluralkit-identities "${pluralkit_identities_version}" "${pluralkit_identities_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-pluralkit-identities butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "pluralkit-identities-version=${pluralkit_identities_version}" >> "${GITHUB_OUTPUT}"
 
           mcp_tools_version="$(scripts/workspace-package-version.sh dione-mcp-tools)"
           mcp_tools_crate="target/package/dione-mcp-tools-${mcp_tools_version}.crate"
-          scripts/verify-public-package-privacy.sh "${mcp_tools_crate}"
-          scripts/verify-crates-io-owners.sh dione-mcp-tools \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-mcp-tools "${mcp_tools_version}" "${mcp_tools_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-mcp-tools=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-mcp-tools=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-mcp-tools "${mcp_tools_version}" "${mcp_tools_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-mcp-tools butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "mcp-tools-version=${mcp_tools_version}" >> "${GITHUB_OUTPUT}"
 
           provider_delivery_version="$(scripts/workspace-package-version.sh dione-provider-delivery)"
           provider_delivery_crate="target/package/dione-provider-delivery-${provider_delivery_version}.crate"
-          scripts/verify-public-package-privacy.sh "${provider_delivery_crate}"
-          scripts/verify-crates-io-owners.sh dione-provider-delivery \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-provider-delivery "${provider_delivery_version}" "${provider_delivery_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-provider-delivery=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-provider-delivery=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-provider-delivery "${provider_delivery_version}" "${provider_delivery_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-provider-delivery butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "provider-delivery-version=${provider_delivery_version}" >> "${GITHUB_OUTPUT}"
 
           teams_version="$(scripts/workspace-package-version.sh dione-teams)"
           teams_crate="target/package/dione-teams-${teams_version}.crate"
-          scripts/verify-public-package-privacy.sh "${teams_crate}"
-          scripts/verify-crates-io-owners.sh dione-teams \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-teams "${teams_version}" "${teams_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-teams=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-teams=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-teams "${teams_version}" "${teams_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-teams butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "teams-version=${teams_version}" >> "${GITHUB_OUTPUT}"
 
           omp_version="$(scripts/workspace-package-version.sh dione-omp)"
           omp_crate="target/package/dione-omp-${omp_version}.crate"
-          scripts/verify-public-package-privacy.sh "${omp_crate}"
-          scripts/verify-crates-io-owners.sh dione-omp \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-omp "${omp_version}" "${omp_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-omp=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-omp=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-omp "${omp_version}" "${omp_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-omp butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "omp-version=${omp_version}" >> "${GITHUB_OUTPUT}"
 
           codex_version="$(scripts/workspace-package-version.sh dione-codex)"
           codex_crate="target/package/dione-codex-${codex_version}.crate"
-          scripts/verify-public-package-privacy.sh "${codex_crate}"
-          scripts/verify-crates-io-owners.sh dione-codex \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-codex "${codex_version}" "${codex_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-codex=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-codex=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-codex "${codex_version}" "${codex_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-codex butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "codex-version=${codex_version}" >> "${GITHUB_OUTPUT}"
 
           claude_version="$(scripts/workspace-package-version.sh dione-claude)"
           claude_crate="target/package/dione-claude-${claude_version}.crate"
-          scripts/verify-public-package-privacy.sh "${claude_crate}"
-          scripts/verify-crates-io-owners.sh dione-claude \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-claude "${claude_version}" "${claude_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-claude=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-claude=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-claude "${claude_version}" "${claude_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-claude butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "claude-version=${claude_version}" >> "${GITHUB_OUTPUT}"
 
           discord_presence_version="$(scripts/workspace-package-version.sh dione-discord-presence)"
           discord_presence_crate="target/package/dione-discord-presence-${discord_presence_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_presence_crate}"
-          scripts/verify-crates-io-owners.sh dione-discord-presence \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-discord-presence "${discord_presence_version}" "${discord_presence_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-discord-presence=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-discord-presence=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-discord-presence "${discord_presence_version}" "${discord_presence_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-discord-presence butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "discord-presence-version=${discord_presence_version}" >> "${GITHUB_OUTPUT}"
 
           discord_state_version="$(scripts/workspace-package-version.sh dione-discord-state)"
           discord_state_crate="target/package/dione-discord-state-${discord_state_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_state_crate}"
-          scripts/verify-crates-io-owners.sh dione-discord-state \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-discord-state "${discord_state_version}" "${discord_state_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-discord-state=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-discord-state=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-discord-state "${discord_state_version}" "${discord_state_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-discord-state butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "discord-state-version=${discord_state_version}" >> "${GITHUB_OUTPUT}"
 
           discord_events_version="$(scripts/workspace-package-version.sh dione-discord-events)"
           discord_events_crate="target/package/dione-discord-events-${discord_events_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_events_crate}"
-          scripts/verify-crates-io-owners.sh dione-discord-events \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-discord-events "${discord_events_version}" "${discord_events_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-discord-events=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-discord-events=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-discord-events "${discord_events_version}" "${discord_events_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-discord-events butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "discord-events-version=${discord_events_version}" >> "${GITHUB_OUTPUT}"
           tracing_channel_version="$(scripts/workspace-package-version.sh dione-tracing-channel)"
           tracing_channel_crate="target/package/dione-tracing-channel-${tracing_channel_version}.crate"
-          scripts/verify-public-package-privacy.sh "${tracing_channel_crate}"
-          scripts/verify-crates-io-owners.sh dione-tracing-channel \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-tracing-channel "${tracing_channel_version}" "${tracing_channel_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-tracing-channel=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-tracing-channel=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-tracing-channel "${tracing_channel_version}" "${tracing_channel_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-tracing-channel butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "tracing-channel-version=${tracing_channel_version}" >> "${GITHUB_OUTPUT}"
 
           config_watcher_version="$(scripts/workspace-package-version.sh dione-config-watcher)"
           config_watcher_crate="target/package/dione-config-watcher-${config_watcher_version}.crate"
-          scripts/verify-public-package-privacy.sh "${config_watcher_crate}"
-          scripts/verify-crates-io-owners.sh dione-config-watcher \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-config-watcher "${config_watcher_version}" "${config_watcher_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-config-watcher=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-config-watcher=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-config-watcher "${config_watcher_version}" "${config_watcher_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-config-watcher butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "config-watcher-version=${config_watcher_version}" >> "${GITHUB_OUTPUT}"
           permissions_version="$(scripts/workspace-package-version.sh dione-permissions)"
           permissions_crate="target/package/dione-permissions-${permissions_version}.crate"
-          scripts/verify-public-package-privacy.sh "${permissions_crate}"
-          scripts/verify-crates-io-owners.sh dione-permissions \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-permissions "${permissions_version}" "${permissions_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-permissions=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-permissions=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-permissions "${permissions_version}" "${permissions_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-permissions butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "permissions-version=${permissions_version}" >> "${GITHUB_OUTPUT}"
           discord_bells_version="$(scripts/workspace-package-version.sh dione-discord-bells)"
           discord_bells_crate="target/package/dione-discord-bells-${discord_bells_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_bells_crate}"
-          scripts/verify-crates-io-owners.sh dione-discord-bells \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-discord-bells "${discord_bells_version}" "${discord_bells_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-discord-bells=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-discord-bells=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-discord-bells "${discord_bells_version}" "${discord_bells_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-discord-bells butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "discord-bells-version=${discord_bells_version}" >> "${GITHUB_OUTPUT}"
 
           discord_gate_version="$(scripts/workspace-package-version.sh dione-discord-gate)"
           discord_gate_crate="target/package/dione-discord-gate-${discord_gate_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_gate_crate}"
-          scripts/verify-crates-io-owners.sh dione-discord-gate \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-discord-gate "${discord_gate_version}" "${discord_gate_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-discord-gate=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-discord-gate=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-discord-gate "${discord_gate_version}" "${discord_gate_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-discord-gate butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "discord-gate-version=${discord_gate_version}" >> "${GITHUB_OUTPUT}"
           oneshot_version="$(scripts/workspace-package-version.sh dione-oneshot)"
           oneshot_crate="target/package/dione-oneshot-${oneshot_version}.crate"
-          scripts/verify-public-package-privacy.sh "${oneshot_crate}"
-          scripts/verify-crates-io-owners.sh dione-oneshot \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-oneshot "${oneshot_version}" "${oneshot_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-oneshot=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-oneshot=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-oneshot "${oneshot_version}" "${oneshot_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-oneshot butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "oneshot-version=${oneshot_version}" >> "${GITHUB_OUTPUT}"
 
           harness_runtime_version="$(scripts/workspace-package-version.sh dione-harness-runtime)"
           harness_runtime_crate="target/package/dione-harness-runtime-${harness_runtime_version}.crate"
-          scripts/verify-public-package-privacy.sh "${harness_runtime_crate}"
-          scripts/verify-crates-io-owners.sh dione-harness-runtime \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-harness-runtime "${harness_runtime_version}" "${harness_runtime_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-harness-runtime=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-harness-runtime=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-harness-runtime "${harness_runtime_version}" "${harness_runtime_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-harness-runtime butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "harness-runtime-version=${harness_runtime_version}" >> "${GITHUB_OUTPUT}"
 
 
           discord_scheduling_version="$(scripts/workspace-package-version.sh dione-discord-scheduling)"
           discord_scheduling_crate="target/package/dione-discord-scheduling-${discord_scheduling_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_scheduling_crate}"
-          scripts/verify-crates-io-owners.sh dione-discord-scheduling \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-discord-scheduling "${discord_scheduling_version}" "${discord_scheduling_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-discord-scheduling=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-discord-scheduling=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-discord-scheduling "${discord_scheduling_version}" "${discord_scheduling_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-discord-scheduling butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "discord-scheduling-version=${discord_scheduling_version}" >> "${GITHUB_OUTPUT}"
 
 
 
           drop_ledger_version="$(scripts/workspace-package-version.sh dione-drop-ledger)"
           drop_ledger_crate="target/package/dione-drop-ledger-${drop_ledger_version}.crate"
-          scripts/verify-public-package-privacy.sh "${drop_ledger_crate}"
-          scripts/verify-crates-io-owners.sh dione-drop-ledger \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-drop-ledger "${drop_ledger_version}" "${drop_ledger_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-drop-ledger=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-drop-ledger=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-drop-ledger "${drop_ledger_version}" "${drop_ledger_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-drop-ledger butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "drop-ledger-version=${drop_ledger_version}" >> "${GITHUB_OUTPUT}"
 
 
 
           pre_send_version="$(scripts/workspace-package-version.sh dione-pre-send)"
           pre_send_crate="target/package/dione-pre-send-${pre_send_version}.crate"
-          scripts/verify-public-package-privacy.sh "${pre_send_crate}"
-          scripts/verify-crates-io-owners.sh dione-pre-send \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-pre-send "${pre_send_version}" "${pre_send_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-pre-send=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-pre-send=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-pre-send "${pre_send_version}" "${pre_send_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-pre-send butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "pre-send-version=${pre_send_version}" >> "${GITHUB_OUTPUT}"
 
           outbound_consent_version="$(scripts/workspace-package-version.sh dione-outbound-consent)"
           outbound_consent_crate="target/package/dione-outbound-consent-${outbound_consent_version}.crate"
-          scripts/verify-public-package-privacy.sh "${outbound_consent_crate}"
-          scripts/verify-crates-io-owners.sh dione-outbound-consent \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-outbound-consent "${outbound_consent_version}" "${outbound_consent_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-outbound-consent=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-outbound-consent=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-outbound-consent "${outbound_consent_version}" "${outbound_consent_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-outbound-consent butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "outbound-consent-version=${outbound_consent_version}" >> "${GITHUB_OUTPUT}"
 
           config_version="$(scripts/workspace-package-version.sh dione-config)"
           config_crate="target/package/dione-config-${config_version}.crate"
-          scripts/verify-public-package-privacy.sh "${config_crate}"
-          scripts/verify-crates-io-owners.sh dione-config \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-          package_state="$(scripts/crates-io-package-state.sh dione-config "${config_version}" "${config_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published) echo "publish-config=false" >> "${GITHUB_OUTPUT}" ;;
-            missing) echo "publish-config=true" >> "${GITHUB_OUTPUT}" ;;
-          esac
+          sh scripts/package-preflight.sh dione-config "${config_version}" "${config_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-config butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "config-version=${config_version}" >> "${GITHUB_OUTPUT}"
 
   publish-rendering:
@@ -765,22 +368,7 @@ jobs:
           test "${rendering_version}" = "${{ needs.verify-dione.outputs.rendering-version }}"
           cargo package -p dione-rendering --locked --no-verify
           rendering_crate="target/package/dione-rendering-${rendering_version}.crate"
-          scripts/verify-public-package-privacy.sh "${rendering_crate}"
-          scripts/verify-crates-io-owners.sh dione-rendering \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-rendering "${rendering_version}" "${rendering_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "rendering ${rendering_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-rendering "${rendering_version}" "${rendering_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -828,12 +416,7 @@ jobs:
 
           cargo package -p dione-rendering --locked
           rendering_crate="target/package/dione-rendering-${rendering_version}.crate"
-          scripts/verify-public-package-privacy.sh "${rendering_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-rendering "${rendering_version}" "${rendering_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-rendering \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-rendering "${rendering_version}" "${rendering_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-durable:
     needs: verify-dione
@@ -861,22 +444,7 @@ jobs:
           test "${durable_version}" = "${{ needs.verify-dione.outputs.durable-version }}"
           cargo package -p dione-durable --locked --no-verify
           durable_crate="target/package/dione-durable-${durable_version}.crate"
-          scripts/verify-public-package-privacy.sh "${durable_crate}"
-          scripts/verify-crates-io-owners.sh dione-durable \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-durable "${durable_version}" "${durable_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "durable ${durable_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-durable "${durable_version}" "${durable_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -924,12 +492,7 @@ jobs:
 
           cargo package -p dione-durable --locked
           durable_crate="target/package/dione-durable-${durable_version}.crate"
-          scripts/verify-public-package-privacy.sh "${durable_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-durable "${durable_version}" "${durable_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-durable \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-durable "${durable_version}" "${durable_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-contracts:
     needs: verify-dione
@@ -957,22 +520,7 @@ jobs:
           test "${contracts_version}" = "${{ needs.verify-dione.outputs.contracts-version }}"
           cargo package -p dione-contracts --locked --no-verify
           contracts_crate="target/package/dione-contracts-${contracts_version}.crate"
-          scripts/verify-public-package-privacy.sh "${contracts_crate}"
-          scripts/verify-crates-io-owners.sh dione-contracts \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-contracts "${contracts_version}" "${contracts_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "contracts ${contracts_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-contracts "${contracts_version}" "${contracts_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -1020,12 +568,7 @@ jobs:
 
           cargo package -p dione-contracts --locked
           contracts_crate="target/package/dione-contracts-${contracts_version}.crate"
-          scripts/verify-public-package-privacy.sh "${contracts_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-contracts "${contracts_version}" "${contracts_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-contracts \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-contracts "${contracts_version}" "${contracts_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-rook:
     needs: [verify-dione, reconcile-durable, reconcile-contracts]
@@ -1053,22 +596,7 @@ jobs:
           test "${rook_version}" = "${{ needs.verify-dione.outputs.rook-version }}"
           cargo package -p dione-rook --locked --no-verify
           rook_crate="target/package/dione-rook-${rook_version}.crate"
-          scripts/verify-public-package-privacy.sh "${rook_crate}"
-          scripts/verify-crates-io-owners.sh dione-rook \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-rook "${rook_version}" "${rook_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "rook ${rook_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-rook "${rook_version}" "${rook_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -1116,12 +644,7 @@ jobs:
 
           cargo package -p dione-rook --locked
           rook_crate="target/package/dione-rook-${rook_version}.crate"
-          scripts/verify-public-package-privacy.sh "${rook_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-rook "${rook_version}" "${rook_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-rook \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-rook "${rook_version}" "${rook_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-attention:
     needs: [verify-dione, reconcile-contracts]
@@ -1149,22 +672,7 @@ jobs:
           test "${attention_version}" = "${{ needs.verify-dione.outputs.attention-version }}"
           cargo package -p dione-attention --locked --no-verify
           attention_crate="target/package/dione-attention-${attention_version}.crate"
-          scripts/verify-public-package-privacy.sh "${attention_crate}"
-          scripts/verify-crates-io-owners.sh dione-attention \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-attention "${attention_version}" "${attention_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "attention ${attention_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-attention "${attention_version}" "${attention_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -1212,12 +720,7 @@ jobs:
 
           cargo package -p dione-attention --locked
           attention_crate="target/package/dione-attention-${attention_version}.crate"
-          scripts/verify-public-package-privacy.sh "${attention_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-attention "${attention_version}" "${attention_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-attention \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-attention "${attention_version}" "${attention_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-evidence:
     needs: verify-dione
@@ -1245,22 +748,7 @@ jobs:
           test "${evidence_version}" = "${{ needs.verify-dione.outputs.evidence-version }}"
           cargo package -p dione-evidence --locked --no-verify
           evidence_crate="target/package/dione-evidence-${evidence_version}.crate"
-          scripts/verify-public-package-privacy.sh "${evidence_crate}"
-          scripts/verify-crates-io-owners.sh dione-evidence \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-evidence "${evidence_version}" "${evidence_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "evidence ${evidence_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-evidence "${evidence_version}" "${evidence_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -1308,12 +796,7 @@ jobs:
 
           cargo package -p dione-evidence --locked
           evidence_crate="target/package/dione-evidence-${evidence_version}.crate"
-          scripts/verify-public-package-privacy.sh "${evidence_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-evidence "${evidence_version}" "${evidence_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-evidence \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-evidence "${evidence_version}" "${evidence_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-messages:
     needs: [verify-dione, reconcile-contracts, reconcile-attention, reconcile-evidence]
@@ -1341,22 +824,7 @@ jobs:
           test "${messages_version}" = "${{ needs.verify-dione.outputs.messages-version }}"
           cargo package -p dione-messages --locked --no-verify
           messages_crate="target/package/dione-messages-${messages_version}.crate"
-          scripts/verify-public-package-privacy.sh "${messages_crate}"
-          scripts/verify-crates-io-owners.sh dione-messages \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-messages "${messages_version}" "${messages_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "messages ${messages_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-messages "${messages_version}" "${messages_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -1404,12 +872,7 @@ jobs:
 
           cargo package -p dione-messages --locked
           messages_crate="target/package/dione-messages-${messages_version}.crate"
-          scripts/verify-public-package-privacy.sh "${messages_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-messages "${messages_version}" "${messages_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-messages \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-messages "${messages_version}" "${messages_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-rate-limiter:
     needs: verify-dione
@@ -1437,22 +900,7 @@ jobs:
           test "${rate_limiter_version}" = "${{ needs.verify-dione.outputs.rate-limiter-version }}"
           cargo package -p dione-rate-limiter --locked --no-verify
           rate_limiter_crate="target/package/dione-rate-limiter-${rate_limiter_version}.crate"
-          scripts/verify-public-package-privacy.sh "${rate_limiter_crate}"
-          scripts/verify-crates-io-owners.sh dione-rate-limiter \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-rate-limiter "${rate_limiter_version}" "${rate_limiter_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "rate-limiter ${rate_limiter_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-rate-limiter "${rate_limiter_version}" "${rate_limiter_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -1500,12 +948,7 @@ jobs:
 
           cargo package -p dione-rate-limiter --locked
           rate_limiter_crate="target/package/dione-rate-limiter-${rate_limiter_version}.crate"
-          scripts/verify-public-package-privacy.sh "${rate_limiter_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-rate-limiter "${rate_limiter_version}" "${rate_limiter_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-rate-limiter \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-rate-limiter "${rate_limiter_version}" "${rate_limiter_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-vaelii:
     needs: verify-dione
@@ -1533,22 +976,7 @@ jobs:
           test "${vaelii_version}" = "${{ needs.verify-dione.outputs.vaelii-version }}"
           cargo package -p dione-vaelii --locked --no-verify
           vaelii_crate="target/package/dione-vaelii-${vaelii_version}.crate"
-          scripts/verify-public-package-privacy.sh "${vaelii_crate}"
-          scripts/verify-crates-io-owners.sh dione-vaelii \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-vaelii "${vaelii_version}" "${vaelii_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "vaelii ${vaelii_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-vaelii "${vaelii_version}" "${vaelii_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -1596,12 +1024,7 @@ jobs:
 
           cargo package -p dione-vaelii --locked
           vaelii_crate="target/package/dione-vaelii-${vaelii_version}.crate"
-          scripts/verify-public-package-privacy.sh "${vaelii_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-vaelii "${vaelii_version}" "${vaelii_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-vaelii \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-vaelii "${vaelii_version}" "${vaelii_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-gaie:
     needs: verify-dione
@@ -1629,22 +1052,7 @@ jobs:
           test "${gaie_version}" = "${{ needs.verify-dione.outputs.gaie-version }}"
           cargo package -p dione-gaie --locked --no-verify
           gaie_crate="target/package/dione-gaie-${gaie_version}.crate"
-          scripts/verify-public-package-privacy.sh "${gaie_crate}"
-          scripts/verify-crates-io-owners.sh dione-gaie \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-gaie "${gaie_version}" "${gaie_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "gaie ${gaie_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-gaie "${gaie_version}" "${gaie_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -1692,12 +1100,7 @@ jobs:
 
           cargo package -p dione-gaie --locked
           gaie_crate="target/package/dione-gaie-${gaie_version}.crate"
-          scripts/verify-public-package-privacy.sh "${gaie_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-gaie "${gaie_version}" "${gaie_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-gaie \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-gaie "${gaie_version}" "${gaie_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-identity-display:
     needs: verify-dione
@@ -1725,22 +1128,7 @@ jobs:
           test "${identity_display_version}" = "${{ needs.verify-dione.outputs.identity-display-version }}"
           cargo package -p dione-identity-display --locked --no-verify
           identity_display_crate="target/package/dione-identity-display-${identity_display_version}.crate"
-          scripts/verify-public-package-privacy.sh "${identity_display_crate}"
-          scripts/verify-crates-io-owners.sh dione-identity-display \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-identity-display "${identity_display_version}" "${identity_display_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "identity-display ${identity_display_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-identity-display "${identity_display_version}" "${identity_display_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -1788,12 +1176,7 @@ jobs:
 
           cargo package -p dione-identity-display --locked
           identity_display_crate="target/package/dione-identity-display-${identity_display_version}.crate"
-          scripts/verify-public-package-privacy.sh "${identity_display_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-identity-display "${identity_display_version}" "${identity_display_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-identity-display \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-identity-display "${identity_display_version}" "${identity_display_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-harness:
     needs: [verify-dione, reconcile-contracts, reconcile-messages]
@@ -1821,22 +1204,7 @@ jobs:
           test "${harness_version}" = "${{ needs.verify-dione.outputs.harness-version }}"
           cargo package -p dione-harness --locked --no-verify
           harness_crate="target/package/dione-harness-${harness_version}.crate"
-          scripts/verify-public-package-privacy.sh "${harness_crate}"
-          scripts/verify-crates-io-owners.sh dione-harness \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-harness "${harness_version}" "${harness_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "harness ${harness_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-harness "${harness_version}" "${harness_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -1884,12 +1252,7 @@ jobs:
 
           cargo package -p dione-harness --locked
           harness_crate="target/package/dione-harness-${harness_version}.crate"
-          scripts/verify-public-package-privacy.sh "${harness_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-harness "${harness_version}" "${harness_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-harness \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-harness "${harness_version}" "${harness_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-presentation:
     needs: [verify-dione, reconcile-contracts, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-identity-display]
@@ -1917,22 +1280,7 @@ jobs:
           test "${presentation_version}" = "${{ needs.verify-dione.outputs.presentation-version }}"
           cargo package -p dione-presentation --locked --no-verify
           presentation_crate="target/package/dione-presentation-${presentation_version}.crate"
-          scripts/verify-public-package-privacy.sh "${presentation_crate}"
-          scripts/verify-crates-io-owners.sh dione-presentation \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-presentation "${presentation_version}" "${presentation_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "presentation ${presentation_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-presentation "${presentation_version}" "${presentation_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -1980,12 +1328,7 @@ jobs:
 
           cargo package -p dione-presentation --locked
           presentation_crate="target/package/dione-presentation-${presentation_version}.crate"
-          scripts/verify-public-package-privacy.sh "${presentation_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-presentation "${presentation_version}" "${presentation_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-presentation \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-presentation "${presentation_version}" "${presentation_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-contradictionary:
     needs: [verify-dione, reconcile-evidence]
@@ -2013,22 +1356,7 @@ jobs:
           test "${contradictionary_version}" = "${{ needs.verify-dione.outputs.contradictionary-version }}"
           cargo package -p dione-contradictionary --locked --no-verify
           contradictionary_crate="target/package/dione-contradictionary-${contradictionary_version}.crate"
-          scripts/verify-public-package-privacy.sh "${contradictionary_crate}"
-          scripts/verify-crates-io-owners.sh dione-contradictionary \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-contradictionary "${contradictionary_version}" "${contradictionary_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "contradictionary ${contradictionary_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-contradictionary "${contradictionary_version}" "${contradictionary_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -2076,12 +1404,7 @@ jobs:
 
           cargo package -p dione-contradictionary --locked
           contradictionary_crate="target/package/dione-contradictionary-${contradictionary_version}.crate"
-          scripts/verify-public-package-privacy.sh "${contradictionary_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-contradictionary "${contradictionary_version}" "${contradictionary_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-contradictionary \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-contradictionary "${contradictionary_version}" "${contradictionary_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-bell-rings:
     needs: verify-dione
@@ -2109,22 +1432,7 @@ jobs:
           test "${bell_rings_version}" = "${{ needs.verify-dione.outputs.bell-rings-version }}"
           cargo package -p dione-bell-rings --locked --no-verify
           bell_rings_crate="target/package/dione-bell-rings-${bell_rings_version}.crate"
-          scripts/verify-public-package-privacy.sh "${bell_rings_crate}"
-          scripts/verify-crates-io-owners.sh dione-bell-rings \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-bell-rings "${bell_rings_version}" "${bell_rings_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "bell-rings ${bell_rings_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-bell-rings "${bell_rings_version}" "${bell_rings_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -2172,12 +1480,7 @@ jobs:
 
           cargo package -p dione-bell-rings --locked
           bell_rings_crate="target/package/dione-bell-rings-${bell_rings_version}.crate"
-          scripts/verify-public-package-privacy.sh "${bell_rings_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-bell-rings "${bell_rings_version}" "${bell_rings_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-bell-rings \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-bell-rings "${bell_rings_version}" "${bell_rings_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-delivery-scheduler:
     needs: [verify-dione, reconcile-contracts]
@@ -2205,22 +1508,7 @@ jobs:
           test "${delivery_scheduler_version}" = "${{ needs.verify-dione.outputs.delivery-scheduler-version }}"
           cargo package -p dione-delivery-scheduler --locked --no-verify
           delivery_scheduler_crate="target/package/dione-delivery-scheduler-${delivery_scheduler_version}.crate"
-          scripts/verify-public-package-privacy.sh "${delivery_scheduler_crate}"
-          scripts/verify-crates-io-owners.sh dione-delivery-scheduler \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-delivery-scheduler "${delivery_scheduler_version}" "${delivery_scheduler_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "delivery-scheduler ${delivery_scheduler_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-delivery-scheduler "${delivery_scheduler_version}" "${delivery_scheduler_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -2269,12 +1557,7 @@ jobs:
 
           cargo package -p dione-delivery-scheduler --locked
           delivery_scheduler_crate="target/package/dione-delivery-scheduler-${delivery_scheduler_version}.crate"
-          scripts/verify-public-package-privacy.sh "${delivery_scheduler_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-delivery-scheduler "${delivery_scheduler_version}" "${delivery_scheduler_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-delivery-scheduler \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-delivery-scheduler "${delivery_scheduler_version}" "${delivery_scheduler_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-access-requests:
     needs: verify-dione
@@ -2302,22 +1585,7 @@ jobs:
           test "${access_requests_version}" = "${{ needs.verify-dione.outputs.access-requests-version }}"
           cargo package -p dione-access-requests --locked --no-verify
           access_requests_crate="target/package/dione-access-requests-${access_requests_version}.crate"
-          scripts/verify-public-package-privacy.sh "${access_requests_crate}"
-          scripts/verify-crates-io-owners.sh dione-access-requests \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-access-requests "${access_requests_version}" "${access_requests_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "access-requests ${access_requests_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-access-requests "${access_requests_version}" "${access_requests_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -2365,12 +1633,7 @@ jobs:
 
           cargo package -p dione-access-requests --locked
           access_requests_crate="target/package/dione-access-requests-${access_requests_version}.crate"
-          scripts/verify-public-package-privacy.sh "${access_requests_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-access-requests "${access_requests_version}" "${access_requests_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-access-requests \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-access-requests "${access_requests_version}" "${access_requests_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-mutes:
     needs: verify-dione
@@ -2398,22 +1661,7 @@ jobs:
           test "${mutes_version}" = "${{ needs.verify-dione.outputs.mutes-version }}"
           cargo package -p dione-mutes --locked --no-verify
           mutes_crate="target/package/dione-mutes-${mutes_version}.crate"
-          scripts/verify-public-package-privacy.sh "${mutes_crate}"
-          scripts/verify-crates-io-owners.sh dione-mutes \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-mutes "${mutes_version}" "${mutes_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "mutes ${mutes_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-mutes "${mutes_version}" "${mutes_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -2461,12 +1709,7 @@ jobs:
 
           cargo package -p dione-mutes --locked
           mutes_crate="target/package/dione-mutes-${mutes_version}.crate"
-          scripts/verify-public-package-privacy.sh "${mutes_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-mutes "${mutes_version}" "${mutes_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-mutes \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-mutes "${mutes_version}" "${mutes_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-coordination:
     needs: verify-dione
@@ -2494,22 +1737,7 @@ jobs:
           test "${coordination_version}" = "${{ needs.verify-dione.outputs.coordination-version }}"
           cargo package -p dione-coordination --locked --no-verify
           coordination_crate="target/package/dione-coordination-${coordination_version}.crate"
-          scripts/verify-public-package-privacy.sh "${coordination_crate}"
-          scripts/verify-crates-io-owners.sh dione-coordination \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-coordination "${coordination_version}" "${coordination_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "coordination ${coordination_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-coordination "${coordination_version}" "${coordination_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -2557,12 +1785,7 @@ jobs:
 
           cargo package -p dione-coordination --locked
           coordination_crate="target/package/dione-coordination-${coordination_version}.crate"
-          scripts/verify-public-package-privacy.sh "${coordination_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-coordination "${coordination_version}" "${coordination_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-coordination \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-coordination "${coordination_version}" "${coordination_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-pre-send:
     needs: [verify-dione, reconcile-evidence]
@@ -2590,22 +1813,7 @@ jobs:
           test "${pre_send_version}" = "${{ needs.verify-dione.outputs.pre-send-version }}"
           cargo package -p dione-pre-send --locked --no-verify
           pre_send_crate="target/package/dione-pre-send-${pre_send_version}.crate"
-          scripts/verify-public-package-privacy.sh "${pre_send_crate}"
-          scripts/verify-crates-io-owners.sh dione-pre-send \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-pre-send "${pre_send_version}" "${pre_send_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "pre-send ${pre_send_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-pre-send "${pre_send_version}" "${pre_send_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -2654,12 +1862,7 @@ jobs:
 
           cargo package -p dione-pre-send --locked
           pre_send_crate="target/package/dione-pre-send-${pre_send_version}.crate"
-          scripts/verify-public-package-privacy.sh "${pre_send_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-pre-send "${pre_send_version}" "${pre_send_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-pre-send \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-pre-send "${pre_send_version}" "${pre_send_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-teams-identities:
     needs: verify-dione
@@ -2687,22 +1890,7 @@ jobs:
           test "${teams_identities_version}" = "${{ needs.verify-dione.outputs.teams-identities-version }}"
           cargo package -p dione-teams-identities --locked --no-verify
           teams_identities_crate="target/package/dione-teams-identities-${teams_identities_version}.crate"
-          scripts/verify-public-package-privacy.sh "${teams_identities_crate}"
-          scripts/verify-crates-io-owners.sh dione-teams-identities \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-teams-identities "${teams_identities_version}" "${teams_identities_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "teams-identities ${teams_identities_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-teams-identities "${teams_identities_version}" "${teams_identities_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -2750,12 +1938,7 @@ jobs:
 
           cargo package -p dione-teams-identities --locked
           teams_identities_crate="target/package/dione-teams-identities-${teams_identities_version}.crate"
-          scripts/verify-public-package-privacy.sh "${teams_identities_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-teams-identities "${teams_identities_version}" "${teams_identities_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-teams-identities \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-teams-identities "${teams_identities_version}" "${teams_identities_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-discord-identities:
     needs: verify-dione
@@ -2783,22 +1966,7 @@ jobs:
           test "${discord_identities_version}" = "${{ needs.verify-dione.outputs.discord-identities-version }}"
           cargo package -p dione-discord-identities --locked --no-verify
           discord_identities_crate="target/package/dione-discord-identities-${discord_identities_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_identities_crate}"
-          scripts/verify-crates-io-owners.sh dione-discord-identities \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-discord-identities "${discord_identities_version}" "${discord_identities_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "discord-identities ${discord_identities_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-discord-identities "${discord_identities_version}" "${discord_identities_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -2846,12 +2014,7 @@ jobs:
 
           cargo package -p dione-discord-identities --locked
           discord_identities_crate="target/package/dione-discord-identities-${discord_identities_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_identities_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-discord-identities "${discord_identities_version}" "${discord_identities_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-discord-identities \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-discord-identities "${discord_identities_version}" "${discord_identities_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-pluralkit-identities:
     needs: verify-dione
@@ -2879,22 +2042,7 @@ jobs:
           test "${pluralkit_identities_version}" = "${{ needs.verify-dione.outputs.pluralkit-identities-version }}"
           cargo package -p dione-pluralkit-identities --locked --no-verify
           pluralkit_identities_crate="target/package/dione-pluralkit-identities-${pluralkit_identities_version}.crate"
-          scripts/verify-public-package-privacy.sh "${pluralkit_identities_crate}"
-          scripts/verify-crates-io-owners.sh dione-pluralkit-identities \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-pluralkit-identities "${pluralkit_identities_version}" "${pluralkit_identities_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "pluralkit-identities ${pluralkit_identities_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-pluralkit-identities "${pluralkit_identities_version}" "${pluralkit_identities_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -2942,12 +2090,7 @@ jobs:
 
           cargo package -p dione-pluralkit-identities --locked
           pluralkit_identities_crate="target/package/dione-pluralkit-identities-${pluralkit_identities_version}.crate"
-          scripts/verify-public-package-privacy.sh "${pluralkit_identities_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-pluralkit-identities "${pluralkit_identities_version}" "${pluralkit_identities_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-pluralkit-identities \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-pluralkit-identities "${pluralkit_identities_version}" "${pluralkit_identities_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-config:
     needs: [verify-dione, reconcile-attention, reconcile-bell-rings, reconcile-contradictionary, reconcile-coordination, reconcile-discord-identities, reconcile-gaie, reconcile-identity-display, reconcile-messages, reconcile-pluralkit-identities, reconcile-pre-send, reconcile-rate-limiter, reconcile-teams-identities, reconcile-vaelii]
@@ -2975,22 +2118,7 @@ jobs:
           test "${config_version}" = "${{ needs.verify-dione.outputs.config-version }}"
           cargo package -p dione-config --locked --no-verify
           config_crate="target/package/dione-config-${config_version}.crate"
-          scripts/verify-public-package-privacy.sh "${config_crate}"
-          scripts/verify-crates-io-owners.sh dione-config \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-config "${config_version}" "${config_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "config ${config_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-config "${config_version}" "${config_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -3051,12 +2179,7 @@ jobs:
 
           cargo package -p dione-config --locked
           config_crate="target/package/dione-config-${config_version}.crate"
-          scripts/verify-public-package-privacy.sh "${config_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-config "${config_version}" "${config_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-config \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-config "${config_version}" "${config_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-outbound-consent:
     needs: [verify-dione, reconcile-config, reconcile-evidence, reconcile-contradictionary, reconcile-messages]
@@ -3084,22 +2207,7 @@ jobs:
           test "${outbound_consent_version}" = "${{ needs.verify-dione.outputs.outbound-consent-version }}"
           cargo package -p dione-outbound-consent --locked --no-verify
           outbound_consent_crate="target/package/dione-outbound-consent-${outbound_consent_version}.crate"
-          scripts/verify-public-package-privacy.sh "${outbound_consent_crate}"
-          scripts/verify-crates-io-owners.sh dione-outbound-consent \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-outbound-consent "${outbound_consent_version}" "${outbound_consent_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "outbound-consent ${outbound_consent_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-outbound-consent "${outbound_consent_version}" "${outbound_consent_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -3151,12 +2259,7 @@ jobs:
 
           cargo package -p dione-outbound-consent --locked
           outbound_consent_crate="target/package/dione-outbound-consent-${outbound_consent_version}.crate"
-          scripts/verify-public-package-privacy.sh "${outbound_consent_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-outbound-consent "${outbound_consent_version}" "${outbound_consent_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-outbound-consent \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-outbound-consent "${outbound_consent_version}" "${outbound_consent_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-mcp-tools:
     needs: verify-dione
@@ -3184,22 +2287,7 @@ jobs:
           test "${mcp_tools_version}" = "${{ needs.verify-dione.outputs.mcp-tools-version }}"
           cargo package -p dione-mcp-tools --locked --no-verify
           mcp_tools_crate="target/package/dione-mcp-tools-${mcp_tools_version}.crate"
-          scripts/verify-public-package-privacy.sh "${mcp_tools_crate}"
-          scripts/verify-crates-io-owners.sh dione-mcp-tools \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-mcp-tools "${mcp_tools_version}" "${mcp_tools_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "mcp-tools ${mcp_tools_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-mcp-tools "${mcp_tools_version}" "${mcp_tools_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -3247,12 +2335,7 @@ jobs:
 
           cargo package -p dione-mcp-tools --locked
           mcp_tools_crate="target/package/dione-mcp-tools-${mcp_tools_version}.crate"
-          scripts/verify-public-package-privacy.sh "${mcp_tools_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-mcp-tools "${mcp_tools_version}" "${mcp_tools_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-mcp-tools \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-mcp-tools "${mcp_tools_version}" "${mcp_tools_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-provider-delivery:
     needs: [verify-dione, reconcile-messages, reconcile-teams-identities]
@@ -3280,22 +2363,7 @@ jobs:
           test "${provider_delivery_version}" = "${{ needs.verify-dione.outputs.provider-delivery-version }}"
           cargo package -p dione-provider-delivery --locked --no-verify
           provider_delivery_crate="target/package/dione-provider-delivery-${provider_delivery_version}.crate"
-          scripts/verify-public-package-privacy.sh "${provider_delivery_crate}"
-          scripts/verify-crates-io-owners.sh dione-provider-delivery \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-provider-delivery "${provider_delivery_version}" "${provider_delivery_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "provider-delivery ${provider_delivery_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-provider-delivery "${provider_delivery_version}" "${provider_delivery_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -3345,12 +2413,7 @@ jobs:
 
           cargo package -p dione-provider-delivery --locked
           provider_delivery_crate="target/package/dione-provider-delivery-${provider_delivery_version}.crate"
-          scripts/verify-public-package-privacy.sh "${provider_delivery_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-provider-delivery "${provider_delivery_version}" "${provider_delivery_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-provider-delivery \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-provider-delivery "${provider_delivery_version}" "${provider_delivery_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-teams:
     needs: [verify-dione, reconcile-messages, reconcile-teams-identities, reconcile-provider-delivery, reconcile-mcp-tools]
@@ -3378,22 +2441,7 @@ jobs:
           test "${teams_version}" = "${{ needs.verify-dione.outputs.teams-version }}"
           cargo package -p dione-teams --locked --no-verify
           teams_crate="target/package/dione-teams-${teams_version}.crate"
-          scripts/verify-public-package-privacy.sh "${teams_crate}"
-          scripts/verify-crates-io-owners.sh dione-teams \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-teams "${teams_version}" "${teams_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "teams ${teams_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-teams "${teams_version}" "${teams_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -3445,12 +2493,7 @@ jobs:
 
           cargo package -p dione-teams --locked
           teams_crate="target/package/dione-teams-${teams_version}.crate"
-          scripts/verify-public-package-privacy.sh "${teams_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-teams "${teams_version}" "${teams_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-teams \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-teams "${teams_version}" "${teams_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-omp:
     needs: [verify-dione, reconcile-durable, reconcile-harness, reconcile-messages, reconcile-provider-delivery, reconcile-teams-identities, reconcile-contracts, reconcile-presentation]
@@ -3478,22 +2521,7 @@ jobs:
           test "${omp_version}" = "${{ needs.verify-dione.outputs.omp-version }}"
           cargo package -p dione-omp --locked --no-verify
           omp_crate="target/package/dione-omp-${omp_version}.crate"
-          scripts/verify-public-package-privacy.sh "${omp_crate}"
-          scripts/verify-crates-io-owners.sh dione-omp \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-omp "${omp_version}" "${omp_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "omp ${omp_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-omp "${omp_version}" "${omp_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -3548,12 +2576,7 @@ jobs:
 
           cargo package -p dione-omp --locked
           omp_crate="target/package/dione-omp-${omp_version}.crate"
-          scripts/verify-public-package-privacy.sh "${omp_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-omp "${omp_version}" "${omp_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-omp \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-omp "${omp_version}" "${omp_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-codex:
     needs: [verify-dione, reconcile-attention, reconcile-config, reconcile-contracts, reconcile-discord-identities, reconcile-durable, reconcile-harness, reconcile-messages, reconcile-presentation, reconcile-provider-delivery]
@@ -3581,22 +2604,7 @@ jobs:
           test "${codex_version}" = "${{ needs.verify-dione.outputs.codex-version }}"
           cargo package -p dione-codex --locked --no-verify
           codex_crate="target/package/dione-codex-${codex_version}.crate"
-          scripts/verify-public-package-privacy.sh "${codex_crate}"
-          scripts/verify-crates-io-owners.sh dione-codex \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-codex "${codex_version}" "${codex_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "codex ${codex_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-codex "${codex_version}" "${codex_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -3653,12 +2661,7 @@ jobs:
 
           cargo package -p dione-codex --locked
           codex_crate="target/package/dione-codex-${codex_version}.crate"
-          scripts/verify-public-package-privacy.sh "${codex_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-codex "${codex_version}" "${codex_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-codex \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-codex "${codex_version}" "${codex_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-claude:
     needs: [verify-dione, reconcile-contracts, reconcile-harness, reconcile-messages, reconcile-presentation]
@@ -3686,22 +2689,7 @@ jobs:
           test "${claude_version}" = "${{ needs.verify-dione.outputs.claude-version }}"
           cargo package -p dione-claude --locked --no-verify
           claude_crate="target/package/dione-claude-${claude_version}.crate"
-          scripts/verify-public-package-privacy.sh "${claude_crate}"
-          scripts/verify-crates-io-owners.sh dione-claude \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-claude "${claude_version}" "${claude_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "claude ${claude_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-claude "${claude_version}" "${claude_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -3753,12 +2741,7 @@ jobs:
 
           cargo package -p dione-claude --locked
           claude_crate="target/package/dione-claude-${claude_version}.crate"
-          scripts/verify-public-package-privacy.sh "${claude_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-claude "${claude_version}" "${claude_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-claude \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-claude "${claude_version}" "${claude_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-discord-presence:
     needs: verify-dione
@@ -3786,22 +2769,7 @@ jobs:
           test "${discord_presence_version}" = "${{ needs.verify-dione.outputs.discord-presence-version }}"
           cargo package -p dione-discord-presence --locked --no-verify
           discord_presence_crate="target/package/dione-discord-presence-${discord_presence_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_presence_crate}"
-          scripts/verify-crates-io-owners.sh dione-discord-presence \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-discord-presence "${discord_presence_version}" "${discord_presence_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "discord-presence ${discord_presence_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-discord-presence "${discord_presence_version}" "${discord_presence_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -3849,12 +2817,7 @@ jobs:
 
           cargo package -p dione-discord-presence --locked
           discord_presence_crate="target/package/dione-discord-presence-${discord_presence_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_presence_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-discord-presence "${discord_presence_version}" "${discord_presence_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-discord-presence \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-discord-presence "${discord_presence_version}" "${discord_presence_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-discord-state:
     needs: verify-dione
@@ -3882,22 +2845,7 @@ jobs:
           test "${discord_state_version}" = "${{ needs.verify-dione.outputs.discord-state-version }}"
           cargo package -p dione-discord-state --locked --no-verify
           discord_state_crate="target/package/dione-discord-state-${discord_state_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_state_crate}"
-          scripts/verify-crates-io-owners.sh dione-discord-state \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-discord-state "${discord_state_version}" "${discord_state_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "discord-state ${discord_state_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-discord-state "${discord_state_version}" "${discord_state_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -3945,12 +2893,7 @@ jobs:
 
           cargo package -p dione-discord-state --locked
           discord_state_crate="target/package/dione-discord-state-${discord_state_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_state_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-discord-state "${discord_state_version}" "${discord_state_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-discord-state \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-discord-state "${discord_state_version}" "${discord_state_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-discord-events:
     needs: [verify-dione, reconcile-attention, reconcile-bell-rings, reconcile-messages, reconcile-coordination, reconcile-evidence, reconcile-contracts]
@@ -3978,22 +2921,7 @@ jobs:
           test "${discord_events_version}" = "${{ needs.verify-dione.outputs.discord-events-version }}"
           cargo package -p dione-discord-events --locked --no-verify
           discord_events_crate="target/package/dione-discord-events-${discord_events_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_events_crate}"
-          scripts/verify-crates-io-owners.sh dione-discord-events \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-discord-events "${discord_events_version}" "${discord_events_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "discord-events ${discord_events_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-discord-events "${discord_events_version}" "${discord_events_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -4047,12 +2975,7 @@ jobs:
 
           cargo package -p dione-discord-events --locked
           discord_events_crate="target/package/dione-discord-events-${discord_events_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_events_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-discord-events "${discord_events_version}" "${discord_events_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-discord-events \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-discord-events "${discord_events_version}" "${discord_events_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-tracing-channel:
     needs: [verify-dione, reconcile-discord-events]
@@ -4080,22 +3003,7 @@ jobs:
           test "${tracing_channel_version}" = "${{ needs.verify-dione.outputs.tracing-channel-version }}"
           cargo package -p dione-tracing-channel --locked --no-verify
           tracing_channel_crate="target/package/dione-tracing-channel-${tracing_channel_version}.crate"
-          scripts/verify-public-package-privacy.sh "${tracing_channel_crate}"
-          scripts/verify-crates-io-owners.sh dione-tracing-channel \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-tracing-channel "${tracing_channel_version}" "${tracing_channel_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "tracing-channel ${tracing_channel_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-tracing-channel "${tracing_channel_version}" "${tracing_channel_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -4144,12 +3052,7 @@ jobs:
 
           cargo package -p dione-tracing-channel --locked
           tracing_channel_crate="target/package/dione-tracing-channel-${tracing_channel_version}.crate"
-          scripts/verify-public-package-privacy.sh "${tracing_channel_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-tracing-channel "${tracing_channel_version}" "${tracing_channel_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-tracing-channel \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-tracing-channel "${tracing_channel_version}" "${tracing_channel_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-config-watcher:
     needs: [verify-dione, reconcile-config, reconcile-discord-events]
@@ -4177,22 +3080,7 @@ jobs:
           test "${config_watcher_version}" = "${{ needs.verify-dione.outputs.config-watcher-version }}"
           cargo package -p dione-config-watcher --locked --no-verify
           config_watcher_crate="target/package/dione-config-watcher-${config_watcher_version}.crate"
-          scripts/verify-public-package-privacy.sh "${config_watcher_crate}"
-          scripts/verify-crates-io-owners.sh dione-config-watcher \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-config-watcher "${config_watcher_version}" "${config_watcher_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "config-watcher ${config_watcher_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-config-watcher "${config_watcher_version}" "${config_watcher_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -4242,12 +3130,7 @@ jobs:
 
           cargo package -p dione-config-watcher --locked
           config_watcher_crate="target/package/dione-config-watcher-${config_watcher_version}.crate"
-          scripts/verify-public-package-privacy.sh "${config_watcher_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-config-watcher "${config_watcher_version}" "${config_watcher_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-config-watcher \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-config-watcher "${config_watcher_version}" "${config_watcher_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-drop-ledger:
     needs: verify-dione
@@ -4275,22 +3158,7 @@ jobs:
           test "${drop_ledger_version}" = "${{ needs.verify-dione.outputs.drop-ledger-version }}"
           cargo package -p dione-drop-ledger --locked --no-verify
           drop_ledger_crate="target/package/dione-drop-ledger-${drop_ledger_version}.crate"
-          scripts/verify-public-package-privacy.sh "${drop_ledger_crate}"
-          scripts/verify-crates-io-owners.sh dione-drop-ledger \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-drop-ledger "${drop_ledger_version}" "${drop_ledger_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "drop-ledger ${drop_ledger_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-drop-ledger "${drop_ledger_version}" "${drop_ledger_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -4338,12 +3206,7 @@ jobs:
 
           cargo package -p dione-drop-ledger --locked
           drop_ledger_crate="target/package/dione-drop-ledger-${drop_ledger_version}.crate"
-          scripts/verify-public-package-privacy.sh "${drop_ledger_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-drop-ledger "${drop_ledger_version}" "${drop_ledger_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-drop-ledger \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-drop-ledger "${drop_ledger_version}" "${drop_ledger_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-permissions:
     needs: [verify-dione, reconcile-config, reconcile-discord-state, reconcile-discord-events]
@@ -4371,22 +3234,7 @@ jobs:
           test "${permissions_version}" = "${{ needs.verify-dione.outputs.permissions-version }}"
           cargo package -p dione-permissions --locked --no-verify
           permissions_crate="target/package/dione-permissions-${permissions_version}.crate"
-          scripts/verify-public-package-privacy.sh "${permissions_crate}"
-          scripts/verify-crates-io-owners.sh dione-permissions \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-permissions "${permissions_version}" "${permissions_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "permissions ${permissions_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-permissions "${permissions_version}" "${permissions_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -4437,12 +3285,7 @@ jobs:
 
           cargo package -p dione-permissions --locked
           permissions_crate="target/package/dione-permissions-${permissions_version}.crate"
-          scripts/verify-public-package-privacy.sh "${permissions_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-permissions "${permissions_version}" "${permissions_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-permissions \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-permissions "${permissions_version}" "${permissions_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-discord-bells:
     needs: [verify-dione, reconcile-bell-rings, reconcile-config, reconcile-discord-events]
@@ -4470,22 +3313,7 @@ jobs:
           test "${discord_bells_version}" = "${{ needs.verify-dione.outputs.discord-bells-version }}"
           cargo package -p dione-discord-bells --locked --no-verify
           discord_bells_crate="target/package/dione-discord-bells-${discord_bells_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_bells_crate}"
-          scripts/verify-crates-io-owners.sh dione-discord-bells \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-discord-bells "${discord_bells_version}" "${discord_bells_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "discord-bells ${discord_bells_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-discord-bells "${discord_bells_version}" "${discord_bells_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -4536,12 +3364,7 @@ jobs:
 
           cargo package -p dione-discord-bells --locked
           discord_bells_crate="target/package/dione-discord-bells-${discord_bells_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_bells_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-discord-bells "${discord_bells_version}" "${discord_bells_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-discord-bells \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-discord-bells "${discord_bells_version}" "${discord_bells_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-discord-gate:
     needs: [verify-dione, reconcile-mutes, reconcile-config, reconcile-discord-events]
@@ -4569,22 +3392,7 @@ jobs:
           test "${discord_gate_version}" = "${{ needs.verify-dione.outputs.discord-gate-version }}"
           cargo package -p dione-discord-gate --locked --no-verify
           discord_gate_crate="target/package/dione-discord-gate-${discord_gate_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_gate_crate}"
-          scripts/verify-crates-io-owners.sh dione-discord-gate \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-discord-gate "${discord_gate_version}" "${discord_gate_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "discord-gate ${discord_gate_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-discord-gate "${discord_gate_version}" "${discord_gate_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -4635,12 +3443,7 @@ jobs:
 
           cargo package -p dione-discord-gate --locked
           discord_gate_crate="target/package/dione-discord-gate-${discord_gate_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_gate_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-discord-gate "${discord_gate_version}" "${discord_gate_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-discord-gate \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-discord-gate "${discord_gate_version}" "${discord_gate_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-oneshot:
     needs: [verify-dione, reconcile-config, reconcile-discord-gate, reconcile-outbound-consent, reconcile-pre-send]
@@ -4668,22 +3471,7 @@ jobs:
           test "${oneshot_version}" = "${{ needs.verify-dione.outputs.oneshot-version }}"
           cargo package -p dione-oneshot --locked --no-verify
           oneshot_crate="target/package/dione-oneshot-${oneshot_version}.crate"
-          scripts/verify-public-package-privacy.sh "${oneshot_crate}"
-          scripts/verify-crates-io-owners.sh dione-oneshot \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-oneshot "${oneshot_version}" "${oneshot_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "oneshot ${oneshot_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-oneshot "${oneshot_version}" "${oneshot_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -4735,12 +3523,7 @@ jobs:
 
           cargo package -p dione-oneshot --locked
           oneshot_crate="target/package/dione-oneshot-${oneshot_version}.crate"
-          scripts/verify-public-package-privacy.sh "${oneshot_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-oneshot "${oneshot_version}" "${oneshot_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-oneshot \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-oneshot "${oneshot_version}" "${oneshot_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-harness-runtime:
     needs: [verify-dione, reconcile-harness, reconcile-config, reconcile-attention, reconcile-codex, reconcile-omp, reconcile-claude]
@@ -4768,22 +3551,7 @@ jobs:
           test "${harness_runtime_version}" = "${{ needs.verify-dione.outputs.harness-runtime-version }}"
           cargo package -p dione-harness-runtime --locked --no-verify
           harness_runtime_crate="target/package/dione-harness-runtime-${harness_runtime_version}.crate"
-          scripts/verify-public-package-privacy.sh "${harness_runtime_crate}"
-          scripts/verify-crates-io-owners.sh dione-harness-runtime \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-harness-runtime "${harness_runtime_version}" "${harness_runtime_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "harness-runtime ${harness_runtime_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-harness-runtime "${harness_runtime_version}" "${harness_runtime_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -4837,12 +3605,7 @@ jobs:
 
           cargo package -p dione-harness-runtime --locked
           harness_runtime_crate="target/package/dione-harness-runtime-${harness_runtime_version}.crate"
-          scripts/verify-public-package-privacy.sh "${harness_runtime_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-harness-runtime "${harness_runtime_version}" "${harness_runtime_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-harness-runtime \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-harness-runtime "${harness_runtime_version}" "${harness_runtime_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-discord-scheduling:
     needs: [verify-dione, reconcile-contracts, reconcile-delivery-scheduler, reconcile-discord-events]
@@ -4870,22 +3633,7 @@ jobs:
           test "${discord_scheduling_version}" = "${{ needs.verify-dione.outputs.discord-scheduling-version }}"
           cargo package -p dione-discord-scheduling --locked --no-verify
           discord_scheduling_crate="target/package/dione-discord-scheduling-${discord_scheduling_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_scheduling_crate}"
-          scripts/verify-crates-io-owners.sh dione-discord-scheduling \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione-discord-scheduling "${discord_scheduling_version}" "${discord_scheduling_crate}" --ignore-vcs-info)"
-          case "$package_state" in
-            published)
-              echo "discord-scheduling ${discord_scheduling_version} was already published with matching contents"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione-discord-scheduling "${discord_scheduling_version}" "${discord_scheduling_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
@@ -4936,12 +3684,7 @@ jobs:
 
           cargo package -p dione-discord-scheduling --locked
           discord_scheduling_crate="target/package/dione-discord-scheduling-${discord_scheduling_version}.crate"
-          scripts/verify-public-package-privacy.sh "${discord_scheduling_crate}"
-          test "$(scripts/crates-io-package-state.sh dione-discord-scheduling "${discord_scheduling_version}" "${discord_scheduling_crate}" --ignore-vcs-info)" = published
-          scripts/verify-crates-io-owners.sh dione-discord-scheduling \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione-discord-scheduling "${discord_scheduling_version}" "${discord_scheduling_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-crate:
     needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime, reconcile-discord-scheduling]
@@ -4969,22 +3712,7 @@ jobs:
           test "${dione_version}" = "${{ needs.verify-dione.outputs.dione-version }}"
           cargo package -p dione --locked --no-verify
           dione_crate="target/package/dione-${dione_version}.crate"
-          scripts/verify-public-package-privacy.sh "${dione_crate}"
-          scripts/verify-crates-io-owners.sh dione \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
-
-          package_state="$(scripts/crates-io-package-state.sh dione "${dione_version}" "${dione_crate}")"
-          case "$package_state" in
-            published)
-              echo "Dione ${dione_version} was already published with matching bytes"
-              echo "upload=false" >> "${GITHUB_OUTPUT}"
-              ;;
-            missing)
-              echo "upload=true" >> "${GITHUB_OUTPUT}"
-              ;;
-          esac
+          sh scripts/package-preflight.sh dione "${dione_version}" "${dione_crate}" exact upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
       - name: Authenticate with crates.io
         if: steps.preflight.outputs.upload == 'true'
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
@@ -5075,9 +3803,4 @@ jobs:
 
           cargo package -p dione --locked
           dione_crate="target/package/dione-${dione_version}.crate"
-          scripts/verify-public-package-privacy.sh "${dione_crate}"
-          test "$(scripts/crates-io-package-state.sh dione "${dione_version}" "${dione_crate}")" = published
-          scripts/verify-crates-io-owners.sh dione \
-            butterflysky \
-            github:butterflyskies:lacuna-blinkers \
-            github:butterflyskies:superadmins
+          sh scripts/package-preflight.sh dione "${dione_version}" "${dione_crate}" exact reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins

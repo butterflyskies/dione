@@ -5,13 +5,17 @@ import os
 import re
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import tarfile
 import tempfile
 import unittest
 
+from workflow_test_support import read_jobs, run_blocks
+
 
 SOURCE = Path(__file__).resolve().parents[2]
+PACKAGES = ('dione', 'dione-rendering', 'dione-durable', 'dione-contracts', 'dione-rook', 'dione-attention', 'dione-evidence', 'dione-messages', 'dione-rate-limiter', 'dione-vaelii', 'dione-gaie', 'dione-identity-display', 'dione-harness', 'dione-presentation', 'dione-contradictionary', 'dione-bell-rings', 'dione-delivery-scheduler', 'dione-access-requests', 'dione-mutes', 'dione-coordination', 'dione-pre-send', 'dione-teams-identities', 'dione-discord-identities', 'dione-pluralkit-identities', 'dione-config', 'dione-outbound-consent', 'dione-mcp-tools', 'dione-provider-delivery', 'dione-teams', 'dione-omp', 'dione-codex', 'dione-claude', 'dione-discord-presence', 'dione-discord-state', 'dione-discord-events', 'dione-tracing-channel', 'dione-config-watcher', 'dione-drop-ledger', 'dione-permissions', 'dione-discord-bells', 'dione-discord-gate', 'dione-oneshot', 'dione-harness-runtime', 'dione-discord-scheduling')
 
 
 @unittest.skipUnless(shutil.which("sh"), "package state requires a POSIX shell")
@@ -83,16 +87,18 @@ class PackageStateTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("bash"), "release preflight requires Bash")
 class ReleasePreflightTests(unittest.TestCase):
+    def test_workflow_reader_rejects_duplicate_job_keys(self):
+        with self.assertRaisesRegex(ValueError, "duplicate workflow job: publish-one"):
+            read_jobs("jobs:\n  publish-one:\n    needs: verify\n  publish-one:\n    needs: other\n")
+
+    def test_workflow_reader_preserves_jobs_when_reordered(self):
+        first = "  publish-one:\n    needs: verify\n"
+        second = "  publish-two:\n    needs: reconcile-one\n"
+        self.assertEqual(read_jobs("jobs:\n" + first + second), read_jobs("jobs:\n" + second + first))
+
     def test_scheduler_reconciliation_gates_root_publication(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         self.assertIn("needs: [verify-dione, reconcile-contracts]", jobs["publish-delivery-scheduler"])
         self.assertIn("needs.reconcile-contracts.result == 'success'", jobs["reconcile-delivery-scheduler"])
         for job in ("publish-crate", "reconcile-dione"):
@@ -101,14 +107,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_access_requests_reconciliation_gates_root_publication(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         self.assertIn("needs: verify-dione", jobs["publish-access-requests"])
         self.assertIn("needs: [verify-dione, publish-access-requests]", jobs["reconcile-access-requests"])
         for job in ("publish-crate", "reconcile-dione"):
@@ -117,14 +116,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_mutes_reconciliation_gates_root_publication(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         self.assertIn("needs: verify-dione", jobs["publish-mutes"])
         self.assertIn("needs: [verify-dione, publish-mutes]", jobs["reconcile-mutes"])
         for job in ("publish-crate", "reconcile-dione"):
@@ -133,14 +125,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_coordination_reconciliation_gates_root_publication(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         self.assertIn("needs: verify-dione", jobs["publish-coordination"])
         self.assertIn("needs: [verify-dione, publish-coordination]", jobs["reconcile-coordination"])
         for job in ("publish-crate", "reconcile-dione"):
@@ -149,14 +134,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_teams_identities_reconciliation_gates_root_publication(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         self.assertIn("needs: verify-dione", jobs["publish-teams-identities"])
         self.assertIn("needs: [verify-dione, publish-teams-identities]", jobs["reconcile-teams-identities"])
         for job in ("publish-crate", "reconcile-dione"):
@@ -165,14 +143,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_discord_identities_reconciliation_gates_root_publication(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         self.assertIn("needs: verify-dione", jobs["publish-discord-identities"])
         self.assertIn("needs: [verify-dione, publish-discord-identities]", jobs["reconcile-discord-identities"])
         for job in ("publish-crate", "reconcile-dione"):
@@ -181,14 +152,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_pluralkit_identities_reconciliation_gates_root_publication(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         self.assertIn("needs: verify-dione", jobs["publish-pluralkit-identities"])
         self.assertIn("needs: [verify-dione, publish-pluralkit-identities]", jobs["reconcile-pluralkit-identities"])
         for job in ("publish-crate", "reconcile-dione"):
@@ -197,15 +161,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_config_reconciliation_requires_every_direct_capability(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                self.assertNotIn(current, jobs)
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         capabilities = ('attention', 'bell-rings', 'contradictionary', 'coordination', 'discord-identities', 'gaie', 'identity-display', 'messages', 'pluralkit-identities', 'pre-send', 'rate-limiter', 'teams-identities', 'vaelii')
         expected = {"verify-dione"} | {"reconcile-" + name for name in capabilities}
         for name, extra in (("publish-config", set()), ("reconcile-config", {"publish-config"})):
@@ -223,7 +179,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_mcp_tools_leaf_and_root_reconciliation(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)", workflow, re.M | re.S))
+        jobs = read_jobs(workflow)
         self.assertEqual(jobs["publish-mcp-tools"].splitlines()[0].strip(), "needs: verify-dione")
         self.assertEqual(jobs["reconcile-mcp-tools"].splitlines()[0].strip(), "needs: [verify-dione, publish-mcp-tools]")
         self.assertIn("always()", jobs["reconcile-mcp-tools"])
@@ -235,7 +191,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_discord_presence_leaf_and_root_reconciliation(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)", workflow, re.M | re.S))
+        jobs = read_jobs(workflow)
         self.assertEqual(jobs["publish-discord-presence"].splitlines()[0].strip(), "needs: verify-dione")
         self.assertEqual(jobs["reconcile-discord-presence"].splitlines()[0].strip(), "needs: [verify-dione, publish-discord-presence]")
         self.assertIn("always()", jobs["reconcile-discord-presence"])
@@ -247,7 +203,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_discord_state_leaf_and_root_reconciliation(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)", workflow, re.M | re.S))
+        jobs = read_jobs(workflow)
         self.assertEqual(jobs["publish-discord-state"].splitlines()[0].strip(), "needs: verify-dione")
         self.assertEqual(jobs["reconcile-discord-state"].splitlines()[0].strip(), "needs: [verify-dione, publish-discord-state]")
         self.assertIn("always()", jobs["reconcile-discord-state"])
@@ -259,15 +215,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_discord_events_reconciliation_requires_every_direct_capability(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                self.assertNotIn(current, jobs)
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         capabilities = ('attention', 'bell-rings', 'messages', 'coordination', 'evidence', 'contracts')
         expected = {"verify-dione"} | {"reconcile-" + name for name in capabilities}
         for name, extra in (("publish-discord-events", set()), ("reconcile-discord-events", {"publish-discord-events"})):
@@ -285,15 +233,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_tracing_channel_reconciliation_requires_every_direct_capability(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                self.assertNotIn(current, jobs)
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         capabilities = ('discord-events',)
         expected = {"verify-dione"} | {"reconcile-" + name for name in capabilities}
         for name, extra in (("publish-tracing-channel", set()), ("reconcile-tracing-channel", {"publish-tracing-channel"})):
@@ -311,15 +251,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_config_watcher_reconciliation_requires_every_direct_capability(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                self.assertNotIn(current, jobs)
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         capabilities = ('config', 'discord-events')
         expected = {"verify-dione"} | {"reconcile-" + name for name in capabilities}
         for name, extra in (("publish-config-watcher", set()), ("reconcile-config-watcher", {"publish-config-watcher"})):
@@ -337,15 +269,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_permissions_reconciliation_requires_every_direct_capability(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                self.assertNotIn(current, jobs)
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         capabilities = ('config', 'discord-state', 'discord-events')
         expected = {"verify-dione"} | {"reconcile-" + name for name in capabilities}
         for name, extra in (("publish-permissions", set()), ("reconcile-permissions", {"publish-permissions"})):
@@ -363,15 +287,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_discord_bells_reconciliation_requires_every_direct_capability(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                self.assertNotIn(current, jobs)
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         self.assertIn("    permissions:\n      contents: read\n      id-token: write\n", jobs["publish-discord-bells"])
         self.assertIn("    permissions:\n      contents: read\n", jobs["reconcile-discord-bells"])
         for name in ("publish-discord-bells", "reconcile-discord-bells"):
@@ -393,15 +309,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_discord_gate_reconciliation_requires_every_direct_capability(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                self.assertNotIn(current, jobs)
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         self.assertIn("    permissions:\n      contents: read\n      id-token: write\n", jobs["publish-discord-gate"])
         self.assertIn("    permissions:\n      contents: read\n", jobs["reconcile-discord-gate"])
         for name in ("publish-discord-gate", "reconcile-discord-gate"):
@@ -423,15 +331,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_oneshot_reconciliation_requires_every_direct_capability(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                self.assertNotIn(current, jobs)
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         self.assertIn("    permissions:\n      contents: read\n      id-token: write\n", jobs["publish-oneshot"])
         self.assertIn("    permissions:\n      contents: read\n", jobs["reconcile-oneshot"])
         for name in ("publish-oneshot", "reconcile-oneshot"):
@@ -453,15 +353,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_harness_runtime_reconciliation_requires_every_direct_capability(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                self.assertNotIn(current, jobs)
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         self.assertIn("    permissions:\n      contents: read\n      id-token: write\n", jobs["publish-harness-runtime"])
         self.assertIn("    permissions:\n      contents: read\n", jobs["reconcile-harness-runtime"])
         for name in ("publish-harness-runtime", "reconcile-harness-runtime"):
@@ -483,15 +375,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_discord_scheduling_reconciliation_requires_every_direct_capability(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                self.assertNotIn(current, jobs)
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         self.assertIn("    permissions:\n      contents: read\n      id-token: write\n", jobs["publish-discord-scheduling"])
         self.assertIn("    permissions:\n      contents: read\n", jobs["reconcile-discord-scheduling"])
         for name in ("publish-discord-scheduling", "reconcile-discord-scheduling"):
@@ -513,15 +397,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_drop_ledger_reconciliation_requires_every_direct_capability(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                self.assertNotIn(current, jobs)
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         capabilities = ()
         expected = {"verify-dione"} | {"reconcile-" + name for name in capabilities}
         for name, extra in (("publish-drop-ledger", set()), ("reconcile-drop-ledger", {"publish-drop-ledger"})):
@@ -539,15 +415,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_provider_delivery_reconciliation_requires_every_direct_capability(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                self.assertNotIn(current, jobs)
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         capabilities = ('messages', 'teams-identities')
         expected = {"verify-dione"} | {"reconcile-" + name for name in capabilities}
         for name, extra in (("publish-provider-delivery", set()), ("reconcile-provider-delivery", {"publish-provider-delivery"})):
@@ -565,15 +433,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_teams_reconciliation_requires_every_direct_capability(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                self.assertNotIn(current, jobs)
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         capabilities = ('messages', 'teams-identities', 'provider-delivery', 'mcp-tools')
         expected = {"verify-dione"} | {"reconcile-" + name for name in capabilities}
         for name, extra in (("publish-teams", set()), ("reconcile-teams", {"publish-teams"})):
@@ -592,15 +452,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_omp_reconciliation_requires_every_direct_capability(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                self.assertNotIn(current, jobs)
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         capabilities = ('durable', 'harness', 'messages', 'provider-delivery', 'teams-identities', 'contracts', 'presentation')
         expected = {"verify-dione"} | {"reconcile-" + name for name in capabilities}
         for name, extra in (("publish-omp", set()), ("reconcile-omp", {"publish-omp"})):
@@ -619,15 +471,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_claude_reconciliation_requires_every_direct_capability(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                self.assertNotIn(current, jobs)
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         capabilities = ('contracts', 'harness', 'messages', 'presentation')
         expected = {"verify-dione"} | {"reconcile-" + name for name in capabilities}
         for name, extra in (("publish-claude", set()), ("reconcile-claude", {"publish-claude"})):
@@ -646,15 +490,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_outbound_consent_reconciliation_requires_every_direct_capability(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                self.assertNotIn(current, jobs)
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         capabilities = ('config', 'evidence', 'contradictionary', 'messages')
         expected = {"verify-dione"} | {"reconcile-" + name for name in capabilities}
         for name, extra in (("publish-outbound-consent", set()), ("reconcile-outbound-consent", {"publish-outbound-consent"})):
@@ -672,14 +508,7 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_pre_send_reconciliation_gates_root_publication(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
-        jobs = {}
-        current = None
-        for line in workflow.splitlines():
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
-                current = line.strip().removesuffix(":")
-                jobs[current] = ""
-            elif current:
-                jobs[current] += line + "\n"
+        jobs = read_jobs(workflow)
         self.assertIn("needs: [verify-dione, reconcile-evidence]", jobs["publish-pre-send"])
         self.assertIn("needs: [verify-dione, reconcile-evidence, publish-pre-send]", jobs["reconcile-pre-send"])
         for job in ("publish-crate", "reconcile-dione"):
@@ -687,22 +516,23 @@ class ReleasePreflightTests(unittest.TestCase):
         self.assertIn("needs.reconcile-pre-send.result == 'success'", jobs["reconcile-dione"])
         self.assertIn("needs.reconcile-evidence.result == 'success'", jobs["reconcile-pre-send"])
 
-    def test_package_state_failure_stops_each_preflight(self):
-        lines = (SOURCE / ".github/workflows/publish-crate.yml").read_text().splitlines()
-        blocks = []
-        for index, line in enumerate(lines):
-            if line.strip() != "run: |":
-                continue
-            indent = len(line) - len(line.lstrip()) + 2
-            block = []
-            for following in lines[index + 1:]:
-                if following.strip() and len(following) - len(following.lstrip()) < indent:
-                    break
-                block.append(following[indent:])
-            script = "\n".join(block)
-            if "case " in script and "scripts/crates-io-package-state.sh" in script:
-                blocks.append(script)
-        self.assertEqual(len(blocks), 45)
+    def assert_preflight_failures(self, workflow, success_state=None):
+        jobs = read_jobs(workflow)
+        packages = PACKAGES
+        expected = {"verify-dione": packages, "publish-crate": ("dione",)}
+        expected.update({"publish-" + package.removeprefix("dione-"): (package,)
+                         for package in packages if package != "dione"})
+        selected = {}
+        for name, job in jobs.items():
+            scripts = [block for block in run_blocks(job)
+                       if ("scripts/package-preflight.sh" in block and " reconcile - - " not in block)
+                       or ("case " in block and "scripts/crates-io-package-state.sh" in block)]
+            if scripts:
+                self.assertEqual(len(scripts), 1, name)
+                selected[name] = scripts[0]
+        self.assertEqual(set(selected), set(expected))
+        versions = {package.removeprefix("dione-") + "-version" for package in packages}
+        versions.add("dione-version")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "scripts").mkdir()
@@ -712,66 +542,85 @@ class ReleasePreflightTests(unittest.TestCase):
                 "scripts/verify-public-package-privacy.sh": "exit 0",
                 "scripts/verify-crates-io-owners.sh": "exit 0",
                 "scripts/crates-io-package-state.sh":
-                    'if [ "$1" = "$FAIL_PACKAGE" ]; then exit 23; fi; echo missing',
+                    'if [ "$1" = "$FAIL_PACKAGE" ]; then exit 23; fi; echo "${TEST_PACKAGE_STATE:-missing}"',
             }
-            for name, body in stubs.items():
+            for name, contents in stubs.items():
                 path = root / name
-                path.write_text("#!/bin/sh\n" + body + "\n")
+                path.write_text("#!/bin/sh\n" + contents + "\n")
                 path.chmod(0o755)
-            for index, block in enumerate(blocks):
-                packages = (("dione", "dione-rendering", "dione-durable", "dione-contracts", "dione-rook", "dione-attention", "dione-evidence", "dione-messages", "dione-rate-limiter", "dione-vaelii", "dione-gaie", "dione-identity-display", "dione-harness", "dione-presentation", "dione-contradictionary", "dione-bell-rings", "dione-delivery-scheduler", "dione-access-requests", "dione-mutes", "dione-coordination", "dione-pre-send", "dione-teams-identities", "dione-discord-identities", "dione-pluralkit-identities", "dione-config", "dione-outbound-consent", "dione-mcp-tools", "dione-provider-delivery", "dione-teams", "dione-omp", "dione-codex", "dione-claude", "dione-discord-presence", "dione-discord-state", "dione-discord-events", "dione-tracing-channel", "dione-config-watcher", "dione-drop-ledger", "dione-permissions", "dione-discord-bells", "dione-discord-gate", "dione-oneshot", "dione-harness-runtime", "dione-discord-scheduling") if index == 0
-                            else ({1: "dione-rendering", 2: "dione-durable", 3: "dione-contracts", 4: "dione-rook", 5: "dione-attention", 6: "dione-evidence", 7: "dione-messages", 8: "dione-rate-limiter", 9: "dione-vaelii", 10: "dione-gaie", 11: "dione-identity-display", 12: "dione-harness", 13: "dione-presentation", 14: "dione-contradictionary", 15: "dione-bell-rings", 16: "dione-delivery-scheduler", 17: "dione-access-requests", 18: "dione-mutes", 19: "dione-coordination", 20: "dione-pre-send", 21: "dione-teams-identities", 22: "dione-discord-identities", 23: "dione-pluralkit-identities", 24: "dione-config", 25: "dione-outbound-consent", 26: "dione-mcp-tools", 27: "dione-provider-delivery", 28: "dione-teams", 29: "dione-omp", 30: "dione-codex", 31: "dione-claude", 32: "dione-discord-presence", 33: "dione-discord-state", 34: "dione-discord-events", 35: "dione-tracing-channel", 36: "dione-config-watcher", 37: "dione-drop-ledger", 38: "dione-permissions", 39: "dione-discord-bells", 40: "dione-discord-gate", 41: "dione-oneshot", 42: "dione-harness-runtime", 43: "dione-discord-scheduling", 44: "dione"}[index],))
-                for package in packages:
-                    with self.subTest(block=index, package=package):
-                        script = block.replace("${{ needs.verify-dione.outputs.rendering-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.dione-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.durable-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.contracts-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.rook-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.attention-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.evidence-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.messages-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.rate-limiter-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.vaelii-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.gaie-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.identity-display-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.harness-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.presentation-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.contradictionary-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.bell-rings-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.delivery-scheduler-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.access-requests-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.mutes-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.pre-send-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.outbound-consent-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.config-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.coordination-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.teams-identities-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.discord-identities-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.pluralkit-identities-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.mcp-tools-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.provider-delivery-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.teams-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.omp-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.codex-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.claude-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.discord-presence-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.discord-state-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.discord-events-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.tracing-channel-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.config-watcher-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.drop-ledger-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.permissions-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.discord-bells-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.discord-gate-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.oneshot-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.harness-runtime-version }}", "1.0.0")
-                        script = script.replace("${{ needs.verify-dione.outputs.discord-scheduling-version }}", "1.0.0")
+            helper = SOURCE / "scripts/package-preflight.sh"
+            if helper.exists():
+                shutil.copyfile(helper, root / "scripts/package-preflight.sh")
+            for job, packages in expected.items():
+                def version(match):
+                    self.assertIn(match.group(1), versions)
+                    return "1.0.0"
+                script = re.sub(r"\$\{\{ needs\.verify-dione\.outputs\.([\w-]+) \}\}", version, selected[job])
+                self.assertNotIn("${{", script)
+                targets = packages if success_state is None else ("",)
+                for package in targets:
+                    with self.subTest(job=job, package=package, state=success_state):
+                        output = root / "output"
+                        output.unlink(missing_ok=True)
                         environment = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
-                                           FAIL_PACKAGE=package, GITHUB_OUTPUT=str(root / "output"))
+                                           FAIL_PACKAGE=package, TEST_PACKAGE_STATE=success_state or "missing",
+                                           GITHUB_OUTPUT=str(output))
                         result = subprocess.run(["bash", "-c", script], cwd=root,
                                                 env=environment, capture_output=True, text=True)
-                        self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
+                        if success_state is None:
+                            self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
+                        else:
+                            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                            flag = "true" if success_state == "missing" else "false"
+                            if job == "verify-dione":
+                                expected_output = []
+                                for item in PACKAGES:
+                                    key = item.removeprefix("dione-")
+                                    expected_output += ["publish-" + key + "=" + flag, key + "-version=1.0.0"]
+                            else:
+                                expected_output = ["upload=" + flag]
+                            self.assertEqual(sorted(output.read_text().splitlines()), sorted(expected_output))
+
+    def test_every_preflight_caller_preserves_comparison_and_owner_policy(self):
+        jobs = read_jobs((SOURCE / ".github/workflows/publish-crate.yml").read_text())
+        expected = {"verify-dione": ("verify", PACKAGES)}
+        for package in PACKAGES:
+            key = package.removeprefix("dione-")
+            expected["publish-crate" if package == "dione" else "publish-" + key] = ("upload", (package,))
+            expected["reconcile-" + key] = ("reconcile", (package,))
+        for job, (mode, packages) in expected.items():
+            calls = [shlex.split(line.strip()) for block in run_blocks(jobs[job])
+                     for line in block.splitlines() if line.strip().startswith("sh scripts/package-preflight.sh ")]
+            self.assertEqual(len(calls), len(packages), job)
+            by_package = {call[2]: call for call in calls}
+            self.assertEqual(set(by_package), set(packages), job)
+            for package in packages:
+                key = package.removeprefix("dione-")
+                variable = key.replace("-", "_")
+                comparison = "exact" if package == "dione" else "--ignore-vcs-info"
+                output = "-" if mode == "reconcile" else "${GITHUB_OUTPUT}"
+                output_key = "-" if mode == "reconcile" else ("upload" if mode == "upload" else "publish-" + key)
+                self.assertEqual(by_package[package], [
+                    "sh", "scripts/package-preflight.sh", package,
+                    "${" + variable + "_version}", "${" + variable + "_crate}", comparison,
+                    mode, output, output_key, "butterflysky",
+                    "github:butterflyskies:lacuna-blinkers", "github:butterflyskies:superadmins",
+                ], job)
+
+    def test_each_named_preflight_emits_exact_missing_and_published_outputs(self):
+        workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
+        for state in ("missing", "published"):
+            self.assert_preflight_failures(workflow, success_state=state)
+
+    def test_package_state_failure_stops_each_preflight(self):
+        self.assert_preflight_failures((SOURCE / ".github/workflows/publish-crate.yml").read_text())
+
+    def test_preflight_fault_targets_survive_independent_job_reordering(self):
+        workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
+        jobs = read_jobs(workflow)
+        header = workflow[:workflow.index("jobs:\n") + len("jobs:\n")]
+        reordered = header + "".join("  " + name + ":\n" + body for name, body in reversed(list(jobs.items())))
+        self.assert_preflight_failures(reordered)
 
 
 if __name__ == "__main__":

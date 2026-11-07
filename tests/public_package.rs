@@ -894,9 +894,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     let (publish_dione, reconcile_dione) = remaining.split_once("\n  reconcile-dione:").unwrap();
 
     assert_eq!(
-        workflow
-            .matches("scripts/verify-public-package-privacy.sh")
-            .count(),
+        workflow.matches("scripts/package-preflight.sh").count(),
         workflow.matches("cargo package -p").count()
             + 44 * workflow.matches("cargo package --workspace").count(),
         "every workspace archive must cross the privacy verifier"
@@ -952,8 +950,8 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         assert!(!job.contains("id-token: write"));
     }
     assert!(verify.contains("cargo package --workspace --locked"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione "));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-rendering "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-rendering "));
     assert!(workflow.contains("github:butterflyskies:lacuna-blinkers"));
     assert!(workflow.contains("github:butterflyskies:superadmins"));
     assert!(publish_dione.contains(
@@ -1009,12 +1007,12 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     assert!(reconcile_contradictionary.contains("needs: [verify-dione, publish-contradictionary]"));
     assert!(reconcile_contradictionary.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-contradictionary.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-contradictionary "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-contradictionary "));
     assert!(publish_bell_rings.contains("needs: verify-dione"));
     assert!(reconcile_bell_rings.contains("needs: [verify-dione, publish-bell-rings]"));
     assert!(reconcile_bell_rings.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-bell-rings.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-bell-rings "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-bell-rings "));
     assert!(publish_delivery_scheduler.contains("needs: [verify-dione, reconcile-contracts]"));
     assert!(
         reconcile_delivery_scheduler
@@ -1022,34 +1020,34 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     );
     assert!(reconcile_delivery_scheduler.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-delivery-scheduler.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-delivery-scheduler "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-delivery-scheduler "));
     assert!(publish_access_requests.contains("needs: verify-dione"));
     assert!(reconcile_access_requests.contains("needs: [verify-dione, publish-access-requests]"));
     assert!(reconcile_access_requests.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-access-requests.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-access-requests "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-access-requests "));
     assert!(publish_mutes.contains("needs: verify-dione"));
     assert!(reconcile_mutes.contains("needs: [verify-dione, publish-mutes]"));
     assert!(reconcile_mutes.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-mutes.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-mutes "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-mutes "));
     assert!(publish_coordination.contains("needs: verify-dione"));
     assert!(reconcile_coordination.contains("needs: [verify-dione, publish-coordination]"));
     assert!(reconcile_coordination.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-coordination.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-coordination "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-coordination "));
     assert!(publish_teams_identities.contains("needs: verify-dione"));
     assert!(reconcile_teams_identities.contains("needs: [verify-dione, publish-teams-identities]"));
     assert!(reconcile_teams_identities.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-teams-identities.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-teams-identities "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-teams-identities "));
     assert!(publish_discord_identities.contains("needs: verify-dione"));
     assert!(
         reconcile_discord_identities.contains("needs: [verify-dione, publish-discord-identities]")
     );
     assert!(reconcile_discord_identities.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-discord-identities.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-discord-identities "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-discord-identities "));
     let capabilities = [
         "attention",
         "bell-rings",
@@ -1097,7 +1095,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         "needs.publish-config.result == 'success' || needs.publish-config.result == 'skipped'"
     ));
     assert!(reconcile_dione.contains("needs.reconcile-config.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-config "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-config "));
     let capabilities = ["config", "evidence", "contradictionary", "messages"];
     for (job, publish) in [
         (publish_outbound_consent, false),
@@ -1137,7 +1135,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         "needs.publish-outbound-consent.result == 'success' || needs.publish-outbound-consent.result == 'skipped'"
     ));
     assert!(reconcile_dione.contains("needs.reconcile-outbound-consent.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-outbound-consent "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-outbound-consent "));
     let capabilities = ["messages", "teams-identities"];
     for (job, publish) in [
         (publish_provider_delivery, false),
@@ -1177,7 +1175,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         "needs.publish-provider-delivery.result == 'success' || needs.publish-provider-delivery.result == 'skipped'"
     ));
     assert!(reconcile_dione.contains("needs.reconcile-provider-delivery.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-provider-delivery "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-provider-delivery "));
     let capabilities = [
         "messages",
         "teams-identities",
@@ -1216,7 +1214,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         "needs.publish-teams.result == 'success' || needs.publish-teams.result == 'skipped'"
     ));
     assert!(reconcile_dione.contains("needs.reconcile-teams.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-teams "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-teams "));
     let capabilities = [
         "durable",
         "harness",
@@ -1252,7 +1250,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         "needs.publish-omp.result == 'success' || needs.publish-omp.result == 'skipped'"
     ));
     assert!(reconcile_dione.contains("needs.reconcile-omp.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-omp "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-omp "));
 
     let capabilities = [
         "attention",
@@ -1291,7 +1289,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         "needs.publish-codex.result == 'success' || needs.publish-codex.result == 'skipped'"
     ));
     assert!(reconcile_dione.contains("needs.reconcile-codex.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-codex "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-codex "));
     assert!(workflow.contains("scripts/workspace-package-version.sh dione-codex"));
     assert!(verify.contains("echo \"codex-version=${codex_version}\""));
     assert!(workflow.contains("codex-version: ${{ steps.package.outputs.codex-version }}"));
@@ -1325,7 +1323,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         "needs.publish-claude.result == 'success' || needs.publish-claude.result == 'skipped'"
     ));
     assert!(reconcile_dione.contains("needs.reconcile-claude.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-claude "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-claude "));
     assert!(workflow.contains("scripts/workspace-package-version.sh dione-claude"));
     assert!(verify.contains("echo \"claude-version=${claude_version}\""));
     assert!(workflow.contains("claude-version: ${{ steps.package.outputs.claude-version }}"));
@@ -1341,7 +1339,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     ));
     assert!(reconcile_mcp_tools.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-mcp-tools.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-mcp-tools "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-mcp-tools "));
     assert_eq!(
         publish_discord_presence
             .lines()
@@ -1373,7 +1371,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     ));
     assert!(reconcile_discord_presence.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-discord-presence.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-discord-presence "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-discord-presence "));
     assert_eq!(
         publish_discord_state
             .lines()
@@ -1407,7 +1405,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     ));
     assert!(reconcile_discord_state.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-discord-state.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-discord-state "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-discord-state "));
     assert_eq!(
         publish_discord_events
             .lines()
@@ -1443,7 +1441,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     ));
     assert!(reconcile_discord_events.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-discord-events.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-discord-events "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-discord-events "));
     for dependency in [
         "attention",
         "bell-rings",
@@ -1492,7 +1490,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     ));
     assert!(reconcile_tracing_channel.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-tracing-channel.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-tracing-channel "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-tracing-channel "));
     assert!(
         reconcile_tracing_channel.contains("needs.reconcile-discord-events.result == 'success'")
     );
@@ -1531,7 +1529,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     ));
     assert!(reconcile_config_watcher.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-config-watcher.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-config-watcher "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-config-watcher "));
     assert!(
         reconcile_config_watcher.contains("needs.reconcile-discord-events.result == 'success'")
     );
@@ -1567,7 +1565,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     ));
     assert!(reconcile_permissions.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-permissions.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-permissions "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-permissions "));
     assert!(reconcile_permissions.contains("needs.reconcile-discord-events.result == 'success'"));
     assert!(reconcile_permissions.contains("needs.reconcile-config.result == 'success'"));
     assert!(reconcile_permissions.contains("needs.reconcile-discord-state.result == 'success'"));
@@ -1604,7 +1602,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     ));
     assert!(reconcile_discord_bells.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-discord-bells.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-discord-bells "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-discord-bells "));
     assert!(reconcile_discord_bells.contains("needs.reconcile-discord-events.result == 'success'"));
     assert!(reconcile_discord_bells.contains("needs.reconcile-config.result == 'success'"));
     assert!(reconcile_discord_bells.contains("needs.reconcile-bell-rings.result == 'success'"));
@@ -1641,7 +1639,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     ));
     assert!(reconcile_discord_gate.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-discord-gate.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-discord-gate "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-discord-gate "));
     assert!(reconcile_discord_gate.contains("needs.reconcile-discord-events.result == 'success'"));
     assert!(reconcile_discord_gate.contains("needs.reconcile-config.result == 'success'"));
     assert!(reconcile_discord_gate.contains("needs.reconcile-mutes.result == 'success'"));
@@ -1677,7 +1675,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     ));
     assert!(reconcile_oneshot.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-oneshot.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-oneshot "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-oneshot "));
     assert!(reconcile_oneshot.contains("needs.reconcile-outbound-consent.result == 'success'"));
     assert!(reconcile_oneshot.contains("needs.reconcile-config.result == 'success'"));
     assert!(reconcile_oneshot.contains("needs.reconcile-pre-send.result == 'success'"));
@@ -1721,7 +1719,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     ));
     assert!(reconcile_harness_runtime.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-harness-runtime.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-harness-runtime "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-harness-runtime "));
     assert!(reconcile_harness_runtime.contains("needs.reconcile-attention.result == 'success'"));
     assert!(reconcile_harness_runtime.contains("needs.reconcile-config.result == 'success'"));
     assert!(reconcile_harness_runtime.contains("needs.reconcile-codex.result == 'success'"));
@@ -1764,7 +1762,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     ));
     assert!(reconcile_discord_scheduling.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-discord-scheduling.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-discord-scheduling "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-discord-scheduling "));
     assert!(
         publish_discord_scheduling
             .contains("    permissions:\n      contents: read\n      id-token: write\n")
@@ -1809,7 +1807,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     ));
     assert!(reconcile_drop_ledger.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-drop-ledger.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-drop-ledger "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-drop-ledger "));
     assert!(publish_pluralkit_identities.contains("needs: verify-dione"));
     assert!(
         reconcile_pluralkit_identities
@@ -1817,39 +1815,39 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     );
     assert!(reconcile_pluralkit_identities.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-pluralkit-identities.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-pluralkit-identities "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-pluralkit-identities "));
     assert!(publish_pre_send.contains("needs: [verify-dione, reconcile-evidence]"));
     assert!(
         reconcile_pre_send.contains("needs: [verify-dione, reconcile-evidence, publish-pre-send]")
     );
     assert!(reconcile_pre_send.contains("needs.reconcile-evidence.result == 'success'"));
     assert!(reconcile_dione.contains("needs.reconcile-pre-send.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-pre-send "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-pre-send "));
 
     assert!(reconcile_dione.contains("needs.reconcile-presentation.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-presentation "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-presentation "));
     assert!(reconcile_dione.contains("needs.reconcile-harness.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-harness "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-harness "));
     assert!(reconcile_dione.contains("needs.reconcile-identity-display.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-identity-display "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-identity-display "));
     assert!(reconcile_dione.contains("needs.reconcile-gaie.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-gaie "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-gaie "));
     assert!(reconcile_dione.contains("needs.reconcile-vaelii.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-vaelii "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-vaelii "));
     assert!(reconcile_dione.contains("needs.reconcile-rate-limiter.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-rate-limiter "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-rate-limiter "));
     assert!(reconcile_dione.contains("needs.reconcile-messages.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-messages "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-messages "));
     assert!(reconcile_dione.contains("needs.reconcile-evidence.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-evidence "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-evidence "));
     assert!(reconcile_dione.contains("needs.reconcile-attention.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-attention "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-attention "));
     assert!(reconcile_dione.contains("needs.reconcile-rook.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-rook "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-rook "));
     assert!(reconcile_dione.contains("needs.reconcile-contracts.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-contracts "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-contracts "));
     assert!(reconcile_dione.contains("needs.reconcile-durable.result == 'success'"));
-    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-durable "));
+    assert!(workflow.contains("scripts/package-preflight.sh dione-durable "));
     assert!(!reconcile_dione.contains("--ignore-vcs-info"));
     assert!(workflow.contains("group: publish-crate-${{ inputs.tag }}"));
     assert!(publish_dione.contains("cargo package -p dione --locked --no-verify"));
@@ -1980,36 +1978,15 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
             .count(),
         1
     );
-    let package_lines = package.lines().map(str::trim).collect::<Vec<_>>();
-    let archive_package_calls = package_lines
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| line.starts_with("cargo package ") && !line.contains(" --list"))
-        .collect::<Vec<_>>();
-    assert_eq!(archive_package_calls.len(), 1);
     assert_eq!(
         package
-            .matches("scripts/verify-public-package-privacy.sh")
+            .matches("python3 scripts/verify-workspace-package-privacy.py")
             .count(),
-        44 * archive_package_calls.len(),
-        "every archive-producing workspace package call must cross the privacy verifier"
+        1,
+        "every archive-producing workspace call must cross the Cargo-membership privacy procedure"
     );
-    for (index, _) in archive_package_calls {
-        assert!(
-            package_lines
-                .get(index + 2)
-                .is_some_and(|line| line.contains("_crate=\"target/package/")),
-            "each package archive must resolve to its exact versioned path"
-        );
-        assert!(
-            package_lines
-                .get(index + 3)
-                .is_some_and(|line| line.starts_with("scripts/verify-public-package-privacy.sh")),
-            "each resolved package archive must immediately cross the privacy verifier"
-        );
-    }
     assert!(package.contains(
-        "cargo package --workspace --locked\n          dione_version=\"$(scripts/workspace-package-version.sh dione)\"\n          dione_crate=\"target/package/dione-${dione_version}.crate\"\n          scripts/verify-public-package-privacy.sh \"${dione_crate}\""
+        "cargo package --workspace --locked\n          python3 scripts/verify-workspace-package-privacy.py"
     ));
 
     let required = workflow

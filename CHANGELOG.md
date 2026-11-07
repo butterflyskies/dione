@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.130.5]
+
+### Fixed
+
+- Keep verification scripts compatible with Python 3.9, test member release and
+  publication outputs independently, and share workspace privacy and registry
+  preflight procedures while retaining explicit release dependencies.
+- Correct fixture-aware test commands and extracted harness ownership guidance.
+
 ## [0.130.4]
 
 ### Fixed
