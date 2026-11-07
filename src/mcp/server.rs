@@ -1676,6 +1676,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ordinary_failed_predecessor_flush_keeps_tail_before_current() {
+        for unknown in [false, true] {
+            let mut raw = Config::default();
+            raw.delivery.evidence_markers_enabled = true;
+            raw.channels.push(ChannelConfig {
+                id: "42".to_owned(),
+                delivery_delay_ms: Some(500),
+                ..Default::default()
+            });
+            let config = LoadedConfig::try_from_raw(raw).unwrap();
+            let module = ModuleInstanceId::new(
+                ProviderId::new("discord").unwrap(),
+                ModuleSlotId::new("primary").unwrap(),
+            );
+            let mut buffer = DeliveryBuffer::new(module.clone());
+            buffer.requeue(vec![evidence_message_event(0), evidence_message_event(1)]);
+            let (writer, reader) = tokio::io::duplex(4096);
+            drop(reader);
+            let output = dione_harness::ProtocolOutput::new(writer);
+            if !unknown {
+                // The first failed frame is conservatively unknown. Once poisoned,
+                // later frames are rejected before any new write starts.
+                assert!(
+                    output
+                        .write(&serde_json::json!({"probe":true}))
+                        .await
+                        .unwrap_err()
+                        .completion_is_unknown()
+                );
+            }
+            let sink = dione_claude::connect(output, dione_codex::TOOL_NAMES);
+            let error = forward_ordinary(
+                evidence_message_event(2),
+                &config,
+                &mut buffer,
+                &Arc::new(BellEvaluator::new()),
+                &sink,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.completion_is_unknown(), unknown);
+            let retained = buffer.flush_all();
+            let ids: Vec<_> = retained
+                .iter()
+                .map(|event| match event {
+                    NotificationEvent::Message(message) => message.message_id.get(),
+                    _ => panic!("message retained"),
+                })
+                .collect();
+            let expected = if unknown {
+                vec![101, 102]
+            } else {
+                vec![100, 101, 102]
+            };
+            assert_eq!(ids, expected);
+            let (writer, reader) = tokio::io::duplex(8192);
+            let recovered = dione_claude::connect(
+                dione_harness::ProtocolOutput::new(writer),
+                dione_codex::TOOL_NAMES,
+            );
+            let mut lines = tokio::io::AsyncBufReadExt::lines(tokio::io::BufReader::new(reader));
+            let outcome = deliver_flushed(&recovered, &module, retained, None, true).await;
+            assert!(outcome.error.is_none());
+            assert!(outcome.undelivered.is_empty());
+            for id in expected {
+                let delivered: Value =
+                    serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+                assert_eq!(delivered["params"]["meta"]["message_id"], id.to_string());
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn unknown_admission_does_not_requeue_ambiguous_event_but_retains_tail() {
         let mut owner = crate::codex_test_process::OwnerProcess::start().await;
         let module = ModuleInstanceId::new(
@@ -2046,11 +2119,15 @@ async fn forward_ordinary(
         }
         BufferResult::FlushThenImmediate { preceding, event } => {
             let outcome = deliver_flushed(sink, buffer.module(), preceding, cfg.tz, evidence).await;
-            buffer.requeue(outcome.undelivered);
             if let Some(error) = outcome.error {
-                buffer.requeue(vec![*event]);
+                // Requeue is a prepend: keep retained predecessors before the
+                // new event, excluding any completion-unknown predecessor.
+                let mut retained = outcome.undelivered;
+                retained.push(*event);
+                buffer.requeue(retained);
                 return Err(error);
             }
+            buffer.requeue(outcome.undelivered);
             let delivery = match dione_discord_events::single(
                 buffer.module(),
                 (*event).clone(),

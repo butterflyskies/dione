@@ -433,7 +433,15 @@ impl Coordinator {
                 let leases_ahead = u32::try_from(ahead.len().max(1)).unwrap_or(u32::MAX);
                 let budget = Duration::from_millis(lease_ms).saturating_mul(leases_ahead);
                 if matches!(waiter, WaiterPolicy::Subscribe) {
-                    self.spawn_waiter(session, channel, message, budget);
+                    let deadline = budget
+                        .checked_add(LEASE_MARGIN)
+                        .and_then(|duration| tokio::time::Instant::now().checked_add(duration))
+                        .ok_or_else(|| {
+                            CoordinationError::Protocol(
+                                "wait lease deadline exceeds clock range".to_owned(),
+                            )
+                        })?;
+                    self.spawn_waiter(session, channel, message, deadline);
                 }
                 Ok(ClaimOutcome::Wait { ahead, lease_ms })
             }
@@ -447,18 +455,17 @@ impl Coordinator {
     }
 
     /// Hold `session` open until the server pushes a `done` or `promoted`
-    /// for `message_id`, forwarding it to subscribers, or until `budget`
-    /// (the leases of every seat ahead) plus a margin elapses.
+    /// for `message_id`, forwarding it to subscribers, or until the checked
+    /// aggregate lease deadline (including its margin) elapses.
     fn spawn_waiter(
         &self,
         mut session: Session,
         channel_id: ChannelId,
         message_id: MessageId,
-        budget: Duration,
+        deadline: tokio::time::Instant,
     ) {
         let events = self.events.clone();
         let addr = self.config.addr.clone();
-        let deadline = tokio::time::Instant::now() + budget.saturating_add(LEASE_MARGIN);
         tokio::spawn(async move {
             loop {
                 let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -1216,6 +1223,29 @@ mod tests {
                 reply_message_id: REPLY.parse::<MessageId>().unwrap(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn extreme_subscribed_lease_is_unavailable_without_losing_write_progress() {
+        for ahead_count in [501, 1001] {
+            let reply =
+                json!({"status":"wait","ahead":vec![BOT_A; ahead_count],"lease_ms":u64::MAX})
+                    .to_string();
+            assert!(reply.len() < 64 * 1024);
+            let addr = spawn_scripted_server(vec![reply]).await;
+            let client = coordinator(&addr, BOT_B);
+            let checked = client.claim_with_progress(CHANNEL, MSG).await;
+            assert_eq!(checked.progress, ClaimProgress::Written);
+            assert!(matches!(checked.outcome, ClaimOutcome::Wait { .. }));
+            let subscribed = client.acquire(CHANNEL, MSG, WaiterPolicy::Subscribe).await;
+            assert_eq!(subscribed.progress, ClaimProgress::Written);
+            let ClaimOutcome::Unavailable { reason, claim_sent } = subscribed.outcome else {
+                panic!("unrepresentable subscribed deadline must be unavailable");
+            };
+            assert!(claim_sent);
+            assert!(reason.contains("protocol:"));
+            assert!(reason.contains("deadline"));
+        }
     }
 
     /// Accept connections, answer `hello`, then answer the next request with

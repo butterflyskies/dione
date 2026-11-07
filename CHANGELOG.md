@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.130.9]
+
+### Fixed
+
+- Reject unrepresentable subscribed coordination lease deadlines without panicking,
+  preserving claim write progress and no-waiter claim outcomes.
+- Preserve undelivered predecessor order before a newer immediate notification
+  after failed flushes, excluding completion-unknown events from retries.
+- Patch-version the coordination owner and exact normal dependency closure.
+
 ## [0.130.8]
 
 ### Fixed

@@ -29,3 +29,8 @@ string JSON/protocol diagnostics and error text; this is not a redesign to the
 preferred context-struct/kind pattern. Server text is logged in bounded form and
 fixed protocol wording is retained for callers. No transport abstraction, parallel
 identity system or application dependency is introduced.
+
+Subscribed claims validate the aggregate lease deadline before starting a waiter.
+An unrepresentable deadline becomes a typed protocol-unavailable outcome with
+claim write progress retained. Checked claims that do not subscribe retain their
+Wait outcome because they create no waiter deadline.
