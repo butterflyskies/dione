@@ -12,7 +12,8 @@ pub mod pluralkit;
 pub(crate) mod receipt_gate;
 
 /// Agent harness integration.
-pub mod harness;
+#[cfg(test)]
+mod harness_test_support;
 
 /// Process composition and offline operator commands.
 pub mod startup;

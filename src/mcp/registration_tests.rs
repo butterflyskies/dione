@@ -954,7 +954,7 @@ async fn replacement_registry_refreshes_catalog_and_retains_native_tools() {
 }
 #[tokio::test]
 async fn replacement_registry_reserves_all_three_catalog_sources() {
-    for name in crate::harness::TOOL_NAMES
+    for name in dione_codex::TOOL_NAMES
         .iter()
         .copied()
         .chain(["set_presence", "adapter_only"])

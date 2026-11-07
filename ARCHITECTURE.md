@@ -204,7 +204,7 @@ This receipt records durable assistant admission, not inference or reply success
 The [operator guide](extensions/oh-my-pi/README.md#saved-session-teams-delivery)
 defines conversation admission, file storage, and socket requirements.
 
-[HarnessSession](src/harness/session.rs) owns preparation and consumes itself
+[HarnessSession](crates/dione-harness-runtime/src/session.rs) owns preparation and consumes itself
 into a running session after attention initialization. The
 [Codex session](crates/dione-codex/src/session.rs) owns configuration resolution,
 initial binding, the queue, and the existing reconnect worker. Its delivery

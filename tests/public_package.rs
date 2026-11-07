@@ -877,7 +877,14 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         remaining.split_once("\n  reconcile-discord-gate:").unwrap();
     let (reconcile_discord_gate, remaining) = remaining.split_once("\n  publish-oneshot:").unwrap();
     let (publish_oneshot, remaining) = remaining.split_once("\n  reconcile-oneshot:").unwrap();
-    let (reconcile_oneshot, remaining) = remaining.split_once("\n  publish-crate:").unwrap();
+    let (reconcile_oneshot, remaining) = remaining
+        .split_once("\n  publish-harness-runtime:")
+        .unwrap();
+    let (publish_harness_runtime, remaining) = remaining
+        .split_once("\n  reconcile-harness-runtime:")
+        .unwrap();
+    let (reconcile_harness_runtime, remaining) =
+        remaining.split_once("\n  publish-crate:").unwrap();
     let (publish_dione, reconcile_dione) = remaining.split_once("\n  reconcile-dione:").unwrap();
 
     assert_eq!(
@@ -885,7 +892,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
             .matches("scripts/verify-public-package-privacy.sh")
             .count(),
         workflow.matches("cargo package -p").count()
-            + 42 * workflow.matches("cargo package --workspace").count(),
+            + 43 * workflow.matches("cargo package --workspace").count(),
         "every workspace archive must cross the privacy verifier"
     );
     for job in [
@@ -931,6 +938,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         reconcile_discord_bells,
         reconcile_discord_gate,
         reconcile_oneshot,
+        reconcile_harness_runtime,
         reconcile_dione,
     ] {
         assert!(!job.contains("CARGO_REGISTRY_TOKEN"));
@@ -942,11 +950,11 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     assert!(workflow.contains("github:butterflyskies:lacuna-blinkers"));
     assert!(workflow.contains("github:butterflyskies:superadmins"));
     assert!(publish_dione.contains(
-        "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot]"
+        "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime]"
     ));
     assert!(
         reconcile_dione.contains(
-            "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, publish-crate]"
+            "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime, publish-crate]"
         )
     );
     assert!(reconcile_dione.contains("needs.reconcile-rendering.result == 'success'"));
@@ -1672,6 +1680,53 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     assert!(reconcile_oneshot.contains("    permissions:\n      contents: read\n"));
     assert!(reconcile_oneshot.contains("needs.reconcile-discord-gate.result == 'success'"));
     assert_eq!(
+        publish_harness_runtime
+            .lines()
+            .find(|line| line.trim_start().starts_with("needs:"))
+            .unwrap()
+            .trim(),
+        "needs: [verify-dione, reconcile-harness, reconcile-config, reconcile-attention, reconcile-codex, reconcile-omp, reconcile-claude]"
+    );
+    assert_eq!(
+        reconcile_harness_runtime
+            .lines()
+            .find(|line| line.trim_start().starts_with("needs:"))
+            .unwrap()
+            .trim(),
+        "needs: [verify-dione, reconcile-harness, reconcile-config, reconcile-attention, reconcile-codex, reconcile-omp, reconcile-claude, publish-harness-runtime]"
+    );
+    assert!(workflow.contains("scripts/workspace-package-version.sh dione-harness-runtime"));
+    assert!(verify.contains("echo \"harness-runtime-version=${harness_runtime_version}\""));
+    assert!(
+        workflow.contains(
+            "harness-runtime-version: ${{ steps.package.outputs.harness-runtime-version }}"
+        )
+    );
+    assert!(
+        workflow.contains(
+            "publish-harness-runtime: ${{ steps.package.outputs.publish-harness-runtime }}"
+        )
+    );
+    assert!(reconcile_harness_runtime.contains("always()"));
+    assert!(reconcile_harness_runtime.contains("needs.verify-dione.result == 'success'"));
+    assert!(reconcile_harness_runtime.contains(
+        "needs.publish-harness-runtime.result == 'success' || needs.publish-harness-runtime.result == 'skipped'"
+    ));
+    assert!(reconcile_harness_runtime.contains("--ignore-vcs-info"));
+    assert!(reconcile_dione.contains("needs.reconcile-harness-runtime.result == 'success'"));
+    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-harness-runtime "));
+    assert!(reconcile_harness_runtime.contains("needs.reconcile-attention.result == 'success'"));
+    assert!(reconcile_harness_runtime.contains("needs.reconcile-config.result == 'success'"));
+    assert!(reconcile_harness_runtime.contains("needs.reconcile-codex.result == 'success'"));
+    assert!(
+        publish_harness_runtime
+            .contains("    permissions:\n      contents: read\n      id-token: write\n")
+    );
+    assert!(reconcile_harness_runtime.contains("    permissions:\n      contents: read\n"));
+    assert!(reconcile_harness_runtime.contains("needs.reconcile-harness.result == 'success'"));
+    assert!(reconcile_harness_runtime.contains("needs.reconcile-omp.result == 'success'"));
+    assert!(reconcile_harness_runtime.contains("needs.reconcile-claude.result == 'success'"));
+    assert_eq!(
         publish_drop_ledger
             .lines()
             .find(|line| line.trim_start().starts_with("needs:"))
@@ -1790,6 +1845,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         publish_discord_bells,
         publish_discord_gate,
         publish_oneshot,
+        publish_harness_runtime,
         publish_dione,
     ] {
         assert!(upload_job.contains("id-token: write"));
@@ -1882,7 +1938,7 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
         package
             .matches("scripts/verify-public-package-privacy.sh")
             .count(),
-        42 * archive_package_calls.len(),
+        43 * archive_package_calls.len(),
         "every archive-producing workspace package call must cross the privacy verifier"
     );
     for (index, _) in archive_package_calls {

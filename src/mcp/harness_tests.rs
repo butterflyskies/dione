@@ -17,7 +17,7 @@ enum Received {
 impl Received {
     async fn snapshot(&self) -> Value {
         match self {
-            Self::Delivery(value) => crate::harness::test_support::snapshot(value).await,
+            Self::Delivery(value) => crate::harness_test_support::snapshot(value).await,
             Self::Invalidated(source) => {
                 json!({"invalidate":[source.conversation().local().as_numeric().unwrap().get(),source.local().as_numeric().unwrap().get()]})
             }
@@ -312,7 +312,7 @@ async fn oh_my_pi_ordinary_mcp_tools_remain_available() {
     let connection = dione_omp::connect(
         ProtocolOutput::new(tokio::io::sink()),
         None,
-        crate::harness::TOOL_NAMES,
+        dione_codex::TOOL_NAMES,
     );
     let dir = tempfile::TempDir::new().unwrap();
     let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
@@ -442,7 +442,7 @@ async fn third_adapter_retains_opaque_scoped_records_and_unprojected_observation
         .deliver(&Delivery::batch(
             make("second", "first\n\n"),
             vec![make("first", "")],
-            crate::harness::test_support::context(),
+            crate::harness_test_support::context(),
         ))
         .await
         .unwrap();

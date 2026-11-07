@@ -7,7 +7,7 @@ use dione_messages::{
 };
 use serde_json::Value;
 use serenity::model::id::{ChannelId, MessageId, UserId};
-use {crate::harness::test_support, dione_messages::timestamp::Timestamp};
+use {crate::test_support, dione_messages::timestamp::Timestamp};
 #[derive(Debug)]
 enum RenderedFixture {
     Single,

@@ -1,8 +1,8 @@
 //! Typed failures from process composition and offline commands.
-use crate::harness::HarnessSessionError;
 use crate::mcp::server::ServerConstructionError;
 use camino::Utf8PathBuf;
 use dione_config::StartupConfigError;
+use dione_harness_runtime::HarnessSessionError;
 use dione_mcp_tools::RegistrationError;
 use dione_mcp_tools::ToolNameError;
 use dione_pre_send::PipelineError;

@@ -4131,7 +4131,7 @@ mod tests {
 
     #[tokio::test]
     async fn represented_and_direct_messages_share_the_same_construct_envelope_shape() {
-        use crate::harness::test_support::FixtureNotification;
+        use crate::harness_test_support::FixtureNotification;
 
         let config =
             LoadedConfig::try_from_raw(Config::default()).expect("valid test configuration");

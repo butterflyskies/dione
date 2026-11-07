@@ -40,6 +40,7 @@ use dione_harness::AttentionPolicy;
 use dione_harness::HarnessConnection;
 use dione_harness::HarnessError;
 use dione_harness::ProtocolOutput;
+use dione_harness_runtime::StdioExitPolicy;
 use dione_mcp_tools::RegisteredTool;
 use dione_mcp_tools::RegistrationError;
 use dione_mcp_tools::ToolNameError;
@@ -119,7 +120,7 @@ pub struct DioneServer {
 
 pub(crate) fn reserved_tool_names(harness: &HarnessConnection) -> BTreeSet<String> {
     let definitions = tools_list(harness, true);
-    let mut reserved: BTreeSet<String> = crate::harness::TOOL_NAMES
+    let mut reserved: BTreeSet<String> = dione_codex::TOOL_NAMES
         .iter()
         .map(|name| (*name).to_owned())
         .collect();
@@ -280,12 +281,6 @@ impl DioneServer {
             trace_controller: &self.trace_controller,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum StdioExitPolicy {
-    ShutdownProcess,
-    DetachUntilCancellation,
 }
 
 /// Runs the MCP server: reads JSON-RPC from stdin, writes to stdout.
@@ -1326,7 +1321,7 @@ pub mod test_helpers {
 mod tests {
     use super::*;
     use crate::discord::scheduling::DeliveryBuffer;
-    use crate::harness::test_support::FixtureNotification;
+    use crate::harness_test_support::FixtureNotification;
     use dione_config::ChannelConfig;
     use dione_config::Config;
     use dione_config::LoadedConfig;

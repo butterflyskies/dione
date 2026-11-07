@@ -1,6 +1,6 @@
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::harness::test_support::FixtureNotification;
+    use crate::harness_test_support::FixtureNotification;
     use axum::response::IntoResponse;
     use dione_bell_rings::{Bell, BellEvaluator, BellStatus};
     use dione_bell_rings::{

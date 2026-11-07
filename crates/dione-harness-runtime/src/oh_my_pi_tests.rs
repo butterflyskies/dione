@@ -1,4 +1,4 @@
-use crate::harness::test_support;
+use crate::test_support;
 use dione_discord_events::{MessageEvent, MessageTargeting, NotificationEvent};
 use dione_harness::ProtocolOutput;
 use dione_messages::{delivery::Delivery, timestamp::Timestamp};
@@ -9,11 +9,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
 async fn emitted(delivery: &Delivery) -> Value {
     let (writer, reader) = tokio::io::duplex(64 * 1024);
-    let connection = dione_omp::connect(
-        ProtocolOutput::new(writer),
-        None,
-        crate::harness::TOOL_NAMES,
-    );
+    let connection = dione_omp::connect(ProtocolOutput::new(writer), None, dione_codex::TOOL_NAMES);
     connection.deliver(delivery).await.unwrap();
     let line = BufReader::new(reader)
         .lines()
@@ -27,11 +23,7 @@ async fn emitted(delivery: &Delivery) -> Value {
 #[tokio::test]
 async fn typed_permission_is_rejected_without_parsing_a_foreign_envelope() {
     let (writer, mut reader) = tokio::io::duplex(64 * 1024);
-    let connection = dione_omp::connect(
-        ProtocolOutput::new(writer),
-        None,
-        crate::harness::TOOL_NAMES,
-    );
+    let connection = dione_omp::connect(ProtocolOutput::new(writer), None, dione_codex::TOOL_NAMES);
     let permission = test_support::delivery(NotificationEvent::PermissionResponse {
         request_id: "request".into(),
         granted: true,
@@ -126,11 +118,7 @@ async fn projects_real_rendered_message_reaction_config_and_trace() {
 #[tokio::test]
 async fn concurrent_response_and_event_are_complete_lines_and_rejection_writes_nothing() {
     let (writer, reader) = tokio::io::duplex(32);
-    let connection = dione_omp::connect(
-        ProtocolOutput::new(writer),
-        None,
-        crate::harness::TOOL_NAMES,
-    );
+    let connection = dione_omp::connect(ProtocolOutput::new(writer), None, dione_codex::TOOL_NAMES);
     let permission = test_support::delivery(NotificationEvent::PermissionResponse {
         request_id: "no".into(),
         granted: true,
@@ -251,11 +239,8 @@ async fn identity_display_roundtrips_untrusted_names_without_changing_machine_id
     ];
     for event in events {
         let (writer, reader) = tokio::io::duplex(16 * 1024);
-        let connection = dione_omp::connect(
-            ProtocolOutput::new(writer),
-            None,
-            crate::harness::TOOL_NAMES,
-        );
+        let connection =
+            dione_omp::connect(ProtocolOutput::new(writer), None, dione_codex::TOOL_NAMES);
         connection
             .deliver(&test_support::delivery(event))
             .await
@@ -309,9 +294,9 @@ async fn actual_codex_catalog_is_rejected_and_unknown_names_remain_unhandled() {
     let connection = dione_omp::connect(
         ProtocolOutput::new(tokio::io::sink()),
         None,
-        crate::harness::TOOL_NAMES,
+        dione_codex::TOOL_NAMES,
     );
-    for name in crate::harness::TOOL_NAMES {
+    for name in dione_codex::TOOL_NAMES {
         let error = connection
             .protocol()
             .call(name, &json!({}))

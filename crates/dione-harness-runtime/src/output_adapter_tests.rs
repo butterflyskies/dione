@@ -7,7 +7,7 @@ async fn adapters_distinguish_partial_write_timeout_from_unattempted_poison_fail
     for adapter in [
         (|output| dione_claude::connect(output, dione_codex::TOOL_NAMES))
             as fn(ProtocolOutput) -> dione_harness::HarnessConnection,
-        |output| dione_omp::connect(output, None, crate::harness::TOOL_NAMES),
+        |output| dione_omp::connect(output, None, dione_codex::TOOL_NAMES),
     ] {
         let (writer, mut reader) = tokio::io::duplex(1);
         let connection = adapter(ProtocolOutput::new(writer));

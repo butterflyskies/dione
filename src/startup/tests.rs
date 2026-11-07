@@ -3,6 +3,7 @@ use super::SecretEnvironmentError;
 use super::{StartupErrorKind, drain_shutdown, prepare_teams, validate_teams_control};
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::Parser;
+use dione_codex::CodexSessionOptions;
 use std::{collections::BTreeMap, env::VarError, ffi::OsString, net::SocketAddr, time::Duration};
 #[cfg(unix)]
 use std::{error::Error, os::unix::ffi::OsStringExt};
@@ -11,11 +12,10 @@ use tokio::{
     time::timeout,
 };
 use {
-    crate::harness::{
-        CodexSessionOptions, HarnessSelection, HarnessSession, HarnessSessionError,
-        HarnessSessionErrorKind,
-    },
     dione_harness::AttentionPolicy,
+    dione_harness_runtime::{
+        HarnessSelection, HarnessSession, HarnessSessionError, HarnessSessionErrorKind,
+    },
 };
 
 #[tokio::test]
