@@ -1023,8 +1023,24 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     assert!(reconcile_delivery_scheduler.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-delivery-scheduler.result == 'success'"));
     assert!(workflow.contains("scripts/crates-io-package-state.sh dione-delivery-scheduler "));
-    assert!(publish_access_requests.contains("needs: verify-dione"));
-    assert!(reconcile_access_requests.contains("needs: [verify-dione, publish-access-requests]"));
+    assert!(
+        publish_access_requests
+            .contains("needs: [verify-dione, reconcile-config, reconcile-messages]")
+    );
+    assert!(reconcile_access_requests.contains(
+        "needs: [verify-dione, reconcile-config, reconcile-messages, publish-access-requests]"
+    ));
+    for dependency in ["config", "messages"] {
+        assert!(
+            reconcile_access_requests
+                .contains(&format!("needs.reconcile-{dependency}.result == 'success'"))
+        );
+    }
+    assert!(
+        publish_access_requests
+            .contains("    permissions:\n      contents: read\n      id-token: write\n")
+    );
+    assert!(reconcile_access_requests.contains("    permissions:\n      contents: read\n"));
     assert!(reconcile_access_requests.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-access-requests.result == 'success'"));
     assert!(workflow.contains("scripts/crates-io-package-state.sh dione-access-requests "));

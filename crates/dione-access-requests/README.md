@@ -34,3 +34,9 @@ mutation operations. Existing async application callers therefore retain their
 preexisting blocking-I/O limitation. Best-effort persistence and empty fallback
 are also unchanged. A future semantic or durability redesign must migrate
 callers and historical data together.
+
+The complete decision workflow and wire projections reuse the shared configuration
+runtime. Missing requests precede configuration validation; failed writes and
+unknown durability retain pending requests, while durable grants remove them.
+Queue persistence remains best effort. Context and receipt fields and synthetic
+completion remain private to the owner; MCP retains its authorization/parser gate.

@@ -2277,7 +2277,7 @@ jobs:
             github:butterflyskies:superadmins
 
   publish-access-requests:
-    needs: verify-dione
+    needs: [verify-dione, reconcile-config, reconcile-messages]
     if: needs.verify-dione.outputs.publish-access-requests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -2330,10 +2330,12 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   reconcile-access-requests:
-    needs: [verify-dione, publish-access-requests]
+    needs: [verify-dione, reconcile-config, reconcile-messages, publish-access-requests]
     if: >-
       always() &&
       needs.verify-dione.result == 'success' &&
+      needs.reconcile-config.result == 'success' &&
+      needs.reconcile-messages.result == 'success' &&
       (needs.publish-access-requests.result == 'success' || needs.publish-access-requests.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 20

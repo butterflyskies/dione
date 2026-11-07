@@ -352,3 +352,9 @@ mod tests {
         assert_eq!(q2.list()[0].user_id, 99);
     }
 }
+
+pub mod wire;
+mod workflow;
+pub use workflow::{
+    AccessApproval, AccessCtx, AccessDenial, AccessError, PendingAccessRequest, StoredAccessUserId,
+};

@@ -11,7 +11,6 @@
 //! - Error    → `{"jsonrpc":"2.0","id":N,"error":{"code":-32000,"message":"..."}}`
 //! - Notification (no id) → `{"jsonrpc":"2.0","method":"...","params":{...}}`
 
-use crate::discord::access::AccessCtx;
 use crate::discord::messaging::MessagingCtx;
 use crate::discord::typing::TypingCtx;
 use crate::mcp::dispatch::call_tool;
@@ -22,6 +21,7 @@ use crate::mcp::protocol::tools_list;
 use crate::mcp::tools::diagnostics::DiagnosticsCtx;
 use crate::mcp::tools::no_rly::NoRlyCtx;
 use camino::Utf8PathBuf;
+use dione_access_requests::AccessCtx;
 use dione_access_requests::AccessQueue;
 use dione_attention::delivery::AttentionGuardFailure;
 use dione_attention::types::Admission;

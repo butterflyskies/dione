@@ -1,6 +1,5 @@
 //! MCP transport, request dispatch, and owner-provided tool registrations.
 
-pub(crate) mod access_wire;
 pub mod dispatch;
 pub(crate) mod presence_wire;
 pub mod protocol;
