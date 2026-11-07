@@ -1,6 +1,7 @@
 pub mod attention;
-mod bell_rings;
 pub mod discord;
+#[cfg(test)]
+mod discord_bells_tests;
 pub mod gate;
 pub mod ingress_ledger;
 pub mod mcp;

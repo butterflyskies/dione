@@ -74,6 +74,7 @@ jobs:
       tracing-channel-version: ${{ steps.package.outputs.tracing-channel-version }}
       config-watcher-version: ${{ steps.package.outputs.config-watcher-version }}
       permissions-version: ${{ steps.package.outputs.permissions-version }}
+      discord-bells-version: ${{ steps.package.outputs.discord-bells-version }}
       drop-ledger-version: ${{ steps.package.outputs.drop-ledger-version }}
       publish-discord-presence: ${{ steps.package.outputs.publish-discord-presence }}
       publish-discord-state: ${{ steps.package.outputs.publish-discord-state }}
@@ -81,6 +82,7 @@ jobs:
       publish-tracing-channel: ${{ steps.package.outputs.publish-tracing-channel }}
       publish-config-watcher: ${{ steps.package.outputs.publish-config-watcher }}
       publish-permissions: ${{ steps.package.outputs.publish-permissions }}
+      publish-discord-bells: ${{ steps.package.outputs.publish-discord-bells }}
       publish-drop-ledger: ${{ steps.package.outputs.publish-drop-ledger }}
       provider-delivery-version: ${{ steps.package.outputs.provider-delivery-version }}
       publish-provider-delivery: ${{ steps.package.outputs.publish-provider-delivery }}
@@ -599,6 +601,19 @@ jobs:
             missing) echo "publish-permissions=true" >> "${GITHUB_OUTPUT}" ;;
           esac
           echo "permissions-version=${permissions_version}" >> "${GITHUB_OUTPUT}"
+          discord_bells_version="$(scripts/workspace-package-version.sh dione-discord-bells)"
+          discord_bells_crate="target/package/dione-discord-bells-${discord_bells_version}.crate"
+          scripts/verify-public-package-privacy.sh "${discord_bells_crate}"
+          scripts/verify-crates-io-owners.sh dione-discord-bells \
+            butterflysky \
+            github:butterflyskies:lacuna-blinkers \
+            github:butterflyskies:superadmins
+          package_state="$(scripts/crates-io-package-state.sh dione-discord-bells "${discord_bells_version}" "${discord_bells_crate}" --ignore-vcs-info)"
+          case "$package_state" in
+            published) echo "publish-discord-bells=false" >> "${GITHUB_OUTPUT}" ;;
+            missing) echo "publish-discord-bells=true" >> "${GITHUB_OUTPUT}" ;;
+          esac
+          echo "discord-bells-version=${discord_bells_version}" >> "${GITHUB_OUTPUT}"
           drop_ledger_version="$(scripts/workspace-package-version.sh dione-drop-ledger)"
           drop_ledger_crate="target/package/dione-drop-ledger-${drop_ledger_version}.crate"
           scripts/verify-public-package-privacy.sh "${drop_ledger_crate}"
@@ -4362,8 +4377,107 @@ jobs:
             github:butterflyskies:lacuna-blinkers \
             github:butterflyskies:superadmins
 
+  publish-discord-bells:
+    needs: [verify-dione, reconcile-bell-rings, reconcile-config, reconcile-discord-events]
+    if: needs.verify-dione.outputs.publish-discord-bells == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: "1.98.0"
+      - name: Recheck discord-bells package contents
+        id: preflight
+        run: |
+          set -euo pipefail
+
+          discord_bells_version="$(scripts/workspace-package-version.sh dione-discord-bells)"
+          test "${discord_bells_version}" = "${{ needs.verify-dione.outputs.discord-bells-version }}"
+          cargo package -p dione-discord-bells --locked --no-verify
+          discord_bells_crate="target/package/dione-discord-bells-${discord_bells_version}.crate"
+          scripts/verify-public-package-privacy.sh "${discord_bells_crate}"
+          scripts/verify-crates-io-owners.sh dione-discord-bells \
+            butterflysky \
+            github:butterflyskies:lacuna-blinkers \
+            github:butterflyskies:superadmins
+
+          package_state="$(scripts/crates-io-package-state.sh dione-discord-bells "${discord_bells_version}" "${discord_bells_crate}" --ignore-vcs-info)"
+          case "$package_state" in
+            published)
+              echo "discord-bells ${discord_bells_version} was already published with matching contents"
+              echo "upload=false" >> "${GITHUB_OUTPUT}"
+              ;;
+            missing)
+              echo "upload=true" >> "${GITHUB_OUTPUT}"
+              ;;
+          esac
+      - name: Authenticate with crates.io
+        if: steps.preflight.outputs.upload == 'true'
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
+        id: auth
+      - name: Upload pre-verified discord-bells package
+        if: steps.preflight.outputs.upload == 'true'
+        continue-on-error: true
+        run: cargo publish -p dione-discord-bells --locked --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  reconcile-discord-bells:
+    needs: [verify-dione, reconcile-bell-rings, reconcile-config, reconcile-discord-events, publish-discord-bells]
+    if: >-
+      always() &&
+      needs.verify-dione.result == 'success' &&
+      needs.reconcile-config.result == 'success' &&
+      needs.reconcile-bell-rings.result == 'success' &&
+      needs.reconcile-discord-events.result == 'success' &&
+      (needs.publish-discord-bells.result == 'success' || needs.publish-discord-bells.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: "1.98.0"
+      - name: Reconcile discord-bells registry contents
+        run: |
+          set -euo pipefail
+
+          discord_bells_version="${{ needs.verify-dione.outputs.discord-bells-version }}"
+          for attempt in $(seq 1 20); do
+            if timeout 10s cargo info --registry crates-io "dione-discord-bells@${discord_bells_version}" > /dev/null 2>&1; then
+              break
+            fi
+            if [ "${attempt}" = 20 ]; then
+              echo "Cargo could not resolve dione-discord-bells ${discord_bells_version} after bounded retries" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          cargo package -p dione-discord-bells --locked
+          discord_bells_crate="target/package/dione-discord-bells-${discord_bells_version}.crate"
+          scripts/verify-public-package-privacy.sh "${discord_bells_crate}"
+          test "$(scripts/crates-io-package-state.sh dione-discord-bells "${discord_bells_version}" "${discord_bells_crate}" --ignore-vcs-info)" = published
+          scripts/verify-crates-io-owners.sh dione-discord-bells \
+            butterflysky \
+            github:butterflyskies:lacuna-blinkers \
+            github:butterflyskies:superadmins
+
   publish-crate:
-    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions]
+    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells]
     if: needs.verify-dione.outputs.publish-dione == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -4416,7 +4530,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   reconcile-dione:
-    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, publish-crate]
+    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, publish-crate]
     if: >-
       always() &&
       needs.verify-dione.result == 'success' &&
@@ -4458,6 +4572,7 @@ jobs:
       needs.reconcile-config-watcher.result == 'success' &&
       needs.reconcile-drop-ledger.result == 'success' &&
       needs.reconcile-permissions.result == 'success' &&
+      needs.reconcile-discord-bells.result == 'success' &&
       (needs.publish-crate.result == 'success' || needs.publish-crate.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 20
