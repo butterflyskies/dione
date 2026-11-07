@@ -627,7 +627,7 @@ fn log_server_text(addr: &str, what: &'static str, reply: &Value) {
 
 /// Why a request could not be completed. Public callers receive
 /// [`ClaimOutcome::Unavailable`] or a log line; checked cleanup returns the typed error.
-/// Its message never quotes the server (see [`log_server_text`]).
+/// Its message never quotes the server (see the private `log_server_text` helper).
 #[derive(Debug, thiserror::Error)]
 pub enum CoordinationError {
     #[error("connect to {addr}: {source}")]
