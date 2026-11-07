@@ -1,6 +1,5 @@
 pub mod attention;
 mod bell_rings;
-pub mod config_watcher;
 pub mod discord;
 pub mod drop_ledger;
 pub mod gate;

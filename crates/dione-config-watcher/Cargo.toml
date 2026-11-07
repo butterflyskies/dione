@@ -1,0 +1,24 @@
+[package]
+name = "dione-config-watcher"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Configuration filesystem watching, reload triggering and error forwarding"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["configuration", "filesystem", "async"]
+categories = ["asynchronous", "config"]
+
+[dependencies]
+camino.workspace = true
+dione-config.workspace = true
+dione-discord-events.workspace = true
+notify.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tracing-subscriber.workspace = true

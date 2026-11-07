@@ -371,7 +371,7 @@ not imply that all writes have the same durability guarantee.
 | Transient Discord state | [shared Discord state](crates/dione-discord-state/src/lib.rs) holds entity caches, DM indexes, sent-message identities, and permission requests. The [ingress ledger](src/ingress_ledger.rs), delivery buffer, and rate limiter are also process-local. |
 | Archive data | The separate [GAIE archive](crates/dione-gaie/src/archive.rs) owns corpus NDJSON, checkpoints, attachment data, origin evidence, and archive locks. See the [archive guide](docs/gaie-archive.md). |
 
-The [config watcher](src/config_watcher.rs) reloads changed files through
+The [config watcher](crates/dione-config-watcher/src/lib.rs) reloads changed files through
 ConfigRuntime. Loading a snapshot does not re-read TOML on every message.
 Snapshots, generation notifications, and writer authority are process-global;
 separate ConfigRuntime values do not create independent configuration instances.

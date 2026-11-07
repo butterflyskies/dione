@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.121.2"
+version = "0.122.2"
 dependencies = [
  "arc-swap",
  "axum",
@@ -944,6 +944,7 @@ dependencies = [
  "dione-claude",
  "dione-codex",
  "dione-config",
+ "dione-config-watcher",
  "dione-contracts",
  "dione-contradictionary",
  "dione-coordination",
@@ -978,7 +979,6 @@ dependencies = [
  "insta",
  "libc",
  "native-tls",
- "notify",
  "parking_lot",
  "png 0.17.16",
  "pretty_assertions",
@@ -1139,6 +1139,21 @@ dependencies = [
  "toml 1.1.6+spec-1.1.0",
  "toml_edit 0.25.15+spec-1.1.0",
  "tracing",
+]
+
+[[package]]
+name = "dione-config-watcher"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "dione-config",
+ "dione-discord-events",
+ "notify",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
