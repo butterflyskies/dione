@@ -1225,26 +1225,24 @@ fn extract_delay(event: &NotificationEvent, config: &dione_config::LoadedConfig)
 pub mod test_helpers {
     use super::*;
 
-    /// Projects a test event through the current typed delivery and legacy codec.
+    /// Converts a test event into the current typed delivery.
     pub fn make_notification(
         event: NotificationEvent,
-    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<dione_messages::delivery::Delivery, Box<dyn std::error::Error + Send + Sync>> {
         let module = dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord")?,
             dione_contracts::ModuleSlotId::new("fixture")?,
         );
         let delivery = crate::discord::delivery::single(&module, event, presentation(None, true))?;
-        Ok(crate::codex::legacy_delivery::encode(
-            &delivery,
-            &crate::codex::LegacyDiscordScope::new(module),
-        )?)
+        Ok(delivery)
     }
 
-    /// Projects a nonempty batch through the current typed delivery and legacy codec.
+    /// Converts a nonempty test batch into the current typed delivery.
     pub fn make_batch(
         events: Vec<NotificationEvent>,
         tz: Option<chrono_tz::Tz>,
-    ) -> Result<Option<Value>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Option<dione_messages::delivery::Delivery>, Box<dyn std::error::Error + Send + Sync>>
+    {
         let mut events = events.into_iter();
         let Some(first) = events.next() else {
             return Ok(None);
@@ -1259,10 +1257,7 @@ pub mod test_helpers {
             events.collect(),
             presentation(tz, true),
         )?;
-        Ok(Some(crate::codex::legacy_delivery::encode(
-            &delivery,
-            &crate::codex::LegacyDiscordScope::new(module),
-        )?))
+        Ok(Some(delivery))
     }
 
     fn complete_tools_list(harness: &HarnessConnection, evidence: bool) -> Value {
@@ -1662,25 +1657,27 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_admission_does_not_requeue_ambiguous_event_but_retains_tail() {
-        let directory = tempfile::TempDir::new().unwrap();
-        let root = camino::Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
+        let mut owner = crate::codex_test_process::OwnerProcess::start().await;
         let module = ModuleInstanceId::new(
             ProviderId::new("discord").unwrap(),
             ModuleSlotId::new("primary").unwrap(),
         );
-        let queue = crate::codex::CodexEventQueue::open(
-            &root,
-            crate::codex::LegacyDiscordScope::new(module.clone()),
-        )
-        .await
-        .unwrap();
-        let sink = test_connection_for_queue(queue.clone());
-        let (reached, release) = queue.pause_owned_completion_for_test(true);
+        let sink = owner.connection();
+        owner
+            .command(serde_json::json!({"command":"pause_completion","lose_response":true}))
+            .await;
         let events = vec![evidence_message_event(0), evidence_message_event(1)];
+        let first_module = module.clone();
         let producer =
-            tokio::spawn(async move { deliver_flushed(&sink, &module, events, None, true).await });
-        reached.await.unwrap();
-        release.send(()).unwrap();
+            tokio::spawn(
+                async move { deliver_flushed(&sink, &first_module, events, None, true).await },
+            );
+        owner
+            .command(serde_json::json!({"command":"completion_reached"}))
+            .await;
+        owner
+            .command(serde_json::json!({"command":"completion_release"}))
+            .await;
         let outcome = producer.await.unwrap();
         assert!(outcome.error.as_ref().unwrap().completion_is_unknown());
         assert_eq!(outcome.undelivered.len(), 1);
@@ -1688,27 +1685,42 @@ mod tests {
             panic!("literal message tail")
         };
         assert_eq!(tail.message_id, MessageId::new(101));
-        assert_eq!(queue.status().await.queued, 1);
-        let sink = test_connection_for_queue(queue.clone());
+        assert_eq!(
+            owner.command(serde_json::json!({"command":"status"})).await["queued"],
+            1
+        );
+        let committed = owner
+            .command(serde_json::json!({"command":"queued_payloads"}))
+            .await;
+        assert_eq!(committed[0]["params"]["meta"]["message_id"], "100");
         let recovered = deliver_flushed(
-            &sink,
-            queue.legacy_scope().module(),
+            &owner.connection(),
+            &module,
             outcome.undelivered,
             None,
             true,
         )
         .await;
         assert!(recovered.error.is_none());
-        assert_eq!(queue.status().await.queued, 2);
+        assert_eq!(
+            owner.command(serde_json::json!({"command":"status"})).await["queued"],
+            2
+        );
+        let committed = owner
+            .command(serde_json::json!({"command":"queued_payloads"}))
+            .await;
+        assert_eq!(committed[0]["params"]["meta"]["message_id"], "100");
+        assert_eq!(committed[1]["params"]["meta"]["message_id"], "101");
+        owner.shutdown().await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn evidence_burst_overflow_reaches_real_sink_losslessly_in_fifo_order() {
         let dir = tempfile::TempDir::new().unwrap();
         let state_dir = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-        let queue = crate::codex::CodexEventQueue::load(
+        let queue = dione_codex::CodexEventQueue::load(
             &state_dir,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            dione_codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
@@ -1798,9 +1810,9 @@ mod tests {
     async fn disabled_evidence_delivery_preserves_text_without_projection() {
         let dir = tempfile::TempDir::new().unwrap();
         let state_dir = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-        let queue = crate::codex::CodexEventQueue::load(
+        let queue = dione_codex::CodexEventQueue::load(
             &state_dir,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            dione_codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
@@ -1825,7 +1837,10 @@ mod tests {
 
         deliver_flushed(
             &sink,
-            queue.legacy_scope().module(),
+            &ModuleInstanceId::new(
+                ProviderId::new("discord").unwrap(),
+                ModuleSlotId::new("primary").unwrap(),
+            ),
             vec![event],
             None,
             false,
@@ -1962,15 +1977,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn immediate_buffer_result_dereferences_to_notification() {
+    #[tokio::test]
+    async fn immediate_buffer_result_dereferences_to_notification() {
         let mut buf = DeliveryBuffer::new(ModuleInstanceId::new(
             ProviderId::new("discord").unwrap(),
             ModuleSlotId::new("primary").unwrap(),
         ));
         let result = buf.buffer_event(message_event(42), Duration::from_millis(0));
         let notification = match result {
-            BufferResult::Immediate(event) => (*event).fixture_notification(),
+            BufferResult::Immediate(event) => (*event).fixture_notification().await,
             BufferResult::FlushThenImmediate { .. } => {
                 panic!("delay=0 cannot require a preceding flush")
             }
@@ -2309,18 +2324,18 @@ fn begin_attention(
 mod attention_tests;
 
 #[cfg(test)]
-fn test_connection_for_queue(queue: crate::codex::CodexEventQueue) -> HarnessConnection {
+fn test_connection_for_queue(queue: dione_codex::CodexEventQueue) -> HarnessConnection {
     let (binding, _receiver) = tokio::sync::watch::channel(None);
-    crate::harness::connect_codex(queue, binding)
+    dione_codex::connect(queue, binding)
 }
 #[cfg(test)]
 pub(super) fn test_codex_connection() -> (tempfile::TempDir, HarnessConnection) {
     let dir = tempfile::TempDir::new().unwrap();
     let path = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
     let harness = test_connection_for_queue(
-        crate::codex::CodexEventQueue::load(
+        dione_codex::CodexEventQueue::load(
             &path,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            dione_codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),

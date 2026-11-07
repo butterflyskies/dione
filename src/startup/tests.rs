@@ -217,7 +217,7 @@ async fn startup_teams_required_environment_and_listen_precedence() {
         CodexSessionOptions::new(
             None,
             None,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            dione_codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),
@@ -316,7 +316,7 @@ async fn startup_selection_policy_matches_prepared_connections() {
                 CodexSessionOptions::new(
                     None,
                     None,
-                    crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+                    dione_codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                         dione_contracts::ProviderId::new("discord").unwrap(),
                         dione_contracts::ModuleSlotId::new("primary").unwrap(),
                     )),
@@ -339,7 +339,7 @@ async fn startup_teams_secret_errors_never_retain_secret_values() {
         CodexSessionOptions::new(
             None,
             None,
-            crate::codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
+            dione_codex::LegacyDiscordScope::new(dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             )),

@@ -1,0 +1,12 @@
+error[E0624]: method `register_live_consumer` is private
+ --> tests/ui/register_resident.rs:2:19
+  |
+2 |       let _ = queue.register_live_consumer().await;
+  |                     ^^^^^^^^^^^^^^^^^^^^^^ private method
+  |
+ ::: src/queue.rs
+  |
+  | /     pub(crate) async fn register_live_consumer(
+  | |         &self,
+  | |     ) -> Result<CodexResidentHandle, CodexQueueError> {
+  | |_____________________________________________________- private method defined here

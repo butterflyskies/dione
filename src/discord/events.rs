@@ -4282,8 +4282,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn represented_and_direct_messages_share_the_same_construct_envelope_shape() {
+    #[tokio::test]
+    async fn represented_and_direct_messages_share_the_same_construct_envelope_shape() {
         use crate::harness::test_support::FixtureNotification;
 
         let config =
@@ -4302,7 +4302,9 @@ mod tests {
             panic!("direct builder must return a message");
         };
         assert_eq!(direct_event.author_kind, SourceAuthorKind::DirectHuman);
-        let direct = NotificationEvent::Message(direct_event).fixture_notification();
+        let direct = NotificationEvent::Message(direct_event)
+            .fixture_notification()
+            .await;
 
         let represented_ledger = crate::ingress_ledger::IngressLedger::new();
         let mut represented_message = wire_message_body(201, wire_author(500, "alice"), "hello");
@@ -4352,7 +4354,9 @@ mod tests {
             SourceAuthorKind::VerifiedWebhook
         );
         assert_eq!(represented_event.user_id, UserId::new(600));
-        let represented = NotificationEvent::Message(represented_event).fixture_notification();
+        let represented = NotificationEvent::Message(represented_event)
+            .fixture_notification()
+            .await;
 
         let direct_meta = direct["params"]["meta"].as_object().expect("direct meta");
         let represented_meta = represented["params"]["meta"]

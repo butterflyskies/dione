@@ -1,0 +1,16 @@
+error[E0603]: tuple struct constructor `CodexThreadId` is private
+ --> tests/ui/forge_thread.rs:2:26
+  |
+2 |     let _ = dione_codex::CodexThreadId("thread".into());
+  |                          ^^^^^^^^^^^^^ private tuple struct constructor
+  |
+ ::: src/lib.rs
+  |
+  | pub struct CodexThreadId(String);
+  |                          ------ a constructor is private if any of the fields is private
+  |
+note: the tuple struct constructor `CodexThreadId` is defined here
+ --> src/lib.rs
+  |
+  | pub struct CodexThreadId(String);
+  | ^^^^^^^^^^^^^^^^^^^^^^^^

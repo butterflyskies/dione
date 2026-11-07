@@ -1,0 +1,13 @@
+error[E0603]: module `legacy_delivery` is private
+ --> tests/ui/codec.rs:2:26
+  |
+2 |     let _ = dione_codex::legacy_delivery::decode_attention;
+  |                          ^^^^^^^^^^^^^^^  ---------------- function `decode_attention` is not publicly re-exported
+  |                          |
+  |                          private module
+  |
+note: the module `legacy_delivery` is defined here
+ --> src/lib.rs
+  |
+  | mod legacy_delivery;
+  | ^^^^^^^^^^^^^^^^^^^

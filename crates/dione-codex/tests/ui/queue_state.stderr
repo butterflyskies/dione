@@ -1,0 +1,5 @@
+error[E0616]: field `inner` of struct `CodexEventQueue` is private
+ --> tests/ui/queue_state.rs:2:20
+  |
+2 |     let _ = &queue.inner;
+  |                    ^^^^^ private field

@@ -1,8 +1,5 @@
 //! Claude channel delivery over the shared MCP writer.
-use super::{
-    AttentionPolicy, HarnessConnection, HarnessDelivery, HarnessError, ProtocolOutput,
-    codex::{ToolArgumentError, recognizes},
-};
+use super::{AttentionPolicy, HarnessConnection, HarnessDelivery, HarnessError, ProtocolOutput};
 use dione_contracts::MessageRef;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -36,6 +33,10 @@ pub(crate) fn notification(delivery: &Delivery) -> Value {
         }
     }
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct ReservedToolError(String);
 
 struct ClaudeAdapter {
     output: ProtocolOutput,
@@ -95,8 +96,8 @@ impl HarnessProtocol for ClaudeAdapter {
         _args: &'a Value,
     ) -> BoxFuture<'a, Option<Result<Value, HarnessError>>> {
         Box::pin(async move {
-            recognizes(name).then(|| {
-                Err(HarnessError::source(ToolArgumentError(format!(
+            dione_codex::TOOL_NAMES.contains(&name).then(|| {
+                Err(HarnessError::source(ReservedToolError(format!(
                     "{name} is only available in Codex mode"
                 ))))
             })

@@ -8,18 +8,15 @@ use futures_util::future::BoxFuture;
 use serenity::model::id::{ChannelId, MessageId};
 use std::sync::Mutex as StdMutex;
 
+#[derive(Clone)]
 enum Received {
     Delivery(Delivery),
     Invalidated(MessageRef),
 }
 impl Received {
-    fn snapshot(&self) -> Value {
+    async fn snapshot(&self) -> Value {
         match self {
-            Self::Delivery(value) => crate::codex::legacy_delivery::encode(
-                value,
-                &crate::codex::LegacyDiscordScope::new(crate::harness::test_support::module()),
-            )
-            .unwrap(),
+            Self::Delivery(value) => crate::harness::test_support::snapshot(value).await,
             Self::Invalidated(source) => {
                 json!({"invalidate":[source.conversation().local().as_numeric().unwrap().get(),source.local().as_numeric().unwrap().get()]})
             }
@@ -204,12 +201,7 @@ async fn third_adapter_routes_notifications_invalidation_and_protocol() {
         }
     }
     assert_eq!(
-        received
-            .lock()
-            .unwrap()
-            .iter()
-            .map(Received::snapshot)
-            .collect::<Vec<_>>(),
+        snapshots(&received).await,
         vec![
             json!({"jsonrpc": "2.0", "method": "notifications/claude/channel/permission", "params": {"request_id": "first", "behavior": "allow"}}),
             json!({"invalidate": [10, 20]}),
@@ -288,7 +280,7 @@ async fn notification_loop_invalidates_edits_and_deletes_before_delivery() {
                 .lock()
                 .unwrap()
                 .iter()
-                .any(|entry| entry.snapshot()["params"]["meta"]["type"] == "message_delete")
+                .any(|entry| matches!(entry, Received::Delivery(value) if matches!(value.kind(), dione_messages::delivery::DeliveryKind::Ordinary { first: dione_messages::events::OrdinaryEvent::MessageDeleted { .. }, .. })))
             {
                 break;
             }
@@ -304,12 +296,7 @@ async fn notification_loop_invalidates_edits_and_deletes_before_delivery() {
         .unwrap();
     completed.expect("notification loop delivered the delete");
     assert_eq!(
-        received
-            .lock()
-            .unwrap()
-            .iter()
-            .map(Received::snapshot)
-            .collect::<Vec<_>>(),
+        snapshots(&received).await,
         vec![
             json!({"invalidate": [10, 20]}),
             json!({"jsonrpc": "2.0", "method": "notifications/claude/channel", "params": {"content": "revised", "meta": {"chat_id": "10", "message_id": "20", "user": "30=author", "user_id": "30", "type": "message_edit", "ts": "2026-01-01T00:00:00+00:00"}}}),
@@ -490,4 +477,13 @@ async fn third_adapter_retains_opaque_scoped_records_and_unprojected_observation
         assert_eq!(message.attachments()[0].size().get(), 0);
         assert_eq!(message.attachments()[0].media_type(), None);
     }
+}
+
+async fn snapshots(received: &Arc<StdMutex<Vec<Received>>>) -> Vec<Value> {
+    let captured = received.lock().unwrap().clone();
+    let mut result = Vec::new();
+    for entry in captured {
+        result.push(entry.snapshot().await);
+    }
+    result
 }

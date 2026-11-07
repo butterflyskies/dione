@@ -1,0 +1,44 @@
+[package]
+name = "dione-codex"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Durable Codex inbox, protocol adapter and session lifecycle"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["mcp", "codex", "durable"]
+categories = ["asynchronous"]
+
+[dependencies]
+dione-attention.workspace = true
+dione-config.workspace = true
+dione-contracts.workspace = true
+dione-discord-identities.workspace = true
+dione-durable.workspace = true
+dione-harness.workspace = true
+dione-messages.workspace = true
+dione-presentation.workspace = true
+dione-provider-delivery.workspace = true
+camino.workspace = true
+chrono.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+serenity.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-tungstenite.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+toml.workspace = true
+axum.workspace = true
+dione-durable = { workspace = true, features = ["test-support"] }
+fs2.workspace = true
+libc.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["process", "test-util"] }
+trybuild.workspace = true

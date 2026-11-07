@@ -64,7 +64,7 @@ struct Cli {
 
     /// Exact Codex thread to receive Discord events (defaults to CODEX_THREAD_ID)
     #[arg(long)]
-    codex_thread_id: Option<crate::codex::CodexThreadId>,
+    codex_thread_id: Option<dione_codex::CodexThreadId>,
 
     /// Operator-owned Unix socket for the minimum resident queue/publication API
     #[arg(long)]
@@ -189,7 +189,7 @@ pub async fn run() -> Result<(), StartupError> {
             CodexSessionOptions::new(
                 cli.codex_app_server_socket,
                 cli.codex_thread_id,
-                crate::codex::LegacyDiscordScope::new(authority_module.clone()),
+                dione_codex::LegacyDiscordScope::new(authority_module.clone()),
             ),
             teams_enabled,
         )
@@ -560,9 +560,7 @@ async fn prepare_teams(
         return Err(StartupErrorKind::TeamsConversationsRequired.into());
     }
     let delivery = match session.resident_admission()? {
-        crate::harness::ResidentAdmission::Codex(queue) => {
-            crate::composition::teams_admission::from_codex(queue)
-        }
+        crate::harness::ResidentAdmission::Codex(queue) => dione_codex::teams_delivery(queue),
         crate::harness::ResidentAdmission::Omp(admission) => {
             crate::composition::teams_admission::from_omp(admission)
         }

@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.115.2"
+version = "0.116.2"
 dependencies = [
  "arc-swap",
  "axum",
@@ -941,6 +941,7 @@ dependencies = [
  "dione-access-requests",
  "dione-attention",
  "dione-bell-rings",
+ "dione-codex",
  "dione-config",
  "dione-contracts",
  "dione-contradictionary",
@@ -1050,6 +1051,39 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "dione-codex"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "camino",
+ "chrono",
+ "dione-attention",
+ "dione-config",
+ "dione-contracts",
+ "dione-discord-identities",
+ "dione-durable",
+ "dione-harness",
+ "dione-messages",
+ "dione-presentation",
+ "dione-provider-delivery",
+ "fs2",
+ "futures-util",
+ "libc",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "serenity",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "toml 1.1.6+spec-1.1.0",
+ "tracing",
+ "trybuild",
 ]
 
 [[package]]

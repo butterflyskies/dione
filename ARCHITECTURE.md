@@ -182,7 +182,7 @@ responses and channel notifications can share stdout.
 capabilities from one adapter instance. Shared routing uses that connection;
 the CLI selects the concrete adapter during construction. The
 [Claude adapter](src/harness/claude.rs) shares one serialized output with MCP
-responses. The [Codex adapter](src/harness/codex.rs) owns the queue-tool schemas,
+responses. The [Codex adapter](crates/dione-codex/src/adapter.rs) owns the queue-tool schemas,
 argument handling, queue delivery, and live binding publisher. Attention's
 [delivery contracts](crates/dione-attention/src/delivery.rs) belong to the attention
 module and are consumed by the concrete worker.
@@ -206,14 +206,14 @@ defines conversation admission, file storage, and socket requirements.
 
 [HarnessSession](src/harness/session.rs) owns preparation and consumes itself
 into a running session after attention initialization. The
-[Codex session](src/harness/codex_session.rs) owns configuration resolution,
+[Codex session](crates/dione-codex/src/session.rs) owns configuration resolution,
 initial binding, the queue, and the existing reconnect worker. Its delivery
 cancellation remains independent while process ingress and replies drain.
 Shutdown joins the worker before releasing the retained connection.
 
 In Claude Code mode, accepted events become channel notifications on stdout.
 In Codex mode, the notification sink writes events to the local inbox.
-[app_server.rs](src/codex/app_server.rs) leases events and sends them to an
+[app_server.rs](crates/dione-codex/src/app_server.rs) leases events and sends them to an
 explicit thread through a WebSocket over the local app-server Unix socket.
 Ordinary delivery starts an idle turn or steers an active turn. Attention-managed
 ambient delivery waits for an idle opportunity and does not steer an active turn.
@@ -221,10 +221,10 @@ ambient delivery waits for an idle opportunity and does not steer an active turn
 The worker acknowledges an event after the app-server accepts its request.
 Acceptance is a transport outcome, not proof that the agent read or acted on the
 event. The MCP lease and acknowledgement tools also support explicit pull
-consumers. The [Codex queue adapter](src/codex/queue.rs) projects the legacy API onto the
+consumers. The [Codex queue adapter](crates/dione-codex/src/queue.rs) projects the legacy API onto the
 [durable queue owner](crates/dione-durable/src/queue.rs), which serializes consumer, lease,
 and binding transitions. Its [store](crates/dione-durable/src/store.rs) holds the lifetime
-inbox lock and persists snapshots through the [legacy codec](src/codex/queue_codec.rs). The [Codex setup guide](README.md#codex-mode) describes binding
+inbox lock and persists snapshots through the [legacy codec](crates/dione-codex/src/queue_codec.rs). The [Codex setup guide](README.md#codex-mode) describes binding
 and intentional backlog handoff.
 
 The workspace contains capability libraries and the Dione application package
@@ -363,7 +363,7 @@ not imply that all writes have the same durability guarantee.
 |-------|--------------------------|
 | Configuration | [ConfigRuntime](crates/dione-config/src/config.rs) serializes mutations and publishes immutable snapshots through ArcSwap. TOML, last-known-good, and quarantine files support recovery. [ConfigStore](crates/dione-config/src/config_store.rs) edits TOML without owning persistence. |
 | Access requests | [AccessQueue](crates/dione-access-requests/src/lib.rs) keeps requests in memory and writes `queue.json` through a temporary file and rename. Persistence errors are logged after memory changes. |
-| Codex delivery | [CodexEventQueue](src/codex/queue.rs) adapts the shared [durable owner](crates/dione-durable/src/queue.rs); its [legacy codec](src/codex/queue_codec.rs) preserves pending events, leases, consumers, and bindings in `codex-inbox.json`. The [store](crates/dione-durable/src/store.rs) holds `codex-inbox.lock` for its lifetime to exclude a second owner. |
+| Codex delivery | [CodexEventQueue](crates/dione-codex/src/queue.rs) adapts the shared [durable owner](crates/dione-durable/src/queue.rs); its [legacy codec](crates/dione-codex/src/queue_codec.rs) preserves pending events, leases, consumers, and bindings in `codex-inbox.json`. The [store](crates/dione-durable/src/store.rs) holds `codex-inbox.lock` for its lifetime to exclude a second owner. |
 | Guild mutes | [MuteStore](crates/dione-mutes/src/lib.rs) rebuilds state from `guild_mute_receipts.jsonl`. Receipt append precedes snapshot publication. |
 | Attention | [AttentionRuntime](src/attention/runtime.rs) uses `attention/records.json` through the [attention store](crates/dione-attention/src/store.rs), plus `attention-status.json` for health reporting. |
 | Consent outcomes | [JournalHandle](crates/dione-outbound-consent/src/journal.rs) serializes writes to `no_rly_journal.jsonl`. Pending consent handles are owned by [HoldQueue](crates/dione-outbound-consent/src/queue.rs). |
@@ -385,7 +385,7 @@ Publishing a new snapshot does not reconstruct those captured values.
 | Integration | Implementing code and purpose |
 |-------------|-------------------------------|
 | Discord Gateway and REST | [Serenity client](src/discord/client.rs), [events](src/discord/events.rs), [messaging](src/discord/messaging.rs), [presence](src/discord/presence.rs), [typing](src/discord/typing.rs), and the remaining [tools](src/mcp/tools) receive events and execute authorized operations. |
-| Codex app-server | [Delivery worker](src/codex/app_server.rs) addresses an exact local thread. |
+| Codex app-server | [Delivery worker](crates/dione-codex/src/app_server.rs) addresses an exact local thread. |
 | PluralKit | [Identity resolver](src/pluralkit.rs) resolves supported proxy identity. |
 | Pronouns and nameplates | [Pronoun service](crates/dione-identity-display/src/pronouns.rs) and [nameplate service](crates/dione-identity-display/src/nameplates.rs) enrich display metadata when enabled. |
 | Memory MCP providers | [Bell evaluator](src/bell_rings.rs) uses `rmcp` Streamable HTTP clients for configured recall providers. This is separate from Dione's stdio MCP server. |

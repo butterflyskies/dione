@@ -17,7 +17,7 @@ use std::{
     process::Stdio,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -111,10 +111,18 @@ pub(crate) enum AdmissionResult {
     ConversationDenied,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("remote Codex owner asserted a genuine mapped panic for operation {operation_id}")]
+pub(crate) struct RemoteOwnerPanic {
+    pub(crate) operation_id: u64,
+}
+
 struct Callback {
     delivery: RwLock<Option<TeamsDelivery>>,
     ready: Mutex<Option<oneshot::Sender<Ready>>>,
     join_panics: AtomicUsize,
+    owner_join_panics: AtomicUsize,
+    owner_operation: AtomicU64,
 }
 async fn ready(State(state): State<Arc<Callback>>, Json(value): Json<Ready>) {
     state
@@ -144,6 +152,16 @@ async fn deliver(
                     );
                     state.join_panics.fetch_add(1, Ordering::SeqCst);
                     RemoteCause::JoinPanic
+                }
+                TeamsDeliveryErrorKind::Storage(source) => {
+                    let attestation = source
+                        .downcast_ref::<RemoteOwnerPanic>()
+                        .expect("explicit owner panic attestation, not a transport failure");
+                    state
+                        .owner_operation
+                        .store(attestation.operation_id, Ordering::SeqCst);
+                    state.owner_join_panics.fetch_add(1, Ordering::SeqCst);
+                    RemoteCause::ResponseLost
                 }
                 TeamsDeliveryErrorKind::ResponseLost(_) => RemoteCause::ResponseLost,
                 other => panic!("unexpected actual application completion source: {other:?}"),
@@ -237,6 +255,8 @@ impl FixtureProcess {
             delivery: RwLock::new(Some(delivery)),
             ready: Mutex::new(Some(tx)),
             join_panics: AtomicUsize::new(0),
+            owner_join_panics: AtomicUsize::new(0),
+            owner_operation: AtomicU64::new(0),
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -406,6 +426,12 @@ impl FixtureProcess {
     }
     pub(crate) fn join_panic_count(&self) -> usize {
         self.callback.join_panics.load(Ordering::SeqCst)
+    }
+    pub(crate) fn owner_join_panic_count(&self) -> usize {
+        self.callback.owner_join_panics.load(Ordering::SeqCst)
+    }
+    pub(crate) fn owner_operation_id(&self) -> u64 {
+        self.callback.owner_operation.load(Ordering::SeqCst)
     }
     pub(crate) async fn shutdown(&mut self) {
         self.client

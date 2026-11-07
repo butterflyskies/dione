@@ -4,6 +4,9 @@
 //! output, verifying coalescing, rate limiting, bypass behavior, and config
 //! integration.
 
+#[path = "support/codex_projection.rs"]
+mod codex_projection;
+
 use dione::discord::events::MessageEvent;
 use dione::discord::events::NotificationEvent;
 use dione::discord::scheduling::DeliveryBuffer;
@@ -817,8 +820,8 @@ fn config_buffer_overflow_policy() {
 }
 
 /// Notification conversion preserves all fields through the pipeline.
-#[test]
-fn notification_format_preserved_through_pipeline() {
+#[tokio::test]
+async fn notification_format_preserved_through_pipeline() {
     let mut limiter = make_limiter(false, 100);
     let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
         ProviderId::new("discord").unwrap(),
@@ -856,7 +859,7 @@ fn notification_format_preserved_through_pipeline() {
     let event = result.expect("message should pass through");
 
     // Convert to notification JSON and verify.
-    let notification = test_helpers::make_notification(event).unwrap();
+    let notification = codex_projection::make_notification(event).await.unwrap();
     assert_eq!(notification["method"], "notifications/claude/channel");
     assert_eq!(notification["params"]["content"], "hello world");
     assert_eq!(notification["params"]["meta"]["chat_id"], "1");
@@ -1610,18 +1613,18 @@ fn per_channel_override_with_global_default() {
 // ── Individual notification format tests ────────────────────────────────
 
 /// Individual notifications have correct JSON-RPC structure.
-#[test]
-fn individual_notification_jsonrpc_structure() {
+#[tokio::test]
+async fn individual_notification_jsonrpc_structure() {
     let events = vec![
         msg_event(ChannelId::new(1), UserId::new(100), "first"),
         reaction_event(ChannelId::new(1), UserId::new(200)),
         msg_event(ChannelId::new(1), UserId::new(300), "second"),
     ];
 
-    let notifications: Vec<serde_json::Value> = events
-        .into_iter()
-        .map(|event| test_helpers::make_notification(event).unwrap())
-        .collect();
+    let mut notifications = Vec::new();
+    for event in events {
+        notifications.push(codex_projection::make_notification(event).await.unwrap());
+    }
 
     assert_eq!(notifications.len(), 3);
     for n in &notifications {
@@ -1638,8 +1641,8 @@ fn individual_notification_jsonrpc_structure() {
 }
 
 /// Multi-channel flush preserves per-event chat_id in individual notifications.
-#[test]
-fn multi_channel_flush_preserves_chat_ids() {
+#[tokio::test]
+async fn multi_channel_flush_preserves_chat_ids() {
     let mut limiter = make_limiter(false, 100);
     let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
         ProviderId::new("discord").unwrap(),
@@ -1677,10 +1680,10 @@ fn multi_channel_flush_preserves_chat_ids() {
         "all events from both channels should flush"
     );
 
-    let notifications: Vec<serde_json::Value> = flushed
-        .into_iter()
-        .map(|event| test_helpers::make_notification(event).unwrap())
-        .collect();
+    let mut notifications = Vec::new();
+    for event in flushed {
+        notifications.push(codex_projection::make_notification(event).await.unwrap());
+    }
 
     // BTreeMap orders by channel key: "1" < "2", so ch1 events come first.
     assert_eq!(notifications[0]["params"]["meta"]["chat_id"], "1");
@@ -1700,8 +1703,8 @@ fn multi_channel_flush_preserves_chat_ids() {
 ///
 /// Verifies the fix for the regression introduced in #122 (previously hit
 /// in #91/#94).
-#[test]
-fn coalesced_batch_uses_standard_method_and_contains_all_messages() {
+#[tokio::test]
+async fn coalesced_batch_uses_standard_method_and_contains_all_messages() {
     let mut limiter = make_limiter(false, 100);
     let mut buffer = DeliveryBuffer::new(ModuleInstanceId::new(
         ProviderId::new("discord").unwrap(),
@@ -1732,7 +1735,7 @@ fn coalesced_batch_uses_standard_method_and_contains_all_messages() {
     assert_eq!(flushed.len(), 4, "all 4 messages must flush together");
 
     // Coalesce the flushed events into a single notification.
-    let notification = test_helpers::make_batch(flushed, None).unwrap().unwrap();
+    let notification = make_batch(flushed, None).await.unwrap().unwrap();
 
     // Critical assertion: the method MUST be the standard one that Claude Code
     // recognizes. Using `notifications/claude/channel/batch` causes silent drops.
@@ -1760,5 +1763,15 @@ fn coalesced_batch_uses_standard_method_and_contains_all_messages() {
             content.contains(&format!("message {i}")),
             "content must contain 'message {i}' but was:\n{content}"
         );
+    }
+}
+
+async fn make_batch(
+    events: Vec<NotificationEvent>,
+    timezone: Option<chrono_tz::Tz>,
+) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
+    match test_helpers::make_batch(events, timezone)? {
+        Some(delivery) => Ok(Some(codex_projection::snapshot(&delivery).await?)),
+        None => Ok(None),
     }
 }

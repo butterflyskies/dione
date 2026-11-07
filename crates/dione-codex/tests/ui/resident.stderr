@@ -1,0 +1,11 @@
+error[E0603]: struct `CodexResidentHandle` is private
+ --> tests/ui/resident.rs:1:18
+  |
+1 | use dione_codex::CodexResidentHandle;
+  |                  ^^^^^^^^^^^^^^^^^^^ private struct
+  |
+note: the struct `CodexResidentHandle` is defined here
+ --> src/lib.rs
+  |
+  | pub(crate) use queue::{CodexBindingController, CodexResidentHandle, LiveAdmissionOutcome};
+  |                                                ^^^^^^^^^^^^^^^^^^^

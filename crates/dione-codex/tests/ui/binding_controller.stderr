@@ -1,0 +1,10 @@
+error[E0624]: method `binding_controller` is private
+ --> tests/ui/binding_controller.rs:3:19
+  |
+3 |     let _ = queue.binding_controller();
+  |                   ^^^^^^^^^^^^^^^^^^ private method
+  |
+ ::: src/queue.rs
+  |
+  |     pub(crate) fn binding_controller(&self) -> CodexBindingController {
+  |     ----------------------------------------------------------------- private method defined here

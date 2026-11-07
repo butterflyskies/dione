@@ -1,0 +1,5 @@
+error[E0599]: no method named `test_set_persist_failure` found for reference `&CodexEventQueue` in the current scope
+ --> tests/ui/fault.rs:2:11
+  |
+2 |     queue.test_set_persist_failure(None).await;
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `&CodexEventQueue`
