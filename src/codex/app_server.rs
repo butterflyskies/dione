@@ -1200,12 +1200,6 @@ async fn wait_to_retry_or_rebind(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        codex::{
-            AttentionDelivery, AttentionScheduling, ConsumerId, DeliveryToken, PersistFailure,
-        },
-        delivery::ProviderEventKey,
-    };
     use futures_util::future::BoxFuture;
     use std::sync::{
         Arc, Mutex as StdMutex,
@@ -1214,6 +1208,12 @@ mod tests {
     use tempfile::TempDir;
     use tokio::{net::UnixListener, sync::mpsc};
     use tokio_tungstenite::accept_async;
+    use {
+        crate::codex::{
+            AttentionDelivery, AttentionScheduling, ConsumerId, DeliveryToken, PersistFailure,
+        },
+        dione_provider_delivery::ProviderEventKey,
+    };
 
     fn thread_channel(
         thread: Option<CodexThreadId>,

@@ -338,8 +338,8 @@ fn omp_lifecycle_child_entry() {
                     let bot = "bot".parse().unwrap();
                     let conversation = "19:child/conversation".parse().unwrap();
                     let activity = "child/activity".parse().unwrap();
-                    crate::teams::delivery::TeamsResidentEvent {
-                        provider_key: crate::delivery::ProviderEventKey::teams(
+                    dione_provider_delivery::TeamsResidentEvent {
+                        provider_key: dione_provider_delivery::ProviderEventKey::teams(
                             tenant,
                             bot,
                             conversation,
@@ -352,7 +352,7 @@ fn omp_lifecycle_child_entry() {
                         user_id: "participant".parse().unwrap(),
                         bot_id: "bot".parse().unwrap(),
                         tenant_id: "tenant".parse().unwrap(),
-                        reply_handle: ReplyHandle::generate(),
+                        reply_handle: uuid::Uuid::new_v4().into(),
                         timestamp: dione_messages::timestamp::Timestamp::now(),
                     }
                 };

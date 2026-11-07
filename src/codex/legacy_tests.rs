@@ -4,11 +4,11 @@ use super::{
     },
     *,
 };
-use crate::delivery::ProviderEventKey;
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::TimeDelta;
 use dione_access_requests::AccessQueue;
 use dione_durable::{PersistFailure, QueueCodec, QueueSnapshot};
+use dione_provider_delivery::ProviderEventKey;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::sync::Arc;

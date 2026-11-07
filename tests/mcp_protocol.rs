@@ -26,7 +26,6 @@ use {
         mcp::server::{DioneServer, test_helpers},
         state::new_state,
         teams::{
-            ReplyHandle,
             edge::LiveReplyReceipt,
             runtime::{TeamsReplyAuthority, TeamsRuntimeError},
         },
@@ -34,6 +33,7 @@ use {
     },
     dione_harness::HarnessConnection,
     dione_messages::timestamp::Timestamp,
+    dione_provider_delivery::ReplyHandle,
 };
 
 fn temp_state_dir() -> (TempDir, camino::Utf8PathBuf) {

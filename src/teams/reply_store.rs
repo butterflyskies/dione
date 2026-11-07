@@ -1,8 +1,5 @@
 //! Bounded, owner-only persistence for authenticated Teams reply authority.
 
-use crate::teams::{
-    AdmissionPolicy, AuthenticatedConversationReference, AuthenticatedTeamsEnvelope, ReplyHandle,
-};
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::{DateTime, Utc};
 use dione_teams_identities::{ActivityId, ActorId, ApplicationId, BotId, ConversationId, TenantId};
@@ -18,6 +15,12 @@ use std::{
 };
 use thiserror::Error;
 use uuid::Uuid;
+use {
+    crate::teams::{
+        AdmissionPolicy, AuthenticatedConversationReference, AuthenticatedTeamsEnvelope,
+    },
+    dione_provider_delivery::ReplyHandle,
+};
 
 const LOCK_NAME: &str = "teams-reply-authorities.lock";
 const FILE_NAME: &str = "teams-reply-authorities.json";
@@ -783,7 +786,7 @@ mod tests {
     }
 
     fn handle() -> ReplyHandle {
-        ReplyHandle::generate()
+        uuid::Uuid::new_v4().into()
     }
 
     #[test]

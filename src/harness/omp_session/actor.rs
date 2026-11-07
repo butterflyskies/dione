@@ -24,8 +24,8 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use {
-    crate::{delivery::ProviderEventKey, teams::delivery::TeamsResidentEvent},
     dione_harness::ProtocolOutput,
+    dione_provider_delivery::{ProviderEventKey, TeamsResidentEvent},
 };
 #[cfg(test)]
 #[path = "tests.rs"]

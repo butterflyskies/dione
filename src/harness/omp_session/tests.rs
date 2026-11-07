@@ -9,7 +9,6 @@ use tokio::{
     time::timeout,
 };
 use {
-    crate::teams::ReplyHandle,
     dione_messages::timestamp::Timestamp,
     dione_teams_identities::{ActivityId, BotId, ConversationId, TenantId},
 };
@@ -33,7 +32,7 @@ fn event(activity: &str) -> TeamsResidentEvent {
         user_id: "29:participant".parse().unwrap(),
         tenant_id,
         bot_id,
-        reply_handle: ReplyHandle::generate(),
+        reply_handle: uuid::Uuid::new_v4().into(),
         timestamp: Timestamp::now(),
     }
 }
@@ -631,6 +630,14 @@ fn codec_rejects_public_records_and_mismatched_native_replay_identity() {
     snapshot.entries[0].visibility = dione_durable::EntryVisibility::ResidentOnly;
     let valid = OmpCodec.encode(&snapshot).unwrap();
     assert_eq!(OmpCodec.decode(&valid).unwrap().entries.len(), 1);
+    let mut mismatched_wire: serde_json::Value = serde_json::from_slice(&valid).unwrap();
+    mismatched_wire["entries"][0]["replay_key"] =
+        serde_json::to_value(event("different").provider_key).unwrap();
+    assert!(
+        OmpCodec
+            .decode(&serde_json::to_vec(&mismatched_wire).unwrap())
+            .is_err()
+    );
     snapshot.entries[0].replay_keys = vec![event("different").provider_key];
     assert!(OmpCodec.encode(&snapshot).is_err());
 }
@@ -910,4 +917,34 @@ fn fenced_recovery_wire_has_exact_private_discriminants_and_no_bound_field() {
         serde_json::to_value(BindingRecovery::Unavailable).unwrap(),
         json!({"state":"unavailable"})
     );
+}
+
+#[tokio::test]
+async fn native_payload_key_mismatch_is_rejected_before_admission() {
+    let directory = TempDir::new().unwrap();
+    let session = OmpSession::open(&path(&directory)).await.unwrap();
+    let admission = session.admission();
+    let control = session.control();
+    let running = session.start(
+        ProtocolOutput::new(tokio::io::sink()),
+        CancellationToken::new(),
+    );
+    ready(&control, "saved-one").await;
+    let mut mismatched = event("native");
+    mismatched.provider_key = event("different").provider_key;
+    assert!(matches!(
+        admission.enqueue(mismatched).await.unwrap_err().kind,
+        OmpSessionErrorKind::EventIdentity
+    ));
+    for activity in ["native", "different"] {
+        assert!(matches!(
+            admission.enqueue(event(activity)).await.unwrap(),
+            AdmissionOutcome::Committed
+        ));
+        assert!(matches!(
+            admission.enqueue(event(activity)).await.unwrap(),
+            AdmissionOutcome::Duplicate
+        ));
+    }
+    running.shutdown().await.unwrap();
 }

@@ -1,16 +1,18 @@
 //! Explicit Teams admission composition for resident harness owners.
 
-use crate::{
-    codex::{CodexEventQueue, LiveAdmissionOutcome, LiveQueueErrorKind},
-    harness::omp_session::{OmpAdmission, OmpSessionError, OmpSessionErrorKind},
-    teams::delivery::{
+use dione_durable::{AdmissionOutcome, QueueErrorKind};
+use serde_json::json;
+use std::{future::Future, pin::Pin};
+use {
+    crate::{
+        codex::{CodexEventQueue, LiveAdmissionOutcome, LiveQueueErrorKind},
+        harness::omp_session::{OmpAdmission, OmpSessionError, OmpSessionErrorKind},
+    },
+    dione_provider_delivery::{
         TeamsAdmissionOutcome, TeamsDelivery, TeamsDeliveryError, TeamsDeliveryErrorKind,
         TeamsEventSink, TeamsResidentEvent,
     },
 };
-use dione_durable::{AdmissionOutcome, QueueErrorKind};
-use serde_json::json;
-use std::{future::Future, pin::Pin};
 
 struct CodexTeamsAdmission {
     queue: CodexEventQueue,
@@ -174,15 +176,12 @@ mod tests {
     use std::{error::Error, io};
     use tempfile::TempDir;
     use {
-        crate::{
-            codex::{
-                CodexQueueError, CodexQueueErrorKind, CodexThreadId, LegacyReplayIdentity,
-                LiveQueueError,
-            },
-            delivery::ProviderEventKey,
-            teams::ReplyHandle,
+        crate::codex::{
+            CodexQueueError, CodexQueueErrorKind, CodexThreadId, LegacyReplayIdentity,
+            LiveQueueError,
         },
         dione_messages::timestamp::Timestamp,
+        dione_provider_delivery::{ProviderEventKey, ReplyHandle},
     };
 
     fn event(activity: &str) -> TeamsResidentEvent {

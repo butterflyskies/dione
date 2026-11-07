@@ -470,6 +470,21 @@ services and reply authority; transport retains origin, readiness and admission.
 Existing malformed discovery behavior is retained. Missing tools becomes null
 through mutable JSON indexing; existing non-array values remain unchanged.
 
+## Shared provider delivery boundary
+
+dione-provider-delivery owns the existing concrete provider-qualified replay key,
+Teams resident event and sink contracts, classified admission receipts and
+reply-handle syntax. Private implementation modules publish explicit root types.
+The event is descriptive and retains an independent replay key; OMP still checks
+it against native coordinates. Codex legacy/version0 and OMP version1 codecs
+remain separate, with unchanged fixture bytes and replay ordering.
+
+Handle parsing preserves historical UUID spelling; typed UUID conversion formats
+canonical syntax. Random generation stays private in Teams runtime. Native
+producers retain authenticated envelopes, sealed store and current authorization,
+including prepare/consume/send order and no send on uncertain consume. Concrete
+composition adapters remain application-owned.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -500,6 +515,7 @@ through mutable JSON indexing; existing non-array values remain unchanged.
 24. Unified configuration validation, persistence, recovery, and global publication.
 25. Cohesive outbound consent, held retries, diary, journal and fence-aware chunks.
 26. Immutable MCP tool registration and owner handler contracts.
+27. Shared provider replay identity, Teams delivery and reply-handle contracts.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -512,7 +528,7 @@ The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, and `dione-mcp-tools`.
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, and `dione-provider-delivery`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -534,14 +550,14 @@ Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, and `dione-mcp-tools`,
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, and `dione-provider-delivery`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all twenty-six capabilities. Contradictionary publishing waits
+publishing waits for all twenty-seven capabilities. Contradictionary publishing waits
 for evidence reconciliation. Presentation publishing waits for
 contracts, attention, evidence, messages, and identity-display reconciliation. Harness publishing waits for
 contracts and messages reconciliation. Messages publishing waits for
@@ -581,3 +597,6 @@ consent reconciliation as well.
 
 MCP tools is a capability leaf. Root publication and tokenless reconciliation
 wait for its reconciliation before publishing the application.
+
+Provider delivery publication and tokenless reconciliation wait for messages
+and Teams identities; root waits for provider delivery reconciliation.

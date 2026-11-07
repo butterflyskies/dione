@@ -1,0 +1,22 @@
+[package]
+name = "dione-provider-delivery"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Provider replay identities and descriptive Teams resident delivery contracts"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["delivery", "teams", "replay"]
+categories = ["asynchronous"]
+
+[dependencies]
+dione-messages.workspace = true
+dione-teams-identities.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

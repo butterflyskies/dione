@@ -136,6 +136,13 @@ actual selected-harness discovery and private controls at both construction
 paths. Transport origin, readiness, resident admission and native authority
 remain application-owned.
 
+The public dione-provider-delivery package owns concrete persisted provider
+replay keys, descriptive Teams resident events, borrowed admission sinks and
+reply-handle syntax. Codex and OMP retain distinct codecs and replay ordering.
+Teams retains private authentication, sealed authority, current policy and
+prepare/consume/send sequencing. Typed UUID conversion formats syntax; random
+handle generation stays private to its runtime.
+
 ## Processes and transports
 
 ```mermaid

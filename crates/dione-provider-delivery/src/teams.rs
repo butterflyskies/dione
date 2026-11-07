@@ -1,22 +1,33 @@
 //! Teams events and acceptance receipts at the resident delivery boundary.
 
-use super::ReplyHandle;
+use crate::{ProviderEventKey, ReplyHandle};
+use dione_messages::timestamp::Timestamp;
 use dione_teams_identities::{ActivityId, ActorId, BotId, ConversationId, TenantId};
 use std::{future::Future, pin::Pin, sync::Arc};
 use thiserror::Error;
-use {crate::delivery::ProviderEventKey, dione_messages::timestamp::Timestamp};
 
-pub(crate) struct TeamsResidentEvent {
-    pub(crate) provider_key: ProviderEventKey,
-    pub(crate) content: String,
-    pub(crate) message_id: ActivityId,
-    pub(crate) conversation_id: ConversationId,
-    pub(crate) channel_id: String,
-    pub(crate) user_id: ActorId,
-    pub(crate) bot_id: BotId,
-    pub(crate) tenant_id: TenantId,
-    pub(crate) reply_handle: ReplyHandle,
-    pub(crate) timestamp: Timestamp,
+/// Descriptive delivery data; native authority remains with the producing adapter.
+pub struct TeamsResidentEvent {
+    /// The persisted replay identity, independently checked by consumers.
+    pub provider_key: ProviderEventKey,
+    /// The content delivered to the resident.
+    pub content: String,
+    /// The native activity identity.
+    pub message_id: ActivityId,
+    /// The native conversation identity.
+    pub conversation_id: ConversationId,
+    /// The descriptive delivery channel.
+    pub channel_id: String,
+    /// The native actor identity.
+    pub user_id: ActorId,
+    /// The receiving bot identity.
+    pub bot_id: BotId,
+    /// The containing tenant identity.
+    pub tenant_id: TenantId,
+    /// A syntactically valid reference, not reply authority.
+    pub reply_handle: ReplyHandle,
+    /// The activity timestamp.
+    pub timestamp: Timestamp,
 }
 
 /// A classified resident failure retaining the adapter's original cause.
@@ -48,15 +59,21 @@ pub enum TeamsDeliveryErrorKind {
     Storage(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
-pub(crate) enum TeamsAdmissionOutcome {
+/// Distinct resident acceptance and uncertainty receipts.
+pub enum TeamsAdmissionOutcome {
+    /// The event was committed.
     Committed,
+    /// The replay identity was already accepted.
     Duplicate,
+    /// The event is visible, but persistence durability is uncertain.
     CommittedDurabilityUncertain(TeamsDeliveryError),
     /// Retain authority without claiming either insertion or rejection.
     CompletionUnknown(TeamsDeliveryError),
 }
 
-pub(crate) trait TeamsEventSink: Send + Sync {
+/// An owner-provided resident admission sink.
+pub trait TeamsEventSink: Send + Sync {
+    /// Delivers descriptive event data while borrowing the sink.
     fn deliver<'a>(
         &'a self,
         event: TeamsResidentEvent,
@@ -68,11 +85,13 @@ pub(crate) trait TeamsEventSink: Send + Sync {
 pub struct TeamsDelivery(Arc<dyn TeamsEventSink>);
 
 impl TeamsDelivery {
-    pub(crate) fn new(sink: impl TeamsEventSink + 'static) -> Self {
+    /// Wraps a concrete resident sink in a cloneable capability.
+    pub fn new(sink: impl TeamsEventSink + 'static) -> Self {
         Self(Arc::new(sink))
     }
 
-    pub(crate) async fn deliver(
+    /// Delivers through the same sink while retaining its classified outcome.
+    pub async fn deliver(
         &self,
         event: TeamsResidentEvent,
     ) -> Result<TeamsAdmissionOutcome, TeamsDeliveryError> {

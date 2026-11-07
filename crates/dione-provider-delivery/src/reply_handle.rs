@@ -22,13 +22,15 @@ impl ReplyHandle {
         Ok(Self(value))
     }
 
-    pub(crate) fn generate() -> Self {
-        Self(format!("teams-{}", Uuid::new_v4()))
-    }
-
     /// Returns the original handle spelling for a transport boundary.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl From<Uuid> for ReplyHandle {
+    fn from(id: Uuid) -> Self {
+        Self(format!("teams-{id}"))
     }
 }
 

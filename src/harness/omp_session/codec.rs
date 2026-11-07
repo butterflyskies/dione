@@ -1,11 +1,11 @@
 //! Versioned resident-only OMP inbox schema, separate from the Codex inbox.
 use super::types::{OmpPayload, SavedSessionId};
-use crate::delivery::ProviderEventKey;
 use chrono::{DateTime, Utc};
 use dione_durable::{
     CodecError, CodecErrorKind, ConsumerId, DeliveryToken, EndpointId, EntryVisibility, EventId,
     QueueCodec, QueueSnapshot, state,
 };
+use dione_provider_delivery::ProviderEventKey;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use thiserror::Error;

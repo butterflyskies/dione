@@ -1,6 +1,5 @@
 //! Teams-owned MCP parsing and receipt projection for single-use reply authority.
 
-use super::{ReplyHandle, runtime::TeamsReplyAuthority};
 use dione_mcp_tools::{
     McpTool, RegisteredTool, ToolCallError, ToolCallErrorKind, ToolDefinition, ToolName,
     ToolNameError,
@@ -10,6 +9,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use thiserror::Error;
+use {super::runtime::TeamsReplyAuthority, dione_provider_delivery::ReplyHandle};
 
 /// Builds MCP tools backed by the supplied event-bound Teams reply authority.
 /// An absent authority contributes no tools.

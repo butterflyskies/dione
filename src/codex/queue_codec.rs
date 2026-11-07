@@ -14,8 +14,8 @@ use serenity::model::id::MessageId;
 use std::collections::VecDeque;
 use thiserror::Error;
 use {
-    crate::delivery::ProviderEventKey,
     dione_attention::delivery::{AttentionDirective, OwnedAttentionDescriptor},
+    dione_provider_delivery::ProviderEventKey,
 };
 
 #[derive(Debug, Clone)]
