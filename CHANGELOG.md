@@ -22,8 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Allow 120 seconds for the authenticated Teams event test helper to read each
-  event on slower CI workers, preserving event assertions and production deadlines.
+- Allow 120 seconds for authenticated Teams test event reads, child socket
+  readiness, and parent control connections on slower CI workers, preserving
+  assertions and production deadlines.
 
 ## [0.93.1]
 
