@@ -107,6 +107,7 @@ discord_bells_version=$(sh scripts/workspace-package-version.sh dione-discord-be
 discord_gate_version=$(sh scripts/workspace-package-version.sh dione-discord-gate)
 oneshot_version=$(sh scripts/workspace-package-version.sh dione-oneshot)
 harness_runtime_version=$(sh scripts/workspace-package-version.sh dione-harness-runtime)
+discord_scheduling_version=$(sh scripts/workspace-package-version.sh dione-discord-scheduling)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-coordination-${coordination_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-teams-identities-${teams_identities_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-discord-identities-${discord_identities_version}.crate"
@@ -128,6 +129,7 @@ sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-discord
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-discord-gate-${discord_gate_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-oneshot-${oneshot_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-harness-runtime-${harness_runtime_version}.crate"
+sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-discord-scheduling-${discord_scheduling_version}.crate"
 pre_send_version=$(sh scripts/workspace-package-version.sh dione-pre-send)
 outbound_consent_version=$(sh scripts/workspace-package-version.sh dione-outbound-consent)
 config_version=$(sh scripts/workspace-package-version.sh dione-config)

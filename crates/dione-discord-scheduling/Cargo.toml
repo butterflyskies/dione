@@ -1,0 +1,25 @@
+[package]
+name = "dione-discord-scheduling"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Scoped Discord notification scheduling over the shared scheduler"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["discord", "scheduling", "delivery"]
+categories = ["asynchronous"]
+
+[dependencies]
+dione-contracts.workspace = true
+dione-delivery-scheduler.workspace = true
+dione-discord-events.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+serenity.workspace = true
+dione-messages.workspace = true
+dione-attention.workspace = true
+tracing.workspace = true
+proptest.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

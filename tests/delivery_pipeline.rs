@@ -7,7 +7,6 @@
 #[path = "support/codex_projection.rs"]
 mod codex_projection;
 
-use dione::discord::scheduling::DeliveryBuffer;
 use dione::mcp::server::test_helpers;
 use dione_config::ChannelConfig;
 use dione_config::Config;
@@ -18,6 +17,7 @@ use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use dione_delivery_scheduler::BufferResult;
 use dione_discord_events::MessageEvent;
 use dione_discord_events::NotificationEvent;
+use dione_discord_scheduling::DeliveryBuffer;
 use dione_messages::timestamp::Timestamp;
 use dione_rate_limiter::ChannelRef;
 use dione_rate_limiter::OverflowPolicy;
