@@ -908,10 +908,9 @@ fn claim_winner_display(
         .ok()
         .filter(|id| *id != 0 && id.to_string() == *first);
     match user {
-        Some(id) => dione_messages::identity_display::format_identity(
-            first,
-            names.get(&id).map(String::as_str),
-        ),
+        Some(id) => {
+            dione_identity_display::format_identity(first, names.get(&id).map(String::as_str))
+        }
         None => first.clone(),
     }
 }

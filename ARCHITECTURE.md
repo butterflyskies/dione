@@ -27,8 +27,9 @@ accepted-operation lifetime, and atomic snapshot replacement. Codex and Oh My Pi
 retain their adapter-specific codecs and payload validation. Rook uses the same
 atomic replacement primitive while retaining its private-directory admission.
 The public `dione-contracts` package owns source-qualified provider identities,
-context records, and checked message occurrences. Display formatting and
-attention-dependent delivery values belong to `dione-messages`; Rook retains its own
+context records, and checked message occurrences. Literal identity formatting
+belongs to `dione-identity-display`; delivery values belong to `dione-messages`.
+Rook retains its own
 serialized observation model and authorization checks.
 The public `dione-rook` package owns durable recipients, callback scheduling,
 context reads, and publication slots. Its private snapshot keeps claim and
@@ -43,7 +44,7 @@ arguments, supplied-author JSON projection, and the Markdown scanner shared by
 chunking, status lint, and filtering. It has no attention or delivery dependency.
 Discord still supplies authenticated authorship and enforces current policy.
 The public `dione-messages` package owns observed events, nonempty ordinary
-deliveries, managed source descriptors, identity presentation, and timestamps.
+deliveries, managed source descriptors, and timestamps.
 Dione retains timezone configuration and current dispatch authority. Message
 values describe supplied observations rather than granting access or permission.
 The public `dione-rate-limiter` package owns scoped configuration resolution and
@@ -57,6 +58,10 @@ The public `dione-gaie` package owns durable archives, retained origin bytes,
 scoped Discord backfill, attachment budgets, and latest-state replay. Its private
 origin and checkpoint protocol stays together. Dione retains archive configuration,
 credential loading, channel allowlists, and the archive executable.
+The public `dione-identity-display` package owns literal formatting and the
+existing nameplate/PronounDB clients. Dione keeps service construction, settings,
+bot/human routing, and current exclusion decisions. The clients share the formatter
+directly and have no messages or attention dependency.
 See the [crate split plan](docs/design/plugin-crates.md) for the next boundaries
 and the package release requirements.
 
@@ -294,7 +299,7 @@ Publishing a new snapshot does not reconstruct those captured values.
 | Discord Gateway and REST | [Serenity client](src/discord/client.rs), [events](src/discord/events.rs), [messaging](src/discord/messaging.rs), [presence](src/discord/presence.rs), [typing](src/discord/typing.rs), and the remaining [tools](src/mcp/tools) receive events and execute authorized operations. |
 | Codex app-server | [Delivery worker](src/codex/app_server.rs) addresses an exact local thread. |
 | PluralKit | [Identity resolver](src/pluralkit.rs) resolves supported proxy identity. |
-| Pronouns and nameplates | [Pronoun service](src/pronouns.rs) and [nameplate service](src/nameplates.rs) enrich display metadata when enabled. |
+| Pronouns and nameplates | [Pronoun service](crates/dione-identity-display/src/pronouns.rs) and [nameplate service](crates/dione-identity-display/src/nameplates.rs) enrich display metadata when enabled. |
 | Memory MCP providers | [Bell evaluator](src/bell_rings.rs) uses `rmcp` Streamable HTTP clients for configured recall providers. This is separate from Dione's stdio MCP server. |
 | TypeSafe System One | [Attention provider](crates/dione-attention/src/provider.rs) scores eligible ambient text with bounded requests. It does not replace the agent host's generative inference. |
 | Vaelii | [Receipt bridge](crates/dione-vaelii/src/lib.rs) writes provenance for explicit message reads when configured. Sentex locators are handled by [dione-evidence](crates/dione-evidence/src/lib.rs). |

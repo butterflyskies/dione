@@ -1,9 +1,9 @@
 [workspace]
-members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention", "crates/dione-evidence", "crates/dione-messages", "crates/dione-rate-limiter", "crates/dione-vaelii", "crates/dione-gaie"]
+members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention", "crates/dione-evidence", "crates/dione-messages", "crates/dione-rate-limiter", "crates/dione-vaelii", "crates/dione-gaie", "crates/dione-identity-display"]
 
 [package]
 name = "dione"
-version = "0.96.2"
+version = "0.97.2"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -14,6 +14,8 @@ keywords = ["discord", "mcp", "claude-code", "codex", "bot"]
 categories = ["command-line-utilities"]
 
 [workspace.dependencies]
+serde_yaml_ng = "0.10"
+dione-identity-display = { version = "=0.1.0", path = "crates/dione-identity-display" }
 pretty_assertions = "1"
 url = "2"
 test-case = "3"
@@ -22,7 +24,7 @@ dione-vaelii = { version = "=0.1.0", path = "crates/dione-vaelii" }
 proptest = "1"
 dione-rate-limiter = { version = "=0.1.0", path = "crates/dione-rate-limiter" }
 chrono-tz = "0.10"
-dione-messages = { version = "=0.1.0", path = "crates/dione-messages" }
+dione-messages = { version = "=0.2.0", path = "crates/dione-messages" }
 base64 = "0.22"
 dione-evidence = { version = "=0.1.0", path = "crates/dione-evidence" }
 dione-attention = { version = "=0.1.0", path = "crates/dione-attention" }
@@ -62,6 +64,7 @@ serenity = { version = "0.12", default-features = false, features = ["client", "
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 [dependencies]
+dione-identity-display.workspace = true
 dione-gaie.workspace = true
 dione-vaelii.workspace = true
 dione-rate-limiter.workspace = true
@@ -82,7 +85,6 @@ tokio-util.workspace = true
 serde.workspace = true
 serde_path_to_error.workspace = true
 serde_json.workspace = true
-serde_yaml_ng = "0.10"
 toml.workspace = true
 toml_edit = "0.25"
 tracing.workspace = true

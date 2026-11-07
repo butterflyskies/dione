@@ -434,10 +434,11 @@ Use the [type review checklist](docs/pr-ready.md#review-type-contracts) for evid
 
 ## Compatibility and review
 
-The checked-in workflows do not run `cargo-semver-checks`. For `src/` changes,
-release hygiene checks version ordering and changelog entries; it does not prove
-Rust API compatibility. For changes outside `src/`, the script exits without
-those checks.
+The checked-in workflows do not run `cargo-semver-checks`. Changes under `src/`
+or `crates/*/src/` require a greater Dione version and matching changelog entry.
+Any change within an existing member directory also requires a greater member
+version, including manifest, README, and fixture changes. New members declare a
+valid initial version. Release hygiene does not prove Rust API compatibility.
 For public API changes, identify affected consumers and verify their builds and
 behavior. Keep the compile-fail tests that protect verified-action boundaries.
 

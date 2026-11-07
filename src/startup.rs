@@ -196,18 +196,20 @@ pub async fn run() -> Result<(), StartupError> {
     let teams = prepare_teams(&session, &state_dir, &config.raw.teams, |key| env::var(key)).await?;
 
     let pronoun_service = if config.raw.pronouns.enabled {
-        Some(std::sync::Arc::new(crate::pronouns::PronounService::new(
-            config.pronoun_excluded.clone(),
-            config.raw.pronouns.deadline_ms,
-            std::time::Duration::from_secs(config.raw.pronouns.cache_ttl_seconds),
-        )))
+        Some(std::sync::Arc::new(
+            dione_identity_display::pronouns::PronounService::new(
+                config.pronoun_excluded.clone(),
+                config.raw.pronouns.deadline_ms,
+                std::time::Duration::from_secs(config.raw.pronouns.cache_ttl_seconds),
+            ),
+        ))
     } else {
         None
     };
 
     let nameplate_service = if config.raw.nameplates.enabled {
         Some(std::sync::Arc::new(
-            crate::nameplates::NameplateService::new(
+            dione_identity_display::nameplates::NameplateService::new(
                 &config.raw.nameplates.url,
                 config.raw.nameplates.deadline_ms,
                 std::time::Duration::from_secs(config.raw.nameplates.cache_ttl_seconds),

@@ -1,4 +1,13 @@
-//! Literal human-facing identity display, independent of identity authority.
+//! Literal identity display and nameplate/PronounDB enrichment.
+//!
+//! Applications select lookups and retain identity authority. Formatting uses
+//! supplied names and preserves explicit pronoun suffixes.
+#![warn(missing_docs)]
+
+/// Nameplate-file fetching, caching, and display enrichment.
+pub mod nameplates;
+/// PronounDB fetching, caching, and display enrichment.
+pub mod pronouns;
 
 /// Format a supplied observed/cached name without fetching or escaping it.
 pub fn format_identity(id: &str, display_name: Option<&str>) -> String {

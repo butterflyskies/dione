@@ -6,6 +6,5 @@
 
 pub mod delivery;
 pub mod events;
-pub mod identity_display;
 /// Fixed-offset timestamps and compact formatting without application configuration.
 pub mod timestamp;

@@ -52,8 +52,9 @@ text remain distinct. Owned fields stay private, and an edited occurrence still
 requires exact agreement with its context edit timestamp. Borrowed identity
 projections expose the existing numeric or opaque form without string conversion.
 
-The crate has no application, attention, platform, or Rook dependency. Display,
-event, and delivery values belong to `dione-messages`; application adapters and
+The crate has no application, attention, platform, or Rook dependency. Event and
+delivery values belong to `dione-messages`; literal formatting belongs to
+`dione-identity-display`. Application adapters and
 current authorization remain in Dione. Rook keeps its wire schemas and validation. Common
 observations are descriptive data, not proof of current access or action authority.
 
@@ -125,8 +126,8 @@ protect the handle and handle-collection fields.
 
 ## Shared message boundary
 
-`dione-messages` owns observed event values, typed deliveries, identity
-presentation, and timestamps. It depends on the existing provider contracts,
+`dione-messages` owns observed event values, typed deliveries, and timestamps.
+It depends on the existing provider contracts,
 attention delivery types, and evidence grammar. No configuration, application
 state, source lookup, or transport implementation moves with these values.
 
@@ -188,6 +189,23 @@ tests. Retained-origin consistency does not establish external authenticity.
 The member retains the existing `cfg(kani)` lint admission and one test-scoped
 `await_holding_lock` allowance; the normal gate does not execute Kani proofs.
 
+## Identity display and enrichment boundary
+
+`dione-identity-display` owns the existing literal formatter and complete
+nameplate/PronounDB clients. The clients call that formatter locally, removing
+their former messages/attention dependency. Their HTTP and cache policies remain
+distinct. No wrapper, provider trait, shared cache, or feature flag is added.
+
+Dione retains settings, construction, bot/human routing, and exclusion decisions.
+Nameplates relies on caller exclusion checks; PronounService also checks them
+internally. Preserve that asymmetry and lookup-before-suffix handling. The
+existing 100 ms real PronounDB test remains unchanged and is not hermetic.
+
+Messages 0.2.0 removes its old `identity_display` module. All callers import the
+new package directly. Messages has no dependency or publication wait on identity
+display. The new package includes its HTTP dependencies even for formatting-only
+checks; no application compile-time improvement is claimed.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -202,6 +220,7 @@ The member retains the existing `cfg(kani)` lint admission and one test-scoped
 8. The independent rate-limiter engine.
 9. The optional Vaelii provenance receipt client.
 10. The complete GAIE archive and backfill owner.
+11. Literal identity display and the two enrichment clients.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -213,7 +232,7 @@ test preparation, and release builds separately before making speed claims.
 The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`, and
-`dione-gaie`.
+`dione-gaie`, and `dione-identity-display`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -234,14 +253,14 @@ The already-published path remains mandatory.
 Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`, and
-`dione-gaie`,
+`dione-gaie`, and `dione-identity-display`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all ten capabilities. Messages publishing waits for
+publishing waits for all eleven capabilities. Messages publishing waits for
 contracts, attention, and evidence reconciliation. Attention publishing waits for
 contracts reconciliation. Each reconciliation verifies the
 archive contents after registry resolution.

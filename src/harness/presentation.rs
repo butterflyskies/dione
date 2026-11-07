@@ -73,10 +73,7 @@ impl ChannelPresentation {
         self.text("user_id", author.local());
         self.text(
             "user",
-            dione_messages::identity_display::format_identity(
-                &author.local().to_string(),
-                Some(name),
-            ),
+            dione_identity_display::format_identity(&author.local().to_string(), Some(name)),
         );
     }
     fn parent(&mut self, parent: Option<&ConversationRef>) {
@@ -393,7 +390,7 @@ fn group(
         content.push_str("[users");
         for (actor, name) in roster {
             content.push(' ');
-            content.push_str(&dione_messages::identity_display::format_identity(
+            content.push_str(&dione_identity_display::format_identity(
                 &actor.local().to_string(),
                 Some(name),
             ));
