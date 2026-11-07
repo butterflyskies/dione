@@ -1,0 +1,19 @@
+[package]
+name = "dione-vaelii"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Vaelii client for explicit message-read provenance receipts"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["vaelii", "provenance", "receipts"]
+categories = ["api-bindings"]
+
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

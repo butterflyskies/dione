@@ -13,20 +13,18 @@ use dione_contracts::{
 use serde_json::{Value, json};
 use serenity::http::HttpError;
 use {
-    crate::{
-        discord::{
-            messaging::{
-                MessagingError, MessagingErrorKind,
-                queries::{
-                    DiscordNativeObservation, FetchedMessages, MessageView, NewMessages,
-                    PinnedMessages, RetrievedMessage,
-                },
+    crate::discord::{
+        messaging::{
+            MessagingError, MessagingErrorKind,
+            queries::{
+                DiscordNativeObservation, FetchedMessages, MessageView, NewMessages,
+                PinnedMessages, RetrievedMessage,
             },
-            messaging_wire,
         },
-        vaelii::{GetMessageReceipt, VaeliiError},
+        messaging_wire,
     },
     dione_evidence::project_offered_sentexes,
+    dione_vaelii::{GetMessageReceipt, VaeliiError},
 };
 
 /// Projects an exact read with explicit observation and receipt states.

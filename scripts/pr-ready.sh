@@ -76,6 +76,8 @@ attention_version=$(sh scripts/workspace-package-version.sh dione-attention)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-attention-${attention_version}.crate"
 evidence_version=$(sh scripts/workspace-package-version.sh dione-evidence)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-evidence-${evidence_version}.crate"
+vaelii_version=$(sh scripts/workspace-package-version.sh dione-vaelii)
+sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-vaelii-${vaelii_version}.crate"
 messages_version=$(sh scripts/workspace-package-version.sh dione-messages)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-messages-${messages_version}.crate"
 rate_limiter_version=$(sh scripts/workspace-package-version.sh dione-rate-limiter)

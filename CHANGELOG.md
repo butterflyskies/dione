@@ -18,6 +18,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.95.2]
+
+### Fixed
+
+- Inherit the accepted Teams/OMP test allowances and contained guidance while
+  preserving the Vaelii extraction and its assertions.
+
+## [0.95.1]
+
+### Fixed
+
+- Allow 120 seconds for authenticated Teams test event reads, child socket
+  readiness, and parent control connections on slower CI workers, preserving
+  assertions and production deadlines.
+
+## [0.95.0]
+
+### Changed
+
+- Extract the optional Vaelii provenance receipt client into `dione-vaelii`.
+  Preserve the complete client and its tests. Keep Discord authorization, message
+  retrieval, exact-target checks, and receipt response handling in Dione.
+
 ## [0.94.1]
 
 ### Fixed
@@ -594,14 +617,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 - Move the Teams reply tool schema, argument parsing, and execution into the Teams module. MCP retains tool routing, authorization, and response wrapping.
-
-## [0.51.3]
-
-### Changed
-- Group Teams ingress, authentication, reply authority, and delivery under one module. Teams admission now hands a harness-neutral event to the Codex adapter while preserving durable replay and reply semantics.
-
-### Fixed
-- Validate provider event IDs when restoring the Codex inbox, using the same rules as live admission. Reject invalid persisted IDs without rewriting the inbox.
 
 ## [0.51.3]
 

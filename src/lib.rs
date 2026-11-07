@@ -35,7 +35,6 @@ pub(crate) mod status_lint;
 pub mod teams;
 pub mod tracing_channel;
 pub mod util;
-pub mod vaelii;
 
 /// Agent harness integration.
 pub mod harness;

@@ -3,6 +3,8 @@
 //! The bridge deliberately records provenance, not message content or a truth
 //! claim. It is disabled unless a Vaelii server URL is configured.
 
+#![warn(missing_docs)]
+
 use reqwest::{StatusCode, Url, redirect::Policy};
 use serde::Deserialize;
 use std::time::Duration;
@@ -14,6 +16,10 @@ const GET_MESSAGE_TOOL: &str = "DioneGetMessageTool";
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
+/// Optional receipt endpoint and actor configuration.
+///
+/// The writer uses its supplied `construct_id` when `actor_term` is absent;
+/// this value does not load application configuration itself.
 pub struct VaeliiConfig {
     /// Vaelii daemon base URL, or its explicit `/op` endpoint.
     pub server_url: Option<String>,
@@ -35,6 +41,7 @@ impl Default for VaeliiConfig {
 }
 
 impl VaeliiConfig {
+    /// Return whether a nonempty endpoint is configured, without validating it.
     pub fn is_enabled(&self) -> bool {
         self.server_url
             .as_deref()
@@ -43,21 +50,38 @@ impl VaeliiConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Terms returned after a successful provenance receipt write.
+///
+/// These terms identify the supplied message ID and do not authenticate the
+/// message, its author, or the caller.
 pub struct GetMessageReceipt {
+    /// Invocation term derived from the supplied message ID.
     pub invocation: String,
+    /// Receipt term derived from the supplied message ID.
     pub receipt: String,
 }
 
 #[derive(Debug, Error)]
+/// Endpoint, symbol, request, or receipt-batch failure.
 pub enum VaeliiError {
+    /// The supplied endpoint violates the accepted URL shape.
     #[error("invalid Vaelii server URL: {0}")]
     InvalidUrl(&'static str),
+    /// The supplied actor cannot be serialized as one supported EDN symbol.
     #[error("invalid Vaelii symbol for {field}: {value:?}")]
-    InvalidSymbol { field: &'static str, value: String },
+    InvalidSymbol {
+        /// Input field containing the invalid symbol.
+        field: &'static str,
+        /// Rejected symbol text.
+        value: String,
+    },
+    /// HTTP client construction or request execution failed.
     #[error("Vaelii receipt request failed")]
     Request(#[from] reqwest::Error),
+    /// The endpoint returned a non-success HTTP status.
     #[error("Vaelii receipt write returned HTTP {0}")]
     Http(StatusCode),
+    /// A receipt batch failed the client-side tombstone rule.
     #[error("Vaelii receipt batch violates the naked_term invariant: {0}")]
     NakedTermInvariant(String),
 }
@@ -109,6 +133,13 @@ impl Atom {
 ///
 /// Returns `Ok(None)` when no Vaelii URL is configured. The caller controls
 /// whether and how a configured-write failure is surfaced to the MCP client.
+///
+/// The message ID and actor are caller-supplied. This function does not fetch
+/// the message, authenticate its author, or authorize access. It writes no
+/// message content. An absent actor uses the supplied `construct_id`.
+///
+/// Requests do not follow redirects. A nonempty `VAELII_API_TOKEN` environment
+/// value becomes the bearer token for this request.
 pub async fn write_get_message_receipt(
     config: &VaeliiConfig,
     message_id: u64,
