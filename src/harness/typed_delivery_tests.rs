@@ -177,7 +177,7 @@ async fn permission_control_uses_claude_permission_params_without_channel_metada
         let connection =
             dione_claude::connect(ProtocolOutput::new(writer), dione_codex::TOOL_NAMES);
         let delivery = test_support::delivery(
-            crate::discord::events::NotificationEvent::PermissionResponse {
+            dione_discord_events::NotificationEvent::PermissionResponse {
                 request_id: " request-token ".into(),
                 granted,
             },

@@ -1,6 +1,5 @@
 //! Bounded live source recovery. Metadata is not proof that a source still exists.
 
-use crate::discord::events::MessageTargeting;
 use crate::discord::verified_action::LifecycleContext;
 use crate::gate::GateDecision;
 use crate::gate::InboundGate;
@@ -12,6 +11,7 @@ use dione_attention::{
     types::{DirectAuthorKind, SourceAuthorKind, SourceKey, SourceVersion, content_hash},
 };
 use dione_config::load_config;
+use dione_discord_events::MessageTargeting;
 use dione_discord_state::State;
 use serenity::{http::Http, model::channel::Channel};
 use std::{sync::Arc, time::Duration};
@@ -349,7 +349,7 @@ impl SourceResolver {
     pub async fn recover_event(
         &self,
         source: &SourceVersion,
-    ) -> Result<crate::discord::events::MessageEvent, SourceFailure> {
+    ) -> Result<dione_discord_events::MessageEvent, SourceFailure> {
         let resolved = self
             .resolve_with_parent(source.key, Some(source), false)
             .await?;
@@ -361,7 +361,7 @@ impl SourceResolver {
                 .to_rfc3339()
                 .ok_or(SourceFailure::Unknown)?,
         );
-        Ok(crate::discord::events::MessageEvent {
+        Ok(dione_discord_events::MessageEvent {
             chat_id: source.key.channel_id,
             message_id: source.key.message_id,
             user: format!("<@{}>", source.author_id),
@@ -373,7 +373,7 @@ impl SourceResolver {
             attachments: message
                 .attachments
                 .into_iter()
-                .map(|attachment| crate::discord::events::AttachmentMeta {
+                .map(|attachment| dione_discord_events::AttachmentMeta {
                     name: attachment.filename,
                     content_type: attachment.content_type,
                     size: u64::from(attachment.size),

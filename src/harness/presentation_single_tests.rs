@@ -1,13 +1,8 @@
 use dione_bell_rings::BellStatus;
+use dione_discord_events::{MessageEvent, MessageTargeting, NotificationEvent};
 use serde_json::json;
 use serenity::model::id::{ChannelId, MessageId, UserId};
-use {
-    crate::{
-        discord::events::{MessageEvent, MessageTargeting, NotificationEvent},
-        harness::test_support::FixtureNotification,
-    },
-    dione_messages::timestamp::Timestamp,
-};
+use {crate::harness::test_support::FixtureNotification, dione_messages::timestamp::Timestamp};
 
 #[tokio::test]
 async fn test_message_edit_includes_thread_parent_id() {
@@ -128,7 +123,7 @@ async fn test_message_omits_thread_parent_id_when_none() {
         user_id: UserId::new(300),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: "hello from channel".into(),
-        targeting: crate::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -154,7 +149,7 @@ async fn test_message_includes_thread_parent_id() {
         user_id: UserId::new(300),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: "hello from thread".into(),
-        targeting: crate::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -182,7 +177,7 @@ async fn test_message_includes_reply_to_message_id() {
         user_id: UserId::new(300),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: "replying to you".into(),
-        targeting: crate::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -208,7 +203,7 @@ async fn test_message_omits_reply_to_message_id_when_none() {
         user_id: UserId::new(300),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: "not a reply".into(),
-        targeting: crate::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -234,7 +229,7 @@ async fn test_message_includes_reply_context() {
         user_id: UserId::new(300),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: "replying to you".into(),
-        targeting: crate::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -262,7 +257,7 @@ async fn test_message_omits_reply_context_when_none() {
         user_id: UserId::new(300),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: "not a reply".into(),
-        targeting: crate::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -290,7 +285,7 @@ async fn test_message_omits_reply_context_but_keeps_reply_to_message_id() {
         user_id: UserId::new(300),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: "reply without hydrated parent".into(),
-        targeting: crate::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -319,7 +314,7 @@ async fn test_message_includes_bells_when_present() {
         user_id: UserId::new(300),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: "hello with bells".into(),
-        targeting: crate::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -349,7 +344,7 @@ async fn test_message_omits_bells_when_none() {
         user_id: UserId::new(300),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: "hello without bells".into(),
-        targeting: crate::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -375,7 +370,7 @@ async fn test_message_omits_preview_but_keeps_author() {
         user_id: UserId::new(300),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: "reply to attachment-only parent".into(),
-        targeting: crate::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         attachments: vec![],
         is_voice_message: false,

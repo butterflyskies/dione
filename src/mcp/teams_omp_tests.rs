@@ -102,14 +102,14 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
     assert_eq!(first["meta"]["binding_id"], binding["binding_id"]);
     assert_eq!(first["content"], "hello");
     let discord = crate::harness::test_support::delivery(
-        crate::discord::events::NotificationEvent::Message(crate::discord::events::MessageEvent {
+        dione_discord_events::NotificationEvent::Message(dione_discord_events::MessageEvent {
             chat_id: serenity::model::id::ChannelId::new(10),
             message_id: serenity::model::id::MessageId::new(20),
             user: "Discord author".into(),
             user_id: serenity::model::id::UserId::new(30),
             author_kind: Default::default(),
             content: "Discord still works".into(),
-            targeting: crate::discord::events::MessageTargeting::DirectMessage,
+            targeting: dione_discord_events::MessageTargeting::DirectMessage,
             timestamp: dione_messages::timestamp::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,

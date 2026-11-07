@@ -1,8 +1,8 @@
 //! Native message eligibility for memory retrieval. Delivery policy stays in Dione.
-use crate::discord::events::NotificationEvent;
 use dione_bell_rings::{Bell, BellEvaluator, BellStatus};
 use dione_config::BellRingsConfig;
 use dione_config::BellTrigger;
+use dione_discord_events::NotificationEvent;
 
 pub(crate) async fn evaluate_native(
     event: NotificationEvent,
@@ -34,15 +34,15 @@ pub(crate) async fn evaluate_native(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discord::events::MessageEvent;
-    use crate::discord::events::MessageTargeting;
-    use crate::gate::MentionKind;
     use crate::harness::test_support::FixtureNotification;
     use axum::response::IntoResponse;
     use dione_bell_rings::{
         BellProviderConfig, BellProviderUrl, BellScope, BellTimbre, RecallOptions,
     };
     use dione_config::Config;
+    use dione_discord_events::MentionKind;
+    use dione_discord_events::MessageEvent;
+    use dione_discord_events::MessageTargeting;
     use dione_messages::timestamp::Timestamp;
     use serde_json::{Value, json};
     use serenity::model::id::{ChannelId, MessageId, UserId};

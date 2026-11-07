@@ -1,7 +1,5 @@
 //! Recipient-local attention execution. Network work never owns the ingress loop.
 
-use crate::discord::events::MessageTargeting;
-use crate::discord::events::NotificationEvent;
 use crate::discord::messaging;
 use crate::discord::messaging::MessagingCtx;
 use crate::ingress_ledger::SourceDeliveryFailure;
@@ -9,6 +7,8 @@ use dione_attention::delivery::AttentionGuardFailure as Failure;
 use dione_config::attention_effect_guard;
 use dione_config::load_config;
 use dione_config::subscribe_generation;
+use dione_discord_events::MessageTargeting;
+use dione_discord_events::NotificationEvent;
 use dione_outbound_consent::consent::ConsentGate;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -1161,7 +1161,6 @@ mod tests {
     use crate::attention::admission::AdmissionController;
     use crate::attention::admission::Submission;
     use crate::attention::source::now_ms;
-    use crate::discord::events::NotificationEvent;
     use camino::Utf8PathBuf;
     use dione_attention::config::AttentionBrief;
     use dione_attention::config::AttentionConfig;
@@ -1169,6 +1168,7 @@ mod tests {
     use dione_attention::config::RoomAttention;
     use dione_attention::provider::TypeSafeProvider;
     use dione_config::ConfigRuntime;
+    use dione_discord_events::NotificationEvent;
     use parking_lot::Mutex as SyncMutex;
     use serde_json::{Value, json};
     use serenity::model::id::{ChannelId, MessageId, UserId};

@@ -14,8 +14,6 @@ use crate::attention::control::execute;
 use crate::attention::runtime::AttentionRuntime;
 use crate::attention::source::SourceResolver;
 use crate::attention::source::now_ms;
-use crate::discord::events::MessageEvent;
-use crate::discord::events::MessageTargeting;
 use dione_access_requests::AccessQueue;
 use dione_attention::config::AttentionBrief;
 use dione_attention::config::AttentionConfig;
@@ -34,6 +32,8 @@ use dione_attention::types::content_hash;
 use dione_codex::CodexEventQueue;
 use dione_config::ConfigRuntime;
 use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
+use dione_discord_events::MessageEvent;
+use dione_discord_events::MessageTargeting;
 use parking_lot::Mutex as SyncMutex;
 use serde_json::{Value, json};
 use serenity::model::id::{ChannelId, MessageId, UserId};
@@ -673,12 +673,14 @@ fn off_and_log_share_actual_forwarding_while_direct_work_bypasses_a_held_judgmen
             (
                 100,
                 14,
-                MessageTargeting::GuildDirected(crate::gate::MentionKind::DirectMention),
+                MessageTargeting::GuildDirected(dione_discord_events::MentionKind::DirectMention),
             ),
             (
                 100,
                 15,
-                MessageTargeting::GuildDirected(crate::gate::MentionKind::ReplyToConstruct),
+                MessageTargeting::GuildDirected(
+                    dione_discord_events::MentionKind::ReplyToConstruct,
+                ),
             ),
             (101, 16, MessageTargeting::Ambient),
             (200, 17, MessageTargeting::Ambient),
@@ -1006,7 +1008,8 @@ fn timeout_and_metadata_failure_leave_direct_and_ambient_baseline_delivery_live(
             .network
             .insert(100, 402, "direct survives metadata failure", None);
         let mut direct = fixture.event(100, 402).await;
-        direct.targeting = MessageTargeting::GuildDirected(crate::gate::MentionKind::DirectMention);
+        direct.targeting =
+            MessageTargeting::GuildDirected(dione_discord_events::MentionKind::DirectMention);
         assert!(fixture.dispatch(direct).await.is_none());
         let output = fixture.drain().await;
         assert_eq!(

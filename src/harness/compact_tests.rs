@@ -1,18 +1,13 @@
 //! Historical compact-format expectations exercised through typed conversion.
 use chrono_tz::Tz;
+use dione_discord_events::{MessageEvent, NotificationEvent};
 use dione_messages::{
     delivery::{EvidenceVisibility, PresentationContext},
     timestamp::format_compact,
 };
 use serde_json::Value;
 use serenity::model::id::{ChannelId, MessageId, UserId};
-use {
-    crate::{
-        discord::events::{MessageEvent, NotificationEvent},
-        harness::test_support,
-    },
-    dione_messages::timestamp::Timestamp,
-};
+use {crate::harness::test_support, dione_messages::timestamp::Timestamp};
 #[derive(Debug)]
 enum RenderedFixture {
     Single,
@@ -25,7 +20,7 @@ async fn render_fixture(events: Vec<NotificationEvent>, tz: Option<Tz>) -> Optio
     if rest.is_empty() {
         return Some(RenderedFixture::Single);
     }
-    let delivery = crate::discord::delivery::batch(
+    let delivery = dione_discord_events::batch(
         &test_support::module(),
         first,
         rest,
@@ -44,7 +39,7 @@ fn msg_event(channel: u64, msg_id: u64, user: &str, content: &str) -> Notificati
         user_id: UserId::new(100),
         author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
         content: content.to_string(),
-        targeting: crate::discord::events::MessageTargeting::Ambient,
+        targeting: dione_discord_events::MessageTargeting::Ambient,
         timestamp: Timestamp::parse("2026-06-19T15:30:00+00:00").unwrap(),
         attachments: vec![],
         is_voice_message: false,
@@ -258,7 +253,7 @@ async fn wire_format_snapshot_events_v1() {
             user_id: UserId::new(10),
             author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
             content: "hey everyone".to_string(),
-            targeting: crate::discord::events::MessageTargeting::Ambient,
+            targeting: dione_discord_events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-06-19T20:00:00+00:00").unwrap(),
             attachments: vec![],
             is_voice_message: false,

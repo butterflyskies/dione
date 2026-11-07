@@ -369,9 +369,9 @@ async fn malformed_coordinator_pushes_do_not_interrupt_subsequent_live_delivery(
         events.try_recv(),
         Err(broadcast::error::TryRecvError::Empty)
     ));
-    let delivery = crate::discord::delivery::single(
+    let delivery = dione_discord_events::single(
         &crate::harness::test_support::module(),
-        crate::discord::events::NotificationEvent::Coordination(event),
+        dione_discord_events::NotificationEvent::Coordination(event),
         crate::harness::test_support::context(),
     )
     .unwrap();

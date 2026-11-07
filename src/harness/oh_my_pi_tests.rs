@@ -1,7 +1,5 @@
-use crate::{
-    discord::events::{MessageEvent, MessageTargeting, NotificationEvent},
-    harness::test_support,
-};
+use crate::harness::test_support;
+use dione_discord_events::{MessageEvent, MessageTargeting, NotificationEvent};
 use dione_harness::ProtocolOutput;
 use dione_messages::{delivery::Delivery, timestamp::Timestamp};
 use serde_json::{Value, json};
@@ -169,7 +167,7 @@ async fn projects_real_coalesced_metadata() {
         thread_parent_id: None,
     });
     let [first, second] = events;
-    let rendered = crate::discord::delivery::batch(
+    let rendered = dione_discord_events::batch(
         &test_support::module(),
         first,
         vec![second],
@@ -289,7 +287,7 @@ async fn identity_display_batch_roster_keeps_actor_order_and_blank_fallback() {
         emoji: "ok".into(),
         self_react: false,
     };
-    let delivery = crate::discord::delivery::batch(
+    let delivery = dione_discord_events::batch(
         &test_support::module(),
         event(20, "Later (she/her)"),
         vec![event(10, " ")],

@@ -13,8 +13,6 @@
 
 use crate::bell_rings::evaluate_native;
 use crate::discord::access::AccessCtx;
-use crate::discord::events::MessageEvent;
-use crate::discord::events::NotificationEvent;
 use crate::discord::messaging::MessagingCtx;
 use crate::discord::scheduling::DeliveryBuffer;
 use crate::discord::typing::TypingCtx;
@@ -37,6 +35,8 @@ use dione_contracts::ModuleInstanceId;
 #[cfg(test)]
 use dione_contracts::{ModuleSlotId, ProviderId};
 use dione_delivery_scheduler::BufferResult;
+use dione_discord_events::MessageEvent;
+use dione_discord_events::NotificationEvent;
 use dione_discord_presence::PresenceCapability;
 use dione_harness::AttentionPolicy;
 use dione_harness::HarnessConnection;
@@ -1136,8 +1136,7 @@ async fn deliver_flushed(
         return DeliverOutcome::ok();
     };
     let context = presentation(tz, evidence_markers_enabled);
-    let delivery = match crate::discord::delivery::batch(module, first, iterator.collect(), context)
-    {
+    let delivery = match dione_discord_events::batch(module, first, iterator.collect(), context) {
         Ok(delivery) => delivery,
         Err(error) => {
             return DeliverOutcome {
@@ -1233,7 +1232,7 @@ pub mod test_helpers {
             dione_contracts::ProviderId::new("discord")?,
             dione_contracts::ModuleSlotId::new("fixture")?,
         );
-        let delivery = crate::discord::delivery::single(&module, event, presentation(None, true))?;
+        let delivery = dione_discord_events::single(&module, event, presentation(None, true))?;
         Ok(delivery)
     }
 
@@ -1251,12 +1250,8 @@ pub mod test_helpers {
             dione_contracts::ProviderId::new("discord")?,
             dione_contracts::ModuleSlotId::new("fixture")?,
         );
-        let delivery = crate::discord::delivery::batch(
-            &module,
-            first,
-            events.collect(),
-            presentation(tz, true),
-        )?;
+        let delivery =
+            dione_discord_events::batch(&module, first, events.collect(), presentation(tz, true))?;
         Ok(Some(delivery))
     }
 
@@ -1640,7 +1635,7 @@ mod tests {
             user_id: UserId::new(1),
             author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
             content: "c".into(),
-            targeting: crate::discord::events::MessageTargeting::Ambient,
+            targeting: dione_discord_events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
@@ -1662,7 +1657,7 @@ mod tests {
             user_id: UserId::new(200 + index),
             author_kind: dione_attention::types::SourceAuthorKind::DirectHuman,
             content: format!("claim-{index} [🔍=v1:AAAAAAAAAAw] [🔍=v1:AAAAAAAAACI]"),
-            targeting: crate::discord::events::MessageTargeting::Ambient,
+            targeting: dione_discord_events::MessageTargeting::Ambient,
             timestamp: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             attachments: vec![],
             is_voice_message: false,
@@ -1767,7 +1762,7 @@ mod tests {
             match buffer.buffer_event(evidence_message_event(index), Duration::from_millis(500)) {
                 BufferResult::Immediate(event) => {
                     sink.deliver(
-                        &crate::discord::delivery::single(
+                        &dione_discord_events::single(
                             buffer.module(),
                             *event,
                             presentation(None, true),
@@ -2063,7 +2058,7 @@ async fn forward_ordinary(
     let delay = extract_delay(&event, cfg);
     match buffer.buffer_event_with_evidence(event, delay, evidence) {
         BufferResult::Immediate(event) => {
-            let delivery = match crate::discord::delivery::single(
+            let delivery = match dione_discord_events::single(
                 buffer.module(),
                 (*event).clone(),
                 presentation(cfg.tz, evidence),
@@ -2083,7 +2078,7 @@ async fn forward_ordinary(
                 buffer.requeue(vec![*event]);
                 return Err(error);
             }
-            let delivery = match crate::discord::delivery::single(
+            let delivery = match dione_discord_events::single(
                 buffer.module(),
                 (*event).clone(),
                 presentation(cfg.tz, evidence),
@@ -2202,10 +2197,7 @@ async fn forward_attention_results(
                     dione_attention::delivery::AttentionDirective::NextTurn
                 };
                 let notification = Delivery::managed(
-                    crate::discord::delivery::message(
-                        attention.authority_module(),
-                        managed_message,
-                    ),
+                    dione_discord_events::message(attention.authority_module(), managed_message),
                     directive,
                     result.record.id.clone(),
                     presentation(cfg.tz, cfg.delivery.evidence_markers_enabled),

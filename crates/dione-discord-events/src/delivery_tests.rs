@@ -1,9 +1,23 @@
 use super::*;
 use {
-    crate::{discord::events::AttachmentMeta, harness::test_support},
+    crate::AttachmentMeta,
     dione_attention::{delivery::AttentionDirective, types::RecordId},
     dione_messages::{delivery::DeliveryKind, timestamp::Timestamp},
 };
+
+mod test_support {
+    use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
+    use dione_messages::delivery::{EvidenceVisibility, PresentationContext};
+    pub fn module() -> ModuleInstanceId {
+        ModuleInstanceId::new(
+            ProviderId::new("discord").unwrap(),
+            ModuleSlotId::new("primary").unwrap(),
+        )
+    }
+    pub fn context() -> PresentationContext {
+        PresentationContext::new(None, EvidenceVisibility::Enabled)
+    }
+}
 
 fn fixture() -> MessageEvent {
     MessageEvent {

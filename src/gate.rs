@@ -1,6 +1,7 @@
 use camino::Utf8Path;
 use dione_config::DmPolicy;
 use dione_config::LoadedConfig;
+use dione_discord_events::MentionKind;
 use regex::RegexSet;
 use std::fs;
 
@@ -367,18 +368,6 @@ impl OutboundGate {
 
 /// Detects whether a message constitutes a mention of the bot.
 pub struct MentionDetector;
-
-/// Typed evidence that a guild message was directed to the construct.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MentionKind {
-    /// Discord carried an explicit mention of the construct's bot user.
-    DirectMention,
-    /// The message replied to one authored by the construct's bot user.
-    ReplyToConstruct,
-    /// A configured mention pattern matched the message content.
-    ConfiguredPattern,
-}
 
 impl MentionDetector {
     /// Returns `true` if the message counts as a bot mention.

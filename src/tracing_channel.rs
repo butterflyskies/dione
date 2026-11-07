@@ -4,7 +4,7 @@
 //! notification pipeline, where they appear as channel notifications with
 //! `type="trace"` metadata — differentiated from Discord events.
 
-use crate::discord::events::NotificationEvent;
+use dione_discord_events::NotificationEvent;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::Subscriber;

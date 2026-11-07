@@ -655,7 +655,7 @@ impl IngressLedger {
         channel_id: ChannelId,
         expected_hash: &str,
         config: &dione_config::LoadedConfig,
-        targeting: crate::discord::events::MessageTargeting,
+        targeting: dione_discord_events::MessageTargeting,
     ) -> Result<(), SourceDeliveryFailure> {
         let mut state = self
             .state
@@ -704,7 +704,7 @@ impl IngressLedger {
                     record.thread_parent_id.unwrap_or(channel_id)
                 };
                 let mention = match targeting {
-                    crate::discord::events::MessageTargeting::GuildDirected(kind) => Some(kind),
+                    dione_discord_events::MessageTargeting::GuildDirected(kind) => Some(kind),
                     _ => None,
                 };
                 crate::discord::events::passive_edit_policy_allows(

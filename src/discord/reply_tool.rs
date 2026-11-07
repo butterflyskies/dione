@@ -1,6 +1,5 @@
 //! Discord-owned reply tool registration, parsing, and publication.
 use super::{
-    events::NotificationEvent,
     messaging::{
         LinkPreviews, MessagingCtx, ReplyPing, ReplyToolOptions,
         reply_with_evidence_and_hook_overrides,
@@ -14,6 +13,7 @@ use super::{
 use crate::ingress_ledger::IngressLedger;
 use camino::Utf8PathBuf;
 use dione_config::load_config;
+use dione_discord_events::NotificationEvent;
 use dione_discord_state::State;
 use dione_evidence::SentexHandles;
 use dione_mcp_tools::McpTool;

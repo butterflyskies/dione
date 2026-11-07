@@ -98,6 +98,7 @@ codex_version=$(sh scripts/workspace-package-version.sh dione-codex)
 claude_version=$(sh scripts/workspace-package-version.sh dione-claude)
 discord_presence_version=$(sh scripts/workspace-package-version.sh dione-discord-presence)
 discord_state_version=$(sh scripts/workspace-package-version.sh dione-discord-state)
+discord_events_version=$(sh scripts/workspace-package-version.sh dione-discord-events)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-coordination-${coordination_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-teams-identities-${teams_identities_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-discord-identities-${discord_identities_version}.crate"
@@ -110,6 +111,7 @@ sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-codex-$
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-claude-${claude_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-discord-presence-${discord_presence_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-discord-state-${discord_state_version}.crate"
+sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-discord-events-${discord_events_version}.crate"
 pre_send_version=$(sh scripts/workspace-package-version.sh dione-pre-send)
 outbound_consent_version=$(sh scripts/workspace-package-version.sh dione-outbound-consent)
 config_version=$(sh scripts/workspace-package-version.sh dione-config)
