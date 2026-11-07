@@ -172,6 +172,11 @@ impl BellProviderUrl {
         Ok(Self(parsed.to_string()))
     }
 
+    // Diagnostics retain the provider location, never query credentials or fragments.
+    pub(crate) fn diagnostic_endpoint(&self) -> &str {
+        self.0.split(['?', '#']).next().unwrap_or(&self.0)
+    }
+
     /// Borrows the validated value.
     pub fn as_str(&self) -> &str {
         &self.0

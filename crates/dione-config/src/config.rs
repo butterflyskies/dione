@@ -2155,11 +2155,12 @@ impl ConfigRuntime {
             Err(ConfigError::Parse(e)) => match self.recover_and_finish(&config_path, &e) {
                 Some(result) => result,
                 None => {
-                    let error_msg = format!("config parse error: {e}");
+                    let safe_error = sanitize_toml_error(&e);
+                    let error_msg = format!("config parse error: {safe_error}");
                     let cached = (**LAST_VALID_CONFIG.load()).clone();
                     tracing::warn!(
                         path = %config_path,
-                        error = %e,
+                        error = %safe_error,
                         "config parse error and no last-known-good to restore, continuing with last valid config"
                     );
                     (cached, Some(error_msg))
