@@ -1,9 +1,5 @@
 //! Immutable MCP adapter registrations, validated before requests are served.
 
-use crate::{
-    harness::{HarnessConnection, TOOL_NAMES},
-    mcp::{harness_wire::PRIVATE_CONTROL_TOOLS, protocol::tools_list},
-};
 use futures_util::future::BoxFuture;
 use serde::Serialize;
 use serde_json::Value;
@@ -15,6 +11,13 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
+use {
+    crate::{
+        harness::TOOL_NAMES,
+        mcp::{harness_wire::PRIVATE_CONTROL_TOOLS, protocol::tools_list},
+    },
+    dione_harness::HarnessConnection,
+};
 
 /// A validated MCP tool name used to identify registration conflicts.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]

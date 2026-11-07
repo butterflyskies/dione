@@ -1,6 +1,6 @@
 //! Registered context reads against synthetic Discord HTTP responses.
 use super::*;
-use crate::{harness::HarnessConnection, mcp::tool_registry::ToolRegistry};
+use crate::mcp::tool_registry::ToolRegistry;
 use camino::Utf8PathBuf;
 use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use std::{collections::VecDeque, sync::Mutex};
@@ -112,7 +112,7 @@ impl Fixture {
             ModuleSlotId::new(slot).unwrap(),
         );
         let registry = ToolRegistry::new(
-            &HarnessConnection::claude(),
+            &crate::harness::connect_claude(),
             registrations(services, source).unwrap(),
         )
         .unwrap();

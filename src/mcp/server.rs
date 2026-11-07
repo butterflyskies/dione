@@ -42,7 +42,6 @@ use {
             scheduling::DeliveryBuffer,
             typing::TypingCtx,
         },
-        harness::{AttentionPolicy, HarnessConnection, HarnessError, ProtocolOutput},
         mcp::{
             dispatch::call_tool,
             harness_wire::{PRIVATE_CONTROL_TOOLS, RequestOrigin},
@@ -56,6 +55,7 @@ use {
         delivery::AttentionGuardFailure,
         types::{Admission, DeliveryState},
     },
+    dione_harness::{AttentionPolicy, HarnessConnection, HarnessError, ProtocolOutput},
     dione_messages::delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
     dione_rate_limiter::{ChannelRef, ParticipantId, RateLimitDecision, RateLimiter},
 };
@@ -1260,11 +1260,11 @@ pub mod test_helpers {
 
     /// Exposes `tools_list` for unit testing tool discovery.
     pub fn get_tools_list() -> Value {
-        complete_tools_list(&HarnessConnection::claude(), false)
+        complete_tools_list(&crate::harness::connect_claude(), false)
     }
 
     pub fn get_tools_list_with_evidence() -> Value {
-        complete_tools_list(&HarnessConnection::claude(), true)
+        complete_tools_list(&crate::harness::connect_claude(), true)
     }
 
     pub fn get_codex_tools_list(harness: &HarnessConnection) -> Value {
@@ -1273,7 +1273,7 @@ pub mod test_helpers {
 
     /// Exposes `initialize_response` for unit testing the handshake.
     pub fn get_initialize_response() -> Value {
-        crate::mcp::protocol::initialize_response(&HarnessConnection::claude(), None)
+        crate::mcp::protocol::initialize_response(&crate::harness::connect_claude(), None)
     }
 
     /// Exposes the Codex initialize response for protocol tests.
@@ -1549,7 +1549,7 @@ mod tests {
             state_dir.clone(),
             notification_tx,
             TraceLevelController::noop(),
-            HarnessConnection::claude(),
+            crate::harness::connect_claude(),
             Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
             Arc::new(crate::ingress_ledger::IngressLedger::new()),
             dione_contracts::ModuleInstanceId::new(
@@ -2277,7 +2277,7 @@ mod attention_tests;
 #[cfg(test)]
 fn test_connection_for_queue(queue: crate::codex::CodexEventQueue) -> HarnessConnection {
     let (binding, _receiver) = tokio::sync::watch::channel(None);
-    HarnessConnection::codex(queue, binding)
+    crate::harness::connect_codex(queue, binding)
 }
 #[cfg(test)]
 pub(super) fn test_codex_connection() -> (tempfile::TempDir, HarnessConnection) {

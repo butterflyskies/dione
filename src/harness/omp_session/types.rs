@@ -200,7 +200,7 @@ pub(crate) enum OmpSessionErrorKind {
     #[error("session worker failed")]
     Worker(#[source] tokio::task::JoinError),
     #[error("protocol output failed")]
-    Output(#[source] crate::harness::output::ProtocolOutputError),
+    Output(#[source] dione_harness::ProtocolOutputError),
     #[error("protocol output is unavailable")]
     OutputUnavailable,
 }

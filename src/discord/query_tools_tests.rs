@@ -1,6 +1,6 @@
 //! Query owner argument compatibility and registered execution.
 use super::*;
-use crate::{harness::HarnessConnection, mcp::tool_registry::ToolRegistry};
+use crate::mcp::tool_registry::ToolRegistry;
 use camino::Utf8PathBuf;
 use proptest::prelude::*;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -171,7 +171,7 @@ async fn registered_queries_parse_execute_project_and_reload_policy() {
         None,
     ));
     let registry = ToolRegistry::new(
-        &HarnessConnection::claude(),
+        &crate::harness::connect_claude(),
         registrations_with_search(
             services,
             dione_contracts::ModuleInstanceId::new(
@@ -409,7 +409,7 @@ async fn wrong_observation_exchange() {
         None,
     ));
     let registry = ToolRegistry::new(
-        &HarnessConnection::claude(),
+        &crate::harness::connect_claude(),
         registrations_with_search(
             services,
             dione_contracts::ModuleInstanceId::new(

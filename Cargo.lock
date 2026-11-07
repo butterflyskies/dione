@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.97.2"
+version = "0.98.2"
 dependencies = [
  "aho-corasick",
  "arc-swap",
@@ -945,6 +945,7 @@ dependencies = [
  "dione-durable",
  "dione-evidence",
  "dione-gaie",
+ "dione-harness",
  "dione-identity-display",
  "dione-messages",
  "dione-rate-limiter",
@@ -1071,6 +1072,19 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "dione-harness"
+version = "0.1.0"
+dependencies = [
+ "dione-contracts",
+ "dione-messages",
+ "futures-util",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

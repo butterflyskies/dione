@@ -5606,7 +5606,7 @@ mod tests {
             path.clone(),
             notifications,
             crate::tracing_channel::TraceLevelController::noop(),
-            crate::harness::HarnessConnection::claude(),
+            crate::harness::connect_claude(),
             Arc::new(ConsentGate::new(&path)),
             Arc::new(IngressLedger::new()),
             dione_contracts::ModuleInstanceId::new(

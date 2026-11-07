@@ -1,6 +1,6 @@
 //! Adapter behavior for the same typed live records and historical inbox codec.
 
-use super::{HarnessConnection, ProtocolOutput, test_support};
+use super::{ProtocolOutput, test_support};
 use camino::Utf8PathBuf;
 use dione_contracts::{
     ActorId, ActorRef, ConversationId, ConversationRef, MessageId, MessageRef, ModuleInstanceId,
@@ -101,7 +101,7 @@ async fn actual_claude_and_omp_writers_project_the_same_typed_message() {
         test_support::context(),
     );
     let (writer, reader) = tokio::io::duplex(8192);
-    let claude = HarnessConnection::claude_with_output(ProtocolOutput::new(writer));
+    let claude = crate::harness::claude_with_output(ProtocolOutput::new(writer));
     claude.deliver(&delivery).await.unwrap();
     let actual = read_line(reader).await;
     let mut expected = expected_legacy();
@@ -120,7 +120,7 @@ async fn actual_claude_and_omp_writers_project_the_same_typed_message() {
             .all(Value::is_string)
     );
     let (writer, reader) = tokio::io::duplex(8192);
-    let omp = HarnessConnection::oh_my_pi_with_output(ProtocolOutput::new(writer));
+    let omp = crate::harness::oh_my_pi_with_output(ProtocolOutput::new(writer));
     omp.deliver(&delivery).await.unwrap();
     let actual = read_line(reader).await;
     let mut expected = expected_legacy();
@@ -137,7 +137,7 @@ async fn typed_codex_delivery_reopens_with_literal_legacy_payload_and_create_ded
     let scope = LegacyDiscordScope::new(module.clone());
     let queue = CodexEventQueue::load(&path, scope.clone()).unwrap();
     let (binding, _) = watch::channel(None);
-    let connection = HarnessConnection::codex(queue, binding);
+    let connection = crate::harness::connect_codex(queue, binding);
     let delivery = Delivery::single(
         OrdinaryEvent::Message(Box::new(message(&module, 20))),
         test_support::context(),
@@ -335,7 +335,7 @@ fn opaque_provider_batches_group_by_complete_scope_without_mutating_records() {
 async fn permission_control_uses_claude_permission_params_without_channel_metadata() {
     for (granted, behavior) in [(true, "allow"), (false, "deny")] {
         let (writer, reader) = tokio::io::duplex(2048);
-        let connection = HarnessConnection::claude_with_output(ProtocolOutput::new(writer));
+        let connection = crate::harness::claude_with_output(ProtocolOutput::new(writer));
         let delivery = test_support::delivery(
             crate::discord::events::NotificationEvent::PermissionResponse {
                 request_id: " request-token ".into(),

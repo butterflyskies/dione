@@ -69,7 +69,7 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
     let (writer, reader) = tokio::io::duplex(64 * 1024);
     let output = ProtocolOutput::new(writer);
     let harness =
-        HarnessConnection::oh_my_pi_with_control_and_output(session.control(), output.clone());
+        crate::harness::oh_my_pi_with_control_and_output(session.control(), output.clone());
     let bridge = Arc::new(
         TeamsResidentBridge::new_durable(
             fixture.edge.clone(),
@@ -179,7 +179,7 @@ async fn authenticated_teams_replays_after_restart_and_replies_through_registere
     let (writer, reader) = tokio::io::duplex(64 * 1024);
     let output = ProtocolOutput::new(writer);
     let harness =
-        HarnessConnection::oh_my_pi_with_control_and_output(session.control(), output.clone());
+        crate::harness::oh_my_pi_with_control_and_output(session.control(), output.clone());
     let bridge = Arc::new(
         TeamsResidentBridge::new_durable(
             fixture.edge.clone(),
@@ -321,10 +321,8 @@ fn omp_lifecycle_child_entry() {
             let session = OmpSession::open(&path).await.unwrap();
             let admission = session.admission();
             let output = ProtocolOutput::new(tokio::io::stdout());
-            let harness = HarnessConnection::oh_my_pi_with_control_and_output(
-                session.control(),
-                output.clone(),
-            );
+            let harness =
+                crate::harness::oh_my_pi_with_control_and_output(session.control(), output.clone());
             let cancel = CancellationToken::new();
             let running = session.start(output.clone(), cancel.clone());
             let (_server_dir, assembled) = server(harness).await;

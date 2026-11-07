@@ -1,20 +1,5 @@
 //! Process startup, offline commands, and ordered shutdown.
 mod error;
-use crate::{
-    attention::control::AttentionCommand,
-    discord::events::{Handler, NotificationEvent},
-    harness::{
-        AttentionPolicy, CodexSessionOptions, HarnessSelection, HarnessSession, HarnessSessionError,
-    },
-    mcp::server::DioneServer,
-    state::SharedState,
-    teams::{
-        AdmissionPolicy, ChannelPolicy,
-        edge::{ClientSecretTokenProvider, TeamsEdge},
-        runtime::{TeamsReplyAuthority, TeamsResidentBridge},
-    },
-    tracing_channel::{TraceLevelController, TracingChannelLayer},
-};
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::Parser;
 pub use error::{SecretEnvironmentError, StartupError, StartupErrorKind};
@@ -34,6 +19,22 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{EnvFilter, prelude::*, reload};
+use {
+    crate::{
+        attention::control::AttentionCommand,
+        discord::events::{Handler, NotificationEvent},
+        harness::{CodexSessionOptions, HarnessSelection, HarnessSession, HarnessSessionError},
+        mcp::server::DioneServer,
+        state::SharedState,
+        teams::{
+            AdmissionPolicy, ChannelPolicy,
+            edge::{ClientSecretTokenProvider, TeamsEdge},
+            runtime::{TeamsReplyAuthority, TeamsResidentBridge},
+        },
+        tracing_channel::{TraceLevelController, TracingChannelLayer},
+    },
+    dione_harness::AttentionPolicy,
+};
 
 /// Discord MCP channel server for Claude Code, Codex, and Oh My Pi.
 #[derive(Parser)]

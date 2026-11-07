@@ -54,7 +54,7 @@ impl HarnessSession {
     /// Prepares Claude notifications on the shared MCP writer.
     pub fn claude() -> Self {
         Self {
-            connection: HarnessConnection::claude(),
+            connection: crate::harness::connect_claude(),
             lifecycle: PreparedLifecycle::Claude,
         }
     }
@@ -62,7 +62,7 @@ impl HarnessSession {
     /// Prepares Oh My Pi events on the shared MCP writer.
     pub fn oh_my_pi() -> Self {
         Self {
-            connection: HarnessConnection::oh_my_pi(),
+            connection: crate::harness::connect_oh_my_pi(),
             lifecycle: PreparedLifecycle::OhMyPi,
         }
     }
@@ -75,7 +75,7 @@ impl HarnessSession {
             .map_err(|source| HarnessSessionError {
                 kind: HarnessSessionErrorKind::Omp(Box::new(source)),
             })?;
-        let connection = HarnessConnection::oh_my_pi_with_control(session.control());
+        let connection = crate::harness::oh_my_pi_with_control(session.control());
         Ok(Self {
             connection,
             lifecycle: PreparedLifecycle::OmpResident(Box::new(session)),

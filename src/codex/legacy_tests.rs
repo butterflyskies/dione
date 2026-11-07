@@ -1034,7 +1034,7 @@ async fn binding_server(
         path.to_owned(),
         notification_tx,
         crate::tracing_channel::TraceLevelController::noop(),
-        crate::harness::HarnessConnection::codex(queue.clone(), binding_tx),
+        crate::harness::connect_codex(queue.clone(), binding_tx),
         Arc::new(crate::no_rly::consent::ConsentGate::new(path)),
         Arc::new(crate::ingress_ledger::IngressLedger::new()),
         dione_contracts::ModuleInstanceId::new(
@@ -3206,7 +3206,7 @@ async fn attention_invalidation_preserves_same_message_in_another_conversation()
     payload["params"]["meta"]["user_id"] = json!("456");
     queue.enqueue(payload).await.unwrap();
     let (binding, _) = tokio::sync::watch::channel(None);
-    let connection = crate::harness::HarnessConnection::codex(queue.clone(), binding);
+    let connection = crate::harness::connect_codex(queue.clone(), binding);
     connection
         .invalidate_attention(dione_contracts::MessageRef::new(
             dione_contracts::ConversationRef::new(

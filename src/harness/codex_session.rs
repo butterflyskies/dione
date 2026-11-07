@@ -71,7 +71,7 @@ impl CodexSession {
     }
 
     pub(super) fn connection(&self) -> HarnessConnection {
-        HarnessConnection::codex(self.queue.clone(), self.binding_tx.clone())
+        crate::harness::connect_codex(self.queue.clone(), self.binding_tx.clone())
     }
 
     pub(super) fn codex_admission(&self) -> CodexEventQueue {

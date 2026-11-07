@@ -10,7 +10,7 @@ use futures_util::future::BoxFuture;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use thiserror::Error;
-use {crate::mcp::harness_wire::HarnessProtocol, dione_messages::delivery::Delivery};
+use {dione_harness::HarnessProtocol, dione_messages::delivery::Delivery};
 
 pub(super) const ATTENTION_POLICY: AttentionPolicy = AttentionPolicy::Direct;
 
@@ -72,39 +72,37 @@ fn notification(delivery: &Delivery) -> Result<Value, ProjectionError> {
     }
 }
 
-impl HarnessConnection {
-    /// Connects Oh My Pi event notifications and responses to one stdout writer.
-    pub fn oh_my_pi() -> Self {
-        Self::oh_my_pi_with_output(ProtocolOutput::new(tokio::io::stdout()))
-    }
+/// Connects Oh My Pi event notifications and responses to one stdout writer.
+pub fn connect_oh_my_pi() -> HarnessConnection {
+    oh_my_pi_with_output(ProtocolOutput::new(tokio::io::stdout()))
+}
 
-    pub(crate) fn oh_my_pi_with_output(output: ProtocolOutput) -> Self {
-        Self::from_adapter(
-            OhMyPiAdapter {
-                output: output.clone(),
-                control: None,
-            },
-            output,
-        )
-    }
+pub(crate) fn oh_my_pi_with_output(output: ProtocolOutput) -> HarnessConnection {
+    HarnessConnection::from_adapter(
+        OhMyPiAdapter {
+            output: output.clone(),
+            control: None,
+        },
+        output,
+    )
+}
 
-    pub(crate) fn oh_my_pi_with_control(control: OmpControl) -> Self {
-        let output = ProtocolOutput::new(tokio::io::stdout());
-        Self::oh_my_pi_with_control_and_output(control, output)
-    }
+pub(crate) fn oh_my_pi_with_control(control: OmpControl) -> HarnessConnection {
+    let output = ProtocolOutput::new(tokio::io::stdout());
+    oh_my_pi_with_control_and_output(control, output)
+}
 
-    pub(crate) fn oh_my_pi_with_control_and_output(
-        control: OmpControl,
-        output: ProtocolOutput,
-    ) -> Self {
-        Self::from_adapter(
-            OhMyPiAdapter {
-                output: output.clone(),
-                control: Some(control),
-            },
-            output,
-        )
-    }
+pub(crate) fn oh_my_pi_with_control_and_output(
+    control: OmpControl,
+    output: ProtocolOutput,
+) -> HarnessConnection {
+    HarnessConnection::from_adapter(
+        OhMyPiAdapter {
+            output: output.clone(),
+            control: Some(control),
+        },
+        output,
+    )
 }
 
 impl HarnessDelivery for OhMyPiAdapter {

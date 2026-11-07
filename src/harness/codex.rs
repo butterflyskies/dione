@@ -12,8 +12,9 @@ use {
             CodexBindingController, CodexEventQueue, CodexThreadId, ConsumerId, DeliveryToken,
             consumer_ttl, lease_duration, timeout_response, wait_duration,
         },
-        mcp::{harness_wire::HarnessProtocol, protocol::tool},
+        mcp::protocol::tool,
     },
+    dione_harness::HarnessProtocol,
     dione_messages::delivery::Delivery,
 };
 
@@ -24,20 +25,22 @@ struct CodexAdapter {
     controller: CodexBindingController,
     binding: watch::Sender<Option<EndpointId>>,
 }
-impl HarnessConnection {
-    /// Connects the queue and owner-issued binding control without claiming a consumer.
-    pub fn codex(queue: CodexEventQueue, binding: watch::Sender<Option<EndpointId>>) -> Self {
-        let controller = queue.binding_controller();
-        Self::from_adapter(
-            CodexAdapter {
-                queue,
-                controller,
-                binding,
-            },
-            ProtocolOutput::new(tokio::io::stdout()),
-        )
-    }
+/// Connects the queue and owner-issued binding control without claiming a consumer.
+pub fn connect_codex(
+    queue: CodexEventQueue,
+    binding: watch::Sender<Option<EndpointId>>,
+) -> HarnessConnection {
+    let controller = queue.binding_controller();
+    HarnessConnection::from_adapter(
+        CodexAdapter {
+            queue,
+            controller,
+            binding,
+        },
+        ProtocolOutput::new(tokio::io::stdout()),
+    )
 }
+
 impl HarnessDelivery for CodexAdapter {
     fn attention_policy(&self) -> AttentionPolicy {
         ATTENTION_POLICY
