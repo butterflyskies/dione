@@ -1,9 +1,9 @@
 [workspace]
-members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention", "crates/dione-evidence", "crates/dione-messages", "crates/dione-rate-limiter", "crates/dione-vaelii", "crates/dione-gaie", "crates/dione-identity-display", "crates/dione-harness", "crates/dione-presentation", "crates/dione-contradictionary"]
+members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention", "crates/dione-evidence", "crates/dione-messages", "crates/dione-rate-limiter", "crates/dione-vaelii", "crates/dione-gaie", "crates/dione-identity-display", "crates/dione-harness", "crates/dione-presentation", "crates/dione-contradictionary", "crates/dione-bell-rings"]
 
 [package]
 name = "dione"
-version = "0.100.2"
+version = "0.101.2"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -14,6 +14,8 @@ keywords = ["discord", "mcp", "claude-code", "codex", "bot"]
 categories = ["command-line-utilities"]
 
 [workspace.dependencies]
+rmcp = { version = "1.1", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
+dione-bell-rings = { version = "=0.1.0", path = "crates/dione-bell-rings" }
 aho-corasick = "1"
 dione-contradictionary = { version = "=0.1.0", path = "crates/dione-contradictionary" }
 dione-presentation = { version = "=0.1.0", path = "crates/dione-presentation" }
@@ -68,6 +70,7 @@ serenity = { version = "0.12", default-features = false, features = ["client", "
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 [dependencies]
+dione-bell-rings.workspace = true
 dione-contradictionary.workspace = true
 dione-presentation.workspace = true
 dione-harness.workspace = true
@@ -113,7 +116,6 @@ secrecy.workspace = true
 url.workspace = true
 sha2.workspace = true
 uuid.workspace = true
-rmcp = { version = "1.1", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
 tokio-tungstenite = { version = "0.21", default-features = false, features = ["handshake"] }
 tempfile.workspace = true
 

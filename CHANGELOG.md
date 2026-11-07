@@ -18,6 +18,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.101.2]
+
+### Fixed
+
+- Inherit the accepted Teams/OMP test allowances and contained guidance while
+  preserving this extraction and its assertions.
+
+## [0.101.1]
+
+### Fixed
+
+- Allow 120 seconds for authenticated Teams test event reads, child socket
+  readiness, and parent control connections on slower CI workers, preserving
+  assertions and production deadlines.
+
+## [0.101.0]
+
+### Changed
+- Extract Bell retrieval into `dione-bell-rings`, retaining native eligibility,
+  configuration policy and shadow/live delivery in Dione. Consolidate backend
+  tests onto the production fan-out algorithm and remove the old public
+  single-provider test seam.
+- Replace raw numerical Bell configuration fields with validated `RecallOptions`.
+  Previously invalid Rust construction now returns a typed error; TOML keys,
+  defaults and field diagnostics remain unchanged. Provider URL/scope parsing now
+  returns typed errors from the new member.
+
 ## [0.100.2]
 
 ### Fixed
@@ -34,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   assertions and production deadlines.
 
 ## [0.100.0]
+
 
 ### Changed
 

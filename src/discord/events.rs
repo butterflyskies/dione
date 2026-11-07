@@ -1,4 +1,5 @@
 use super::observation::PreparedAdmission;
+use dione_bell_rings::BellStatus;
 use serenity::{
     async_trait,
     builder::{CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage},
@@ -12,7 +13,6 @@ use std::sync::{
 };
 use {
     crate::{
-        bell_rings::BellStatus,
         discord::{
             messaging::create_dm_channel,
             presence::{

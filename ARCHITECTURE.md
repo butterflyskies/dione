@@ -75,6 +75,12 @@ decisions/persistence, current send authorization, and no_rly consent.
 See the [crate split plan](docs/design/plugin-crates.md) for the next boundaries
 and the package release requirements.
 
+The public `dione-bell-rings` package owns validated recall/provider values,
+reconnectable MCP clients, scope-keyed caching, two-phase fan-out, response admission,
+ranking, retrieval status and compact rendering. Dione retains native eligibility,
+configuration/alias policy, shadow/live orchestration and metadata injection. No
+Discord or Dione application dependency enters the retrieval member.
+
 ## Processes and transports
 
 ```mermaid

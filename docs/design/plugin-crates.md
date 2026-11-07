@@ -263,6 +263,29 @@ The two existing Aho-Corasick constructor `expect` calls, fully qualified fmt
 paths, and unrestricted descriptive fields remain recorded inherited limitations.
 This extraction does not redesign constructor errors or confer authority on hits.
 
+## Bell retrieval boundary
+
+`dione-bell-rings` owns the complete memory retrieval backend. One query operation
+hides MCP setup, session reuse, concurrent connections and recalls, wire decoding,
+admission, ranking and aggregation. Its provider interface and parser remain private.
+The existing parallel single-provider test algorithm is removed. Native eligibility
+and shadow/live publication remain application policy; delivery retains its
+exhaustive conversion to the separate retained-message status enum.
+
+Recall options validate finite distance 0..=2, count 1..=100 and timeout 1..=2000 ms.
+This is an intentional Rust API/behavior change for previously invalid programmatic
+configuration. The application replaces three raw fields with one validated value.
+Existing TOML names/defaults and per-field validation timing remain. Provider leaf
+parse errors become typed errors. No old application re-export aliases remain.
+
+Connections retain their fixed five-second bound, followed by per-provider recall
+timeouts, followed by parsing. This is not a total deadline. Cache keys remain URL
+and scope, excluding alias; eviction does not cancel in-flight clients. Session
+locking, reconnect behavior, cancellation and telemetry distinctions are preserved.
+No generation fence, shutdown/drain guarantee, privacy improvement or speedup is
+claimed. Protocol fixtures exercise the real application adapter; private mocks
+exercise the same production aggregation, not a second algorithm.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -281,6 +304,7 @@ This extraction does not redesign constructor errors or confer authority on hits
 12. Coupled harness facets and bounded protocol output.
 13. Shared presentation and compact batch formatting.
 14. Contradictionary matching, rewrites, and sidecar entry schema.
+15. Bell memory retrieval backend, with native eligibility and publication retained.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -293,7 +317,7 @@ The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, and `dione-contradictionary`.
+`dione-presentation`, `dione-contradictionary`, and `dione-bell-rings`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -315,14 +339,14 @@ Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, and `dione-contradictionary`,
+`dione-presentation`, `dione-contradictionary`, and `dione-bell-rings`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all fourteen capabilities. Contradictionary publishing waits
+publishing waits for all fifteen capabilities. Contradictionary publishing waits
 for evidence reconciliation. Presentation publishing waits for
 contracts, attention, evidence, messages, and identity-display reconciliation. Harness publishing waits for
 contracts and messages reconciliation. Messages publishing waits for

@@ -1,8 +1,8 @@
+use dione_bell_rings::BellStatus;
 use serde_json::json;
 use serenity::model::id::{ChannelId, MessageId, UserId};
 use {
     crate::{
-        bell_rings::BellStatus,
         discord::events::{MessageEvent, MessageTargeting, NotificationEvent},
         harness::test_support::FixtureNotification,
     },

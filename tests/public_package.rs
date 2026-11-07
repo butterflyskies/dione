@@ -762,7 +762,10 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         .split_once("\n  reconcile-contradictionary:")
         .unwrap();
     let (reconcile_contradictionary, remaining) =
-        remaining.split_once("\n  publish-crate:").unwrap();
+        remaining.split_once("\n  publish-bell-rings:").unwrap();
+    let (publish_bell_rings, remaining) =
+        remaining.split_once("\n  reconcile-bell-rings:").unwrap();
+    let (reconcile_bell_rings, remaining) = remaining.split_once("\n  publish-crate:").unwrap();
     let (publish_dione, reconcile_dione) = remaining.split_once("\n  reconcile-dione:").unwrap();
 
     assert_eq!(
@@ -770,7 +773,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
             .matches("scripts/verify-public-package-privacy.sh")
             .count(),
         workflow.matches("cargo package -p").count()
-            + 15 * workflow.matches("cargo package --workspace").count(),
+            + 16 * workflow.matches("cargo package --workspace").count(),
         "every workspace archive must cross the privacy verifier"
     );
     for job in [
@@ -789,6 +792,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         reconcile_harness,
         reconcile_presentation,
         reconcile_contradictionary,
+        reconcile_bell_rings,
         reconcile_dione,
     ] {
         assert!(!job.contains("CARGO_REGISTRY_TOKEN"));
@@ -800,11 +804,11 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     assert!(workflow.contains("github:butterflyskies:lacuna-blinkers"));
     assert!(workflow.contains("github:butterflyskies:superadmins"));
     assert!(publish_dione.contains(
-        "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary]"
+        "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings]"
     ));
     assert!(
         reconcile_dione.contains(
-            "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, publish-crate]"
+            "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, publish-crate]"
         )
     );
     assert!(reconcile_dione.contains("needs.reconcile-rendering.result == 'success'"));
@@ -853,6 +857,11 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     assert!(reconcile_contradictionary.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-contradictionary.result == 'success'"));
     assert!(workflow.contains("scripts/crates-io-package-state.sh dione-contradictionary "));
+    assert!(publish_bell_rings.contains("needs: verify-dione"));
+    assert!(reconcile_bell_rings.contains("needs: [verify-dione, publish-bell-rings]"));
+    assert!(reconcile_bell_rings.contains("--ignore-vcs-info"));
+    assert!(reconcile_dione.contains("needs.reconcile-bell-rings.result == 'success'"));
+    assert!(workflow.contains("scripts/crates-io-package-state.sh dione-bell-rings "));
     assert!(reconcile_dione.contains("needs.reconcile-presentation.result == 'success'"));
     assert!(workflow.contains("scripts/crates-io-package-state.sh dione-presentation "));
     assert!(reconcile_dione.contains("needs.reconcile-harness.result == 'success'"));
@@ -897,6 +906,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         publish_harness,
         publish_presentation,
         publish_contradictionary,
+        publish_bell_rings,
         publish_dione,
     ] {
         assert!(upload_job.contains("id-token: write"));
@@ -989,7 +999,7 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
         package
             .matches("scripts/verify-public-package-privacy.sh")
             .count(),
-        15 * archive_package_calls.len(),
+        16 * archive_package_calls.len(),
         "every archive-producing workspace package call must cross the privacy verifier"
     );
     for (index, _) in archive_package_calls {

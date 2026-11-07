@@ -1,5 +1,5 @@
 pub mod attention;
-pub mod bell_rings;
+mod bell_rings;
 pub mod codex;
 pub mod config;
 pub(crate) mod config_candidate;

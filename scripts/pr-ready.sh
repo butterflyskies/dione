@@ -78,6 +78,8 @@ evidence_version=$(sh scripts/workspace-package-version.sh dione-evidence)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-evidence-${evidence_version}.crate"
 contradictionary_version=$(sh scripts/workspace-package-version.sh dione-contradictionary)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-contradictionary-${contradictionary_version}.crate"
+bell_rings_version=$(sh scripts/workspace-package-version.sh dione-bell-rings)
+sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-bell-rings-${bell_rings_version}.crate"
 presentation_version=$(sh scripts/workspace-package-version.sh dione-presentation)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-presentation-${presentation_version}.crate"
 harness_version=$(sh scripts/workspace-package-version.sh dione-harness)

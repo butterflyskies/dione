@@ -7,7 +7,7 @@ use dione_contracts::{
 use serenity::model::id::{ChannelId, MessageId as DiscordMessageId, UserId};
 use thiserror::Error;
 use {
-    crate::{bell_rings, coordination::CoordinationEvent, gate::MentionKind},
+    crate::{coordination::CoordinationEvent, gate::MentionKind},
     dione_attention::types::SourceAuthorKind,
     dione_messages::{
         delivery::{Delivery, PresentationContext},
@@ -56,11 +56,11 @@ pub(crate) fn message(module: &ModuleInstanceId, event: MessageEvent) -> Message
         }
     };
     let status = event.bells_status.map(|status| match status {
-        bell_rings::BellStatus::Ok => BellStatus::Ok,
-        bell_rings::BellStatus::PartialTimeout => BellStatus::PartialTimeout,
-        bell_rings::BellStatus::PartialError => BellStatus::PartialError,
-        bell_rings::BellStatus::Timeout => BellStatus::Timeout,
-        bell_rings::BellStatus::Error => BellStatus::Error,
+        dione_bell_rings::BellStatus::Ok => BellStatus::Ok,
+        dione_bell_rings::BellStatus::PartialTimeout => BellStatus::PartialTimeout,
+        dione_bell_rings::BellStatus::PartialError => BellStatus::PartialError,
+        dione_bell_rings::BellStatus::Timeout => BellStatus::Timeout,
+        dione_bell_rings::BellStatus::Error => BellStatus::Error,
     });
     let reply = ReplyObservation::new(
         event
