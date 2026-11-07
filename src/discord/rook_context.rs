@@ -270,7 +270,7 @@ mod tests {
                         shared_state.clone(),
                         Arc::new(current.lock().unwrap().clone()),
                         "/tmp".into(),
-                        Arc::new(crate::no_rly::consent::ConsentGate::new(
+                        Arc::new(dione_outbound_consent::consent::ConsentGate::new(
                             camino::Utf8Path::new("/tmp"),
                         )),
                         Arc::new(crate::ingress_ledger::IngressLedger::new()),

@@ -991,9 +991,9 @@ mod tests {
     };
     use crate::discord::query_wire;
     use crate::gate::OutboundGate;
-    use crate::no_rly::consent::ConsentGate;
     use dione_config::ChannelConfig;
     use dione_config::Config;
+    use dione_outbound_consent::consent::ConsentGate;
     use serde_json::{Value, json};
     use std::{collections::BTreeMap, fmt, sync::Arc};
     use tokio::{

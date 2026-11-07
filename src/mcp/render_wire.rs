@@ -133,7 +133,7 @@ mod tests {
                 LoadedConfig::try_from_raw(Config::default()).expect("valid test configuration"),
             ),
             Utf8PathBuf::from("/tmp"),
-            Arc::new(crate::no_rly::consent::ConsentGate::new(
+            Arc::new(dione_outbound_consent::consent::ConsentGate::new(
                 camino::Utf8Path::new("/tmp"),
             )),
             Arc::new(crate::ingress_ledger::IngressLedger::new()),
@@ -164,12 +164,12 @@ mod contract_tests {
     use crate::discord::messaging::MessagingCtx;
     use crate::discord::rendering::render_to_channel;
     use crate::ingress_ledger::IngressLedger;
-    use crate::no_rly::consent::ConsentGate;
     use crate::state::new_state;
     use camino::Utf8PathBuf;
     use dione_config::ChannelConfig;
     use dione_config::Config;
     use dione_config::LoadedConfig;
+    use dione_outbound_consent::consent::ConsentGate;
     use dione_pre_send::{
         AuditTrail, ConstructFeedback, HookContext, HookDecision, HookName, HookOutput,
         PipelineMode, PreSendHook, PreSendPipeline,

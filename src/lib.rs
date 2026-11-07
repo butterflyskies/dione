@@ -2,14 +2,12 @@ pub mod attention;
 mod bell_rings;
 pub mod codex;
 pub mod config_watcher;
-pub mod contradictionary_diary;
 pub(crate) mod delivery;
 pub mod discord;
 pub mod drop_ledger;
 pub mod gate;
 pub mod ingress_ledger;
 pub mod mcp;
-pub mod no_rly;
 pub mod oneshot;
 pub mod permissions;
 pub mod pluralkit;
@@ -22,7 +20,6 @@ pub(crate) mod receipt_gate;
 pub mod state;
 pub mod teams;
 pub mod tracing_channel;
-pub mod util;
 
 /// Agent harness integration.
 pub mod harness;

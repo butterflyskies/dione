@@ -5,29 +5,10 @@ pub mod queries;
 mod rook_publication;
 pub(crate) mod search;
 mod types;
-use crate::contradictionary_diary::BlockOutcome;
-use crate::contradictionary_diary::DiaryRecord;
-use crate::contradictionary_diary::append_diary_record;
-use crate::discord::chunk;
-use crate::discord::chunk_preserving_fences_with_context;
 use crate::discord::events::NotificationEvent;
 use crate::gate::OutboundGate;
 use crate::ingress_ledger::IngressLedger;
 use crate::ingress_ledger::VerifyResult;
-use crate::no_rly::consent::ConsentGate;
-use crate::no_rly::consent::DeliverError;
-use crate::no_rly::consent::DeliverReply;
-use crate::no_rly::consent::DeliveryCause;
-use crate::no_rly::consent::PostedMessages;
-use crate::no_rly::consent::RejectedHandle;
-use crate::no_rly::consent::Released;
-use crate::no_rly::consent::Rephrased;
-use crate::no_rly::consent::Replacement;
-use crate::no_rly::consent::ReplyRequest;
-use crate::no_rly::judge::AlwaysClear;
-use crate::no_rly::judge::OutboundJudge;
-use crate::no_rly::judge::Verdict;
-use crate::no_rly::queue::HoldHandle;
 use crate::state::State;
 use camino::Utf8PathBuf;
 use dione_config::ChunkMode;
@@ -45,6 +26,25 @@ use dione_evidence::has_terminal_sentex_syntax;
 use dione_evidence::locator_metadata;
 use dione_evidence::parse_sentex_locators;
 use dione_mutes::MuteStore;
+use dione_outbound_consent::chunker::chunk;
+use dione_outbound_consent::chunker::chunk_preserving_fences_with_context;
+use dione_outbound_consent::consent::ConsentGate;
+use dione_outbound_consent::consent::DeliverError;
+use dione_outbound_consent::consent::DeliverReply;
+use dione_outbound_consent::consent::PostedMessages;
+use dione_outbound_consent::consent::RejectedHandle;
+use dione_outbound_consent::consent::Released;
+use dione_outbound_consent::consent::Rephrased;
+use dione_outbound_consent::consent::Replacement;
+use dione_outbound_consent::consent::ReplyRequest;
+use dione_outbound_consent::consent::{DeliveryCause, DeliveryProgress};
+use dione_outbound_consent::diary::BlockOutcome;
+use dione_outbound_consent::diary::DiaryRecord;
+use dione_outbound_consent::diary::append_diary_record;
+use dione_outbound_consent::judge::AlwaysClear;
+use dione_outbound_consent::judge::OutboundJudge;
+use dione_outbound_consent::judge::Verdict;
+use dione_outbound_consent::queue::HoldHandle;
 use dione_pre_send::{
     ChannelType as HookChannelType, ConstructId, HookContext, HookDecision, HookName,
     OutboundDestination, PreSendPipeline,
@@ -1068,15 +1068,14 @@ async fn deliver_prepared_text(
         Some(auto) => auto_send_records(ctx, &auto.rewrites, &auto.written, &content),
         None => Vec::new(),
     };
-    let request = ReplyRequest {
+    let request = ReplyRequest::new(
         channel_id,
-        content: content.to_string(),
+        content.to_string(),
         reply_to_message_id,
-        suppress_ping: options.suppress_ping.suppressed(),
-        suppress_embeds: options.suppress_embeds.suppressed(),
-        pending_diary_records,
-        fence_context: Default::default(),
-    };
+        options.suppress_ping.suppressed(),
+        options.suppress_embeds.suppressed(),
+    )
+    .with_pending_diary_records(pending_diary_records);
 
     if let Some(ref judge) = ctx.config.contradictionary
         && let Verdict::Bounce(reason) = judge.judge(&content)
@@ -1138,26 +1137,30 @@ async fn deliver_prepared_text(
                 locators,
             }))
         }
-        Err(DeliverError::Total(failure)) => {
-            if let Some(ref_id) = claimed {
-                release_reply_claim(ctx, channel_id, ref_id).await;
+        Err(error) => {
+            let (cause, progress, diary) = error.into_parts();
+            match progress {
+                DeliveryProgress::None => {
+                    if let Some(ref_id) = claimed {
+                        release_reply_claim(ctx, channel_id, ref_id).await;
+                    }
+                    Err(MessagingErrorKind::Delivery(cause).into())
+                }
+                DeliveryProgress::Partial(sent) => {
+                    if let Some(ref_id) = claimed {
+                        report_reply_done(ctx, channel_id, ref_id, sent.first()).await;
+                    }
+                    let auto_records = diary
+                        .into_iter()
+                        .filter(|record| record.action == Action::Auto)
+                        .collect::<Vec<_>>();
+                    append_diary_records(ctx, &auto_records);
+                    Ok(ReplyOutcome::PartiallyDelivered(PartialReceipt {
+                        sent,
+                        cause,
+                    }))
+                }
             }
-            Err(MessagingErrorKind::Delivery(failure.cause).into())
-        }
-        Err(DeliverError::Partial(failure)) => {
-            if let Some(ref_id) = claimed {
-                report_reply_done(ctx, channel_id, ref_id, failure.sent.first()).await;
-            }
-            let auto_records = failure
-                .diary
-                .into_iter()
-                .filter(|record| record.action == Action::Auto)
-                .collect::<Vec<_>>();
-            append_diary_records(ctx, &auto_records);
-            Ok(ReplyOutcome::PartiallyDelivered(PartialReceipt {
-                sent: failure.sent,
-                cause: failure.cause,
-            }))
         }
     }
 }
@@ -1222,7 +1225,7 @@ fn auto_send_records(
 /// its `log`/`celebrate` hits, and the override when a held block is
 /// released.
 fn send_side_records(hits: &[dione_contradictionary::Hit], content: &str) -> Vec<DiaryRecord> {
-    match crate::contradictionary_diary::evaluate_block(hits, content, true) {
+    match dione_outbound_consent::diary::evaluate_block(hits, content, true) {
         BlockOutcome::Clear => Vec::new(),
         BlockOutcome::Overridden(records) | BlockOutcome::Recorded(records) => records,
         BlockOutcome::Rejected { .. } => {
@@ -1274,8 +1277,8 @@ async fn deliver_reply(
         .map(|c| c.check(content))
         .unwrap_or_default();
 
-    let pending_diary_records = if !request.pending_diary_records.is_empty() {
-        request.pending_diary_records.clone()
+    let pending_diary_records = if !request.pending_diary_records().is_empty() {
+        request.pending_diary_records().to_vec()
     } else if ctx.config.contradictionary.is_some() {
         // Hold send-side records until every chunk succeeds. Quiet tiers
         // describe published text, and an override is only a crossing after
@@ -1381,7 +1384,7 @@ async fn deliver_reply(
                 let mut ids = sent_ids.into_iter();
                 return Err(match ids.next() {
                     Some(first) => {
-                        request.set_fence_context(chunks[i].incoming.clone());
+                        request.set_fence_context(chunks[i].incoming_context().cloned());
                         DeliverError::partial(
                             cause,
                             PostedMessages::new(first, ids.collect()),
@@ -1391,7 +1394,7 @@ async fn deliver_reply(
                     }
                     None => DeliverError::total_with_diary(
                         cause,
-                        if request.pending_diary_records.is_empty() {
+                        if request.pending_diary_records().is_empty() {
                             Vec::new()
                         } else {
                             pending_diary_records
@@ -3855,7 +3858,7 @@ mod tests {
     fn diary_records(dir: &tempfile::TempDir) -> Vec<Value> {
         std::fs::read_to_string(
             dir.path()
-                .join(crate::contradictionary_diary::DIARY_FILE_NAME),
+                .join(dione_outbound_consent::diary::DIARY_FILE_NAME),
         )
         .unwrap_or_default()
         .lines()

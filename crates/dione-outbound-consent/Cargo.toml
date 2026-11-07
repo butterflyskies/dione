@@ -1,0 +1,31 @@
+[package]
+name = "dione-outbound-consent"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Held-send consent, retry progress, diary, journal, and fence chunking"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["consent", "delivery", "journal"]
+categories = ["asynchronous"]
+
+[dependencies]
+camino.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serenity.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+native-tls.workspace = true
+dione-config.workspace = true
+dione-evidence.workspace = true
+dione-contradictionary.workspace = true
+dione-messages.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+proptest.workspace = true
+insta.workspace = true

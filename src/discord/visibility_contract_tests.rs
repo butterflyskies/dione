@@ -587,7 +587,7 @@ fn registry(ctx: &IntrospectionCtx, state_dir: &camino::Utf8Path) -> ToolRegistr
         ctx.http.clone(),
         crate::state::new_state(),
         state_dir.to_owned(),
-        Arc::new(crate::no_rly::consent::ConsentGate::new(state_dir)),
+        Arc::new(dione_outbound_consent::consent::ConsentGate::new(state_dir)),
         Arc::new(crate::ingress_ledger::IngressLedger::new()),
         None,
     ));

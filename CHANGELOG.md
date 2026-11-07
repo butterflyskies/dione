@@ -18,6 +18,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.111.2]
+
+### Fixed
+
+- Inherit the accepted Teams/OMP test allowances and contained guidance while
+  preserving this extraction and its assertions.
+
+## [0.111.1]
+
+### Fixed
+
+- Allow 120 seconds for authenticated Teams test event reads, child socket
+  readiness, and parent control connections on slower CI workers, preserving
+  assertions and production deadlines.
+
+## [0.111.0] - 2026-11-05
+
+### Changed
+
+- Extract outbound consent, held retries, journal, deferred diary and fence-aware
+  chunking into dione-outbound-consent. Native senders consume typed terminal
+  progress while retry state stays private to the consent owner.
+
 ## [0.110.2]
 
 ### Fixed

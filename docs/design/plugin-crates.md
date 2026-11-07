@@ -442,6 +442,21 @@ handling of an explicit Unknown receipt after a real normal mutation. This split
 loses the former combined syscall-to-MCP injected path. The application retains
 its concrete file watcher and process lifetimes.
 
+## Outbound consent boundary
+
+dione-outbound-consent keeps consent decisions, held reservation and retry state,
+journal maintenance, deferred diary and fence-aware chunking together. Native
+HTTP, authorization, coordination and process lifetime stay application-owned.
+Requests have ordinary constructors, while fence fields, retry remainder and
+nonempty publication representation remain private. The terminal native adapter
+consumes typed cause, progress and diary without exposing retry remainder; the
+consent gate retains that remainder for subsequent attempts.
+
+The queue remains process-local and single-principal, with lookup handles rather
+than authentication tokens. Journal appends remain best effort. The inherited
+plain chunker tiny-limit multibyte risk is unchanged; this extraction makes no
+arbitrary-limit safety claim.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -470,6 +485,7 @@ its concrete file watcher and process lifetimes.
 22. Discord nonzero input identity and SDK conversions, with adapter parsing retained.
 23. PluralKit configured UUID and deployment identity, with network trust retained.
 24. Unified configuration validation, persistence, recovery, and global publication.
+25. Cohesive outbound consent, held retries, diary, journal and fence-aware chunks.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -482,7 +498,7 @@ The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, and `dione-config`.
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, and `dione-outbound-consent`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -504,14 +520,14 @@ Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, and `dione-config`,
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, and `dione-outbound-consent`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all twenty-four capabilities. Contradictionary publishing waits
+publishing waits for all twenty-five capabilities. Contradictionary publishing waits
 for evidence reconciliation. Presentation publishing waits for
 contracts, attention, evidence, messages, and identity-display reconciliation. Harness publishing waits for
 contracts and messages reconciliation. Messages publishing waits for
@@ -544,3 +560,7 @@ capability reconciliations: attention, Bell rings, contradictionary, coordinatio
 Discord identities, GAIE, identity display, messages, PluralKit identities,
 pre-send, rate limiter, Teams identities, and Vaelii. Root publication and
 reconciliation also wait for config reconciliation.
+
+Outbound consent publishing and tokenless reconciliation wait for configuration,
+evidence, Contradictionary and messages reconciliation. Dione waits for outbound
+consent reconciliation as well.

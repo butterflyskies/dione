@@ -5,11 +5,11 @@ use crate::discord::events::NotificationEvent;
 use crate::discord::messaging;
 use crate::discord::messaging::MessagingCtx;
 use crate::ingress_ledger::SourceDeliveryFailure;
-use crate::no_rly::consent::ConsentGate;
 use dione_attention::delivery::AttentionGuardFailure as Failure;
 use dione_config::attention_effect_guard;
 use dione_config::load_config;
 use dione_config::subscribe_generation;
+use dione_outbound_consent::consent::ConsentGate;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,

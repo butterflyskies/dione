@@ -1,6 +1,5 @@
 pub(crate) mod access;
 pub(crate) mod audience;
-pub mod chunker;
 pub mod client;
 pub mod events;
 pub(crate) mod introspection;
@@ -23,9 +22,6 @@ pub(crate) mod visibility;
 #[cfg(test)]
 mod visibility_contract_tests;
 pub(crate) mod visibility_read;
-
-pub(crate) use chunker::{FenceContext, chunk_preserving_fences_with_context};
-pub use chunker::{chunk, chunk_preserving_fences};
 
 pub(crate) mod delivery;
 pub(crate) mod messaging_wire;

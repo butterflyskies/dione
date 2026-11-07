@@ -1,9 +1,9 @@
 [workspace]
-members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention", "crates/dione-evidence", "crates/dione-messages", "crates/dione-rate-limiter", "crates/dione-vaelii", "crates/dione-gaie", "crates/dione-identity-display", "crates/dione-harness", "crates/dione-presentation", "crates/dione-contradictionary", "crates/dione-bell-rings", "crates/dione-delivery-scheduler", "crates/dione-access-requests", "crates/dione-mutes", "crates/dione-coordination", "crates/dione-pre-send", "crates/dione-teams-identities", "crates/dione-discord-identities", "crates/dione-pluralkit-identities", "crates/dione-config"]
+members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention", "crates/dione-evidence", "crates/dione-messages", "crates/dione-rate-limiter", "crates/dione-vaelii", "crates/dione-gaie", "crates/dione-identity-display", "crates/dione-harness", "crates/dione-presentation", "crates/dione-contradictionary", "crates/dione-bell-rings", "crates/dione-delivery-scheduler", "crates/dione-access-requests", "crates/dione-mutes", "crates/dione-coordination", "crates/dione-pre-send", "crates/dione-teams-identities", "crates/dione-discord-identities", "crates/dione-pluralkit-identities", "crates/dione-config", "crates/dione-outbound-consent"]
 
 [package]
 name = "dione"
-version = "0.110.2"
+version = "0.111.2"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -14,6 +14,8 @@ keywords = ["discord", "mcp", "claude-code", "codex", "bot"]
 categories = ["command-line-utilities"]
 
 [workspace.dependencies]
+insta = { version = "1", features = ["json", "redactions"] }
+dione-outbound-consent = { version = "=0.1.0", path = "crates/dione-outbound-consent" }
 dione-config = { version = "=0.1.0", path = "crates/dione-config" }
 toml_edit = "0.25"
 dione-pluralkit-identities = { version = "=0.1.0", path = "crates/dione-pluralkit-identities" }
@@ -82,6 +84,7 @@ serenity = { version = "0.12", default-features = false, features = ["client", "
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 [dependencies]
+dione-outbound-consent.workspace = true
 dione-config.workspace = true
 dione-pluralkit-identities.workspace = true
 dione-discord-identities.workspace = true
@@ -155,7 +158,7 @@ axum-server = { version = "0.8", features = ["tls-rustls"] }
 rcgen = "0.13"
 rustls.workspace = true
 tokio-rustls.workspace = true
-insta = { version = "1", features = ["json", "redactions"] }
+insta.workspace = true
 proptest.workspace = true
 test-case.workspace = true
 pretty_assertions.workspace = true

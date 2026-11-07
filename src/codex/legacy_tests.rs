@@ -1036,7 +1036,7 @@ async fn binding_server(
         notification_tx,
         crate::tracing_channel::TraceLevelController::noop(),
         crate::harness::connect_codex(queue.clone(), binding_tx),
-        Arc::new(crate::no_rly::consent::ConsentGate::new(path)),
+        Arc::new(dione_outbound_consent::consent::ConsentGate::new(path)),
         Arc::new(crate::ingress_ledger::IngressLedger::new()),
         dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),

@@ -30,7 +30,6 @@ use crate::mcp::tool_registry::ToolNameError;
 use crate::mcp::tool_registry::ToolRegistry;
 use crate::mcp::tools::diagnostics::DiagnosticsCtx;
 use crate::mcp::tools::no_rly::NoRlyCtx;
-use crate::no_rly::consent::ConsentGate;
 pub use crate::tracing_channel::TraceLevelController;
 use camino::Utf8PathBuf;
 use dione_access_requests::AccessQueue;
@@ -51,6 +50,7 @@ use dione_messages::delivery::Delivery;
 use dione_messages::delivery::DeliveryKind;
 use dione_messages::delivery::EvidenceVisibility;
 use dione_messages::delivery::PresentationContext;
+use dione_outbound_consent::consent::ConsentGate;
 use dione_rate_limiter::ChannelRef;
 use dione_rate_limiter::ParticipantId;
 use dione_rate_limiter::RateLimitDecision;
@@ -1471,7 +1471,9 @@ mod tests {
             notification_tx,
             TraceLevelController::noop(),
             harness,
-            Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
+            Arc::new(dione_outbound_consent::consent::ConsentGate::new(
+                &state_dir,
+            )),
             Arc::new(crate::ingress_ledger::IngressLedger::new()),
             dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
@@ -1558,7 +1560,9 @@ mod tests {
             notification_tx,
             TraceLevelController::noop(),
             crate::harness::connect_claude(),
-            Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
+            Arc::new(dione_outbound_consent::consent::ConsentGate::new(
+                &state_dir,
+            )),
             Arc::new(crate::ingress_ledger::IngressLedger::new()),
             dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),

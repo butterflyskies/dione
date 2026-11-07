@@ -1,5 +1,5 @@
 ---
-source: src/no_rly/journal.rs
+source: crates/dione-outbound-consent/src/journal.rs
 expression: rec
 ---
 {

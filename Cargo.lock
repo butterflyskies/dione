@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.110.2"
+version = "0.111.2"
 dependencies = [
  "arc-swap",
  "axum",
@@ -955,6 +955,7 @@ dependencies = [
  "dione-identity-display",
  "dione-messages",
  "dione-mutes",
+ "dione-outbound-consent",
  "dione-pluralkit-identities",
  "dione-pre-send",
  "dione-presentation",
@@ -1238,6 +1239,28 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "dione-outbound-consent"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "chrono",
+ "dione-config",
+ "dione-contradictionary",
+ "dione-evidence",
+ "dione-messages",
+ "insta",
+ "native-tls",
+ "proptest",
+ "serde",
+ "serde_json",
+ "serenity",
+ "tempfile",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]

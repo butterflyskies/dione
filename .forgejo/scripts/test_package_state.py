@@ -220,6 +220,32 @@ class ReleasePreflightTests(unittest.TestCase):
             self.assertIn("reconcile-config", jobs[name].splitlines()[0])
         self.assertIn("needs.reconcile-config.result == 'success'", jobs["reconcile-dione"])
 
+    def test_outbound_consent_reconciliation_requires_every_direct_capability(self):
+        workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
+        jobs = {}
+        current = None
+        for line in workflow.splitlines():
+            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":"):
+                current = line.strip().removesuffix(":")
+                self.assertNotIn(current, jobs)
+                jobs[current] = ""
+            elif current:
+                jobs[current] += line + "\n"
+        capabilities = ('config', 'evidence', 'contradictionary', 'messages')
+        expected = {"verify-dione"} | {"reconcile-" + name for name in capabilities}
+        for name, extra in (("publish-outbound-consent", set()), ("reconcile-outbound-consent", {"publish-outbound-consent"})):
+            needs = jobs[name].splitlines()[0].strip().removeprefix("needs: [").removesuffix("]")
+            self.assertEqual(set(needs.split(", ")), expected | extra)
+        reconcile = jobs["reconcile-outbound-consent"]
+        self.assertIn("always()", reconcile)
+        self.assertIn("needs.verify-dione.result == 'success'", reconcile)
+        for name in capabilities:
+            self.assertIn("needs.reconcile-" + name + ".result == 'success'", reconcile)
+        self.assertIn("(needs.publish-outbound-consent.result == 'success' || needs.publish-outbound-consent.result == 'skipped')", reconcile)
+        for name in ("publish-crate", "reconcile-dione"):
+            self.assertIn("reconcile-outbound-consent", jobs[name].splitlines()[0])
+        self.assertIn("needs.reconcile-outbound-consent.result == 'success'", jobs["reconcile-dione"])
+
     def test_pre_send_reconciliation_gates_root_publication(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
         jobs = {}
@@ -252,7 +278,7 @@ class ReleasePreflightTests(unittest.TestCase):
             script = "\n".join(block)
             if "case " in script and "scripts/crates-io-package-state.sh" in script:
                 blocks.append(script)
-        self.assertEqual(len(blocks), 26)
+        self.assertEqual(len(blocks), 27)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "scripts").mkdir()
@@ -269,8 +295,8 @@ class ReleasePreflightTests(unittest.TestCase):
                 path.write_text("#!/bin/sh\n" + body + "\n")
                 path.chmod(0o755)
             for index, block in enumerate(blocks):
-                packages = (("dione", "dione-rendering", "dione-durable", "dione-contracts", "dione-rook", "dione-attention", "dione-evidence", "dione-messages", "dione-rate-limiter", "dione-vaelii", "dione-gaie", "dione-identity-display", "dione-harness", "dione-presentation", "dione-contradictionary", "dione-bell-rings", "dione-delivery-scheduler", "dione-access-requests", "dione-mutes", "dione-coordination", "dione-pre-send", "dione-teams-identities", "dione-discord-identities", "dione-pluralkit-identities", "dione-config") if index == 0
-                            else ({1: "dione-rendering", 2: "dione-durable", 3: "dione-contracts", 4: "dione-rook", 5: "dione-attention", 6: "dione-evidence", 7: "dione-messages", 8: "dione-rate-limiter", 9: "dione-vaelii", 10: "dione-gaie", 11: "dione-identity-display", 12: "dione-harness", 13: "dione-presentation", 14: "dione-contradictionary", 15: "dione-bell-rings", 16: "dione-delivery-scheduler", 17: "dione-access-requests", 18: "dione-mutes", 19: "dione-coordination", 20: "dione-pre-send", 21: "dione-teams-identities", 22: "dione-discord-identities", 23: "dione-pluralkit-identities", 24: "dione-config", 25: "dione"}[index],))
+                packages = (("dione", "dione-rendering", "dione-durable", "dione-contracts", "dione-rook", "dione-attention", "dione-evidence", "dione-messages", "dione-rate-limiter", "dione-vaelii", "dione-gaie", "dione-identity-display", "dione-harness", "dione-presentation", "dione-contradictionary", "dione-bell-rings", "dione-delivery-scheduler", "dione-access-requests", "dione-mutes", "dione-coordination", "dione-pre-send", "dione-teams-identities", "dione-discord-identities", "dione-pluralkit-identities", "dione-config", "dione-outbound-consent") if index == 0
+                            else ({1: "dione-rendering", 2: "dione-durable", 3: "dione-contracts", 4: "dione-rook", 5: "dione-attention", 6: "dione-evidence", 7: "dione-messages", 8: "dione-rate-limiter", 9: "dione-vaelii", 10: "dione-gaie", 11: "dione-identity-display", 12: "dione-harness", 13: "dione-presentation", 14: "dione-contradictionary", 15: "dione-bell-rings", 16: "dione-delivery-scheduler", 17: "dione-access-requests", 18: "dione-mutes", 19: "dione-coordination", 20: "dione-pre-send", 21: "dione-teams-identities", 22: "dione-discord-identities", 23: "dione-pluralkit-identities", 24: "dione-config", 25: "dione-outbound-consent", 26: "dione"}[index],))
                 for package in packages:
                     with self.subTest(block=index, package=package):
                         script = block.replace("${{ needs.verify-dione.outputs.rendering-version }}", "1.0.0")
@@ -293,6 +319,7 @@ class ReleasePreflightTests(unittest.TestCase):
                         script = script.replace("${{ needs.verify-dione.outputs.access-requests-version }}", "1.0.0")
                         script = script.replace("${{ needs.verify-dione.outputs.mutes-version }}", "1.0.0")
                         script = script.replace("${{ needs.verify-dione.outputs.pre-send-version }}", "1.0.0")
+                        script = script.replace("${{ needs.verify-dione.outputs.outbound-consent-version }}", "1.0.0")
                         script = script.replace("${{ needs.verify-dione.outputs.config-version }}", "1.0.0")
                         script = script.replace("${{ needs.verify-dione.outputs.coordination-version }}", "1.0.0")
                         script = script.replace("${{ needs.verify-dione.outputs.teams-identities-version }}", "1.0.0")

@@ -6,6 +6,7 @@
 //! either up to the gate-rejection path or against a local mock HTTP server.
 
 use dione_access_requests::AccessQueue;
+use dione_outbound_consent::consent::ConsentGate;
 use serde_json::json;
 use serenity::{
     http::{Http, HttpBuilder},
@@ -23,7 +24,6 @@ use {
     dione::{
         discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
         mcp::server::{DioneServer, test_helpers},
-        no_rly::consent::ConsentGate,
         state::new_state,
         teams::{
             ReplyHandle,

@@ -23,11 +23,11 @@ use serenity::{
 use std::{num::NonZeroU64, sync::Arc, time::Duration};
 use thiserror::Error;
 use {
-    crate::{
-        contradictionary_diary::{DiaryRecord, append_diary_record},
-        no_rly::judge::{OutboundJudge, Verdict},
-    },
     dione_contradictionary::Action,
+    dione_outbound_consent::{
+        diary::{DiaryRecord, append_diary_record},
+        judge::{OutboundJudge, Verdict},
+    },
 };
 
 const CODEC: &str = "discord.rook.text";
@@ -642,11 +642,11 @@ async fn post_once(
 mod tests {
     use super::*;
     use crate::ingress_ledger::IngressLedger;
-    use crate::no_rly::consent::ConsentGate;
     use dione_config::ChannelConfig;
     use dione_config::Config;
     use dione_config::LoadedConfig;
     use dione_config::ReplyToMode;
+    use dione_outbound_consent::consent::ConsentGate;
     use serde_json::{Value, json};
     use serenity::http::Http;
     use std::sync::Mutex;

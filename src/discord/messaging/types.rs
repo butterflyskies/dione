@@ -5,12 +5,12 @@ use serenity::model::id::{ChannelId, MessageId};
 use std::{fmt, io};
 use thiserror::Error;
 use {
-    crate::no_rly::{
+    dione_contradictionary::AutoRewrite,
+    dione_evidence::SentexLocator,
+    dione_outbound_consent::{
         consent::{BounceTicket, RejectedHandle},
         delivery::{DeliveryCause, PostedMessages},
     },
-    dione_contradictionary::AutoRewrite,
-    dione_evidence::SentexLocator,
 };
 
 /// Delivery-stage outcome and the rewrites applied before that stage.

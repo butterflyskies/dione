@@ -23,10 +23,10 @@ use crate::mcp::tools::diagnostics::set_trace_level;
 use crate::mcp::tools::no_rly::no_rly_condense;
 use crate::mcp::tools::no_rly::no_rly_stats;
 use crate::mcp::tools::no_rly::no_rly_vacuum;
-use crate::no_rly::queue::HoldHandle;
 use dione_config::ConfigStore;
 use dione_config::DiscordId;
 use dione_mutes::MAX_TTL_MINUTES;
+use dione_outbound_consent::queue::HoldHandle;
 use dione_rendering as rendering;
 use serde_json::{Value, json};
 
@@ -1172,7 +1172,9 @@ mod tests {
             notification_tx,
             crate::tracing_channel::TraceLevelController::noop(),
             crate::harness::connect_claude(),
-            std::sync::Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
+            std::sync::Arc::new(dione_outbound_consent::consent::ConsentGate::new(
+                &state_dir,
+            )),
             std::sync::Arc::new(crate::ingress_ledger::IngressLedger::new()),
             dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
@@ -1412,7 +1414,9 @@ mod tests {
             notification_tx,
             crate::tracing_channel::TraceLevelController::noop(),
             crate::harness::connect_claude(),
-            std::sync::Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
+            std::sync::Arc::new(dione_outbound_consent::consent::ConsentGate::new(
+                &state_dir,
+            )),
             std::sync::Arc::new(crate::ingress_ledger::IngressLedger::new()),
             dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),

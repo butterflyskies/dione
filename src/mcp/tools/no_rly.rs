@@ -4,11 +4,11 @@
 //! these tools only read and maintain the journal, plus report the live
 //! queue depth.
 
-use crate::no_rly::consent::ConsentGate;
-use crate::no_rly::journal::Outcome;
-use crate::no_rly::journal::StatsFilter;
 use chrono::{Days, Utc};
 use dione_config::LoadedConfig;
+use dione_outbound_consent::consent::ConsentGate;
+use dione_outbound_consent::journal::Outcome;
+use dione_outbound_consent::journal::StatsFilter;
 use serde_json::{Value, json};
 use std::sync::Arc;
 

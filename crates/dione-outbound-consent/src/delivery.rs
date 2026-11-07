@@ -1,6 +1,7 @@
 //! Typed publication failures and the private state required to resume a send.
 
-use crate::{contradictionary_diary::DiaryRecord, discord::chunker::FenceChunkError};
+use crate::chunker::FenceChunkError;
+use crate::diary::DiaryRecord;
 use serenity::model::id::{ChannelId, MessageId};
 use thiserror::Error;
 
@@ -94,7 +95,8 @@ impl DeliverError {
         Self::total_with_diary(cause, Vec::new())
     }
 
-    pub(crate) fn total_with_diary(cause: DeliveryCause, diary: Vec<DiaryRecord>) -> Self {
+    /// Constructs a no-publication failure while retaining deferred diary records.
+    pub fn total_with_diary(cause: DeliveryCause, diary: Vec<DiaryRecord>) -> Self {
         Self::Total(TotalFailure { cause, diary })
     }
 
@@ -111,6 +113,21 @@ impl DeliverError {
             remainder,
             diary,
         })
+    }
+
+    /// Consumes terminal publication details, discarding private retry remainder.
+    ///
+    /// Consent retries retain their remainder inside the gate instead of consuming
+    /// this terminal projection.
+    pub fn into_parts(self) -> (DeliveryCause, DeliveryProgress, Vec<DiaryRecord>) {
+        match self {
+            Self::Total(failure) => (failure.cause, DeliveryProgress::None, failure.diary),
+            Self::Partial(failure) => (
+                failure.cause,
+                DeliveryProgress::Partial(failure.sent),
+                failure.diary,
+            ),
+        }
     }
 
     /// The original failure cause.

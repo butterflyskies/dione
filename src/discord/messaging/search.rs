@@ -599,10 +599,10 @@ mod tests {
     use super::*;
     use crate::discord::search_wire;
     use crate::ingress_ledger::IngressLedger;
-    use crate::no_rly::consent::ConsentGate;
     use crate::state::new_state;
     use dione_config::ChannelConfig;
     use dione_config::Config;
+    use dione_outbound_consent::consent::ConsentGate;
     use serde_json::json;
     use std::{sync::Arc, time::Duration};
     use tokio::{

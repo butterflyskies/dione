@@ -103,7 +103,9 @@ impl Fixture {
             ),
             crate::state::new_state(),
             state_dir.clone(),
-            Arc::new(crate::no_rly::consent::ConsentGate::new(&state_dir)),
+            Arc::new(dione_outbound_consent::consent::ConsentGate::new(
+                &state_dir,
+            )),
             Arc::new(crate::ingress_ledger::IngressLedger::new()),
             None,
         ));
