@@ -1730,7 +1730,10 @@ fn sweep_temp_siblings(config_path: &Utf8Path) -> usize {
 /// Only a fixed category and numeric parser location may cross these surfaces:
 /// even serde's first error-message line can quote a credential-bearing value.
 fn sanitize_toml_error(error: &toml::de::Error) -> String {
-    let display = error.to_string();
+    safe_parse_diagnostic(&error.to_string(), error.span())
+}
+
+fn safe_parse_diagnostic(display: &str, span: Option<std::ops::Range<usize>>) -> String {
     let location = display
         .lines()
         .next()
@@ -1739,12 +1742,34 @@ fn sanitize_toml_error(error: &toml::de::Error) -> String {
         .and_then(|(line, column)| {
             Some((line.parse::<usize>().ok()?, column.parse::<usize>().ok()?))
         });
-    match (error.span(), location) {
+    match (span, location) {
         (Some(_), Some((line, column))) if line > 0 && column > 0 => {
             format!("TOML parse error at line {line}, column {column}")
         }
         (Some(span), _) => format!("TOML parse error at byte {}", span.start),
         (None, _) => "TOML parse error".to_owned(),
+    }
+}
+
+/// Mutation parser diagnostics never retain the source-bearing parser cause.
+#[derive(Debug, thiserror::Error)]
+#[error("config mutation {stage} error: {diagnostic}")]
+pub(crate) struct ConfigMutationDiagnostic {
+    stage: &'static str,
+    diagnostic: String,
+}
+impl ConfigMutationDiagnostic {
+    pub(crate) fn read(error: &toml_edit::TomlError) -> Self {
+        Self {
+            stage: "read",
+            diagnostic: safe_parse_diagnostic(&error.to_string(), error.span()),
+        }
+    }
+    fn validation(error: &toml::de::Error) -> Self {
+        Self {
+            stage: "validation",
+            diagnostic: sanitize_toml_error(error),
+        }
     }
 }
 
@@ -2419,7 +2444,8 @@ impl ConfigRuntime {
 
                 // Validate and compose before touching disk. The sidecar is
                 // merged at the same boundary as reload.
-                let raw: Config = toml::from_str(&serialized)?;
+                let raw: Config = toml::from_str(&serialized)
+                    .map_err(|error| ConfigMutationDiagnostic::validation(&error))?;
                 let sidecar_entries = load_sidecar_for(&config_path, &raw)?;
                 let loaded = compose_candidate(raw, sidecar_entries, &NEXT_CONFIG_GENERATION)?;
                 let persisted = persist_canonical(&config_path, serialized.as_bytes())?;

@@ -667,6 +667,10 @@ mod tests {
             "safe endpoint location remains"
         );
         assert!(
+            !output.contains("SYNTHETIC_PATH_CANARY"),
+            "all diagnostics must omit path credentials"
+        );
+        assert!(
             !output.contains("SYNTHETIC_QUERY_CANARY"),
             "all diagnostics must omit query credentials; targets: {:?}",
             output
@@ -699,11 +703,9 @@ mod tests {
                 }
                 assert!(request.len() < 16_384);
             }
-            assert!(
-                String::from_utf8(request)
-                    .unwrap()
-                    .starts_with("POST /mcp?token=SYNTHETIC_QUERY_CANARY HTTP/1.1\r\n")
-            );
+            assert!(String::from_utf8(request).unwrap().starts_with(
+                "POST /SYNTHETIC_PATH_CANARY/mcp?token=SYNTHETIC_QUERY_CANARY HTTP/1.1\r\n"
+            ));
             socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1\r\nConnection: close\r\n\r\n{").await.unwrap();
         });
         let client = DiagnosticHttpClient(
@@ -715,7 +717,7 @@ mod tests {
         let response = client
             .post_message(
                 format!(
-                    "http://{address}/mcp?token=SYNTHETIC_QUERY_CANARY#SYNTHETIC_FRAGMENT_CANARY"
+                    "http://{address}/SYNTHETIC_PATH_CANARY/mcp?token=SYNTHETIC_QUERY_CANARY#SYNTHETIC_FRAGMENT_CANARY"
                 )
                 .into(),
                 serde_json::from_value(json!({"jsonrpc":"2.0", "id":1, "method":"ping"})).unwrap(),
@@ -764,7 +766,7 @@ mod tests {
                 let request = String::from_utf8(request).unwrap();
                 assert!(
                     request.starts_with(&format!(
-                        "{method} /mcp?token=SYNTHETIC_QUERY_CANARY HTTP/1.1\r\n"
+                        "{method} /SYNTHETIC_PATH_CANARY/mcp?token=SYNTHETIC_QUERY_CANARY HTTP/1.1\r\n"
                     )),
                     "original query reaches the actual HTTP request"
                 );
@@ -779,10 +781,10 @@ mod tests {
                 socket.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
             });
             let url = BellProviderUrl::parse(format!(
-                "http://{address}/mcp?token=SYNTHETIC_QUERY_CANARY#SYNTHETIC_FRAGMENT_CANARY"
+                "http://{address}/SYNTHETIC_PATH_CANARY/mcp?token=SYNTHETIC_QUERY_CANARY#SYNTHETIC_FRAGMENT_CANARY"
             ))
             .unwrap();
-            assert_eq!(url.diagnostic_endpoint(), format!("http://{address}/mcp"));
+            assert_eq!(url.diagnostic_endpoint(), format!("http://{address}"));
             assert!(
                 url.as_str()
                     .ends_with("?token=SYNTHETIC_QUERY_CANARY#SYNTHETIC_FRAGMENT_CANARY")
@@ -859,43 +861,42 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = Vec::new();
-            loop {
-                let mut byte = [0];
-                socket.read_exact(&mut byte).await.unwrap();
-                request.push(byte[0]);
-                if request.ends_with(b"\r\n\r\n") {
-                    break;
+        let server =
+            tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut byte = [0];
+                    socket.read_exact(&mut byte).await.unwrap();
+                    request.push(byte[0]);
+                    if request.ends_with(b"\r\n\r\n") {
+                        break;
+                    }
+                    assert!(request.len() < 16_384);
                 }
-                assert!(request.len() < 16_384);
-            }
-            let headers = String::from_utf8(request).unwrap();
-            assert!(
-                headers
+                let headers = String::from_utf8(request).unwrap();
+                assert!(
+                    headers.lines().next().unwrap().contains(
+                        " /SYNTHETIC_PATH_CANARY/mcp?token=SYNTHETIC_QUERY_CANARY HTTP/1.1"
+                    ),
+                    "actual request query must be preserved"
+                );
+                assert!(!headers.contains("SYNTHETIC_FRAGMENT_CANARY"));
+                let length = headers
                     .lines()
-                    .next()
-                    .unwrap()
-                    .contains(" /mcp?token=SYNTHETIC_QUERY_CANARY HTTP/1.1"),
-                "actual request query must be preserved"
-            );
-            assert!(!headers.contains("SYNTHETIC_FRAGMENT_CANARY"));
-            let length = headers
-                .lines()
-                .find_map(|line| {
-                    line.to_ascii_lowercase()
-                        .strip_prefix("content-length:")
-                        .map(|value| value.trim().parse::<usize>().unwrap())
-                })
-                .unwrap_or(0);
-            assert!(length < 16_384);
-            socket.read_exact(&mut vec![0; length]).await.unwrap();
-            socket.write_all(response.as_bytes()).await.unwrap();
-        });
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|value| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                assert!(length < 16_384);
+                socket.read_exact(&mut vec![0; length]).await.unwrap();
+                socket.write_all(response.as_bytes()).await.unwrap();
+            });
         (
             BellProviderUrl::parse(format!(
-                "http://{address}/mcp?token=SYNTHETIC_QUERY_CANARY#SYNTHETIC_FRAGMENT_CANARY"
+                "http://{address}/SYNTHETIC_PATH_CANARY/mcp?token=SYNTHETIC_QUERY_CANARY#SYNTHETIC_FRAGMENT_CANARY"
             ))
             .unwrap(),
             server,
@@ -1004,10 +1005,10 @@ mod tests {
                     );
                 }
                 ("auth", Err(StreamableHttpError::AuthRequired(error))) => {
-                    assert_eq!(error.www_authenticate_header, "Bearer realm=fixture")
+                    assert_eq!(error.www_authenticate_header, "authentication required")
                 }
                 ("scope", Err(StreamableHttpError::InsufficientScope(error))) => {
-                    assert_eq!(error.required_scope.as_deref(), Some("fixture:read"))
+                    assert_eq!(error.required_scope.as_deref(), Some("required scope"))
                 }
                 ("expired", Err(StreamableHttpError::SessionExpired)) => {}
                 ("sse", Ok(StreamableHttpPostResponse::Sse(mut events, session))) => {
@@ -1120,6 +1121,122 @@ mod tests {
             !output.contains("SYNTHETIC_QUERY_CANARY"),
             "all SSE body diagnostics must omit query credentials"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn reflected_response_headers_are_safe_in_errors_and_worker_logs() {
+        let (_capture, diagnostics) = capture_diagnostics();
+        for (status, content_type, extra, expected, scope_present) in [
+            (
+                200,
+                "text/plain; reflected=SYNTHETIC_QUERY_CANARY",
+                "",
+                "content-type",
+                false,
+            ),
+            (
+                401,
+                "text/plain",
+                "WWW-Authenticate: Bearer realm=SYNTHETIC_QUERY_CANARY\r\n",
+                "auth",
+                false,
+            ),
+            (
+                403,
+                "text/plain",
+                "WWW-Authenticate: Bearer scope=SYNTHETIC_QUERY_CANARY\r\n",
+                "scope",
+                true,
+            ),
+            (
+                403,
+                "text/plain",
+                "WWW-Authenticate: Bearer realm=SYNTHETIC_QUERY_CANARY\r\n",
+                "scope",
+                false,
+            ),
+        ] {
+            let response = http_response(
+                status,
+                content_type,
+                extra,
+                "SYNTHETIC_QUERY_CANARY response body",
+            );
+            let (url, server) = diagnostic_http_fixture(response.clone()).await;
+            assert_eq!(
+                MemoryMcpProvider::new(url).ensure_connected().await,
+                ConnectOutcome::Error
+            );
+            server.await.unwrap();
+            assert_safe_diagnostics(&diagnostics, "bell provider cold-start failed");
+            let (url, server) = diagnostic_http_fixture(response).await;
+            let client = DiagnosticHttpClient(
+                reqwest_mcp::Client::builder()
+                    .pool_max_idle_per_host(0)
+                    .build()
+                    .unwrap(),
+            );
+            let error = client
+                .post_message(
+                    url.as_str().into(),
+                    serde_json::from_value(json!({"jsonrpc":"2.0","id":1,"method":"ping"}))
+                        .unwrap(),
+                    Some("fixture-session".into()),
+                    None,
+                    HashMap::new(),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                !format!("{error:?} {error}").contains("SYNTHETIC_QUERY_CANARY"),
+                "returned diagnostic error must omit reflected headers"
+            );
+            match (expected, error) {
+                ("content-type", StreamableHttpError::UnexpectedContentType(value)) => {
+                    assert!(value.is_some())
+                }
+                ("auth", StreamableHttpError::AuthRequired(value)) => {
+                    assert!(!value.www_authenticate_header.is_empty())
+                }
+                ("scope", StreamableHttpError::InsufficientScope(value)) => {
+                    assert_eq!(value.required_scope.is_some(), scope_present)
+                }
+                _ => panic!("response diagnostic must preserve protocol variant and hint presence"),
+            }
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn delegated_get_content_type_error_is_safe() {
+        let (_capture, diagnostics) = capture_diagnostics();
+        let response = http_response(200, "text/SYNTHETIC_QUERY_CANARY", "", "");
+        let (url, server) = diagnostic_http_fixture(response).await;
+        let client = DiagnosticHttpClient(
+            reqwest_mcp::Client::builder()
+                .pool_max_idle_per_host(0)
+                .build()
+                .unwrap(),
+        );
+        let error = client
+            .get_stream(
+                url.as_str().into(),
+                "fixture-session".into(),
+                None,
+                None,
+                HashMap::new(),
+            )
+            .await
+            .err()
+            .expect("GET must reject unexpected content type");
+        assert!(matches!(
+            &error,
+            StreamableHttpError::UnexpectedContentType(Some(_))
+        ));
+        assert!(!format!("{error:?} {error}").contains("SYNTHETIC_QUERY_CANARY"));
+        tracing::warn!(endpoint = %url.diagnostic_endpoint(), error = ?error, "delegated GET rejected");
+        assert_safe_diagnostics(&diagnostics, "delegated GET rejected");
+        server.await.unwrap();
     }
 
     enum Response {
@@ -1514,7 +1631,7 @@ mod tests {
         let registry = BellEvaluator::default();
         let configs = vec![BellProviderConfig {
             url: BellProviderUrl::parse(format!(
-                "http://{addr}/mcp?token=SYNTHETIC_QUERY_CANARY#SYNTHETIC_FRAGMENT_CANARY"
+                "http://{addr}/SYNTHETIC_PATH_CANARY/mcp?token=SYNTHETIC_QUERY_CANARY#SYNTHETIC_FRAGMENT_CANARY"
             ))
             .unwrap(),
             scope: BellScope::parse("test").unwrap(),
@@ -1554,7 +1671,7 @@ mod tests {
         let registry = BellEvaluator::default();
         let configs = vec![BellProviderConfig {
             url: BellProviderUrl::parse(format!(
-                "http://{addr}/mcp?token=SYNTHETIC_QUERY_CANARY#SYNTHETIC_FRAGMENT_CANARY"
+                "http://{addr}/SYNTHETIC_PATH_CANARY/mcp?token=SYNTHETIC_QUERY_CANARY#SYNTHETIC_FRAGMENT_CANARY"
             ))
             .unwrap(),
             scope: BellScope::parse("test").unwrap(),

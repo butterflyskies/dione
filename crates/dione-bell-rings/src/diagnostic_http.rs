@@ -115,6 +115,22 @@ fn without_request_url(
 ) -> StreamableHttpError<reqwest_mcp::Error> {
     match error {
         StreamableHttpError::Client(error) => StreamableHttpError::Client(error.without_url()),
+        StreamableHttpError::UnexpectedContentType(value) => {
+            StreamableHttpError::UnexpectedContentType(
+                value.map(|_| "unsupported content type".to_owned()),
+            )
+        }
+        // Bell discards connection failures and has no OAuth recovery consumer.
+        // Preserve hint presence and protocol category, never reflected contents.
+        StreamableHttpError::AuthRequired(_) => StreamableHttpError::AuthRequired(
+            AuthRequiredError::new("authentication required".to_owned()),
+        ),
+        StreamableHttpError::InsufficientScope(value) => {
+            StreamableHttpError::InsufficientScope(InsufficientScopeError::new(
+                "insufficient scope".to_owned(),
+                value.required_scope.map(|_| "required scope".to_owned()),
+            ))
+        }
         other => other,
     }
 }
@@ -292,7 +308,7 @@ impl DiagnosticHttpClient {
             }
             _ => {
                 // unexpected content type
-                tracing::error!("unexpected content type: {:?}", content_type);
+                tracing::error!(present = content_type.is_some(), "unexpected content type");
                 Err(StreamableHttpError::UnexpectedContentType(content_type))
             }
         }
