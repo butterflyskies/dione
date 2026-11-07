@@ -1,12 +1,12 @@
 //! MCP search argument parsing and response formatting.
 use crate::discord::{
-    ids::Snowflake,
     messaging::search::{
         SearchError, SearchErrorKind, SearchHas, SearchLimit, SearchOffset, SearchPage,
         SearchPreparationError, SearchRequest, SearchTimestamp, SortBy, SortOrder,
     },
     query_wire,
 };
+use dione_discord_identities::Snowflake;
 use serde::{Deserialize, de};
 use serde_json::{Value, json};
 use serenity::model::id::{ChannelId, GuildId, MessageId, UserId};

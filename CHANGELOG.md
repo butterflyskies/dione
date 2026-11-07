@@ -18,6 +18,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.108.2]
+
+### Fixed
+
+- Inherit the accepted Teams/OMP test allowances and contained guidance while
+  preserving this extraction and its assertions.
+
+## [0.108.1]
+
+### Fixed
+
+- Allow 120 seconds for authenticated Teams test event reads, child socket
+  readiness, and parent control connections on slower CI workers, preserving
+  assertions and production deadlines.
+
+## [0.108.0] - 2026-11-05
+
+### Changed
+
+- Extract the nonzero Discord input validator and Serenity conversions into
+  dione-discord-identities. Migrate callers directly and remove the former
+  application module while retaining adapter parsing and persisted spelling.
+
 ## [0.107.2]
 
 ### Fixed

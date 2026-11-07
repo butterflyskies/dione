@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use std::num::ParseIntError;
 use thiserror::Error;
 use {
-    crate::discord::ids::Snowflake,
+    dione_discord_identities::Snowflake,
     dione_evidence::{SentexError, SentexHandles, parse_tool_sentex_handles},
 };
 

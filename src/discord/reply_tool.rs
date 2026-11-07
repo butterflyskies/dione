@@ -188,7 +188,7 @@ impl<'a> ReplyRequest<'a> {
             .and_then(Value::as_str)
             .ok_or(ArgumentErrorKind::Missing("content"))?;
         let reply_to = parse_optional_id(arguments, "reply_to_message_id")?
-            .map(crate::discord::ids::Snowflake::message);
+            .map(dione_discord_identities::Snowflake::message);
         let ping = ReplyPing::from_suppressed(
             arguments
                 .get("suppress_ping")

@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.107.2"
+version = "0.108.2"
 dependencies = [
  "arc-swap",
  "axum",
@@ -946,6 +946,7 @@ dependencies = [
  "dione-contradictionary",
  "dione-coordination",
  "dione-delivery-scheduler",
+ "dione-discord-identities",
  "dione-durable",
  "dione-evidence",
  "dione-gaie",
@@ -1089,6 +1090,14 @@ dependencies = [
  "dione-contracts",
  "thiserror 2.0.21",
  "tokio",
+]
+
+[[package]]
+name = "dione-discord-identities"
+version = "0.1.0"
+dependencies = [
+ "native-tls",
+ "serenity",
 ]
 
 [[package]]

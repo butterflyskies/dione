@@ -2,7 +2,6 @@
 
 use super::{
     audience,
-    ids::Snowflake,
     introspection::{self, IntrospectionCtx, IntrospectionOperation},
     introspection_wire,
     reply_tool::ReplyServices,
@@ -17,6 +16,7 @@ use crate::{
         ToolNameError,
     },
 };
+use dione_discord_identities::Snowflake;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::sync::Arc;

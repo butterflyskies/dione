@@ -3,7 +3,6 @@ pub(crate) mod audience;
 pub mod chunker;
 pub mod client;
 pub mod events;
-pub mod ids;
 pub(crate) mod introspection;
 pub(crate) mod introspection_tools;
 pub(crate) mod introspection_wire;

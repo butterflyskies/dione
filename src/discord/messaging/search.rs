@@ -1,15 +1,13 @@
 //! Guild search requests, Discord execution, and authorized message observations.
 use crate::{
     config::LoadedConfig,
-    discord::{
-        ids::Snowflake,
-        messaging::{
-            MessagingCtx,
-            queries::{MessageView, ObservationError},
-        },
+    discord::messaging::{
+        MessagingCtx,
+        queries::{MessageView, ObservationError},
     },
     gate::OutboundGate,
 };
+use dione_discord_identities::Snowflake;
 use serde::Deserialize;
 use serde_json::Value;
 use serenity::model::{
