@@ -1,0 +1,26 @@
+{
+  "42": {
+    "user_id": 42,
+    "username": "pending-user",
+    "message_preview": "please",
+    "timestamp": "2026-01-02T12:00:00Z"
+  },
+  "0": {
+    "user_id": 0,
+    "username": "pending-user",
+    "message_preview": "please",
+    "timestamp": "2026-01-02T12:00:00Z"
+  },
+  "7": {
+    "user_id": 18446744073709551615,
+    "username": "pending-user",
+    "message_preview": "please",
+    "timestamp": "2026-01-02T12:00:00Z"
+  },
+  "99": {
+    "user_id": 99,
+    "username": "pending-user",
+    "message_preview": "please",
+    "timestamp": "2026-01-01T12:00:00Z"
+  }
+}

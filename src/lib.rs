@@ -20,7 +20,6 @@ pub mod permissions;
 pub mod pluralkit;
 pub mod pre_send;
 pub mod principal_policy;
-pub mod queue;
 #[expect(
     dead_code,
     reason = "standalone receipt-gate fixture is runtime-wired in a follow-up PR"

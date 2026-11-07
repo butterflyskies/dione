@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.102.2"
+version = "0.103.2"
 dependencies = [
  "arc-swap",
  "axum",
@@ -939,6 +939,7 @@ dependencies = [
  "chrono-tz",
  "clap",
  "color-eyre",
+ "dione-access-requests",
  "dione-attention",
  "dione-bell-rings",
  "dione-contracts",
@@ -990,6 +991,18 @@ dependencies = [
  "trybuild",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "dione-access-requests"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

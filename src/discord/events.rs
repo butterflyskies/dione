@@ -1,4 +1,5 @@
 use super::observation::PreparedAdmission;
+use dione_access_requests::{AccessQueue, AccessRequest};
 use dione_bell_rings::BellStatus;
 use serenity::{
     async_trait,
@@ -30,7 +31,6 @@ use {
             GateDecision, InboundGate, MentionDetector, MentionKind, ReplyParentAction,
             ReplyParentResolution, classify_reply_parent_ignore_default,
         },
-        queue::AccessRequest,
     },
     dione_attention::types::{DirectAuthorKind, SourceAuthorKind},
     dione_messages::timestamp::Timestamp,
@@ -199,7 +199,7 @@ impl NotificationEvent {
 /// Serenity event handler — bridges Discord gateway events to the MCP layer.
 pub struct Handler {
     pub state: crate::state::State,
-    pub queue: Arc<tokio::sync::Mutex<crate::queue::AccessQueue>>,
+    pub queue: Arc<tokio::sync::Mutex<AccessQueue>>,
     pub tx: tokio::sync::mpsc::Sender<NotificationEvent>,
     pub state_dir: camino::Utf8PathBuf,
     pub bot_user_id: AtomicU64,
@@ -4561,9 +4561,7 @@ mod tests {
         let (tx, notifications) = tokio::sync::mpsc::channel(8);
         let handler = Handler {
             state: crate::state::new_state(),
-            queue: Arc::new(tokio::sync::Mutex::new(crate::queue::AccessQueue::load(
-                &state_dir,
-            ))),
+            queue: Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&state_dir))),
             tx,
             state_dir,
             bot_user_id: AtomicU64::new(999),

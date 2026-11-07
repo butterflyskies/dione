@@ -1,5 +1,6 @@
 //! Exercises a third adapter through common MCP and notification routing.
 use super::*;
+use dione_access_requests::AccessQueue;
 use dione_contracts::MessageRef;
 use futures_util::future::BoxFuture;
 use serenity::model::id::{ChannelId, MessageId};
@@ -93,7 +94,7 @@ async fn third_adapter_routes_notifications_invalidation_and_protocol() {
     let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
     let server = DioneServer::new(
         crate::state::new_state(),
-        Arc::new(Mutex::new(crate::queue::AccessQueue::load(&path))),
+        Arc::new(Mutex::new(AccessQueue::load(&path))),
         Arc::new(serenity::http::Http::new("fake")),
         path.clone(),
         mpsc::channel(1).0,
@@ -235,7 +236,7 @@ async fn notification_loop_invalidates_edits_and_deletes_before_delivery() {
     let server = Arc::new(
         DioneServer::new(
             crate::state::new_state(),
-            Arc::new(Mutex::new(crate::queue::AccessQueue::load(&path))),
+            Arc::new(Mutex::new(AccessQueue::load(&path))),
             Arc::new(serenity::http::Http::new("fake")),
             path.clone(),
             mpsc::channel(1).0,
@@ -327,7 +328,7 @@ async fn oh_my_pi_ordinary_mcp_tools_remain_available() {
     let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
     let server = DioneServer::new(
         crate::state::new_state(),
-        Arc::new(Mutex::new(crate::queue::AccessQueue::load(&path))),
+        Arc::new(Mutex::new(AccessQueue::load(&path))),
         Arc::new(serenity::http::Http::new("fake")),
         path.clone(),
         mpsc::channel(1).0,

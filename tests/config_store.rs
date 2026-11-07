@@ -3,10 +3,10 @@ use dione::{
     config::{Config, DmPolicy, LoadedConfig},
     mcp::server::{DioneServer, test_helpers},
     no_rly::consent::ConsentGate,
-    queue::AccessQueue,
     state::new_state,
     tracing_channel::TraceLevelController,
 };
+use dione_access_requests::AccessQueue;
 use serde_json::{Value, json};
 use serenity::http::Http;
 use std::sync::Arc;

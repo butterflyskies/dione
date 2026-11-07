@@ -13,6 +13,7 @@
 
 pub use crate::tracing_channel::TraceLevelController;
 use camino::Utf8PathBuf;
+use dione_access_requests::AccessQueue;
 use dione_bell_rings::{BellEvaluator, render_bells};
 use dione_contracts::ModuleInstanceId;
 #[cfg(test)]
@@ -98,7 +99,7 @@ impl ServerConstructionError {
 /// Runtime context for the MCP server.
 #[derive(Clone)]
 pub struct DioneServer {
-    pub queue: Arc<Mutex<crate::queue::AccessQueue>>,
+    pub queue: Arc<Mutex<AccessQueue>>,
     pub notification_tx: mpsc::Sender<Value>,
     pub presence: PresenceCapability,
     pub trace_controller: TraceLevelController,
@@ -143,7 +144,7 @@ impl DioneServer {
     )]
     pub async fn new(
         state: crate::state::State,
-        queue: Arc<Mutex<crate::queue::AccessQueue>>,
+        queue: Arc<Mutex<AccessQueue>>,
         http: Arc<serenity::http::Http>,
         state_dir: Utf8PathBuf,
         notification_tx: mpsc::Sender<Value>,
@@ -1457,7 +1458,7 @@ mod tests {
         let (_queue_dir, harness) = test_codex_connection();
         let server = DioneServer::new(
             crate::state::new_state(),
-            Arc::new(Mutex::new(crate::queue::AccessQueue::load(&state_dir))),
+            Arc::new(Mutex::new(AccessQueue::load(&state_dir))),
             Arc::new(serenity::http::Http::new("fake")),
             state_dir.clone(),
             notification_tx,
@@ -1544,7 +1545,7 @@ mod tests {
         let (notification_tx, _notification_rx) = mpsc::channel(1);
         let server = DioneServer::new(
             crate::state::new_state(),
-            Arc::new(Mutex::new(crate::queue::AccessQueue::load(&state_dir))),
+            Arc::new(Mutex::new(AccessQueue::load(&state_dir))),
             Arc::new(serenity::http::Http::new("fake")),
             state_dir.clone(),
             notification_tx,

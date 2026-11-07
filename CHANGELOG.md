@@ -18,6 +18,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.103.2]
+
+### Fixed
+
+- Inherit the accepted Teams/OMP test allowances and contained guidance while
+  preserving this extraction and its assertions.
+
+## [0.103.1]
+
+### Fixed
+
+- Allow 120 seconds for authenticated Teams test event reads, child socket
+  readiness, and parent control connections on slower CI workers, preserving
+  assertions and production deadlines.
+
+## [0.103.0]
+
+### Changed
+
+- Extract pending access-request storage into dione-access-requests. Migrate
+  application consumers directly and retain historical queue.json records,
+  byte-limited previews, notification bookkeeping, and best-effort persistence.
+  Configuration-backed authorization remains in Dione.
+
 ## [0.102.2]
 
 ### Fixed
