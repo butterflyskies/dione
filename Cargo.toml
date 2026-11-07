@@ -1,9 +1,9 @@
 [workspace]
-members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention", "crates/dione-evidence", "crates/dione-messages", "crates/dione-rate-limiter", "crates/dione-vaelii", "crates/dione-gaie", "crates/dione-identity-display", "crates/dione-harness", "crates/dione-presentation", "crates/dione-contradictionary", "crates/dione-bell-rings", "crates/dione-delivery-scheduler", "crates/dione-access-requests", "crates/dione-mutes", "crates/dione-coordination", "crates/dione-pre-send", "crates/dione-teams-identities", "crates/dione-discord-identities"]
+members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-contracts", "crates/dione-rook", "crates/dione-attention", "crates/dione-evidence", "crates/dione-messages", "crates/dione-rate-limiter", "crates/dione-vaelii", "crates/dione-gaie", "crates/dione-identity-display", "crates/dione-harness", "crates/dione-presentation", "crates/dione-contradictionary", "crates/dione-bell-rings", "crates/dione-delivery-scheduler", "crates/dione-access-requests", "crates/dione-mutes", "crates/dione-coordination", "crates/dione-pre-send", "crates/dione-teams-identities", "crates/dione-discord-identities", "crates/dione-pluralkit-identities"]
 
 [package]
 name = "dione"
-version = "0.108.2"
+version = "0.109.2"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -14,6 +14,7 @@ keywords = ["discord", "mcp", "claude-code", "codex", "bot"]
 categories = ["command-line-utilities"]
 
 [workspace.dependencies]
+dione-pluralkit-identities = { version = "=0.1.0", path = "crates/dione-pluralkit-identities" }
 dione-discord-identities = { version = "=0.1.0", path = "crates/dione-discord-identities" }
 dione-teams-identities = { version = "=0.1.0", path = "crates/dione-teams-identities" }
 regex = "1"
@@ -79,6 +80,7 @@ serenity = { version = "0.12", default-features = false, features = ["client", "
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 [dependencies]
+dione-pluralkit-identities.workspace = true
 dione-discord-identities.workspace = true
 dione-teams-identities.workspace = true
 dione-pre-send.workspace = true

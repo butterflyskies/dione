@@ -30,52 +30,6 @@ use uuid::Uuid;
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
-/// A validated PluralKit UUID.
-///
-/// Validates that the string is a well-formed UUID (8-4-4-4-12 hex format).
-/// Prevents raw arbitrary strings from being used as identity claims.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct PkUuid(String);
-
-impl PkUuid {
-    /// Parse and validate a PluralKit UUID string.
-    ///
-    /// Accepts only the standard UUID format: 8-4-4-4-12 hex with dashes.
-    /// PK short IDs (5-char alphanumeric) are NOT accepted because the PK API
-    /// returns full UUIDs — a configured short ID would never match the
-    /// resolver's output, silently failing to authorize.
-    pub(crate) fn parse(s: impl Into<String>) -> Result<Self, &'static str> {
-        let s = s.into();
-        if s.is_empty() {
-            return Err("PK UUID must be non-empty");
-        }
-        let is_uuid = s.len() == 36
-            && s.chars().enumerate().all(|(i, c)| {
-                if i == 8 || i == 13 || i == 18 || i == 23 {
-                    c == '-'
-                } else {
-                    c.is_ascii_hexdigit()
-                }
-            });
-        if !is_uuid {
-            return Err("PK identifier must be a full UUID (8-4-4-4-12 hex); \
-                 short IDs are not accepted — use the full UUID from PK's API");
-        }
-        // Canonicalize to lowercase for consistent matching.
-        Ok(Self(s.to_ascii_lowercase()))
-    }
-
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for PkUuid {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
 /// Error from PK API resolution.
 #[derive(Debug)]
 pub enum PkResolveError {
@@ -1400,39 +1354,6 @@ mod tests {
             ..PkResolverConfig::default()
         };
         assert!(PkResolver::new(config).is_err());
-    }
-
-    #[test]
-    fn test_pk_uuid_empty_rejected() {
-        assert!(PkUuid::parse("").is_err());
-    }
-
-    #[test]
-    fn test_pk_uuid_invalid_format_rejected() {
-        assert!(PkUuid::parse("not-a-uuid").is_err());
-        assert!(PkUuid::parse("sys-1").is_err());
-    }
-
-    #[test]
-    fn test_pk_uuid_short_id_rejected() {
-        // Short IDs cannot match resolver output (which returns full UUIDs),
-        // so they must be rejected to prevent silent authorization failures.
-        assert!(PkUuid::parse("abcde").is_err());
-    }
-
-    #[test]
-    fn test_pk_uuid_valid_uuid_accepted() {
-        assert!(PkUuid::parse("12345678-1234-1234-1234-123456789abc").is_ok());
-    }
-
-    #[test]
-    fn test_pk_uuid_uppercase_canonicalized() {
-        let uuid = PkUuid::parse("12345678-ABCD-1234-1234-123456789ABC").unwrap();
-        assert_eq!(
-            uuid.as_str(),
-            "12345678-abcd-1234-1234-123456789abc",
-            "uppercase UUID must be canonicalized to lowercase"
-        );
     }
 
     // ── Mock HTTP server ────────────────────────────────────────────────────
