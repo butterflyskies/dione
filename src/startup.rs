@@ -3,6 +3,7 @@ mod error;
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::Parser;
 use dione_access_requests::AccessQueue;
+use dione_mutes::MuteStore;
 pub use error::{SecretEnvironmentError, StartupError, StartupErrorKind};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -140,16 +141,16 @@ pub async fn run() -> Result<(), StartupError> {
         crate::pre_send::production_pipeline().map_err(StartupErrorKind::Observe)?;
     crate::pre_send::install_pipeline(Some(pre_send_pipeline));
 
-    let mute_store = crate::mute_store::MuteStore::load(&state_dir)
+    let mute_store = MuteStore::load(&state_dir)
         .await
         .map_err(StartupErrorKind::Mute)?;
-    crate::mute_store::init_global(mute_store);
+    crate::composition::mutes::init_global(mute_store);
 
     if let Some(path) = &cli.attention_command {
         return run_attention_command(path, &state_dir, &config, cli.mode.attention_policy()).await;
     }
 
-    let expiry_handle = crate::mute_store::global()
+    let expiry_handle = crate::composition::mutes::global()
         .ok_or(StartupErrorKind::MuteUnavailable)?
         .spawn_expiry_task();
 

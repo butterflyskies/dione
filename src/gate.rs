@@ -197,7 +197,7 @@ impl InboundGate {
             return GateDecision::Drop;
         }
         if let Some(gid) = guild_id
-            && let Some(store) = crate::mute_store::global()
+            && let Some(store) = crate::composition::mutes::global()
             && store.is_guild_muted(gid)
         {
             tracing::debug!(

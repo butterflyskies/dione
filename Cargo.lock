@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.103.2"
+version = "0.104.2"
 dependencies = [
  "arc-swap",
  "axum",
@@ -951,6 +951,7 @@ dependencies = [
  "dione-harness",
  "dione-identity-display",
  "dione-messages",
+ "dione-mutes",
  "dione-presentation",
  "dione-rate-limiter",
  "dione-rendering",
@@ -1160,6 +1161,20 @@ dependencies = [
  "dione-evidence",
  "serde",
  "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
+name = "dione-mutes"
+version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "camino",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
  "tracing",
 ]
 

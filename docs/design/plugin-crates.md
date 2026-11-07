@@ -319,6 +319,25 @@ deserialization are inherited type-policy violations, scoped to this storage
 API. This extraction does not extend their semantics or establish compliance.
 The crate README records that debt and the existing async blocking-I/O limit.
 
+## Mute-store boundary
+
+dione-mutes owns receipt replay, projection, mutation, clock, notifier and expiry
+mechanics with all 27 existing unit tests. Historical optional fields, raw IDs,
+line-numbered corrupt replay errors, append-before-projection and expiry retry
+behavior remain unchanged. The store still accepts zero TTL; MCP rejects it.
+
+The existing singleton and its initialization functions move only to
+composition::mutes. All concrete types are imported directly from the member.
+Startup retains load/install before the offline-command return, worker spawn
+after that return and explicit abort on normal shutdown. Current authorization
+and post-wait mute rechecks stay in application adapters.
+
+Raw numeric identities/TTL, mutable public fields, derived deserialization,
+operation/optional-field combinations, String mutation errors and boxed errors
+are inherited scoped policy violations. Append errors do not prove no bytes
+reached disk. No torn-tail recovery, cross-instance lock, directory synchronization
+or shutdown redesign is added. The member README records these limits.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -340,6 +359,7 @@ The crate README records that debt and the existing async blocking-I/O limit.
 15. Bell memory retrieval backend, with native eligibility and publication retained.
 16. Generic scoped delivery scheduler, with native evidence classification retained.
 17. Pending access-request storage, with configuration-backed authorization retained.
+18. Mute store and expiry mechanics, with process wiring and authorization retained.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -352,7 +372,7 @@ The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, and `dione-access-requests`.
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, and `dione-mutes`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -374,14 +394,14 @@ Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, and `dione-access-requests`,
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, and `dione-mutes`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all seventeen capabilities. Contradictionary publishing waits
+publishing waits for all eighteen capabilities. Contradictionary publishing waits
 for evidence reconciliation. Presentation publishing waits for
 contracts, attention, evidence, messages, and identity-display reconciliation. Harness publishing waits for
 contracts and messages reconciliation. Messages publishing waits for
@@ -396,3 +416,5 @@ fixture proves Cargo dependency resolution with a local registry only.
 Scheduler publishing waits for contracts reconciliation. Dione publishing also waits for scheduler reconciliation.
 
 Access-request storage has no capability publication prerequisite. Dione publishing waits for its reconciliation.
+
+Mute storage has no capability publication prerequisite. Dione publishing waits for mute reconciliation.

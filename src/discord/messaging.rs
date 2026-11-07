@@ -6,6 +6,7 @@ mod rook_publication;
 pub(crate) mod search;
 mod types;
 use camino::Utf8PathBuf;
+use dione_mutes::MuteStore;
 pub use rook_publication::{DiscordPublicationInitError, DiscordPublicationProvider};
 use serde::Deserialize;
 use serde_json::json;
@@ -137,7 +138,7 @@ struct TargetVerificationContext<'a> {
     ledger: &'a IngressLedger,
     http: &'a Arc<serenity::http::Http>,
     config: &'a LoadedConfig,
-    mute_store_override: Option<&'a crate::mute_store::MuteStore>,
+    mute_store_override: Option<&'a MuteStore>,
 }
 
 async fn verify_message_target_with_mute_store(
@@ -216,7 +217,7 @@ async fn verify_message_target_with_mute_store(
                 let drops = crate::drop_ledger::global();
                 let guild_muted = match mute_store_override {
                     Some(store) => store.is_guild_muted(guild_id.get()),
-                    None => crate::mute_store::global()
+                    None => crate::composition::mutes::global()
                         .is_some_and(|store| store.is_guild_muted(guild_id.get())),
                 };
                 if guild_muted
@@ -1970,6 +1971,7 @@ fn parse_reaction_type(
 mod tests {
     use super::*;
     use dione_access_requests::AccessQueue;
+    use dione_mutes::{GuildMute, MuteState};
     use serde_json::Value;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::{
@@ -1979,7 +1981,6 @@ mod tests {
     use {
         crate::{
             config::{ChannelConfig, Config},
-            mute_store::{GuildMute, MuteState, MuteStore},
             pre_send::{
                 Assessment, AuditSink, AuditTrail, ConstructFeedback, FeedbackSink, HookContext,
                 HookDecision, HookOutput, PipelineMode, PreSendHook, PreSendPipeline, SinkError,
@@ -2620,9 +2621,12 @@ mod tests {
                 cutoff_event_id: String::new(),
             },
         );
-        crate::mute_store::init_global(MuteStore::from_state(state, camino::Utf8Path::new("/tmp")));
+        crate::composition::mutes::init_global(MuteStore::from_state(
+            state,
+            camino::Utf8Path::new("/tmp"),
+        ));
         assert!(
-            crate::mute_store::global()
+            crate::composition::mutes::global()
                 .expect("global store installed")
                 .is_guild_muted(500)
         );
