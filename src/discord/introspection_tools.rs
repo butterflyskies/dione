@@ -9,15 +9,15 @@ use super::{
     visibility::{MAX_CAN_VIEW_USER_IDS, VisibilityRequest, VisibilityRequestError},
     visibility_read,
 };
-use crate::mcp::tool_registry::McpTool;
-use crate::mcp::tool_registry::RegisteredTool;
-use crate::mcp::tool_registry::ToolCallError;
-use crate::mcp::tool_registry::ToolCallErrorKind;
-use crate::mcp::tool_registry::ToolDefinition;
-use crate::mcp::tool_registry::ToolName;
-use crate::mcp::tool_registry::ToolNameError;
 use dione_config::load_config;
 use dione_discord_identities::Snowflake;
+use dione_mcp_tools::McpTool;
+use dione_mcp_tools::RegisteredTool;
+use dione_mcp_tools::ToolCallError;
+use dione_mcp_tools::ToolCallErrorKind;
+use dione_mcp_tools::ToolDefinition;
+use dione_mcp_tools::ToolName;
+use dione_mcp_tools::ToolNameError;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::sync::Arc;

@@ -1,7 +1,7 @@
 //! Teams-owned MCP parsing and receipt projection for single-use reply authority.
 
 use super::{ReplyHandle, runtime::TeamsReplyAuthority};
-use crate::mcp::tool_registry::{
+use dione_mcp_tools::{
     McpTool, RegisteredTool, ToolCallError, ToolCallErrorKind, ToolDefinition, ToolName,
     ToolNameError,
 };

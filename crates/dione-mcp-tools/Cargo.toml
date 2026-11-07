@@ -1,0 +1,20 @@
+[package]
+name = "dione-mcp-tools"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Immutable MCP tool registrations and owner-provided contracts"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["mcp", "tools", "registry"]
+categories = ["asynchronous"]
+
+[dependencies]
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

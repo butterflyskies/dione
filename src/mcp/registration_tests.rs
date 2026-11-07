@@ -3,19 +3,17 @@
 use super::*;
 use dione_access_requests::AccessQueue;
 use dione_contracts::MessageRef;
+use dione_mcp_tools::{
+    McpTool, RegisteredTool, RegistrationErrorKind, ToolCallError, ToolDefinition, ToolName,
+};
 use futures_util::future::BoxFuture;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::io::AsyncWriteExt;
 use {
-    crate::{
-        mcp::tool_registry::{
-            McpTool, RegisteredTool, RegistrationErrorKind, ToolCallError, ToolDefinition, ToolName,
-        },
-        teams::{
-            ReplyHandle,
-            edge::LiveReplyReceipt,
-            runtime::{TeamsReplyAuthority, TeamsRuntimeError},
-        },
+    crate::teams::{
+        ReplyHandle,
+        edge::LiveReplyReceipt,
+        runtime::{TeamsReplyAuthority, TeamsRuntimeError},
     },
     dione_harness::{HarnessDelivery, HarnessProtocol},
     dione_messages::delivery::Delivery,
@@ -49,6 +47,14 @@ async fn server_with_http(
     harness: HarnessConnection,
     http: Arc<serenity::http::Http>,
 ) -> (tempfile::TempDir, DioneServer) {
+    try_server_with_http(harness, http)
+        .await
+        .expect("Discord reply registration")
+}
+async fn try_server_with_http(
+    harness: HarnessConnection,
+    http: Arc<serenity::http::Http>,
+) -> Result<(tempfile::TempDir, DioneServer), ServerConstructionError> {
     let dir = tempfile::TempDir::new().expect("state directory");
     let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("UTF-8 path");
     let (tx, _rx) = mpsc::channel(1);
@@ -68,9 +74,8 @@ async fn server_with_http(
         ),
         None,
     )
-    .await
-    .expect("Discord reply registration");
-    (dir, server)
+    .await?;
+    Ok((dir, server))
 }
 fn request(name: &str, arguments: Value) -> Value {
     json!({"jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{"name":name,"arguments":arguments}})
@@ -125,14 +130,14 @@ fn names_and_collisions_are_rejected_before_serving() {
             .into_iter()
             .chain(PRIVATE_CONTROL_TOOLS.iter().copied())
         {
-            let error = ToolRegistry::new(&harness, vec![fake(name, true)])
+            let error = ToolRegistry::new(&reserved_tool_names(&harness), vec![fake(name, true)])
                 .err()
                 .expect("reserved name");
             assert_eq!(error.name.to_string(), name);
             assert!(matches!(error.kind, RegistrationErrorKind::Reserved));
         }
         let error = ToolRegistry::new(
-            &harness,
+            &reserved_tool_names(&harness),
             vec![fake("extension", false), fake("extension", true)],
         )
         .err()
@@ -416,6 +421,7 @@ async fn teams_public_mcp_error_does_not_render_retained_internal_causes() {
 }
 
 struct PrivateControlFixture {
+    advertised: Arc<std::sync::RwLock<Vec<Value>>>,
     initialized: Arc<AtomicBool>,
     calls: Arc<AtomicUsize>,
 }
@@ -437,7 +443,7 @@ impl HarnessProtocol for PrivateControlFixture {
         json!({"tools": {}})
     }
     fn tools(&self) -> Vec<Value> {
-        Vec::new()
+        self.advertised.read().unwrap().clone()
     }
     fn resident_control(&self) -> bool {
         true
@@ -484,6 +490,7 @@ async fn private_controls_require_transport_assigned_origin_and_remain_undiscove
     let initialized = Arc::new(AtomicBool::new(false));
     let harness = HarnessConnection::from_adapter(
         PrivateControlFixture {
+            advertised: Arc::default(),
             initialized: initialized.clone(),
             calls: calls.clone(),
         },
@@ -578,6 +585,7 @@ async fn stdio_eof_revokes_readiness_before_the_server_returns() {
     let initialized = Arc::new(AtomicBool::new(true));
     let harness = HarnessConnection::from_adapter(
         PrivateControlFixture {
+            advertised: Arc::default(),
             initialized: initialized.clone(),
             calls: Arc::new(AtomicUsize::new(0)),
         },
@@ -827,4 +835,91 @@ async fn discord_management_registration_preserves_discovery_and_resident_author
         &server.module_tools,
         &json!({"method":"tools/list"})
     ));
+}
+
+fn mutable_catalog_harness(advertised: Arc<std::sync::RwLock<Vec<Value>>>) -> HarnessConnection {
+    HarnessConnection::from_adapter(
+        PrivateControlFixture {
+            advertised,
+            initialized: Arc::new(AtomicBool::new(false)),
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+        ProtocolOutput::new(tokio::io::sink()),
+    )
+}
+#[tokio::test]
+async fn initial_registry_uses_current_harness_catalog() {
+    let advertised = Arc::new(std::sync::RwLock::new(Vec::new()));
+    let harness = mutable_catalog_harness(advertised.clone());
+    *advertised.write().unwrap() = vec![json!({"name":42}), json!({}), json!({"name":"reply"})];
+    let error = try_server_with_http(harness, Arc::new(serenity::http::Http::new("fake")))
+        .await
+        .err()
+        .expect("current harness reply collides with native reply");
+    match error.kind {
+        ServerConstructionErrorKind::Registration(error) => {
+            assert_eq!(error.name.to_string(), "reply");
+            assert!(matches!(error.kind, RegistrationErrorKind::Reserved));
+        }
+        ServerConstructionErrorKind::Definition(error) => {
+            panic!("unexpected definition error: {error}")
+        }
+    }
+}
+#[tokio::test]
+async fn replacement_registry_refreshes_catalog_and_retains_native_tools() {
+    let advertised = Arc::new(std::sync::RwLock::new(Vec::new()));
+    let (_dir, initial) = server(mutable_catalog_harness(advertised.clone())).await;
+    *advertised.write().unwrap() = vec![json!({"name":"late_extension"}), json!({"name":null})];
+    let error = initial
+        .with_module_tools(vec![fake("late_extension", false)])
+        .err()
+        .expect("fresh catalog collision");
+    assert_eq!(error.name.to_string(), "late_extension");
+    assert!(matches!(error.kind, RegistrationErrorKind::Reserved));
+    let (_dir, initial) = server(mutable_catalog_harness(advertised.clone())).await;
+    advertised.write().unwrap().clear();
+    let installed = initial
+        .with_module_tools(vec![fake("late_extension", false)])
+        .unwrap();
+    let response = handle_request(
+        &installed,
+        request("late_extension", json!({"message":"fresh dispatch"})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result_value(&response), json!({"echo":"fresh dispatch"}));
+    let listed = handle_request(&installed, json!({"id":2,"method":"tools/list"}))
+        .await
+        .unwrap();
+    let tools = listed["result"]["tools"].as_array().unwrap();
+    assert!(tools.iter().any(|tool| tool["name"] == "reply"));
+    assert!(tools.iter().any(|tool| tool["name"] == "late_extension"));
+    let error = installed
+        .with_module_tools(vec![fake("reply", false)])
+        .err()
+        .expect("native retained");
+    assert_eq!(error.name.to_string(), "reply");
+    assert!(matches!(error.kind, RegistrationErrorKind::Duplicate));
+}
+#[tokio::test]
+async fn replacement_registry_reserves_all_three_catalog_sources() {
+    for name in crate::harness::TOOL_NAMES
+        .iter()
+        .copied()
+        .chain(["set_presence", "adapter_only"])
+        .chain(PRIVATE_CONTROL_TOOLS.iter().copied())
+    {
+        let advertised = Arc::new(std::sync::RwLock::new(vec![
+            json!({"name":"adapter_only"}),
+            json!({"name":false}),
+        ]));
+        let (_dir, initial) = server(mutable_catalog_harness(advertised)).await;
+        let error = initial
+            .with_module_tools(vec![fake(name, false)])
+            .err()
+            .expect("reserved source");
+        assert_eq!(error.name.to_string(), name);
+        assert!(matches!(error.kind, RegistrationErrorKind::Reserved));
+    }
 }

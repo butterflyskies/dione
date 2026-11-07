@@ -129,6 +129,13 @@ senders retain HTTP, authorization and coordination effects. Their terminal
 failure projection consumes typed progress and diary records; consent retries
 retain private remainder and fence state inside the owner.
 
+The public dione-mcp-tools package owns validated tool names, definitions,
+immutable registrations and borrowed handler contracts. Application server
+assembly supplies the current reserved-name set from fixed harness names,
+actual selected-harness discovery and private controls at both construction
+paths. Transport origin, readiness, resident admission and native authority
+remain application-owned.
+
 ## Processes and transports
 
 ```mermaid

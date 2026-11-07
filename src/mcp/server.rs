@@ -24,10 +24,6 @@ use crate::mcp::harness_wire::PRIVATE_CONTROL_TOOLS;
 use crate::mcp::harness_wire::RequestOrigin;
 use crate::mcp::protocol::initialize_response;
 use crate::mcp::protocol::tools_list;
-use crate::mcp::tool_registry::RegisteredTool;
-use crate::mcp::tool_registry::RegistrationError;
-use crate::mcp::tool_registry::ToolNameError;
-use crate::mcp::tool_registry::ToolRegistry;
 use crate::mcp::tools::diagnostics::DiagnosticsCtx;
 use crate::mcp::tools::no_rly::NoRlyCtx;
 pub use crate::tracing_channel::TraceLevelController;
@@ -46,6 +42,10 @@ use dione_harness::AttentionPolicy;
 use dione_harness::HarnessConnection;
 use dione_harness::HarnessError;
 use dione_harness::ProtocolOutput;
+use dione_mcp_tools::RegisteredTool;
+use dione_mcp_tools::RegistrationError;
+use dione_mcp_tools::ToolNameError;
+use dione_mcp_tools::ToolRegistry;
 use dione_messages::delivery::Delivery;
 use dione_messages::delivery::DeliveryKind;
 use dione_messages::delivery::EvidenceVisibility;
@@ -57,6 +57,7 @@ use dione_rate_limiter::RateLimitDecision;
 use dione_rate_limiter::RateLimiter;
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeSet,
     os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
     sync::Arc,
     time::{Duration, Instant},
@@ -115,6 +116,24 @@ pub struct DioneServer {
     pub(super) module_tools: ToolRegistry,
     discord_tools: Vec<RegisteredTool>,
     discord: Arc<crate::discord::reply_tool::ReplyServices>,
+}
+
+pub(crate) fn reserved_tool_names(harness: &HarnessConnection) -> BTreeSet<String> {
+    let definitions = tools_list(harness, true);
+    let mut reserved: BTreeSet<String> = crate::harness::TOOL_NAMES
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+    if let Some(tools) = definitions["tools"].as_array() {
+        reserved.extend(
+            tools
+                .iter()
+                .filter_map(|tool| tool["name"].as_str())
+                .map(str::to_owned),
+        );
+    }
+    reserved.extend(PRIVATE_CONTROL_TOOLS.iter().map(|name| (*name).to_owned()));
+    reserved
 }
 
 impl DioneServer {
@@ -200,7 +219,7 @@ impl DioneServer {
             crate::discord::reply_tool::registration(discord.clone())
                 .map_err(ServerConstructionError::definition)?,
         );
-        let module_tools = ToolRegistry::new(&harness, discord_tools.clone())
+        let module_tools = ToolRegistry::new(&reserved_tool_names(&harness), discord_tools.clone())
             .map_err(ServerConstructionError::registration)?;
         Ok(Self {
             queue,
@@ -228,7 +247,7 @@ impl DioneServer {
         mut tools: Vec<RegisteredTool>,
     ) -> Result<Self, RegistrationError> {
         tools.extend(self.discord_tools.iter().cloned());
-        self.module_tools = ToolRegistry::new(&self.harness, tools)?;
+        self.module_tools = ToolRegistry::new(&reserved_tool_names(&self.harness), tools)?;
         Ok(self)
     }
 }
@@ -993,7 +1012,7 @@ async fn dispatch(
                 tools_list(&server.harness, config.delivery.evidence_markers_enabled);
             server.module_tools.append_definitions(
                 &mut response,
-                crate::mcp::tool_registry::ToolDiscoveryContext {
+                dione_mcp_tools::ToolDiscoveryContext {
                     evidence_markers_enabled: config.delivery.evidence_markers_enabled,
                 },
             );

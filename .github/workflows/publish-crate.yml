@@ -66,6 +66,8 @@ jobs:
       publish-discord-identities: ${{ steps.package.outputs.publish-discord-identities }}
       pluralkit-identities-version: ${{ steps.package.outputs.pluralkit-identities-version }}
       publish-pluralkit-identities: ${{ steps.package.outputs.publish-pluralkit-identities }}
+      mcp-tools-version: ${{ steps.package.outputs.mcp-tools-version }}
+      publish-mcp-tools: ${{ steps.package.outputs.publish-mcp-tools }}
       pre-send-version: ${{ steps.package.outputs.pre-send-version }}
       publish-pre-send: ${{ steps.package.outputs.publish-pre-send }}
       outbound-consent-version: ${{ steps.package.outputs.outbound-consent-version }}
@@ -407,6 +409,20 @@ jobs:
             missing) echo "publish-pluralkit-identities=true" >> "${GITHUB_OUTPUT}" ;;
           esac
           echo "pluralkit-identities-version=${pluralkit_identities_version}" >> "${GITHUB_OUTPUT}"
+
+          mcp_tools_version="$(scripts/workspace-package-version.sh dione-mcp-tools)"
+          mcp_tools_crate="target/package/dione-mcp-tools-${mcp_tools_version}.crate"
+          scripts/verify-public-package-privacy.sh "${mcp_tools_crate}"
+          scripts/verify-crates-io-owners.sh dione-mcp-tools \
+            butterflysky \
+            github:butterflyskies:lacuna-blinkers \
+            github:butterflyskies:superadmins
+          package_state="$(scripts/crates-io-package-state.sh dione-mcp-tools "${mcp_tools_version}" "${mcp_tools_crate}" --ignore-vcs-info)"
+          case "$package_state" in
+            published) echo "publish-mcp-tools=false" >> "${GITHUB_OUTPUT}" ;;
+            missing) echo "publish-mcp-tools=true" >> "${GITHUB_OUTPUT}" ;;
+          esac
+          echo "mcp-tools-version=${mcp_tools_version}" >> "${GITHUB_OUTPUT}"
 
           pre_send_version="$(scripts/workspace-package-version.sh dione-pre-send)"
           pre_send_crate="target/package/dione-pre-send-${pre_send_version}.crate"
@@ -2869,8 +2885,104 @@ jobs:
             github:butterflyskies:lacuna-blinkers \
             github:butterflyskies:superadmins
 
+  publish-mcp-tools:
+    needs: verify-dione
+    if: needs.verify-dione.outputs.publish-mcp-tools == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: "1.98.0"
+      - name: Recheck mcp-tools package contents
+        id: preflight
+        run: |
+          set -euo pipefail
+
+          mcp_tools_version="$(scripts/workspace-package-version.sh dione-mcp-tools)"
+          test "${mcp_tools_version}" = "${{ needs.verify-dione.outputs.mcp-tools-version }}"
+          cargo package -p dione-mcp-tools --locked --no-verify
+          mcp_tools_crate="target/package/dione-mcp-tools-${mcp_tools_version}.crate"
+          scripts/verify-public-package-privacy.sh "${mcp_tools_crate}"
+          scripts/verify-crates-io-owners.sh dione-mcp-tools \
+            butterflysky \
+            github:butterflyskies:lacuna-blinkers \
+            github:butterflyskies:superadmins
+
+          package_state="$(scripts/crates-io-package-state.sh dione-mcp-tools "${mcp_tools_version}" "${mcp_tools_crate}" --ignore-vcs-info)"
+          case "$package_state" in
+            published)
+              echo "mcp-tools ${mcp_tools_version} was already published with matching contents"
+              echo "upload=false" >> "${GITHUB_OUTPUT}"
+              ;;
+            missing)
+              echo "upload=true" >> "${GITHUB_OUTPUT}"
+              ;;
+          esac
+      - name: Authenticate with crates.io
+        if: steps.preflight.outputs.upload == 'true'
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
+        id: auth
+      - name: Upload pre-verified mcp-tools package
+        if: steps.preflight.outputs.upload == 'true'
+        continue-on-error: true
+        run: cargo publish -p dione-mcp-tools --locked --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  reconcile-mcp-tools:
+    needs: [verify-dione, publish-mcp-tools]
+    if: >-
+      always() &&
+      needs.verify-dione.result == 'success' &&
+      (needs.publish-mcp-tools.result == 'success' || needs.publish-mcp-tools.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: "1.98.0"
+      - name: Reconcile mcp-tools registry contents
+        run: |
+          set -euo pipefail
+
+          mcp_tools_version="${{ needs.verify-dione.outputs.mcp-tools-version }}"
+          for attempt in $(seq 1 20); do
+            if timeout 10s cargo info --registry crates-io "dione-mcp-tools@${mcp_tools_version}" > /dev/null 2>&1; then
+              break
+            fi
+            if [ "${attempt}" = 20 ]; then
+              echo "Cargo could not resolve dione-mcp-tools ${mcp_tools_version} after bounded retries" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          cargo package -p dione-mcp-tools --locked
+          mcp_tools_crate="target/package/dione-mcp-tools-${mcp_tools_version}.crate"
+          scripts/verify-public-package-privacy.sh "${mcp_tools_crate}"
+          test "$(scripts/crates-io-package-state.sh dione-mcp-tools "${mcp_tools_version}" "${mcp_tools_crate}" --ignore-vcs-info)" = published
+          scripts/verify-crates-io-owners.sh dione-mcp-tools \
+            butterflysky \
+            github:butterflyskies:lacuna-blinkers \
+            github:butterflyskies:superadmins
+
   publish-crate:
-    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent]
+    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools]
     if: needs.verify-dione.outputs.publish-dione == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -2923,7 +3035,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   reconcile-dione:
-    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, publish-crate]
+    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, publish-crate]
     if: >-
       always() &&
       needs.verify-dione.result == 'success' &&
@@ -2952,6 +3064,7 @@ jobs:
       needs.reconcile-pluralkit-identities.result == 'success' &&
       needs.reconcile-config.result == 'success' &&
       needs.reconcile-outbound-consent.result == 'success' &&
+      needs.reconcile-mcp-tools.result == 'success' &&
       (needs.publish-crate.result == 'success' || needs.publish-crate.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 20
