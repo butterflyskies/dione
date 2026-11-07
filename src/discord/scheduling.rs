@@ -1,10 +1,8 @@
 //! Discord scheduling classification and scoped payload ownership.
 
-use crate::{
-    delivery_buffer::{BufferResult, BufferedEvent, DeliveryBuffer as Scheduler},
-    discord::events::NotificationEvent,
-};
+use crate::discord::events::NotificationEvent;
 use dione_contracts::{ConversationId, ConversationRef, ModuleInstanceId};
+use dione_delivery_scheduler::{BufferResult, BufferedEvent, DeliveryBuffer as Scheduler};
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -141,10 +139,7 @@ mod tests {
     use super::*;
     use dione_contracts::{ModuleSlotId, ProviderId};
     use serenity::model::id::{ChannelId, MessageId, UserId};
-    use {
-        crate::{delivery_buffer::IMMEDIATE_BURST_LIMIT, discord::events::MessageEvent},
-        dione_messages::timestamp::Timestamp,
-    };
+    use {crate::discord::events::MessageEvent, dione_messages::timestamp::Timestamp};
 
     fn msg_event(chat_id: ChannelId) -> NotificationEvent {
         NotificationEvent::Message(MessageEvent {
@@ -284,7 +279,7 @@ mod tests {
             ProviderId::new("discord").unwrap(),
             ModuleSlotId::new("primary").unwrap(),
         ));
-        for index in 0..IMMEDIATE_BURST_LIMIT {
+        for index in 0..4 {
             assert!(matches!(
                 buffer.buffer_event(
                     evidence_event(ChannelId::new(42), &format!("burst-{index}")),
@@ -332,7 +327,7 @@ mod tests {
             ProviderId::new("discord").unwrap(),
             ModuleSlotId::new("primary").unwrap(),
         ));
-        for index in 0..IMMEDIATE_BURST_LIMIT {
+        for index in 0..4 {
             assert!(matches!(
                 buffer.buffer_event(
                     evidence_event(ChannelId::new(42), &format!("burst-{index}")),

@@ -81,6 +81,11 @@ ranking, retrieval status and compact rendering. Dione retains native eligibilit
 configuration/alias policy, shadow/live orchestration and metadata injection. No
 Discord or Dione application dependency enters the retrieval member.
 
+The public dione-delivery-scheduler package owns the generic per-conversation
+FIFO, deadlines, bounded immediate budgets, requeue, and ordered drain.
+Discord retains evidence classification and native notification ownership.
+MCP retains admission, rate-limit handling, runtime delivery, and shutdown wiring.
+
 ## Processes and transports
 
 ```mermaid
@@ -187,7 +192,7 @@ for edits, deletes, reply context, and subsequent reads.
 Admitted events enter a Tokio channel with capacity 256. The notification task
 in [server.rs](src/mcp/server.rs) applies rate limits and optional attention
 evaluation, then buffers and coalesces ordinary delivery through
-[scheduling.rs](src/discord/scheduling.rs) and [delivery_buffer.rs](src/delivery_buffer.rs).
+[scheduling.rs](src/discord/scheduling.rs) and [delivery scheduler](crates/dione-delivery-scheduler/src/lib.rs).
 [delivery.rs](src/discord/delivery.rs) constructs typed batches, and
 [dione-presentation](crates/dione-presentation/src/lib.rs) projects deliveries for each harness.
 The buffer is in memory;

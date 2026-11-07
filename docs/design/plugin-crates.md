@@ -286,6 +286,20 @@ No generation fence, shutdown/drain guarantee, privacy improvement or speedup is
 claimed. Protocol fixtures exercise the real application adapter; private mocks
 exercise the same production aggregation, not a second algorithm.
 
+## Delivery scheduler boundary
+
+dione-delivery-scheduler owns the existing generic BufferedEvent and
+DeliveryBuffer implementation and its eight engine tests. It depends on
+dione-contracts for complete conversation identities and uses the Tokio clock.
+Discord retains native event classification and evidence eligibility. MCP
+retains routing, retry decisions, and shutdown ownership. All callers import
+the new member directly, and the old application module is removed.
+
+The fixed immediate budget stays private. Discord adapter tests assert four
+immediate events before buffering, rather than importing the engine constant.
+FIFO, rejected payloads, first deadlines, key ordering, control bypass, and
+failed-tail requeue retain their implementations and tests.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -305,6 +319,7 @@ exercise the same production aggregation, not a second algorithm.
 13. Shared presentation and compact batch formatting.
 14. Contradictionary matching, rewrites, and sidecar entry schema.
 15. Bell memory retrieval backend, with native eligibility and publication retained.
+16. Generic scoped delivery scheduler, with native evidence classification retained.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -317,7 +332,7 @@ The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, and `dione-bell-rings`.
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, and `dione-delivery-scheduler`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -339,14 +354,14 @@ Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, and `dione-bell-rings`,
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, and `dione-delivery-scheduler`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all fifteen capabilities. Contradictionary publishing waits
+publishing waits for all sixteen capabilities. Contradictionary publishing waits
 for evidence reconciliation. Presentation publishing waits for
 contracts, attention, evidence, messages, and identity-display reconciliation. Harness publishing waits for
 contracts and messages reconciliation. Messages publishing waits for
@@ -357,3 +372,5 @@ archive contents after registry resolution.
 The new publishing and reconciliation jobs have not been exercised against a
 live registry. Local package-state tests mock registry responses; the retry
 fixture proves Cargo dependency resolution with a local registry only.
+
+Scheduler publishing waits for contracts reconciliation. Dione publishing also waits for scheduler reconciliation.

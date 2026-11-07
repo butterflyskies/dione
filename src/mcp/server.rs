@@ -17,6 +17,7 @@ use dione_bell_rings::{BellEvaluator, render_bells};
 use dione_contracts::ModuleInstanceId;
 #[cfg(test)]
 use dione_contracts::{ModuleSlotId, ProviderId};
+use dione_delivery_scheduler::BufferResult;
 use serde_json::{Value, json};
 use std::{
     os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
@@ -34,7 +35,6 @@ use {
     crate::{
         bell_rings::evaluate_native,
         config::BellMode,
-        delivery_buffer::BufferResult,
         discord::{
             access::AccessCtx,
             events::{MessageEvent, NotificationEvent},
@@ -1296,7 +1296,6 @@ mod tests {
     use {
         crate::{
             config::{ChannelConfig, Config, LoadedConfig},
-            delivery_buffer::BufferResult,
             discord::scheduling::DeliveryBuffer,
             harness::test_support::FixtureNotification,
             teams::ReplyHandle,

@@ -5,6 +5,7 @@
 //! integration.
 
 use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
+use dione_delivery_scheduler::BufferResult;
 use serenity::model::id::{ChannelId, MessageId, UserId};
 use std::{
     collections::HashMap,
@@ -13,7 +14,6 @@ use std::{
 use {
     dione::{
         config::{ChannelConfig, Config, DeliveryConfig, LoadedConfig, RateLimitTomlConfig},
-        delivery_buffer::BufferResult,
         discord::{
             events::{MessageEvent, NotificationEvent},
             scheduling::DeliveryBuffer,

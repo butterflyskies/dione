@@ -8,7 +8,6 @@ pub mod config_watcher;
 pub mod contradictionary_diary;
 pub mod coordination;
 pub(crate) mod delivery;
-pub mod delivery_buffer;
 pub mod discord;
 pub mod drop_ledger;
 pub mod gate;

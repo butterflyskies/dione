@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.101.2"
+version = "0.102.2"
 dependencies = [
  "arc-swap",
  "axum",
@@ -943,6 +943,7 @@ dependencies = [
  "dione-bell-rings",
  "dione-contracts",
  "dione-contradictionary",
+ "dione-delivery-scheduler",
  "dione-durable",
  "dione-evidence",
  "dione-gaie",
@@ -1047,6 +1048,15 @@ dependencies = [
  "tempfile",
  "toml 1.1.6+spec-1.1.0",
  "tracing",
+]
+
+[[package]]
+name = "dione-delivery-scheduler"
+version = "0.1.0"
+dependencies = [
+ "dione-contracts",
+ "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]

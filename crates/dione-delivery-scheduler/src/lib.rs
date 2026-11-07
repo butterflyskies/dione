@@ -1,4 +1,5 @@
 //! Provider-independent scheduling with per-conversation FIFO and burst limits.
+#![warn(missing_docs)]
 
 use dione_contracts::ConversationRef;
 use std::{
@@ -8,7 +9,7 @@ use std::{
 use thiserror::Error;
 use tokio::time::Instant;
 
-pub(crate) const IMMEDIATE_BURST_LIMIT: u8 = 4;
+const IMMEDIATE_BURST_LIMIT: u8 = 4;
 const IMMEDIATE_BURST_WINDOW: tokio::time::Duration = tokio::time::Duration::from_secs(1);
 
 /// An adapter-owned payload with complete scheduling identity.
@@ -41,7 +42,12 @@ pub enum BufferResult<E> {
     /// Event should be forwarded immediately (not buffered).
     Immediate(Box<E>),
     /// Older same-conversation events must be delivered before this immediate event.
-    FlushThenImmediate { preceding: Vec<E>, event: Box<E> },
+    FlushThenImmediate {
+        /// Buffered events that precede the immediate event in the conversation.
+        preceding: Vec<E>,
+        /// The offered immediate event.
+        event: Box<E>,
+    },
     /// Event was buffered; will be flushed at the conversation's deadline.
     Buffered,
     /// The required deadline was unrepresentable; the offered event is returned.
