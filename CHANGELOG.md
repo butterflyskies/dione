@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.131.1] - 2026-11-07
+
+### Fixed
+
+- Increase three Teams/OMP test-only event/socket readiness allowances to
+  120 seconds, retaining assertions, bind waits and production deadlines.
+
 ## [0.131.0] - 2026-11-07
 
 ### Changed
