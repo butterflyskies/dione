@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.130.15]
+
+### Fixed
+
+- Reject invalid recovered rate-limit settings before recovery file effects,
+  and expose the configured evidence-marker version through the config API.
+
 ## [0.130.14]
 
 ### Security

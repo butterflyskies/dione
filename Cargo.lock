@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.130.14"
+version = "0.130.15"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1085,7 +1085,7 @@ dependencies = [
 
 [[package]]
 name = "dione-codex"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "axum",
  "camino",
@@ -1118,7 +1118,7 @@ dependencies = [
 
 [[package]]
 name = "dione-config"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "arc-swap",
  "camino",
@@ -1154,7 +1154,7 @@ dependencies = [
 
 [[package]]
 name = "dione-config-watcher"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "camino",
  "dione-config",
@@ -1214,7 +1214,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-bells"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "dione-attention",
  "dione-bell-rings",
@@ -1242,7 +1242,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-gate"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "camino",
  "dione-config",
@@ -1378,7 +1378,7 @@ dependencies = [
 
 [[package]]
 name = "dione-harness-runtime"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "camino",
  "chrono-tz",
@@ -1489,7 +1489,7 @@ dependencies = [
 
 [[package]]
 name = "dione-oneshot"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "camino",
  "dione-config",
@@ -1507,7 +1507,7 @@ dependencies = [
 
 [[package]]
 name = "dione-outbound-consent"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "camino",
  "chrono",
@@ -1530,7 +1530,7 @@ dependencies = [
 
 [[package]]
 name = "dione-permissions"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "camino",
  "chrono",

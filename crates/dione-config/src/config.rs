@@ -1944,7 +1944,8 @@ fn quarantine_canonical(config_path: &Utf8Path) -> std::io::Result<bool> {
 /// (good.tmp → config.toml) → fsync(parent dir). Every boundary retains a
 /// usable config on disk.
 ///
-/// Returns `Ok(false)` when no LKG exists (nothing to restore from).
+/// Returns `Missing` when no LKG exists. Invalid bytes are not restored;
+/// semantic rate-limit rejection remains typed for startup and runtime callers.
 ///
 /// The restored canonical carries the LKG's permission mode, copied from the
 /// SAME opened handle the bytes are read from: `File::create` alone would
@@ -1952,6 +1953,7 @@ fn quarantine_canonical(config_path: &Utf8Path) -> std::io::Result<bool> {
 /// token-bearing config on every recovery.
 enum RestoreOutcome {
     Missing,
+    RejectedRateLimit(dione_rate_limiter::RateLimitConfigurationError),
     Applied {
         durability_error: Option<std::io::Error>,
     },
@@ -1968,6 +1970,24 @@ fn restore_from_lkg(config_path: &Utf8Path) -> std::io::Result<RestoreOutcome> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(RestoreOutcome::Missing),
         Err(e) => return Err(e),
     };
+    // Validate the exact bytes read from the retained LKG descriptor before any
+    // staging, quarantine, or canonical rename. A pre-upgrade LKG is not authority
+    // to publish settings that current composition must reject.
+    let text = std::str::from_utf8(&bytes).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "last-known-good config is not valid UTF-8",
+        )
+    })?;
+    let raw: Config = toml::from_str(text).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "last-known-good config is not valid TOML",
+        )
+    })?;
+    if let Err(error) = raw.rate_limit.validate() {
+        return Ok(RestoreOutcome::RejectedRateLimit(error));
+    }
     let good_tmp = unique_sibling(config_path, "good.tmp");
     let result = (|| -> std::io::Result<()> {
         {
@@ -2211,8 +2231,13 @@ impl ConfigRuntime {
                 }
             },
             Err(ConfigError::Parse(e)) => match self.recover_and_finish(&config_path, &e) {
-                Some(result) => result,
-                None => {
+                Ok(Some(result)) => result,
+                Err(error) => {
+                    let cached = (**LAST_VALID_CONFIG.load()).clone();
+                    tracing::warn!(%error, "last-known-good configuration candidate rejected");
+                    (cached, Some(error.to_string()))
+                }
+                Ok(None) => {
                     let safe_error = sanitize_toml_error(&e);
                     let error_msg = format!("config parse error: {safe_error}");
                     let cached = (**LAST_VALID_CONFIG.load()).clone();
@@ -2286,7 +2311,7 @@ impl ConfigRuntime {
                 }
             },
             Err(ConfigError::Parse(e)) => {
-                if let Some(result) = self.recover_and_finish(&config_path, &e) {
+                if let Some(result) = self.recover_and_finish(&config_path, &e)? {
                     return Ok(result);
                 }
                 match no_lkg_policy {
@@ -2392,23 +2417,28 @@ impl ConfigRuntime {
 
     /// Runtime disk repair: quarantine the invalid canonical, restore it
     /// from the LKG, and rerun the pipeline over the restored file. Returns
-    /// `None` when there is no LKG (or recovery itself failed) so the caller
-    /// falls back to its no-LKG behavior.
+    /// `Ok(None)` when there is no usable LKG (or recovery itself failed), so
+    /// syntax recovery follows the existing no-LKG policy. Semantic rate-limit
+    /// rejection is typed and occurs before recovery disk effects.
     fn recover_and_finish(
         &self,
         config_path: &Utf8Path,
         parse_error: &toml::de::Error,
-    ) -> Option<(LoadedConfig, Option<String>)> {
+    ) -> Result<
+        Option<(LoadedConfig, Option<String>)>,
+        dione_rate_limiter::RateLimitConfigurationError,
+    > {
         let durability_error = match restore_from_lkg(config_path) {
             Ok(RestoreOutcome::Applied { durability_error }) => durability_error,
-            Ok(RestoreOutcome::Missing) => return None,
+            Ok(RestoreOutcome::Missing) => return Ok(None),
+            Ok(RestoreOutcome::RejectedRateLimit(error)) => return Err(error),
             Err(e) => {
                 tracing::warn!(
                     path = %config_path,
                     error = %e,
                     "failed to restore config from last-known-good"
                 );
-                return None;
+                return Ok(None);
             }
         };
         tracing::warn!(
@@ -2424,7 +2454,7 @@ impl ConfigRuntime {
                     error = %e,
                     "restored last-known-good failed to load"
                 );
-                return None;
+                return Ok(None);
             }
         };
         // Sanitized one-liner: the recovery note is returned to callers
@@ -2445,7 +2475,12 @@ impl ConfigRuntime {
                 "; the restore rename applied but parent-directory durability is unknown: {error}"
             ));
         }
-        Some(self.finish(config_path, raw, Some(note), Some(snapshot)))
+        Ok(Some(self.finish(
+            config_path,
+            raw,
+            Some(note),
+            Some(snapshot),
+        )))
     }
 
     /// Applies one serialized tool mutation to the config: load the latest
@@ -2785,6 +2820,47 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn startup_rejects_semantically_invalid_lkg_before_recovery_disk_effects() {
+        let _cache = config_cache_guard();
+        for policy in [NoLkgPolicy::FailStartup, NoLkgPolicy::RegenerateDefaults] {
+            let (_dir, state) = temp_state_dir();
+            let path = state.join("config.toml");
+            fs::write(&path, "[rate_limit]\nenabled = true\nmax_tokens = 2\n").unwrap();
+            let runtime = ConfigRuntime::new(state.clone());
+            assert!(reload_now(&runtime).1.is_none());
+            let invalid_lkg = "[rate_limit]\nenabled = true\nmax_tokens = 0\n";
+            fs::write(lkg_path(&path), invalid_lkg).unwrap();
+            let malformed = "synthetic malformed {{{";
+            replace_file(&path, malformed.as_bytes());
+            let before = load_config(&state);
+            let counter = NEXT_CONFIG_GENERATION.load(Ordering::Relaxed);
+            assert!(
+                matches!(
+                    startup_load_now(&runtime, policy),
+                    Err(StartupConfigError::InvalidRateLimit(_))
+                ),
+                "semantic-invalid recovery candidate must be a typed startup error"
+            );
+            assert_eq!(
+                fs::read_to_string(&path).unwrap(),
+                malformed,
+                "invalid LKG must not replace canonical"
+            );
+            assert_eq!(fs::read_to_string(lkg_path(&path)).unwrap(), invalid_lkg);
+            assert!(!quarantine_path(&path).exists());
+            assert!(Arc::ptr_eq(&before, &load_config(&state)));
+            assert_eq!(NEXT_CONFIG_GENERATION.load(Ordering::Relaxed), counter);
+            let (_, warning) = reload_now(&runtime);
+            assert!(warning.unwrap().starts_with("rate_limit."));
+            assert_eq!(fs::read_to_string(&path).unwrap(), malformed);
+            assert_eq!(fs::read_to_string(lkg_path(&path)).unwrap(), invalid_lkg);
+            assert!(!quarantine_path(&path).exists());
+            assert!(Arc::ptr_eq(&before, &load_config(&state)));
+            assert_eq!(NEXT_CONFIG_GENERATION.load(Ordering::Relaxed), counter);
+        }
+    }
 
     #[test]
     fn rate_limit_invalid_semantics_preserve_disk_lkg_cache_and_next_budget() {
