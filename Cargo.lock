@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.126.2"
+version = "0.127.2"
 dependencies = [
  "arc-swap",
  "axum",
@@ -965,6 +965,7 @@ dependencies = [
  "dione-messages",
  "dione-mutes",
  "dione-omp",
+ "dione-oneshot",
  "dione-outbound-consent",
  "dione-permissions",
  "dione-pluralkit-identities",
@@ -1428,6 +1429,23 @@ dependencies = [
  "tracing",
  "trybuild",
  "uuid",
+]
+
+[[package]]
+name = "dione-oneshot"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "dione-config",
+ "dione-contradictionary",
+ "dione-discord-gate",
+ "dione-outbound-consent",
+ "dione-pre-send",
+ "serde",
+ "serde_json",
+ "serenity",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

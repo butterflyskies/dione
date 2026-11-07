@@ -19,6 +19,8 @@
 //! The binary prints exactly one JSON object ([`Outcome::to_json`]) on
 //! stdout and maps [`Outcome::exit_code`] to the process status.
 
+#![warn(missing_docs)]
+
 use camino::Utf8Path;
 use dione_config::ChunkMode;
 use dione_config::ConfigError;
@@ -87,11 +89,17 @@ impl fmt::Display for TokenSource {
 /// What the caller asked for, already validated at the argv level.
 #[derive(Debug, Clone)]
 pub struct SendRequest {
+    /// The configured Discord channel to send to.
     pub channel_id: u64,
+    /// The numeric bot identity required before sending.
     pub expect_identity: u64,
+    /// The message text supplied by the caller.
     pub message: String,
+    /// The explicitly selected token source.
     pub token_source: TokenSource,
+    /// Whether the caller permits more than one message chunk.
     pub allow_multi_chunk: bool,
+    /// Whether to stop after successful preflight without posting.
     pub dry_run: bool,
     /// Caller-stable idempotency key (at most [`NONCE_MAX_LEN`] characters).
     /// Sent as `nonce` + `enforce_nonce: true` as defense-in-depth for a
@@ -109,16 +117,24 @@ pub const NONCE_MAX_LEN: usize = 25;
 pub enum Reason {
     /// Bad argv or unreadable stdin; exit 1, stderr carries the human text.
     Usage,
+    /// The read-only configuration could not be loaded or used.
     ConfigInvalid,
+    /// The named token source is empty or rejected by Discord.
     NoToken,
+    /// The authenticated numeric bot identity differs from the requested one.
     IdentityMismatch,
+    /// The target is unavailable under the configured outbound policy.
     NotPermittedTarget,
+    /// The text cannot be delivered under the caller's chunking constraints.
     WouldChunk,
+    /// The pre-send assessment refuses the message without holding a ticket.
     ContradictionaryBounce,
+    /// A Discord REST operation failed.
     SendFailed,
 }
 
 impl Reason {
+    /// All refusal reasons in contract order.
     pub const ALL: [Reason; 8] = [
         Reason::Usage,
         Reason::ConfigInvalid,
@@ -130,6 +146,7 @@ impl Reason {
         Reason::SendFailed,
     ];
 
+    /// Return the stable refusal slug used by the JSON contract.
     pub fn slug(self) -> &'static str {
         match self {
             Self::Usage => "usage",
@@ -168,8 +185,11 @@ impl Reason {
 /// One refusal: slug, sanitized human detail, and whether a retry could help.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Refusal {
+    /// The refusal category.
     pub reason: Reason,
+    /// The human-readable failure detail.
     pub detail: String,
+    /// Whether retry is appropriate for this classified failure.
     pub retryable: bool,
     /// True only for a POST failure that cannot prove no message was
     /// created (5xx, timeout, lost response). The caller must reconcile
@@ -178,6 +198,7 @@ pub struct Refusal {
 }
 
 impl Refusal {
+    /// Return the process exit status for this result.
     pub fn exit_code(&self) -> i32 {
         self.reason.exit_code()
     }
@@ -220,25 +241,36 @@ impl Refusal {
 /// The verified bot identity the send was bound to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Identity {
+    /// The numeric Discord bot identifier.
     pub bot_user_id: u64,
+    /// The display username, which is not used for identity binding.
     pub username: String,
+    /// The explicitly selected token source.
     pub token_source: TokenSource,
 }
 
 /// Terminal result of one invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
+    /// The ordered message chunks were posted successfully.
     Sent {
+        /// The configured Discord target channel.
         channel_id: u64,
+        /// The posted message identifiers in send order.
         message_ids: Vec<u64>,
+        /// The bot identity bound by preflight.
         identity: Identity,
     },
     /// `--dry-run` cleared every preflight step.
     PreflightOk {
+        /// The configured Discord target channel.
         channel_id: u64,
+        /// The number of chunks that preflight would send.
         chunks: usize,
+        /// The bot identity bound by preflight.
         identity: Identity,
     },
+    /// The invocation refused or failed with the classified outcome.
     Refused(Refusal),
 }
 
@@ -249,6 +281,7 @@ impl From<Refusal> for Outcome {
 }
 
 impl Outcome {
+    /// Return the process exit status for this result.
     pub fn exit_code(&self) -> i32 {
         match self {
             Self::Sent { .. } | Self::PreflightOk { .. } => 0,
@@ -787,7 +820,9 @@ impl FailureClass {
 /// Which call failed. Identity lookup is a GET — nothing was created.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
+    /// The preflight identity GET request.
     Identity,
+    /// A message creation POST request.
     Post,
 }
 
@@ -816,8 +851,11 @@ pub fn retryable_for(stage: Stage, class: FailureClass, _has_nonce: bool) -> boo
 /// A sanitized view of one serenity REST failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestFailure {
+    /// The HTTP status when a response supplied one.
     pub status: Option<u16>,
+    /// The category used to determine retry and ambiguity.
     pub class: FailureClass,
+    /// The human-readable failure detail.
     pub detail: String,
 }
 

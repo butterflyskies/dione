@@ -1,12 +1,12 @@
 //! `dione-send`: one-shot, outbound-only Discord send with an explicit
 //! identity preflight (#426). See `docs/oneshot-send.md` and
-//! [`dione::oneshot`] for the contract.
+//! [`dione_oneshot`] for the contract.
 //!
 //! stdout carries exactly one JSON object; every log line goes to stderr.
 
 use camino::Utf8PathBuf;
 use clap::{Parser, error::ErrorKind};
-use dione::oneshot::{Outcome, Reason, Refusal, SendRequest, TokenSource};
+use dione_oneshot::{Outcome, Reason, Refusal, SendRequest, TokenSource};
 use std::io::{Read as _, Write as _};
 
 #[derive(Debug, Parser)]
@@ -94,7 +94,7 @@ fn log_filter(rust_log: Option<&str>) -> tracing_subscriber::EnvFilter {
         })
         .unwrap_or(tracing::level_filters::LevelFilter::WARN);
     tracing_subscriber::EnvFilter::new(format!(
-        "warn,dione={level},dione_send={level},{THIRD_PARTY_CLAMP}"
+        "warn,dione={level},dione_send={level},dione_oneshot={level},{THIRD_PARTY_CLAMP}"
     ))
 }
 
@@ -157,7 +157,7 @@ async fn real_main() -> i32 {
     // Redacted on purpose, on BOTH streams: a raw TOML error echoes the
     // offending source line, which may be the token. Only the redacted
     // kind/path/line:col ever leaves the process.
-    let config = match dione::oneshot::load_config_for_send(&config_path) {
+    let config = match dione_oneshot::load_config_for_send(&config_path) {
         Ok(config) => config,
         Err(refusal) => {
             eprintln!("dione-send: {}", refusal.detail);
@@ -176,11 +176,11 @@ async fn real_main() -> i32 {
     };
     #[cfg(feature = "oneshot-test-seam")]
     let outcome = match cli.discord_api_base.as_deref() {
-        Some(api_base) => dione::oneshot::run_with_api_base(&config, &request, api_base).await,
-        None => dione::oneshot::run(&config, &request).await,
+        Some(api_base) => dione_oneshot::run_with_api_base(&config, &request, api_base).await,
+        None => dione_oneshot::run(&config, &request).await,
     };
     #[cfg(not(feature = "oneshot-test-seam"))]
-    let outcome = dione::oneshot::run(&config, &request).await;
+    let outcome = dione_oneshot::run(&config, &request).await;
     emit(&outcome)
 }
 
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn third_party_targets_stay_clamped_at_trace() {
-        assert!(enabled("trace", "dione::oneshot", tracing::Level::TRACE));
+        assert!(enabled("trace", "dione_oneshot", tracing::Level::TRACE));
         assert!(enabled("trace", "dione_send", tracing::Level::TRACE));
         for target in [
             "serenity::http::client",
@@ -246,8 +246,8 @@ mod tests {
             "serenity::http::client",
             tracing::Level::DEBUG
         ));
-        assert!(!enabled(rust_log, "dione::oneshot", tracing::Level::INFO));
-        assert!(!enabled("", "dione::oneshot", tracing::Level::INFO));
-        assert!(enabled("info", "dione::oneshot", tracing::Level::INFO));
+        assert!(!enabled(rust_log, "dione_oneshot", tracing::Level::INFO));
+        assert!(!enabled("", "dione_oneshot", tracing::Level::INFO));
+        assert!(enabled("info", "dione_oneshot", tracing::Level::INFO));
     }
 }

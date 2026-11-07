@@ -4,7 +4,6 @@ pub mod discord;
 mod discord_bells_tests;
 pub mod ingress_ledger;
 pub mod mcp;
-pub mod oneshot;
 pub mod pluralkit;
 #[expect(
     dead_code,

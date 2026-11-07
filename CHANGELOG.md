@@ -18,6 +18,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.127.2]
+
+### Fixed
+
+- Inherit the accepted Teams/OMP test allowances and contained guidance while
+  preserving this extraction and its assertions.
+
+## [0.127.1]
+
+### Fixed
+
+- Allow 120 seconds for authenticated Teams test event reads, child socket
+  readiness, and parent control connections on slower CI workers, preserving
+  assertions and production deadlines.
+
+## [0.127.0] - 2026-11-06
+
+### Changed
+
+- Extract the complete stateless one-shot sender into dione-oneshot, retaining
+  the real CLI, explicit test feature, privacy, and ambiguous-delivery contracts.
+
 ## [0.126.2]
 
 ### Fixed
