@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.130.10]
+
+### Fixed
+
+- Clean owned attachment download temporaries after pre-publication failures,
+  preserving primary errors and objects already published before directory sync.
+- Patch-version GAIE and its exact normal dependency closure.
+
 ## [0.130.9]
 
 ### Fixed

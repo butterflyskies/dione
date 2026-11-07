@@ -24,3 +24,9 @@ their four application integration tests remain in Dione. Existing Kani proof
 modules remain present; the normal workspace gate does not execute them.
 
 This crate is part of the Dione workspace and uses its MIT OR Apache-2.0 license.
+
+Attachment publication owns each successfully created UUID temporary file until
+rename. Normal pre-rename failures close and remove only that owned file on a
+best-effort basis while preserving the original error. Once rename succeeds,
+the content-addressed object remains visible even if directory sync fails.
+This does not promise cleanup after process crashes or failed unlink operations.

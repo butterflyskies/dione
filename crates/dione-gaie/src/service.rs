@@ -603,30 +603,14 @@ impl DiscordArchiveClient {
                 size,
             });
         }
-        let temporary = directory.join(format!(".download-{}", Uuid::new_v4().simple()));
-        let mut options = OpenOptions::new();
-        options.create_new(true).write(true);
-        #[cfg(unix)]
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-        let mut file = options
-            .open(temporary.as_std_path())
-            .map_err(|source| attachment_io(&temporary, source))?;
-        file.write_all(&bytes)
-            .and_then(|()| file.sync_all())
-            .map_err(|source| attachment_io(&temporary, source))?;
-        if hash_bytes(
-            &fs::read(temporary.as_std_path())
-                .map_err(|source| attachment_io(&temporary, source))?,
-        ) != digest
-        {
-            let _ = fs::remove_file(temporary.as_std_path());
-            return Err(DiscordArchiveError::AttachmentIntegrity);
-        }
-        fs::rename(temporary.as_std_path(), destination.as_std_path())
-            .map_err(|source| attachment_io(&destination, source))?;
-        File::open(directory.as_std_path())
-            .and_then(|file| file.sync_all())
-            .map_err(|source| attachment_io(directory, source))?;
+        persist_download(
+            directory,
+            &destination,
+            &bytes,
+            &digest,
+            #[cfg(test)]
+            None,
+        )?;
         Ok(DownloadedAttachment {
             sha256: digest,
             size,
@@ -931,6 +915,118 @@ pub(crate) fn message_batch_with_origin(
         });
     }
     Ok(events)
+}
+
+// Own only a successfully created UUID file. Closing before unlinking also
+// makes normal error cleanup work on platforms that forbid deleting open files.
+struct OwnedDownloadTemp {
+    path: Utf8PathBuf,
+    file: Option<File>,
+    published: bool,
+}
+
+impl Drop for OwnedDownloadTemp {
+    fn drop(&mut self) {
+        drop(self.file.take());
+        if !self.published {
+            // Preserve the original operation error; cleanup is best effort.
+            let _ = fs::remove_file(self.path.as_std_path());
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DownloadFault {
+    Write,
+    Sync,
+    Read,
+    Digest,
+    Rename,
+    DirectorySync,
+}
+
+fn persist_download(
+    directory: &Utf8Path,
+    destination: &Utf8Path,
+    bytes: &[u8],
+    digest: &str,
+    #[cfg(test)] fault: Option<DownloadFault>,
+) -> Result<(), DiscordArchiveError> {
+    let temporary = directory.join(format!(".download-{}", Uuid::new_v4().simple()));
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    let file = options
+        .open(temporary.as_std_path())
+        .map_err(|source| attachment_io(&temporary, source))?;
+    let mut owned = OwnedDownloadTemp {
+        path: temporary.clone(),
+        file: Some(file),
+        published: false,
+    };
+    let file = owned.file.as_mut().expect("newly owned download file");
+    #[cfg(test)]
+    if fault == Some(DownloadFault::Write) {
+        file.write_all(&bytes[..bytes.len() / 2])
+            .map_err(|source| attachment_io(&temporary, source))?;
+        return Err(attachment_io(
+            &temporary,
+            std::io::Error::other("synthetic partial write failure"),
+        ));
+    }
+    file.write_all(bytes)
+        .map_err(|source| attachment_io(&temporary, source))?;
+    #[cfg(test)]
+    if fault == Some(DownloadFault::Sync) {
+        return Err(attachment_io(
+            &temporary,
+            std::io::Error::other("synthetic file sync failure"),
+        ));
+    }
+    file.sync_all()
+        .map_err(|source| attachment_io(&temporary, source))?;
+    drop(owned.file.take());
+    #[cfg(test)]
+    if fault == Some(DownloadFault::Read) {
+        return Err(attachment_io(
+            &temporary,
+            std::io::Error::other("synthetic read failure"),
+        ));
+    }
+    #[cfg(test)]
+    if fault == Some(DownloadFault::Digest) {
+        fs::write(&temporary, b"synthetic corrupted bytes")
+            .map_err(|source| attachment_io(&temporary, source))?;
+    }
+    if hash_bytes(
+        &fs::read(temporary.as_std_path()).map_err(|source| attachment_io(&temporary, source))?,
+    ) != digest
+    {
+        return Err(DiscordArchiveError::AttachmentIntegrity);
+    }
+    #[cfg(test)]
+    if fault == Some(DownloadFault::Rename) {
+        return Err(attachment_io(
+            destination,
+            std::io::Error::other("synthetic rename failure"),
+        ));
+    }
+    fs::rename(temporary.as_std_path(), destination.as_std_path())
+        .map_err(|source| attachment_io(destination, source))?;
+    owned.published = true;
+    #[cfg(test)]
+    if fault == Some(DownloadFault::DirectorySync) {
+        return Err(attachment_io(
+            directory,
+            std::io::Error::other("synthetic directory sync failure"),
+        ));
+    }
+    File::open(directory.as_std_path())
+        .and_then(|file| file.sync_all())
+        .map_err(|source| attachment_io(directory, source))?;
+    Ok(())
 }
 
 fn hash_bytes(value: &[u8]) -> String {
@@ -1397,6 +1493,92 @@ mod tests {
         );
     }
 
+    #[test]
+    fn owned_download_temporaries_are_cleaned_on_every_prepublication_failure() {
+        for fault in [
+            DownloadFault::Write,
+            DownloadFault::Sync,
+            DownloadFault::Read,
+            DownloadFault::Digest,
+            DownloadFault::Rename,
+            DownloadFault::DirectorySync,
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let directory = Utf8PathBuf::from_path_buf(temp.path().to_owned()).unwrap();
+            let sentinel = directory.join("unrelated-owned-fixture");
+            fs::write(&sentinel, b"keep").unwrap();
+            let bytes = b"synthetic attachment bytes";
+            let digest = hash_bytes(bytes);
+            let destination = directory.join(format!("{digest}.txt"));
+            let error = persist_download(&directory, &destination, bytes, &digest, Some(fault))
+                .unwrap_err();
+            if fault == DownloadFault::Digest {
+                assert!(matches!(error, DiscordArchiveError::AttachmentIntegrity));
+            } else {
+                let DiscordArchiveError::AttachmentIo { source, .. } = error else {
+                    panic!("original filesystem failure must remain primary");
+                };
+                assert_eq!(source.kind(), std::io::ErrorKind::Other);
+                assert!(source.to_string().starts_with("synthetic "));
+            }
+            let temporary_count = fs::read_dir(&directory)
+                .unwrap()
+                .filter(|entry| {
+                    entry
+                        .as_ref()
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".download-")
+                })
+                .count();
+            assert_eq!(
+                temporary_count, 0,
+                "owned temp must be removed after {fault:?}"
+            );
+            assert_eq!(fs::read(&sentinel).unwrap(), b"keep");
+            if fault == DownloadFault::DirectorySync {
+                assert_eq!(fs::read(&destination).unwrap(), bytes);
+            } else {
+                assert!(
+                    !destination.exists(),
+                    "no partial visible object after {fault:?}"
+                );
+            }
+            persist_download(&directory, &destination, bytes, &digest, None).unwrap();
+            assert_eq!(fs::read(&destination).unwrap(), bytes);
+            assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
+            #[cfg(unix)]
+            assert_eq!(
+                fs::metadata(&destination).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn published_download_survives_directory_sync_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = Utf8PathBuf::from_path_buf(temp.path().to_owned()).unwrap();
+        let bytes = b"visible published attachment";
+        let digest = hash_bytes(bytes);
+        let destination = directory.join(format!("{digest}.txt"));
+        let error = persist_download(
+            &directory,
+            &destination,
+            bytes,
+            &digest,
+            Some(DownloadFault::DirectorySync),
+        )
+        .unwrap_err();
+        assert!(matches!(error, DiscordArchiveError::AttachmentIo { .. }));
+        assert_eq!(
+            fs::read(&destination).expect("published object must remain visible"),
+            bytes
+        );
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+    }
+
     #[tokio::test]
     async fn test_attachment_download_is_content_addressed_and_verified() {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -1429,6 +1611,21 @@ mod tests {
             "fa2c8cc4f28176bbeed4b736df569a34c79cd3723e9ec42f9674b4d46ac6b8b8"
         );
         assert_eq!(download.size, 4);
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert_eq!(
+                fs::metadata(directory.join(format!("{}.txt", download.sha256)))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
         assert_eq!(
             fs::read(
                 directory
