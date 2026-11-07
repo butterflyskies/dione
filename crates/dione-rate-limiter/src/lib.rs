@@ -1,3 +1,8 @@
+//! Per-participant and per-channel rate-limit budgets with explicit time.
+//!
+//! The caller owns admission, identity selection, scheduling, and overflow handling.
+#![warn(missing_docs)]
+
 use std::{
     collections::HashMap,
     time::{Duration, Instant},
@@ -6,36 +11,45 @@ use std::{
 // ── Newtypes ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Caller-supplied participant key for independent rate-limit buckets.
 pub struct ParticipantId(String);
 
 impl ParticipantId {
+    /// Wrap a supplied identifier without validation.
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
+    /// Borrow the supplied identifier.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Caller-supplied channel key used with a participant key.
 pub struct ChannelRef(String);
 
 impl ChannelRef {
+    /// Wrap a supplied identifier without validation.
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
+    /// Borrow the supplied identifier.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Caller-supplied sender class used to select an override.
 pub struct SenderClass(String);
 
 impl SenderClass {
+    /// Wrap a supplied identifier without validation.
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
+    /// Borrow the supplied identifier.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -44,25 +58,48 @@ impl SenderClass {
 // ── Config ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Requested handling for denied messages.
+///
+/// The engine returns this value without dropping, notifying, or buffering.
 pub enum OverflowPolicy {
-    Drop { notify: bool },
+    /// Request that the caller discard the message.
+    Drop {
+        /// Whether the caller should notify the sender about the drop.
+        notify: bool,
+    },
+    /// Request that the caller buffer the message.
     Buffer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Token budget, timing, and overflow request for one resolved scope.
 pub struct ScopeConfig {
+    /// Initial token count. Bucket construction requires a nonzero value.
     pub max_tokens: u32,
+    /// Duration of a non-exhausted token window.
     pub window: Duration,
+    /// Delay from exhaustion until the bucket refills.
     pub cooldown: Duration,
+    /// Requested handling returned when a message is denied.
     pub overflow: OverflowPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// Configuration selected for each participant and channel pair.
+///
+/// Individual overrides take precedence over the first matching class in the
+/// caller-provided class order, then the default. A channel override replaces
+/// the entire selected configuration. It does not create a shared channel budget.
 pub struct RateLimitConfig {
+    /// Whether checks consume tokens instead of allowing every message.
     pub enabled: bool,
+    /// Fallback when no individual or sender class override matches.
     pub default: ScopeConfig,
+    /// Class overrides searched in the order of the supplied sender classes.
     pub classes: Vec<(SenderClass, ScopeConfig)>,
+    /// Overrides keyed by supplied participant identity.
     pub individuals: HashMap<ParticipantId, ScopeConfig>,
+    /// Overrides that replace the sender-resolved configuration for a channel.
     pub channels: HashMap<ChannelRef, ScopeConfig>,
 }
 
@@ -114,34 +151,63 @@ impl RateLimitConfig {
 // ── Bucket state machine ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Lazy token-bucket state at the most recently supplied time.
 pub enum BucketState {
+    /// Full token budget with no active window.
     Idle,
-    Active { window_expires: Instant },
-    Exhausted { cooldown_expires: Instant },
-    Cooldown { expires: Instant },
+    /// A token window has started and tokens remain.
+    Active {
+        /// Time at which the active window refills.
+        window_expires: Instant,
+    },
+    /// The last token was consumed and cooldown has been scheduled.
+    Exhausted {
+        /// Time at which the exhausted bucket may refill.
+        cooldown_expires: Instant,
+    },
+    /// Checks are denied until the cooldown expires.
+    Cooldown {
+        /// Time at which the bucket refills.
+        expires: Instant,
+    },
 }
 
 #[derive(Debug, Clone)]
+/// Token-budget state advanced using caller-supplied times.
 pub struct TokenBucket {
+    /// Current lazy state.
     pub state: BucketState,
+    /// Tokens remaining in the current window.
     pub remaining: u32,
     config: ScopeConfig,
     delivered_this_window: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Result of checking one message against the selected bucket.
 pub enum RateLimitDecision {
+    /// The message may proceed.
     Allowed {
+        /// Tokens left after this check, or `u32::MAX` when disabled.
         remaining: u32,
+        /// Window deadline, or the supplied check time when disabled.
         window_resets: Instant,
     },
+    /// The message exceeds the current budget.
     Denied {
+        /// Delay until the next opportunity to refill.
         retry_after: Duration,
+        /// Handling requested of the caller; the engine performs no delivery.
         overflow: OverflowPolicy,
     },
 }
 
 impl TokenBucket {
+    /// Create an idle bucket with the full configured token budget.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `config.max_tokens` is zero.
     pub fn new(config: ScopeConfig) -> Self {
         assert!(config.max_tokens > 0, "max_tokens must be > 0");
         Self {
@@ -232,6 +298,7 @@ impl TokenBucket {
         }
     }
 
+    /// Return the number of allowed checks since the last refill.
     pub fn delivered_this_window(&self) -> u32 {
         self.delivered_this_window
     }
@@ -252,12 +319,16 @@ impl TokenBucket {
 
 // ── RateLimiter (manager) ────────────────────────────────────────────────────
 
+/// Independent token buckets keyed by participant and channel.
+///
+/// The caller supplies identity, class membership, time, and overflow handling.
 pub struct RateLimiter {
     config: RateLimitConfig,
     buckets: HashMap<(ParticipantId, ChannelRef), TokenBucket>,
 }
 
 impl RateLimiter {
+    /// Store the configuration and start with no buckets.
     pub fn new(config: RateLimitConfig) -> Self {
         Self {
             config,
@@ -277,6 +348,17 @@ impl RateLimiter {
         self.config = config;
     }
 
+    /// Resolve configuration and check the participant and channel bucket.
+    ///
+    /// The first matching class follows `classes` order. A channel override
+    /// replaces the entire sender-resolved configuration. A changed configuration
+    /// replaces the existing bucket before checking. Disabled checks allow the
+    /// message without creating or consuming a bucket.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an enabled check resolves a configuration with zero `max_tokens`
+    /// when constructing or replacing its bucket.
     pub fn check_message(
         &mut self,
         sender: &ParticipantId,

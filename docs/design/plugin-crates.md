@@ -144,6 +144,18 @@ All callers use the new package directly. The old core and timestamp modules
 and compatibility paths are removed. Compiler examples protect timestamp and
 delivery fields from direct external construction.
 
+## Rate-limiter boundary
+
+`dione-rate-limiter` owns the complete existing engine and its unit/property
+tests. It resolves configuration and advances token buckets using caller-supplied
+time. Its buckets remain independent for each participant/channel pair. Existing
+public bucket fields remain public; no construction operation changes.
+
+Dione retains TOML validation, admitted identity keying, live reload scheduling,
+edit/delete bypass, and denial handling. The MCP loop still supplies no sender
+classes and drops denied `Buffer` results. This extraction does not implement
+those existing unfinished integrations.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -155,6 +167,7 @@ delivery fields from direct external construction.
 5. The attention engine, with application admission and runtime retained.
 6. Evidence and Markdown grammar, independent of attention-bound delivery.
 7. Shared message events, presentation, and delivery values.
+8. The independent rate-limiter engine.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -165,7 +178,7 @@ test preparation, and release builds separately before making speed claims.
 
 The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
-`dione-evidence`, and `dione-messages`.
+`dione-evidence`, `dione-messages`, and `dione-rate-limiter`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -185,14 +198,14 @@ later application commits; every other archived byte remains protected.
 The already-published path remains mandatory.
 Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
-`dione-evidence`, and `dione-messages`,
+`dione-evidence`, `dione-messages`, and `dione-rate-limiter`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all seven capabilities. Messages publishing waits for
+publishing waits for all eight capabilities. Messages publishing waits for
 contracts, attention, and evidence reconciliation. Attention publishing waits for
 contracts reconciliation. Each reconciliation verifies the
 archive contents after registry resolution.

@@ -1033,7 +1033,7 @@ pub struct VoiceConfig {
 
 /// TOML-level rate limit configuration. Deserialized from `[rate_limit]`.
 ///
-/// Maps to the runtime [`crate::rate_limiter::RateLimitConfig`] via
+/// Maps to the runtime [`dione_rate_limiter::RateLimitConfig`] via
 /// [`RateLimitTomlConfig::into_runtime`].
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
@@ -1051,8 +1051,8 @@ pub struct RateLimitTomlConfig {
 
 impl RateLimitTomlConfig {
     /// Convert to the runtime rate limit config.
-    pub fn into_runtime(self) -> crate::rate_limiter::RateLimitConfig {
-        use crate::rate_limiter::{OverflowPolicy, RateLimitConfig, ScopeConfig};
+    pub fn into_runtime(self) -> dione_rate_limiter::RateLimitConfig {
+        use dione_rate_limiter::{OverflowPolicy, RateLimitConfig, ScopeConfig};
         use std::time::Duration;
 
         let overflow = match self.overflow.as_deref() {
@@ -1121,7 +1121,7 @@ pub struct LoadedConfig {
     /// Parsed timezone for timestamp conversion. None = UTC.
     pub tz: Option<chrono_tz::Tz>,
     /// Pre-computed runtime rate limit config (avoids per-event `into_runtime()`).
-    rate_limit_runtime: crate::rate_limiter::RateLimitConfig,
+    rate_limit_runtime: dione_rate_limiter::RateLimitConfig,
     /// Pre-built Aho-Corasick concordance for outbound text scanning.
     pub contradictionary: Option<Arc<Contradictionary>>,
     /// Validated configured Discord identity for outbound hook context.
@@ -1382,7 +1382,7 @@ impl LoadedConfig {
     }
 
     /// Returns the pre-computed runtime rate limit config (avoids per-event allocation).
-    pub fn rate_limit_runtime(&self) -> &crate::rate_limiter::RateLimitConfig {
+    pub fn rate_limit_runtime(&self) -> &dione_rate_limiter::RateLimitConfig {
         &self.rate_limit_runtime
     }
 
@@ -5177,7 +5177,7 @@ overflow = "buffer"
 
     #[test]
     fn test_rate_limit_toml_into_runtime() {
-        use crate::rate_limiter::OverflowPolicy;
+        use dione_rate_limiter::OverflowPolicy;
         let toml_cfg = RateLimitTomlConfig {
             enabled: true,
             max_tokens: Some(5),
@@ -5195,7 +5195,7 @@ overflow = "buffer"
 
     #[test]
     fn test_rate_limit_toml_into_runtime_defaults() {
-        use crate::rate_limiter::OverflowPolicy;
+        use dione_rate_limiter::OverflowPolicy;
         let toml_cfg = RateLimitTomlConfig::default();
         let rt = toml_cfg.into_runtime();
         assert!(!rt.enabled);

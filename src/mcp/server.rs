@@ -51,13 +51,13 @@ use {
             tools::{diagnostics::DiagnosticsCtx, no_rly::NoRlyCtx},
         },
         no_rly::consent::ConsentGate,
-        rate_limiter::{ChannelRef, ParticipantId, RateLimitDecision, RateLimiter},
     },
     dione_attention::{
         delivery::AttentionGuardFailure,
         types::{Admission, DeliveryState},
     },
     dione_messages::delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
+    dione_rate_limiter::{ChannelRef, ParticipantId, RateLimitDecision, RateLimiter},
 };
 
 /// Failure to construct the server's immutable owner registrations.
@@ -1298,10 +1298,10 @@ mod tests {
             delivery_buffer::BufferResult,
             discord::scheduling::DeliveryBuffer,
             harness::test_support::FixtureNotification,
-            rate_limiter::{OverflowPolicy, RateLimitConfig, ScopeConfig},
             teams::ReplyHandle,
         },
         dione_messages::timestamp::Timestamp,
+        dione_rate_limiter::{OverflowPolicy, RateLimitConfig, ScopeConfig},
     };
 
     #[test]
