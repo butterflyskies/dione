@@ -80,6 +80,8 @@ impl PronounCache {
 
 /// PronounDB v2 API adapter.
 pub struct PronounProvider {
+    #[cfg(test)]
+    endpoint: Option<String>,
     client: reqwest::Client,
     cache: PronounCache,
     deadline: Duration,
@@ -99,6 +101,8 @@ impl PronounProvider {
             .build()
             .expect("failed to build reqwest client");
         Self {
+            #[cfg(test)]
+            endpoint: None,
             client,
             cache: PronounCache::new(cache_ttl),
             deadline: Duration::from_millis(deadline_ms),
@@ -120,10 +124,14 @@ impl PronounProvider {
     }
 
     async fn fetch_from_api(&self, user_id: u64) -> Option<String> {
-        let url = format!(
-            "https://pronoundb.org/api/v2/lookup?platform=discord&ids={}",
-            user_id
-        );
+        #[cfg(test)]
+        let endpoint = self
+            .endpoint
+            .as_deref()
+            .unwrap_or("https://pronoundb.org/api/v2/lookup");
+        #[cfg(not(test))]
+        let endpoint = "https://pronoundb.org/api/v2/lookup";
+        let url = format!("{endpoint}?platform=discord&ids={user_id}");
 
         let resp = match tokio::time::timeout(self.deadline, self.client.get(&url).send()).await {
             Ok(Ok(resp)) if resp.status().is_success() => resp,
@@ -291,13 +299,69 @@ mod tests {
 
     #[tokio::test]
     async fn test_service_non_excluded_but_provider_fails() {
-        let service = PronounService::new(
+        use crate::test_support::{http_fixture, response};
+        let (origin, requests, server) = http_fixture(vec![Some(response(
+            "503 Service Unavailable",
+            "unavailable",
+        ))])
+        .await;
+        let mut service = PronounService::new(
             std::collections::HashSet::new(),
-            100,
+            5000,
             Duration::from_secs(300),
         );
-        let result = service.resolve_display_name(12345, "TestUser").await;
-        assert_eq!(result, "TestUser");
+        service.provider.endpoint = Some(format!("{origin}/api/v2/lookup"));
+        assert_eq!(
+            service.resolve_display_name(12345, "TestUser").await,
+            "TestUser"
+        );
+        assert_eq!(
+            service.resolve_display_name(12345, "TestUser").await,
+            "TestUser"
+        );
+        assert_eq!(
+            *requests.lock().unwrap(),
+            vec!["GET /api/v2/lookup?platform=discord&ids=12345 HTTP/1.1"],
+            "actual failed lookup must cache absence and prevent a second HTTP request"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn actual_provider_success_cache_and_exclusion_preserve_literal_values() {
+        use crate::test_support::{http_fixture, response};
+        let (origin, requests, server) = http_fixture(vec![Some(response(
+            "200 OK",
+            r#"{"42":{"sets":{"en":["she"]}}}"#,
+        ))])
+        .await;
+        let mut service = PronounService::new(
+            std::collections::HashSet::from([77]),
+            5000,
+            Duration::from_secs(300),
+        );
+        service.provider.endpoint = Some(format!("{origin}/api/v2/lookup"));
+        assert_eq!(
+            service.resolve_display_name(77, "Excluded").await,
+            "Excluded"
+        );
+        assert!(
+            requests.lock().unwrap().is_empty(),
+            "excluded user must not contact peer"
+        );
+        assert_eq!(
+            service.resolve_display_name(42, "Iris").await,
+            "Iris (she/her)"
+        );
+        assert_eq!(
+            service.resolve_display_name(42, "Iris (xe/it)").await,
+            "Iris (xe/it)"
+        );
+        assert_eq!(
+            *requests.lock().unwrap(),
+            vec!["GET /api/v2/lookup?platform=discord&ids=42 HTTP/1.1"]
+        );
+        server.abort();
     }
     #[tokio::test]
     async fn cached_pronouns_do_not_override_explicit_display_suffix() {

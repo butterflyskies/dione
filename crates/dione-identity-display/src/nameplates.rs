@@ -123,8 +123,8 @@ impl NameplateProvider {
                     );
                     return None;
                 }
-                Ok(Err(e)) => {
-                    tracing::debug!(error = %e, "nameplates fetch failed");
+                Ok(Err(_)) => {
+                    tracing::debug!(failure = "request_failed", "nameplates fetch failed");
                     return None;
                 }
                 Err(_) => {
@@ -147,8 +147,11 @@ impl NameplateProvider {
 
         let body = match resp.text().await {
             Ok(t) => t,
-            Err(e) => {
-                tracing::debug!(error = %e, "nameplates response read failed");
+            Err(_) => {
+                tracing::debug!(
+                    failure = "body_read_failed",
+                    "nameplates response read failed"
+                );
                 return None;
             }
         };
@@ -240,6 +243,116 @@ impl NameplateService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn configured_request_credentials_never_enter_send_failure_diagnostics() {
+        use crate::test_support::{CapturedLogs, http_fixture};
+        use tracing::instrument::WithSubscriber;
+        let (origin, requests, server) = http_fixture(vec![None]).await;
+        let endpoint =
+            format!("{origin}/SYNTHETIC_PATH_CANARY/nameplates?key=SYNTHETIC_QUERY_CANARY");
+        let service = NameplateService::new(&endpoint, 5000, Duration::from_secs(3600), &[]);
+        let logs = CapturedLogs::default();
+        assert_eq!(
+            service
+                .resolve_display_name(42, "Iris")
+                .with_subscriber(logs.subscriber())
+                .await,
+            "Iris"
+        );
+        let requests = requests.lock().unwrap().clone();
+        assert!(
+            !requests.is_empty(),
+            "real peer must observe unchanged configured request"
+        );
+        assert!(requests.iter().all(|line| line
+            == "GET /SYNTHETIC_PATH_CANARY/nameplates?key=SYNTHETIC_QUERY_CANARY HTTP/1.1"));
+        let text = logs.text();
+        assert!(text.contains("nameplates fetch failed"));
+        assert!(
+            !text.contains("SYNTHETIC_PATH_CANARY"),
+            "send failure diagnostic must exclude configured private path"
+        );
+        assert!(
+            !text.contains("SYNTHETIC_QUERY_CANARY"),
+            "send failure diagnostic must exclude configured private query"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn interrupted_body_and_status_failure_preserve_real_stale_nameplate() {
+        use crate::test_support::{CapturedLogs, http_fixture, response};
+        use tracing::instrument::WithSubscriber;
+        let yaml = "nameplates:\n  \"42\":\n    name: Iris\n    pronouns: [she/her]\n";
+        let truncated =
+            b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nConnection: close\r\n\r\nshort".to_vec();
+        let (origin, requests, server) = http_fixture(vec![
+            Some(response("200 OK", yaml)),
+            Some(truncated),
+            Some(response("503 Service Unavailable", "unavailable")),
+        ])
+        .await;
+        let service = NameplateService::new(
+            &format!("{origin}/SYNTHETIC_PATH_CANARY/plates?key=SYNTHETIC_QUERY_CANARY"),
+            5000,
+            Duration::ZERO,
+            &[],
+        );
+        let logs = CapturedLogs::default();
+        async {
+            assert_eq!(
+                service.resolve_display_name(42, "Iris").await,
+                "Iris (she/her)"
+            );
+            assert_eq!(
+                service.resolve_display_name(42, "Iris").await,
+                "Iris (she/her)",
+                "interrupted body must serve actually fetched stale data"
+            );
+            assert_eq!(
+                service.resolve_display_name(42, "Iris (xe/it)").await,
+                "Iris (xe/it)"
+            );
+        }
+        .with_subscriber(logs.subscriber())
+        .await;
+        assert_eq!(requests.lock().unwrap().len(), 3);
+        let text = logs.text();
+        assert!(text.contains("nameplates response read failed"));
+        assert!(text.contains("body_read_failed"));
+        assert!(text.contains("non-success status"));
+        assert!(!text.contains("SYNTHETIC_PATH_CANARY"));
+        assert!(!text.contains("SYNTHETIC_QUERY_CANARY"));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn cold_connect_failure_is_safe_and_returns_original_display() {
+        use crate::test_support::CapturedLogs;
+        use tracing::instrument::WithSubscriber;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let service = NameplateService::new(
+            &format!("http://{address}/SYNTHETIC_PATH_CANARY?key=SYNTHETIC_QUERY_CANARY"),
+            5000,
+            Duration::from_secs(3600),
+            &[],
+        );
+        let logs = CapturedLogs::default();
+        assert_eq!(
+            service
+                .resolve_display_name(42, "Iris")
+                .with_subscriber(logs.subscriber())
+                .await,
+            "Iris"
+        );
+        let text = logs.text();
+        assert!(text.contains("request_failed"));
+        assert!(!text.contains("SYNTHETIC_PATH_CANARY"));
+        assert!(!text.contains("SYNTHETIC_QUERY_CANARY"));
+    }
 
     #[test]
     fn test_parse_nameplates_yaml() {

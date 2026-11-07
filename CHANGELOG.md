@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.130.12]
+
+### Fixed
+
+- Keep configured nameplate request paths and queries out of send/read failure
+  diagnostics without changing actual requests or stale-cache recovery.
+- Replace the live pronoun failure test with hermetic real HTTP failure/cache,
+  positive-value and exclusion controls; keep production provider defaults.
+- Patch-version identity display and its exact normal dependency closure.
+
 ## [0.130.11]
 
 ### Fixed

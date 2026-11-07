@@ -151,3 +151,6 @@ mod tests {
         assert_eq!(display_name_with_pronouns("Alex", Some(" \t")), "Alex");
     }
 }
+
+#[cfg(test)]
+mod test_support;
