@@ -19,7 +19,10 @@ mod selection;
 pub(crate) use codex::TOOL_NAMES;
 pub(crate) use selection::HarnessSelection;
 
-pub(crate) mod presentation;
+#[cfg(test)]
+mod compact_tests;
+#[cfg(test)]
+mod presentation_single_tests;
 
 #[cfg(test)]
 pub(crate) mod test_support;

@@ -76,6 +76,8 @@ attention_version=$(sh scripts/workspace-package-version.sh dione-attention)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-attention-${attention_version}.crate"
 evidence_version=$(sh scripts/workspace-package-version.sh dione-evidence)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-evidence-${evidence_version}.crate"
+presentation_version=$(sh scripts/workspace-package-version.sh dione-presentation)
+sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-presentation-${presentation_version}.crate"
 harness_version=$(sh scripts/workspace-package-version.sh dione-harness)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-harness-${harness_version}.crate"
 identity_display_version=$(sh scripts/workspace-package-version.sh dione-identity-display)

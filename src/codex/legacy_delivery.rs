@@ -126,11 +126,11 @@ pub(crate) fn encode(
     scope: &LegacyDiscordScope,
 ) -> Result<Value, LegacyDeliveryError> {
     validate_delivery(delivery, scope)?;
-    Ok(match crate::harness::presentation::project(delivery) {
-        crate::harness::presentation::Presentation::Channel(channel) => {
+    Ok(match dione_presentation::project(delivery) {
+        dione_presentation::Presentation::Channel(channel) => {
             serde_json::json!({"jsonrpc":"2.0","method":"notifications/claude/channel","params":{"content":channel.content,"meta":channel.meta}})
         }
-        crate::harness::presentation::Presentation::Permission { request, decision } => {
+        dione_presentation::Presentation::Permission { request, decision } => {
             serde_json::json!({"jsonrpc":"2.0","method":"notifications/claude/channel/permission","params":{"request_id":request,"behavior":match decision {dione_messages::events::PermissionDecision::Granted=>"allow",dione_messages::events::PermissionDecision::Denied=>"deny"}}})
         }
     })

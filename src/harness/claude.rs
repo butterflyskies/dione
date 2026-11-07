@@ -13,16 +13,16 @@ use {
 pub(super) const ATTENTION_POLICY: AttentionPolicy = AttentionPolicy::Direct;
 
 pub(crate) fn notification(delivery: &Delivery) -> Value {
-    match super::presentation::project(delivery) {
-        super::presentation::Presentation::Channel(channel) => {
+    match dione_presentation::project(delivery) {
+        dione_presentation::Presentation::Channel(channel) => {
             let meta: serde_json::Map<String, Value> = channel
                 .meta
                 .into_iter()
                 .map(|(key, value)| {
                     let value = match value {
-                        super::presentation::MetadataValue::Text(value) => value,
-                        super::presentation::MetadataValue::Flag(value) => value.to_string(),
-                        super::presentation::MetadataValue::Locators(value) => {
+                        dione_presentation::MetadataValue::Text(value) => value,
+                        dione_presentation::MetadataValue::Flag(value) => value.to_string(),
+                        dione_presentation::MetadataValue::Locators(value) => {
                             json!(value).to_string()
                         }
                     };
@@ -31,7 +31,7 @@ pub(crate) fn notification(delivery: &Delivery) -> Value {
                 .collect();
             json!({"jsonrpc":"2.0","method":"notifications/claude/channel","params":{"content":channel.content,"meta":meta}})
         }
-        super::presentation::Presentation::Permission { request, decision } => {
+        dione_presentation::Presentation::Permission { request, decision } => {
             json!({"jsonrpc":"2.0","method":"notifications/claude/channel/permission","params":{"request_id":request,"behavior":match decision {PermissionDecision::Granted=>"allow",PermissionDecision::Denied=>"deny"}}})
         }
     }

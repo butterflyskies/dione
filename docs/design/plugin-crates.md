@@ -230,6 +230,20 @@ test stays in Dione without writer-fixture duplication. A shared-state test
 checks both facets across clones; compiler examples protect the private fields
 and public constructor. Member dev Tokio adds only the existing test-util feature.
 
+## Presentation boundary
+
+`dione-presentation` owns the shared projector and its typed descriptive output.
+Provider envelopes and legacy scope validation remain application-owned. The four
+output types, two channel fields, and `project` become public; locator fields,
+grouping, and the projector's metadata helpers remain private. Output is not an authority
+receipt or proof of delivery.
+
+The 21 single and nine compact tests remain in Dione to cover native conversion
+and provider encoding. The 18 private-group tests move into the member with typed
+message fixtures and the same assertions. They deliberately retain singleton
+batch formatting; public projection still selects single formatting for an
+ordinary singleton. No public helper or test-support feature is added for them.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -246,6 +260,7 @@ and public constructor. Member dev Tokio adds only the existing test-util featur
 10. The complete GAIE archive and backfill owner.
 11. Literal identity display and the two enrichment clients.
 12. Coupled harness facets and bounded protocol output.
+13. Shared presentation and compact batch formatting.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -256,8 +271,9 @@ test preparation, and release builds separately before making speed claims.
 
 The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
-`dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`, and
-`dione-gaie`, `dione-identity-display`, and `dione-harness`.
+`dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
+`dione-gaie`, `dione-identity-display`, `dione-harness`, and
+`dione-presentation`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -277,15 +293,17 @@ later application commits; every other archived byte remains protected.
 The already-published path remains mandatory.
 Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
-`dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`, and
-`dione-gaie`, `dione-identity-display`, and `dione-harness`,
+`dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
+`dione-gaie`, `dione-identity-display`, `dione-harness`, and
+`dione-presentation`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all twelve capabilities. Harness publishing waits for
+publishing waits for all thirteen capabilities. Presentation publishing waits for
+contracts, attention, evidence, messages, and identity-display reconciliation. Harness publishing waits for
 contracts and messages reconciliation. Messages publishing waits for
 contracts, attention, and evidence reconciliation. Attention publishing waits for
 contracts reconciliation. Each reconciliation verifies the
