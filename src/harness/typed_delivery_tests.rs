@@ -97,7 +97,7 @@ async fn actual_claude_and_omp_writers_project_the_same_typed_message() {
         test_support::context(),
     );
     let (writer, reader) = tokio::io::duplex(8192);
-    let claude = crate::harness::claude_with_output(ProtocolOutput::new(writer));
+    let claude = dione_claude::connect(ProtocolOutput::new(writer), dione_codex::TOOL_NAMES);
     claude.deliver(&delivery).await.unwrap();
     let actual = read_line(reader).await;
     let mut expected = expected_legacy();
@@ -174,7 +174,8 @@ async fn typed_codex_delivery_reopens_with_literal_legacy_payload_and_create_ded
 async fn permission_control_uses_claude_permission_params_without_channel_metadata() {
     for (granted, behavior) in [(true, "allow"), (false, "deny")] {
         let (writer, reader) = tokio::io::duplex(2048);
-        let connection = crate::harness::claude_with_output(ProtocolOutput::new(writer));
+        let connection =
+            dione_claude::connect(ProtocolOutput::new(writer), dione_codex::TOOL_NAMES);
         let delivery = test_support::delivery(
             crate::discord::events::NotificationEvent::PermissionResponse {
                 request_id: " request-token ".into(),

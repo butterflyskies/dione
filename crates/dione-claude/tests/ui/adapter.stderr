@@ -1,0 +1,11 @@
+error[E0603]: struct `ClaudeAdapter` is private
+ --> tests/ui/adapter.rs:1:19
+  |
+1 | use dione_claude::ClaudeAdapter;
+  |                   ^^^^^^^^^^^^^ private struct
+  |
+note: the struct `ClaudeAdapter` is defined here
+ --> src/lib.rs
+  |
+  | struct ClaudeAdapter {
+  | ^^^^^^^^^^^^^^^^^^^^

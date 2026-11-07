@@ -1,0 +1,24 @@
+[package]
+name = "dione-claude"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Claude channel delivery and protocol adapter"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["mcp", "claude", "notifications"]
+categories = ["asynchronous"]
+
+[dependencies]
+dione-contracts.workspace = true
+dione-harness.workspace = true
+dione-messages.workspace = true
+dione-presentation.workspace = true
+futures-util.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+trybuild.workspace = true

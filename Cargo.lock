@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.116.2"
+version = "0.117.2"
 dependencies = [
  "arc-swap",
  "axum",
@@ -941,6 +941,7 @@ dependencies = [
  "dione-access-requests",
  "dione-attention",
  "dione-bell-rings",
+ "dione-claude",
  "dione-codex",
  "dione-config",
  "dione-contracts",
@@ -1051,6 +1052,21 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "dione-claude"
+version = "0.1.0"
+dependencies = [
+ "dione-contracts",
+ "dione-harness",
+ "dione-messages",
+ "dione-presentation",
+ "futures-util",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "trybuild",
 ]
 
 [[package]]

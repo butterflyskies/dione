@@ -181,7 +181,7 @@ responses and channel notifications can share stdout.
 [HarnessConnection](crates/dione-harness/src/connection.rs) couples delivery and MCP
 capabilities from one adapter instance. Shared routing uses that connection;
 the CLI selects the concrete adapter during construction. The
-[Claude adapter](src/harness/claude.rs) shares one serialized output with MCP
+[Claude adapter](crates/dione-claude/src/lib.rs) shares one serialized output with MCP
 responses. The [Codex adapter](crates/dione-codex/src/adapter.rs) owns the queue-tool schemas,
 argument handling, queue delivery, and live binding publisher. Attention's
 [delivery contracts](crates/dione-attention/src/delivery.rs) belong to the attention

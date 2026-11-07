@@ -376,7 +376,10 @@ async fn malformed_coordinator_pushes_do_not_interrupt_subsequent_live_delivery(
     )
     .unwrap();
     let (writer, reader) = tokio::io::duplex(4096);
-    let connection = crate::harness::claude_with_output(dione_harness::ProtocolOutput::new(writer));
+    let connection = dione_claude::connect(
+        dione_harness::ProtocolOutput::new(writer),
+        dione_codex::TOOL_NAMES,
+    );
     connection.deliver(&delivery).await.unwrap();
     let output: Value = serde_json::from_str(
         &BufReader::new(reader)

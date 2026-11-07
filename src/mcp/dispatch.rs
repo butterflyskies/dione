@@ -1171,7 +1171,10 @@ mod tests {
             state_dir.clone(),
             notification_tx,
             crate::tracing_channel::TraceLevelController::noop(),
-            crate::harness::connect_claude(),
+            dione_claude::connect(
+                dione_harness::ProtocolOutput::new(tokio::io::stdout()),
+                dione_codex::TOOL_NAMES,
+            ),
             std::sync::Arc::new(dione_outbound_consent::consent::ConsentGate::new(
                 &state_dir,
             )),
@@ -1413,7 +1416,10 @@ mod tests {
             state_dir.clone(),
             notification_tx,
             crate::tracing_channel::TraceLevelController::noop(),
-            crate::harness::connect_claude(),
+            dione_claude::connect(
+                dione_harness::ProtocolOutput::new(tokio::io::stdout()),
+                dione_codex::TOOL_NAMES,
+            ),
             std::sync::Arc::new(dione_outbound_consent::consent::ConsentGate::new(
                 &state_dir,
             )),

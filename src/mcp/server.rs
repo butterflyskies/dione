@@ -1283,11 +1283,23 @@ pub mod test_helpers {
 
     /// Exposes `tools_list` for unit testing tool discovery.
     pub fn get_tools_list() -> Value {
-        complete_tools_list(&crate::harness::connect_claude(), false)
+        complete_tools_list(
+            &dione_claude::connect(
+                dione_harness::ProtocolOutput::new(tokio::io::stdout()),
+                dione_codex::TOOL_NAMES,
+            ),
+            false,
+        )
     }
 
     pub fn get_tools_list_with_evidence() -> Value {
-        complete_tools_list(&crate::harness::connect_claude(), true)
+        complete_tools_list(
+            &dione_claude::connect(
+                dione_harness::ProtocolOutput::new(tokio::io::stdout()),
+                dione_codex::TOOL_NAMES,
+            ),
+            true,
+        )
     }
 
     pub fn get_codex_tools_list(harness: &HarnessConnection) -> Value {
@@ -1296,7 +1308,13 @@ pub mod test_helpers {
 
     /// Exposes `initialize_response` for unit testing the handshake.
     pub fn get_initialize_response() -> Value {
-        crate::mcp::protocol::initialize_response(&crate::harness::connect_claude(), None)
+        crate::mcp::protocol::initialize_response(
+            &dione_claude::connect(
+                dione_harness::ProtocolOutput::new(tokio::io::stdout()),
+                dione_codex::TOOL_NAMES,
+            ),
+            None,
+        )
     }
 
     /// Exposes the Codex initialize response for protocol tests.
@@ -1573,7 +1591,10 @@ mod tests {
             state_dir.clone(),
             notification_tx,
             TraceLevelController::noop(),
-            crate::harness::connect_claude(),
+            dione_claude::connect(
+                dione_harness::ProtocolOutput::new(tokio::io::stdout()),
+                dione_codex::TOOL_NAMES,
+            ),
             Arc::new(dione_outbound_consent::consent::ConsentGate::new(
                 &state_dir,
             )),

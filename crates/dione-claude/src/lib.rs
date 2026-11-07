@@ -1,15 +1,19 @@
-//! Claude channel delivery over the shared MCP writer.
-use super::{AttentionPolicy, HarnessConnection, HarnessDelivery, HarnessError, ProtocolOutput};
+//! Claude channel delivery and protocol behavior over one shared MCP writer.
+#![warn(missing_docs)]
 use dione_contracts::MessageRef;
+use dione_harness::{
+    AttentionPolicy, HarnessConnection, HarnessDelivery, HarnessError, ProtocolOutput,
+};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use {
     dione_harness::HarnessProtocol,
     dione_messages::{delivery::Delivery, events::PermissionDecision},
 };
-pub(super) const ATTENTION_POLICY: AttentionPolicy = AttentionPolicy::Direct;
+/// Claude notifications can be delivered directly.
+pub const ATTENTION_POLICY: AttentionPolicy = AttentionPolicy::Direct;
 
-pub(crate) fn notification(delivery: &Delivery) -> Value {
+fn notification(delivery: &Delivery) -> Value {
     match dione_presentation::project(delivery) {
         dione_presentation::Presentation::Channel(channel) => {
             let meta: serde_json::Map<String, Value> = channel
@@ -40,15 +44,17 @@ struct ReservedToolError(String);
 
 struct ClaudeAdapter {
     output: ProtocolOutput,
+    codex_tool_names: &'static [&'static str],
 }
-/// Connects Claude channel notifications and responses to one stdout writer.
-pub fn connect_claude() -> HarnessConnection {
-    claude_with_output(ProtocolOutput::new(tokio::io::stdout()))
-}
-pub(crate) fn claude_with_output(output: ProtocolOutput) -> HarnessConnection {
+/// Connects Claude notifications and responses to the same supplied writer.
+pub fn connect(
+    output: ProtocolOutput,
+    codex_tool_names: &'static [&'static str],
+) -> HarnessConnection {
     HarnessConnection::from_adapter(
         ClaudeAdapter {
             output: output.clone(),
+            codex_tool_names,
         },
         output,
     )
@@ -96,7 +102,7 @@ impl HarnessProtocol for ClaudeAdapter {
         _args: &'a Value,
     ) -> BoxFuture<'a, Option<Result<Value, HarnessError>>> {
         Box::pin(async move {
-            dione_codex::TOOL_NAMES.contains(&name).then(|| {
+            self.codex_tool_names.contains(&name).then(|| {
                 Err(HarnessError::source(ReservedToolError(format!(
                     "{name} is only available in Codex mode"
                 ))))
@@ -119,12 +125,28 @@ mod tests {
     };
     use tokio::io::{AsyncBufReadExt, AsyncWrite, BufReader};
 
+    fn text(text: &str) -> Delivery {
+        use dione_messages::{
+            delivery::{EvidenceVisibility, PresentationContext},
+            events::{ControlEvent, TraceLevel},
+        };
+        Delivery::control(
+            ControlEvent::Trace {
+                level: TraceLevel::INFO,
+                target: "fixture".to_owned(),
+                message: text.to_owned(),
+                fields: Vec::new(),
+            },
+            PresentationContext::new(None, EvidenceVisibility::Enabled),
+        )
+    }
+
     #[tokio::test]
     async fn channel_metadata_uses_strings_without_changing_content() {
         let (writer, reader) = tokio::io::duplex(4096);
-        let connection = crate::harness::claude_with_output(ProtocolOutput::new(writer));
+        let connection = connect(ProtocolOutput::new(writer), &[]);
         let content = "original text\n\"quoted\" <source> 🛰";
-        let delivery = crate::harness::test_support::text(content);
+        let delivery = text(content);
         connection.deliver(&delivery).await.unwrap();
         let mut lines = BufReader::new(reader).lines();
         let delivered: Value =
@@ -167,15 +189,13 @@ mod tests {
     #[tokio::test]
     async fn stdout_failure_is_reported_and_poisoned() {
         let flushes = Arc::new(AtomicUsize::new(0));
-        let connection = crate::harness::claude_with_output(ProtocolOutput::new(FailedWriter {
-            flushes: flushes.clone(),
-        }));
-        assert!(
-            connection
-                .deliver(&crate::harness::test_support::text("hello"))
-                .await
-                .is_err()
+        let connection = connect(
+            ProtocolOutput::new(FailedWriter {
+                flushes: flushes.clone(),
+            }),
+            &[],
         );
+        assert!(connection.deliver(&text("hello")).await.is_err());
         assert!(
             connection
                 .output()
@@ -185,11 +205,8 @@ mod tests {
         );
         assert_eq!(flushes.load(Ordering::SeqCst), 0);
         let (writer, reader) = tokio::io::duplex(1024);
-        let connection = crate::harness::claude_with_output(ProtocolOutput::new(writer));
-        connection
-            .deliver(&crate::harness::test_support::text("hello"))
-            .await
-            .unwrap();
+        let connection = connect(ProtocolOutput::new(writer), &[]);
+        connection.deliver(&text("hello")).await.unwrap();
         let mut lines = BufReader::new(reader).lines();
         assert_eq!(
             lines.next_line().await.unwrap().unwrap(),
@@ -200,9 +217,9 @@ mod tests {
     #[tokio::test]
     async fn stdout_response_and_notification_share_complete_lines() {
         let (writer, reader) = tokio::io::duplex(32);
-        let connection = crate::harness::claude_with_output(ProtocolOutput::new(writer));
+        let connection = connect(ProtocolOutput::new(writer), &[]);
         let response = json!({"jsonrpc": "2.0", "id": 7, "result": {"message": "response"}});
-        let notification = crate::harness::test_support::text("notification");
+        let notification = text("notification");
         let read = async {
             let mut lines = BufReader::new(reader).lines();
             let mut values = Vec::new();

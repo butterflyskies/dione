@@ -51,7 +51,10 @@ impl HarnessSession {
     /// Prepares Claude notifications on the shared MCP writer.
     pub fn claude() -> Self {
         Self {
-            connection: crate::harness::connect_claude(),
+            connection: dione_claude::connect(
+                super::ProtocolOutput::new(tokio::io::stdout()),
+                dione_codex::TOOL_NAMES,
+            ),
             lifecycle: PreparedLifecycle::Claude,
         }
     }

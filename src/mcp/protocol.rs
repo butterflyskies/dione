@@ -319,7 +319,13 @@ mod tests {
     /// advertised list must fail here, not in a reviewer's client.
     #[test]
     fn presence_tools_are_listed_with_their_schemas() {
-        let list = tools_list(&crate::harness::connect_claude(), false);
+        let list = tools_list(
+            &dione_claude::connect(
+                dione_harness::ProtocolOutput::new(tokio::io::stdout()),
+                dione_codex::TOOL_NAMES,
+            ),
+            false,
+        );
         let tools = list["tools"].as_array().unwrap();
         let set = tools
             .iter()
