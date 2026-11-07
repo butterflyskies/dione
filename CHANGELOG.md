@@ -18,6 +18,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.121.2]
+
+### Fixed
+
+- Inherit the accepted Teams/OMP test allowances and contained guidance while
+  preserving this extraction and its assertions.
+
+## [0.121.1]
+
+### Fixed
+
+- Allow 120 seconds for authenticated Teams test event reads, child socket
+  readiness, and parent control connections on slower CI workers, preserving
+  assertions and production deadlines.
+
+## [0.121.0] - 2026-11-05
+
+### Changed
+
+- Extract trace capture, live filter control, and awaited event forwarding into
+  `dione-tracing-channel`, preserving process initialization and diagnostic routing.
+
 ## [0.120.2]
 
 ### Fixed

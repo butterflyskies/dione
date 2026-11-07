@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.120.2"
+version = "0.121.2"
 dependencies = [
  "arc-swap",
  "axum",
@@ -971,6 +971,7 @@ dependencies = [
  "dione-rook",
  "dione-teams",
  "dione-teams-identities",
+ "dione-tracing-channel",
  "dione-vaelii",
  "fs2",
  "futures-util",
@@ -1532,6 +1533,17 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "dione-tracing-channel"
+version = "0.1.0"
+dependencies = [
+ "dione-discord-events",
+ "native-tls",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
