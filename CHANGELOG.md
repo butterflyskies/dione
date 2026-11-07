@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.130.3]
+
+### Fixed
+
+- Allow 120 seconds for attention tests to observe provider requests at the real
+  HTTP fixture, preserving assertions and production deadlines.
+
 ## [0.130.2]
 
 ### Fixed

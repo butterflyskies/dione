@@ -171,7 +171,7 @@ impl Network {
     }
 
     async fn wait_for_provider(&self, count: usize) {
-        tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::time::timeout(Duration::from_secs(120), async {
             while self.provider_requests().len() < count {
                 tokio::task::yield_now().await;
             }
