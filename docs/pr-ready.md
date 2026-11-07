@@ -13,10 +13,16 @@ cannot run this gate.
    the base for a stacked PR. The gate builds and launches the `review` profile.
 4. Review that commit with the group's pinned design principles and review
    lenses linked below. Resolve actionable findings before opening the PR.
+   Internal pre-PR review is distinct from official hosted merge approval.
 5. Attach the commit ID and command result to the PR. Wait for CI at the same
-   head commit, then obtain independent review and
-   approval of the final commit.
-   A member of `lacuna-blinkers` performs the final merge.
+   head commit. For a PR targeting `main`, obtain independent six-lens review
+   and official approval of the final commit and accumulated diff; a member of
+   `lacuna-blinkers` performs that merge. For an intermediate stacked PR targeting
+   a contained working branch, require focused source/package technical review
+   and ordinary required CI, plus the actual target-specific server requirements.
+   Do not impose the `main` official approval or six-lens receipt on that merge.
+   This distinction does not waive internal pre-PR review or authorize a merge
+   or retarget to `main`.
 
 The default `review` profile uses thin LTO and 16 codegen units. For an explicit
 full release check, run `sh scripts/pr-ready.sh origin/main release`. Main CI and
@@ -34,9 +40,9 @@ The Forgejo `main` branch rule must require each individual PR job, the
 `Dione review / Six lenses` receipt status once that trusted workflow is on
 `main`. Any member of `lacuna-constructs`, `friends-of-lacuna`, or
 `lacuna-blinkers` is an official reviewer and may review and approve a PR.
-Require one approval from one of these teams, never from the PR author, and
-allow only `lacuna-blinkers` to merge. The author of a PR cannot review or
-approve it. Once others have reviewed and approved, any member of
+For `main`, require one approval from one of these teams, never from the PR
+author, and allow only `lacuna-blinkers` to merge. The author of a PR cannot
+review or approve it. Once others have reviewed and approved, any member of
 `lacuna-blinkers` may merge, including the author or the reviewer.
 Keep blocking on rejected reviews enabled. The six-lens receipt status checks
 the official approval body for a complete receipt, but Forgejo lets repository

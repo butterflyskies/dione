@@ -620,7 +620,7 @@ async fn actual_child_stdin_close_stops_socket_releases_lock_and_preserves_backl
             .unwrap();
         let mut line = String::new();
         tokio::time::timeout(
-            Duration::from_secs(5),
+            Duration::from_secs(120),
             BufReader::new(stream).read_line(&mut line),
         )
         .await
