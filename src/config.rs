@@ -1,6 +1,7 @@
 use arc_swap::ArcSwap;
 use camino::{Utf8Path, Utf8PathBuf};
 use dione_bell_rings::{BellProviderConfig, RecallOptions};
+use dione_coordination::{CoordinationConfig, Coordinator};
 use dione_gaie::{DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES, DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES};
 use regex::RegexSet;
 use serde::{Deserialize, Deserializer, de::Error as _};
@@ -19,7 +20,6 @@ use {
     crate::{
         config_candidate::{compose_candidate, resolve_sidecar_path},
         config_store::{BoxError, ConfigStore},
-        coordination::{CoordinationConfig, Coordinator},
         discord::verified_action::PLURALKIT_APPLICATION_ID,
         pre_send::ConstructId,
         teams::ConversationId,
@@ -1249,7 +1249,7 @@ impl LoadedConfig {
         // switch coordination off silently.
         let coordinator_bot_id = pre_send_author_id.map(|id| id.get().to_string());
         if coordinator_bot_id.is_none()
-            && crate::coordination::gateway_bot_id().is_none()
+            && dione_coordination::gateway_bot_id().is_none()
             && channel_policies
                 .values()
                 .any(|policy| policy.coordinate.is_some())

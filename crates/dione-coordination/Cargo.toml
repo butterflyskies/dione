@@ -1,0 +1,25 @@
+[package]
+name = "dione-coordination"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Checked reply coordination client and shared protocol events"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["coordination", "protocol", "discord"]
+categories = ["asynchronous", "network-programming"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serenity.workspace = true
+native-tls.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+futures-util.workspace = true
+toml.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

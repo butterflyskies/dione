@@ -4,10 +4,11 @@ use super::events::{MessageEvent, MessageTargeting, NotificationEvent};
 use dione_contracts::{
     ActorId, ActorRef, ConversationId, ConversationRef, MessageId, MessageRef, ModuleInstanceId,
 };
+use dione_coordination::CoordinationEvent;
 use serenity::model::id::{ChannelId, MessageId as DiscordMessageId, UserId};
 use thiserror::Error;
 use {
-    crate::{coordination::CoordinationEvent, gate::MentionKind},
+    crate::gate::MentionKind,
     dione_attention::types::SourceAuthorKind,
     dione_messages::{
         delivery::{Delivery, PresentationContext},

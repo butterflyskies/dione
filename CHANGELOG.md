@@ -18,6 +18,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.105.2]
+
+### Fixed
+
+- Inherit the accepted Teams/OMP test allowances and contained guidance while
+  preserving this extraction and its assertions.
+
+## [0.105.1]
+
+### Fixed
+
+- Allow 120 seconds for authenticated Teams test event reads, child socket
+  readiness, and parent control connections on slower CI workers, preserving
+  assertions and production deadlines.
+
+## [0.105.0] - 2026-11-05
+
+### Changed
+
+- Extract checked reply-coordination mechanics into dione-coordination, retaining
+  application authorization and publication policy. Preserve write uncertainty,
+  acknowledged release and shared event delivery across config reloads.
+
 ## [0.104.2]
 
 ### Fixed
