@@ -1,0 +1,5 @@
+error[E0616]: field `sender` of struct `OmpControl` is private
+ --> tests/ui/control_sender.rs:2:21
+  |
+2 |     let _ = control.sender;
+  |                     ^^^^^^ private field

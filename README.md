@@ -338,3 +338,5 @@ under `src/` needs a version bump in `Cargo.toml` and a matching
 
 Licensed under either of MIT or Apache-2.0, at your option, as declared in
 [`Cargo.toml`](Cargo.toml).
+
+The reusable [OMP runtime](crates/dione-omp/README.md) owns durable sessions and protocol delivery. The application retains transport authorization and process assembly.

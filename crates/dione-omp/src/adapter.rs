@@ -1,22 +1,26 @@
 //! Oh My Pi event projection over the shared MCP writer.
-use super::{
-    AttentionPolicy, HarnessConnection, HarnessDelivery, HarnessError, ProtocolOutput,
-    codex::{ToolArgumentError, recognizes},
-    omp_session::{BindingId, OmpControl, SavedSessionId},
+use crate::{
+    OmpControl,
+    types::{BindingId, SavedSessionId},
 };
 use dione_contracts::MessageRef;
 use dione_durable::DeliveryToken;
+use dione_harness::{
+    AttentionPolicy, HarnessConnection, HarnessDelivery, HarnessError, HarnessProtocol,
+    ProtocolOutput,
+};
+use dione_messages::delivery::Delivery;
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use thiserror::Error;
-use {dione_harness::HarnessProtocol, dione_messages::delivery::Delivery};
 
-pub(super) const ATTENTION_POLICY: AttentionPolicy = AttentionPolicy::Direct;
+const ATTENTION_POLICY: AttentionPolicy = AttentionPolicy::Direct;
 
 struct OhMyPiAdapter {
     output: ProtocolOutput,
     control: Option<OmpControl>,
+    codex_tool_names: &'static [&'static str],
 }
 
 #[derive(Deserialize)]
@@ -72,34 +76,24 @@ fn notification(delivery: &Delivery) -> Result<Value, ProjectionError> {
     }
 }
 
-/// Connects Oh My Pi event notifications and responses to one stdout writer.
-pub fn connect_oh_my_pi() -> HarnessConnection {
-    oh_my_pi_with_output(ProtocolOutput::new(tokio::io::stdout()))
-}
+#[derive(Debug, Error)]
+#[error("{0}")]
+struct ToolArgumentError(String);
 
-pub(crate) fn oh_my_pi_with_output(output: ProtocolOutput) -> HarnessConnection {
-    HarnessConnection::from_adapter(
-        OhMyPiAdapter {
-            output: output.clone(),
-            control: None,
-        },
-        output,
-    )
-}
-
-pub(crate) fn oh_my_pi_with_control(control: OmpControl) -> HarnessConnection {
-    let output = ProtocolOutput::new(tokio::io::stdout());
-    oh_my_pi_with_control_and_output(control, output)
-}
-
-pub(crate) fn oh_my_pi_with_control_and_output(
-    control: OmpControl,
+/// Connects OMP notifications and private controls to one protocol writer.
+///
+/// Supply the application's actual Codex tool names and the output used by the session.
+/// `control` enables in-process controls; the application still authorizes transport origins.
+pub fn connect(
     output: ProtocolOutput,
+    control: Option<OmpControl>,
+    codex_tool_names: &'static [&'static str],
 ) -> HarnessConnection {
     HarnessConnection::from_adapter(
         OhMyPiAdapter {
             output: output.clone(),
-            control: Some(control),
+            control,
+            codex_tool_names,
         },
         output,
     )
@@ -204,7 +198,7 @@ impl HarnessProtocol for OhMyPiAdapter {
         _args: &'a Value,
     ) -> BoxFuture<'a, Option<Result<Value, HarnessError>>> {
         Box::pin(async move {
-            recognizes(name).then(|| {
+            self.codex_tool_names.contains(&name).then(|| {
                 Err(HarnessError::source(ToolArgumentError(format!(
                     "{name} is only available in Codex mode"
                 ))))
@@ -212,7 +206,3 @@ impl HarnessProtocol for OhMyPiAdapter {
         })
     }
 }
-
-#[cfg(test)]
-#[path = "oh_my_pi_tests.rs"]
-mod tests;

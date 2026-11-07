@@ -1,0 +1,11 @@
+error[E0603]: module `codec` is private
+ --> tests/ui/codec.rs:1:16
+  |
+1 | use dione_omp::codec::OmpCodec;
+  |                ^^^^^ private module
+  |
+note: the module `codec` is defined here
+ --> src/lib.rs
+  |
+  | mod codec;
+  | ^^^^^^^^^

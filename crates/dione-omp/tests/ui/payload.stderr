@@ -1,0 +1,13 @@
+error[E0603]: module `types` is private
+ --> tests/ui/payload.rs:1:16
+  |
+1 | use dione_omp::types::OmpPayload;
+  |                ^^^^^  ---------- enum `OmpPayload` is not publicly re-exported
+  |                |
+  |                private module
+  |
+note: the module `types` is defined here
+ --> src/lib.rs
+  |
+  | mod types;
+  | ^^^^^^^^^

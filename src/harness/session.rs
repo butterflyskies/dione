@@ -2,13 +2,12 @@
 use super::{
     HarnessConnection,
     codex_session::{CodexSession, CodexSessionOptions, RunningCodexSession},
-    omp_session::{OmpAdmission, OmpSession, RunningOmpSession},
 };
-use crate::codex::CodexDeliveryError;
-use crate::codex::CodexQueueError;
+use crate::codex::{CodexDeliveryError, CodexQueueError};
 use camino::Utf8Path;
 use dione_attention::delivery::AttentionDeliveryGuard;
 use dione_config::DeliveryConfig;
+use dione_omp::{OmpAdmission, OmpSession, RunningOmpSession};
 use std::{error::Error, sync::Arc};
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -59,7 +58,11 @@ impl HarnessSession {
     /// Prepares Oh My Pi events on the shared MCP writer.
     pub fn oh_my_pi() -> Self {
         Self {
-            connection: crate::harness::connect_oh_my_pi(),
+            connection: dione_omp::connect(
+                super::ProtocolOutput::new(tokio::io::stdout()),
+                None,
+                super::TOOL_NAMES,
+            ),
             lifecycle: PreparedLifecycle::OhMyPi,
         }
     }
@@ -72,7 +75,11 @@ impl HarnessSession {
             .map_err(|source| HarnessSessionError {
                 kind: HarnessSessionErrorKind::Omp(Box::new(source)),
             })?;
-        let connection = crate::harness::oh_my_pi_with_control(session.control());
+        let connection = dione_omp::connect(
+            super::ProtocolOutput::new(tokio::io::stdout()),
+            Some(session.control()),
+            super::TOOL_NAMES,
+        );
         Ok(Self {
             connection,
             lifecycle: PreparedLifecycle::OmpResident(Box::new(session)),

@@ -5,8 +5,17 @@
 //! a real Discord connection. Tool calls that require Discord HTTP are tested
 //! either up to the gate-rejection path or against a local mock HTTP server.
 
+use dione::{
+    discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
+    mcp::server::{DioneServer, test_helpers},
+    state::new_state,
+    tracing_channel::TraceLevelController,
+};
 use dione_access_requests::AccessQueue;
+use dione_harness::HarnessConnection;
+use dione_messages::timestamp::Timestamp;
 use dione_outbound_consent::consent::ConsentGate;
+use dione_provider_delivery::ReplyHandle;
 use dione_teams::{
     edge::LiveReplyReceipt,
     runtime::{TeamsReplyAuthority, TeamsRuntimeError},
@@ -24,17 +33,6 @@ use tokio::{
     sync::{Mutex, mpsc},
     task::JoinHandle,
 };
-use {
-    dione::{
-        discord::events::{AttachmentMeta, MessageEvent, NotificationEvent},
-        mcp::server::{DioneServer, test_helpers},
-        state::new_state,
-        tracing_channel::TraceLevelController,
-    },
-    dione_harness::HarnessConnection,
-    dione_messages::timestamp::Timestamp,
-    dione_provider_delivery::ReplyHandle,
-};
 
 fn temp_state_dir() -> (TempDir, camino::Utf8PathBuf) {
     let dir = TempDir::new().unwrap();
@@ -49,7 +47,7 @@ async fn can_view_channel_is_discovered_with_main_schema_in_every_harness() {
     let (_directory, state_dir) = temp_state_dir();
     for harness in [
         dione::harness::connect_claude(),
-        dione::harness::connect_oh_my_pi(),
+        dione::harness::HarnessSession::oh_my_pi().connection(),
         codex_connection(&state_dir),
     ] {
         let server = make_server_with_harness(&state_dir, harness).await;
@@ -85,7 +83,7 @@ async fn channel_audience_is_discovered_without_requiring_candidate_users() {
     let (_directory, state_dir) = temp_state_dir();
     for harness in [
         dione::harness::connect_claude(),
-        dione::harness::connect_oh_my_pi(),
+        dione::harness::HarnessSession::oh_my_pi().connection(),
         codex_connection(&state_dir),
     ] {
         let server = make_server_with_harness(&state_dir, harness).await;

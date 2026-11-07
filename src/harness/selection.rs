@@ -23,7 +23,7 @@ impl HarnessSelection {
         match self {
             Self::ClaudeCode => super::claude::ATTENTION_POLICY,
             Self::Codex => super::codex::ATTENTION_POLICY,
-            Self::OhMyPi => super::oh_my_pi::ATTENTION_POLICY,
+            Self::OhMyPi => AttentionPolicy::Direct,
         }
     }
     pub(crate) async fn prepare(

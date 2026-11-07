@@ -2,13 +2,11 @@
 use super::*;
 use dione_access_requests::AccessQueue;
 use dione_contracts::MessageRef;
+use dione_harness::{HarnessDelivery, HarnessError, HarnessProtocol};
+use dione_messages::delivery::Delivery;
 use futures_util::future::BoxFuture;
 use serenity::model::id::{ChannelId, MessageId};
 use std::sync::Mutex as StdMutex;
-use {
-    dione_harness::{HarnessDelivery, HarnessError, HarnessProtocol},
-    dione_messages::delivery::Delivery,
-};
 
 enum Received {
     Delivery(Delivery),
@@ -323,7 +321,11 @@ async fn notification_loop_invalidates_edits_and_deletes_before_delivery() {
 
 #[tokio::test]
 async fn oh_my_pi_ordinary_mcp_tools_remain_available() {
-    let connection = crate::harness::oh_my_pi_with_output(ProtocolOutput::new(tokio::io::sink()));
+    let connection = dione_omp::connect(
+        ProtocolOutput::new(tokio::io::sink()),
+        None,
+        crate::harness::TOOL_NAMES,
+    );
     let dir = tempfile::TempDir::new().unwrap();
     let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
     let server = DioneServer::new(

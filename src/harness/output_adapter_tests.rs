@@ -4,10 +4,9 @@ use tokio::io::AsyncReadExt;
 
 #[tokio::test(start_paused = true)]
 async fn adapters_distinguish_partial_write_timeout_from_unattempted_poison_failure() {
-    for adapter in [
-        crate::harness::claude_with_output,
-        crate::harness::oh_my_pi_with_output,
-    ] {
+    for adapter in [crate::harness::claude_with_output, |output| {
+        dione_omp::connect(output, None, crate::harness::TOOL_NAMES)
+    }] {
         let (writer, mut reader) = tokio::io::duplex(1);
         let connection = adapter(ProtocolOutput::new(writer));
         let error = connection

@@ -1,31 +1,70 @@
-use super::*;
-use serenity::model::id::{ChannelId, MessageId, UserId};
-use tokio::io::{AsyncBufReadExt, BufReader};
-use {
-    crate::{
-        discord::events::{MessageEvent, MessageTargeting, NotificationEvent},
-        harness::test_support,
-    },
-    dione_messages::timestamp::Timestamp,
+use crate::{
+    discord::events::{MessageEvent, MessageTargeting, NotificationEvent},
+    harness::test_support,
 };
+use dione_harness::ProtocolOutput;
+use dione_messages::{delivery::Delivery, timestamp::Timestamp};
+use serde_json::{Value, json};
+use serenity::model::id::{ChannelId, MessageId, UserId};
+use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
-#[test]
-fn typed_permission_is_rejected_without_parsing_a_foreign_envelope() {
+async fn emitted(delivery: &Delivery) -> Value {
+    let (writer, reader) = tokio::io::duplex(64 * 1024);
+    let connection = dione_omp::connect(
+        ProtocolOutput::new(writer),
+        None,
+        crate::harness::TOOL_NAMES,
+    );
+    connection.deliver(delivery).await.unwrap();
+    let line = BufReader::new(reader)
+        .lines()
+        .next_line()
+        .await
+        .unwrap()
+        .unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
+#[tokio::test]
+async fn typed_permission_is_rejected_without_parsing_a_foreign_envelope() {
+    let (writer, mut reader) = tokio::io::duplex(64 * 1024);
+    let connection = dione_omp::connect(
+        ProtocolOutput::new(writer),
+        None,
+        crate::harness::TOOL_NAMES,
+    );
     let permission = test_support::delivery(NotificationEvent::PermissionResponse {
         request_id: "request".into(),
         granted: true,
     });
-    assert!(matches!(
-        notification(&permission),
-        Err(ProjectionError {
-            kind: ProjectionErrorKind::Permission
-        })
-    ));
-    assert!(notification(&test_support::text("allowed")).is_ok());
+    let error = connection.deliver(&permission).await.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "cannot project Oh My Pi event: permission notifications are unsupported"
+    );
+    let mut byte = [0; 1];
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), reader.read_exact(&mut byte))
+            .await
+            .is_err()
+    );
+    connection
+        .deliver(&test_support::text("allowed"))
+        .await
+        .unwrap();
+    let line = BufReader::new(reader)
+        .lines()
+        .next_line()
+        .await
+        .unwrap()
+        .unwrap();
+    let value: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(value["params"]["content"], "allowed");
 }
 
-#[test]
-fn projects_real_rendered_message_reaction_config_and_trace() {
+#[tokio::test]
+async fn projects_real_rendered_message_reaction_config_and_trace() {
     let message = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(10),
         message_id: MessageId::new(20),
@@ -80,7 +119,7 @@ fn projects_real_rendered_message_reaction_config_and_trace() {
     for (event, expected) in cases {
         let rendered = test_support::delivery(event);
         assert_eq!(
-            notification(&rendered).unwrap(),
+            emitted(&rendered).await,
             json!({"jsonrpc":"2.0","method":"notifications/dione/event","params":expected})
         );
     }
@@ -89,7 +128,11 @@ fn projects_real_rendered_message_reaction_config_and_trace() {
 #[tokio::test]
 async fn concurrent_response_and_event_are_complete_lines_and_rejection_writes_nothing() {
     let (writer, reader) = tokio::io::duplex(32);
-    let connection = crate::harness::oh_my_pi_with_output(ProtocolOutput::new(writer));
+    let connection = dione_omp::connect(
+        ProtocolOutput::new(writer),
+        None,
+        crate::harness::TOOL_NAMES,
+    );
     let permission = test_support::delivery(NotificationEvent::PermissionResponse {
         request_id: "no".into(),
         granted: true,
@@ -118,8 +161,8 @@ async fn concurrent_response_and_event_are_complete_lines_and_rejection_writes_n
     assert!(values.contains(&json!({"jsonrpc":"2.0","method":"notifications/dione/event","params":{"version":1,"content":"hello","meta":{"type":"trace","level":"INFO","target":"fixture"}}})));
 }
 
-#[test]
-fn projects_real_coalesced_metadata() {
+#[tokio::test]
+async fn projects_real_coalesced_metadata() {
     let events = [20, 21].map(|id| NotificationEvent::MessageDelete {
         chat_id: ChannelId::new(10),
         message_id: MessageId::new(id),
@@ -134,7 +177,7 @@ fn projects_real_coalesced_metadata() {
     )
     .unwrap();
     assert_eq!(
-        notification(&rendered).unwrap(),
+        emitted(&rendered).await,
         json!({
             "jsonrpc":"2.0","method":"notifications/dione/event",
             "params":{"version":1,"content":"[events ch=10 n=2]\n\n!delete|20\n\n!delete|21\n","meta":{"chat_id":"10","type":"batch","format":"events_v1"}}
@@ -142,8 +185,8 @@ fn projects_real_coalesced_metadata() {
     );
 }
 
-#[test]
-fn projects_real_evidence_metadata() {
+#[tokio::test]
+async fn projects_real_evidence_metadata() {
     let rendered = test_support::delivery(NotificationEvent::MessageEdit {
         chat_id: ChannelId::new(10),
         message_id: MessageId::new(20),
@@ -155,7 +198,7 @@ fn projects_real_evidence_metadata() {
         reply_to_message_id: None,
     });
     assert_eq!(
-        notification(&rendered).unwrap(),
+        emitted(&rendered).await,
         json!({
             "jsonrpc":"2.0","method":"notifications/dione/event",
             "params":{"version":1,"content":"claim [🔍=v2:claim:AAAAAAAAAAw]","meta":{
@@ -210,7 +253,11 @@ async fn identity_display_roundtrips_untrusted_names_without_changing_machine_id
     ];
     for event in events {
         let (writer, reader) = tokio::io::duplex(16 * 1024);
-        let connection = crate::harness::oh_my_pi_with_output(ProtocolOutput::new(writer));
+        let connection = dione_omp::connect(
+            ProtocolOutput::new(writer),
+            None,
+            crate::harness::TOOL_NAMES,
+        );
         connection
             .deliver(&test_support::delivery(event))
             .await
@@ -232,8 +279,8 @@ async fn identity_display_roundtrips_untrusted_names_without_changing_machine_id
     }
 }
 
-#[test]
-fn identity_display_batch_roster_keeps_actor_order_and_blank_fallback() {
+#[tokio::test]
+async fn identity_display_batch_roster_keeps_actor_order_and_blank_fallback() {
     let event = |id, name: &str| NotificationEvent::Reaction {
         chat_id: ChannelId::new(10),
         message_id: MessageId::new(20),
@@ -249,7 +296,7 @@ fn identity_display_batch_roster_keeps_actor_order_and_blank_fallback() {
         test_support::context(),
     )
     .unwrap();
-    let wire = notification(&delivery).unwrap();
+    let wire = emitted(&delivery).await;
     let text = wire["params"]["content"].as_str().unwrap();
     assert!(
         text.starts_with("[events ch=10 n=2]\n[users 10 20=Later (she/her)]\n\n"),
@@ -257,4 +304,32 @@ fn identity_display_batch_roster_keeps_actor_order_and_blank_fallback() {
     );
     assert_eq!(wire["params"]["meta"]["chat_id"], "10");
     assert_eq!(wire["params"]["meta"]["format"], "events_v1");
+}
+
+#[tokio::test]
+async fn actual_codex_catalog_is_rejected_and_unknown_names_remain_unhandled() {
+    let connection = dione_omp::connect(
+        ProtocolOutput::new(tokio::io::sink()),
+        None,
+        crate::harness::TOOL_NAMES,
+    );
+    for name in crate::harness::TOOL_NAMES {
+        let error = connection
+            .protocol()
+            .call(name, &json!({}))
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!("{name} is only available in Codex mode")
+        );
+    }
+    assert!(
+        connection
+            .protocol()
+            .call("unregistered_control", &json!({}))
+            .await
+            .is_none()
+    );
 }
