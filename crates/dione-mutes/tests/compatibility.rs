@@ -6,13 +6,23 @@ use tempfile::TempDir;
 
 const HISTORICAL: &str = r#"{"timestamp":"2026-01-01T00:00:00Z","guild_id":0,"operation":"mute","actor":"historical","reason":null,"muted_until":"2100-01-01T00:00:00Z"}"#;
 
+fn private_directory() -> TempDir {
+    let directory = TempDir::new().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    directory
+}
+
 #[tokio::test]
 async fn historical_omitted_cutoff_survives_load_append_and_reload() {
     let old_mute: GuildMute = serde_json::from_str(
         r#"{"guild_id":0,"muted_until":"2100-01-01T00:00:00Z","muted_by":"historical","reason":null,"muted_at":"2026-01-01T00:00:00Z"}"#,
     ).unwrap();
     assert_eq!(old_mute.cutoff_event_id, "");
-    let dir = TempDir::new().unwrap();
+    let dir = private_directory();
     let path = Utf8Path::from_path(dir.path()).unwrap();
     let log = path.join("guild_mute_receipts.jsonl");
     fs::write(&log, format!("{HISTORICAL}\n")).unwrap();
@@ -43,7 +53,7 @@ async fn historical_omitted_cutoff_survives_load_append_and_reload() {
 
 #[tokio::test]
 async fn corrupt_nonblank_tail_keeps_line_error_and_original_bytes() {
-    let dir = TempDir::new().unwrap();
+    let dir = private_directory();
     let path = Utf8Path::from_path(dir.path()).unwrap();
     let log = path.join("guild_mute_receipts.jsonl");
     let corrupt = format!("{HISTORICAL}\n\n{{\n");
@@ -55,7 +65,7 @@ async fn corrupt_nonblank_tail_keeps_line_error_and_original_bytes() {
 
 #[tokio::test]
 async fn zero_ttl_remains_accepted_and_receipted_by_store() {
-    let dir = TempDir::new().unwrap();
+    let dir = private_directory();
     let path = Utf8Path::from_path(dir.path()).unwrap();
     let store = MuteStore::load(path).await.unwrap();
     let muted = store

@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.130.12"
+version = "0.130.13"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1085,7 +1085,7 @@ dependencies = [
 
 [[package]]
 name = "dione-codex"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "axum",
  "camino",
@@ -1242,7 +1242,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-gate"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "camino",
  "dione-config",
@@ -1312,7 +1312,7 @@ dependencies = [
 
 [[package]]
 name = "dione-durable"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "camino",
  "chrono",
@@ -1378,7 +1378,7 @@ dependencies = [
 
 [[package]]
 name = "dione-harness-runtime"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "camino",
  "chrono-tz",
@@ -1448,11 +1448,12 @@ dependencies = [
 
 [[package]]
 name = "dione-mutes"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arc-swap",
  "camino",
  "chrono",
+ "dione-durable",
  "serde",
  "serde_json",
  "tempfile",
@@ -1462,7 +1463,7 @@ dependencies = [
 
 [[package]]
 name = "dione-omp"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "camino",
  "chrono",
@@ -1488,7 +1489,7 @@ dependencies = [
 
 [[package]]
 name = "dione-oneshot"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "camino",
  "dione-config",
@@ -1506,12 +1507,13 @@ dependencies = [
 
 [[package]]
 name = "dione-outbound-consent"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "camino",
  "chrono",
  "dione-config",
  "dione-contradictionary",
+ "dione-durable",
  "dione-evidence",
  "dione-messages",
  "insta",
@@ -1616,7 +1618,7 @@ dependencies = [
 
 [[package]]
 name = "dione-rook"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "dione-contracts",

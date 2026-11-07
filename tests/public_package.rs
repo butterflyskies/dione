@@ -1026,8 +1026,9 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     assert!(reconcile_access_requests.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-access-requests.result == 'success'"));
     assert!(workflow.contains("scripts/package-preflight.sh dione-access-requests "));
-    assert!(publish_mutes.contains("needs: verify-dione"));
-    assert!(reconcile_mutes.contains("needs: [verify-dione, publish-mutes]"));
+    assert!(publish_mutes.contains("needs: [verify-dione, reconcile-durable]"));
+    assert!(reconcile_mutes.contains("needs: [verify-dione, reconcile-durable, publish-mutes]"));
+    assert!(reconcile_mutes.contains("needs.reconcile-durable.result == 'success'"));
     assert!(reconcile_mutes.contains("--ignore-vcs-info"));
     assert!(reconcile_dione.contains("needs.reconcile-mutes.result == 'success'"));
     assert!(workflow.contains("scripts/package-preflight.sh dione-mutes "));
@@ -1096,7 +1097,13 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     ));
     assert!(reconcile_dione.contains("needs.reconcile-config.result == 'success'"));
     assert!(workflow.contains("scripts/package-preflight.sh dione-config "));
-    let capabilities = ["config", "evidence", "contradictionary", "messages"];
+    let capabilities = [
+        "durable",
+        "config",
+        "evidence",
+        "contradictionary",
+        "messages",
+    ];
     for (job, publish) in [
         (publish_outbound_consent, false),
         (reconcile_outbound_consent, true),

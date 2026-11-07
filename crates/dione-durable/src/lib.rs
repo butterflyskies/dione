@@ -7,6 +7,7 @@ mod engine;
 mod error;
 mod identity;
 mod options;
+pub mod private_file;
 mod queue;
 pub mod state;
 mod store;

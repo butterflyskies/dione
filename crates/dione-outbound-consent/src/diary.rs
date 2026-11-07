@@ -233,14 +233,10 @@ impl DiaryRecord {
 /// all land here, each line tagged with its [`DiaryRecord::action`].
 pub fn append_diary_record(dir: &Path, record: &DiaryRecord) -> std::io::Result<()> {
     use std::io::Write;
-    std::fs::create_dir_all(dir)?;
     let path = dir.join(DIARY_FILE_NAME);
     let mut line = serde_json::to_string(record).map_err(std::io::Error::other)?;
     line.push('\n');
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?;
+    let mut file = dione_durable::private_file::open_append(&path)?;
     file.write_all(line.as_bytes())
 }
 

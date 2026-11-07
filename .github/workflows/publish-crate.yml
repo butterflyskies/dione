@@ -1636,7 +1636,7 @@ jobs:
           sh scripts/package-preflight.sh dione-access-requests "${access_requests_version}" "${access_requests_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-mutes:
-    needs: verify-dione
+    needs: [verify-dione, reconcile-durable]
     if: needs.verify-dione.outputs.publish-mutes == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -1674,10 +1674,11 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   reconcile-mutes:
-    needs: [verify-dione, publish-mutes]
+    needs: [verify-dione, reconcile-durable, publish-mutes]
     if: >-
       always() &&
       needs.verify-dione.result == 'success' &&
+      needs.reconcile-durable.result == 'success' &&
       (needs.publish-mutes.result == 'success' || needs.publish-mutes.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -2182,7 +2183,7 @@ jobs:
           sh scripts/package-preflight.sh dione-config "${config_version}" "${config_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-outbound-consent:
-    needs: [verify-dione, reconcile-config, reconcile-evidence, reconcile-contradictionary, reconcile-messages]
+    needs: [verify-dione, reconcile-durable, reconcile-config, reconcile-evidence, reconcile-contradictionary, reconcile-messages]
     if: needs.verify-dione.outputs.publish-outbound-consent == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -2220,10 +2221,11 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   reconcile-outbound-consent:
-    needs: [verify-dione, reconcile-config, reconcile-evidence, reconcile-contradictionary, reconcile-messages, publish-outbound-consent]
+    needs: [verify-dione, reconcile-durable, reconcile-config, reconcile-evidence, reconcile-contradictionary, reconcile-messages, publish-outbound-consent]
     if: >-
       always() &&
       needs.verify-dione.result == 'success' &&
+      needs.reconcile-durable.result == 'success' &&
       needs.reconcile-config.result == 'success' &&
       needs.reconcile-evidence.result == 'success' &&
       needs.reconcile-contradictionary.result == 'success' &&

@@ -290,21 +290,15 @@ impl Journal {
     /// Append one record as a JSONL line, creating the file and any missing
     /// parent directories on demand.
     pub fn append(&self, record: &JournalRecord) -> io::Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
-        }
         let mut line = serde_json::to_string(record).map_err(io::Error::other)?;
         line.push('\n');
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)?;
+        let mut file = dione_durable::private_file::open_append(self.path.as_std_path())?;
         file.write_all(line.as_bytes())
     }
 
     /// Read and parse the whole journal. A missing file is an empty journal.
     pub fn load(&self) -> io::Result<JournalScan> {
-        let contents = match fs::read_to_string(&self.path) {
+        let contents = match dione_durable::private_file::read_to_string(self.path.as_std_path()) {
             Ok(c) => c,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(JournalScan::default()),
             Err(e) => return Err(e),
@@ -542,9 +536,6 @@ impl Journal {
         unknown: &[String],
         malformed: &[String],
     ) -> io::Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
-        }
         let mut out = String::new();
         for record in records {
             out.push_str(&serde_json::to_string(record).map_err(io::Error::other)?);
@@ -554,12 +545,7 @@ impl Journal {
             out.push_str(line);
             out.push('\n');
         }
-        let tmp = self.path.with_extension("jsonl.tmp");
-        let mut file = fs::File::create(&tmp)?;
-        file.write_all(out.as_bytes())?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&tmp, &self.path)
+        dione_durable::private_file::replace(self.path.as_std_path(), out.as_bytes())
     }
 
     fn file_size(&self) -> io::Result<u64> {
@@ -775,6 +761,11 @@ mod tests {
 
     fn temp_journal() -> (TempDir, Journal) {
         let dir = TempDir::new().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        }
         let path = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
         let journal = Journal::new(&path);
         (dir, journal)
@@ -801,6 +792,72 @@ mod tests {
             resolved_at: Timestamp::parse(resolved_at).unwrap(),
             latency_ms,
         })
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_audit_files_remain_private_under_umask_022() {
+        use std::os::unix::fs::PermissionsExt;
+        if let Some(directory) = std::env::var_os("SL024_AUDIT_CHILD") {
+            let path = Utf8PathBuf::from_path_buf(directory.into()).unwrap();
+            let journal = Journal::new(&path);
+            journal
+                .append(&record(
+                    "nr-private-1",
+                    Outcome::Unknown,
+                    "2026-07-07T10:00:05+00:00",
+                    5000,
+                ))
+                .unwrap();
+            assert_eq!(
+                fs::metadata(journal.path()).unwrap().permissions().mode() & 0o777,
+                0o600,
+                "actual journal append must create0600 under child umask022"
+            );
+            crate::diary::append_diary_record(
+                path.as_std_path(),
+                &crate::diary::DiaryRecord::held_now("synthetic", "SYNTHETIC_HELD_TEXT"),
+            )
+            .unwrap();
+            assert_eq!(
+                fs::metadata(path.join(crate::diary::DIARY_FILE_NAME))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600,
+                "actual diary append must create0600"
+            );
+            let report = journal
+                .condense(Utc.with_ymd_and_hms(2026, 7, 8, 0, 0, 0).unwrap())
+                .unwrap();
+            assert_eq!(report.condensed_bounces, 1);
+            assert_eq!(
+                fs::metadata(journal.path()).unwrap().permissions().mode() & 0o777,
+                0o600,
+                "actual journal rewrite must preserve0600"
+            );
+            assert_eq!(Journal::new(&path).load().unwrap().records.len(), 1);
+            return;
+        }
+        let directory = TempDir::new().unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        let status = std::process::Command::new("sh")
+            .args(["-c", "umask 022; exec \"$@\"", "sl024-child"])
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "journal::tests::owner_audit_files_remain_private_under_umask_022",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("SL024_AUDIT_CHILD", directory.path())
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "actual owner child permission contract failed"
+        );
     }
 
     #[test]

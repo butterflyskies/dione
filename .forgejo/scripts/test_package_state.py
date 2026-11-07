@@ -117,8 +117,11 @@ class ReleasePreflightTests(unittest.TestCase):
     def test_mutes_reconciliation_gates_root_publication(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
         jobs = read_jobs(workflow)
-        self.assertIn("needs: verify-dione", jobs["publish-mutes"])
-        self.assertIn("needs: [verify-dione, publish-mutes]", jobs["reconcile-mutes"])
+        expected = {"verify-dione", "reconcile-durable"}
+        for name, extra in (("publish-mutes", set()), ("reconcile-mutes", {"publish-mutes"})):
+            needs = jobs[name].splitlines()[0].strip().removeprefix("needs: [").removesuffix("]")
+            self.assertEqual(set(needs.split(", ")), expected | extra)
+        self.assertIn("needs.reconcile-durable.result == 'success'", jobs["reconcile-mutes"])
         for job in ("publish-crate", "reconcile-dione"):
             self.assertIn("reconcile-mutes", jobs[job].splitlines()[0])
         self.assertIn("needs.reconcile-mutes.result == 'success'", jobs["reconcile-dione"])
@@ -491,7 +494,7 @@ class ReleasePreflightTests(unittest.TestCase):
     def test_outbound_consent_reconciliation_requires_every_direct_capability(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
         jobs = read_jobs(workflow)
-        capabilities = ('config', 'evidence', 'contradictionary', 'messages')
+        capabilities = ('durable', 'config', 'evidence', 'contradictionary', 'messages')
         expected = {"verify-dione"} | {"reconcile-" + name for name in capabilities}
         for name, extra in (("publish-outbound-consent", set()), ("reconcile-outbound-consent", {"publish-outbound-consent"})):
             needs = jobs[name].splitlines()[0].strip().removeprefix("needs: [").removesuffix("]")

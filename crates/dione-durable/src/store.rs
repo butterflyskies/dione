@@ -330,7 +330,7 @@ impl<P: Clone, K: Clone + Eq + Hash> DurableStore<P, K> {
 mod tests;
 
 #[cfg(unix)]
-fn validate_private_file(file: &File) -> io::Result<()> {
+pub(crate) fn validate_private_file(file: &File) -> io::Result<()> {
     let metadata = file.metadata()?;
     // SAFETY: geteuid has no arguments or memory-safety preconditions.
     let owner = unsafe { libc::geteuid() };
@@ -367,7 +367,7 @@ fn open_startup_entry(
 }
 
 #[cfg(unix)]
-fn open_startup_at(
+pub(crate) fn open_startup_at(
     directory: &File,
     name: &CStr,
     flags: i32,
@@ -391,8 +391,13 @@ fn open_startup_at(
 
 #[cfg(unix)]
 fn open_startup_directory(path: &Utf8Path) -> io::Result<File> {
+    open_private_directory(path.as_std_path(), false)
+}
+
+#[cfg(unix)]
+pub(crate) fn open_private_directory(path: &std::path::Path, create: bool) -> io::Result<File> {
     let absolute = if path.is_absolute() {
-        path.as_std_path().to_owned()
+        path.to_owned()
     } else {
         std::env::current_dir()?.join(path)
     };
@@ -405,7 +410,28 @@ fn open_startup_directory(path: &Utf8Path) -> io::Result<File> {
             Component::Normal(name) => {
                 let name = CString::new(name.as_bytes()).map_err(|_| unsafe_startup_layout())?;
                 directory =
-                    open_startup_at(&directory, &name, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
+                    match open_startup_at(&directory, &name, libc::O_RDONLY | libc::O_DIRECTORY, 0)
+                    {
+                        Err(error) if create && error.kind() == io::ErrorKind::NotFound => {
+                            // SAFETY: the admitted parent descriptor is live and name is NUL terminated.
+                            let result = unsafe {
+                                libc::mkdirat(directory.as_raw_fd(), name.as_ptr(), 0o700)
+                            };
+                            if result < 0 {
+                                let error = io::Error::last_os_error();
+                                if error.kind() != io::ErrorKind::AlreadyExists {
+                                    return Err(error);
+                                }
+                            }
+                            open_startup_at(
+                                &directory,
+                                &name,
+                                libc::O_RDONLY | libc::O_DIRECTORY,
+                                0,
+                            )?
+                        }
+                        result => result?,
+                    };
                 let metadata = directory.metadata()?;
                 let trusted_owner = metadata.uid() == 0 || metadata.uid() == owner;
                 let replaceable =
@@ -421,7 +447,7 @@ fn open_startup_directory(path: &Utf8Path) -> io::Result<File> {
 }
 
 #[cfg(unix)]
-fn private_directory(directory: &File) -> io::Result<bool> {
+pub(crate) fn private_directory(directory: &File) -> io::Result<bool> {
     let metadata = directory.metadata()?;
     // SAFETY: geteuid has no memory-safety preconditions.
     Ok(metadata.is_dir()
@@ -430,7 +456,7 @@ fn private_directory(directory: &File) -> io::Result<bool> {
 }
 
 #[cfg(unix)]
-fn validate_startup_file(file: &File, allow_legacy: bool) -> io::Result<()> {
+pub(crate) fn validate_startup_file(file: &File, allow_legacy: bool) -> io::Result<()> {
     let metadata = file.metadata()?;
     // SAFETY: geteuid has no memory-safety preconditions.
     let owner = unsafe { libc::geteuid() };

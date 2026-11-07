@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.130.13]
+
+### Security
+
+- Keep mute receipts and outbound-consent audit files private on Unix across
+  creation, replay, and replacement; reject unsafe aliases and exposed legacy
+  files without changing consent or mute commit semantics.
+
 ## [0.130.12]
 
 ### Fixed
