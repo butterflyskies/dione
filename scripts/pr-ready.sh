@@ -102,6 +102,7 @@ discord_events_version=$(sh scripts/workspace-package-version.sh dione-discord-e
 tracing_channel_version=$(sh scripts/workspace-package-version.sh dione-tracing-channel)
 config_watcher_version=$(sh scripts/workspace-package-version.sh dione-config-watcher)
 drop_ledger_version=$(sh scripts/workspace-package-version.sh dione-drop-ledger)
+permissions_version=$(sh scripts/workspace-package-version.sh dione-permissions)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-coordination-${coordination_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-teams-identities-${teams_identities_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-discord-identities-${discord_identities_version}.crate"
@@ -118,6 +119,7 @@ sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-discord
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-tracing-channel-${tracing_channel_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-config-watcher-${config_watcher_version}.crate"
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-drop-ledger-${drop_ledger_version}.crate"
+sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-permissions-${permissions_version}.crate"
 pre_send_version=$(sh scripts/workspace-package-version.sh dione-pre-send)
 outbound_consent_version=$(sh scripts/workspace-package-version.sh dione-outbound-consent)
 config_version=$(sh scripts/workspace-package-version.sh dione-config)

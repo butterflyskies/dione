@@ -9,7 +9,7 @@ use dione_discord_presence::{
 };
 use serenity::{
     async_trait,
-    builder::{CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage},
+    builder::CreateMessage,
     gateway::{ActivityData, ShardMessenger},
     model::{event::MessageUpdateEvent, prelude::*},
     prelude::*,
@@ -1043,87 +1043,14 @@ impl EventHandler for Handler {
     }
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
-        let Interaction::Component(component) = interaction else {
-            return;
-        };
-
-        let custom_id = &component.data.custom_id;
-
-        // Parse permission response pattern: "perm:allow:{request_id}" or "perm:deny:{request_id}"
-        let (granted, request_id) = if let Some(rid) = custom_id.strip_prefix("perm:allow:") {
-            (true, rid.to_string())
-        } else if let Some(rid) = custom_id.strip_prefix("perm:deny:") {
-            (false, rid.to_string())
-        } else {
-            return;
-        };
-
-        let config = dione_config::load_config(&self.state_dir);
-        let sender_id = component.user.id.get();
-        let is_admin = config.is_admin(sender_id);
-
-        if !is_admin {
-            // Respond with ephemeral "not authorized".
-            let resp = CreateInteractionResponse::Message(
-                CreateInteractionResponseMessage::new()
-                    .content("Not authorized.")
-                    .ephemeral(true),
-            );
-            if let Err(e) = component.create_response(&ctx.http, resp).await {
-                tracing::warn!(error = %e, "failed to send ephemeral not-authorized response");
-            }
-            return;
-        }
-
-        // Acknowledge the interaction first — Discord requires a response within 3 seconds.
-        // Only send the PermissionResponse event if the acknowledgment succeeds.
-        let label = if granted { "Allowed" } else { "Denied" };
-        let updated_content = format!(
-            "Permission request `{request_id}` — **{label}** by <@{}>",
-            component.user.id.get()
-        );
-        let resp = CreateInteractionResponse::UpdateMessage(
-            CreateInteractionResponseMessage::new()
-                .content(updated_content)
-                .components(vec![]),
-        );
-        if let Err(e) = component.create_response(&ctx.http, resp).await {
-            tracing::warn!(error = %e, "failed to update permission button message; not forwarding event");
-            return;
-        }
-
-        // Remove all pending entries for this request_id (multi-admin: each admin
-        // gets a separate DM, so there may be sibling messages to clean up).
-        // Removal also re-marks the message IDs as bot-sent, so the gateway
-        // message_delete events triggered by the cleanup below are suppressed
-        // rather than delivered to the MCP client.
-        let siblings = {
-            let mut state = self.state.write().await;
-            state.remove_permissions_by_request_id(&request_id)
-        };
-
-        // Delete all permission DMs — siblings from other admins and the
-        // clicked message itself. The interaction response already acknowledged
-        // the click, so the message can be cleaned up.
-        for (channel_id, msg_id) in &siblings {
-            if let Err(e) = ctx.http.delete_message(*channel_id, *msg_id, None).await {
-                tracing::warn!(msg_id = msg_id.get(), error = %e, "failed to delete permission DM");
-            }
-        }
-
-        // Only send the event if we actually owned this request (guard against
-        // duplicate clicks after prune already cleared the entries).
-        if siblings.is_empty() {
-            return;
-        }
-
-        let event = NotificationEvent::PermissionResponse {
-            request_id: request_id.clone(),
-            granted,
-        };
-        if let Err(e) = self.tx.send(event).await {
-            tracing::warn!(error = %e, "failed to send permission response event");
-        }
+        dione_permissions::handle_interaction(
+            &ctx.http,
+            interaction,
+            &self.state,
+            &self.state_dir,
+            &self.tx,
+        )
+        .await;
     }
 }
 

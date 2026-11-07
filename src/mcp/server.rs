@@ -1064,7 +1064,7 @@ async fn dispatch(
                 .unwrap_or("");
 
             let config = dione_config::load_config(server.state_dir());
-            if let Err(e) = crate::permissions::send_permission_request(
+            if let Err(e) = dione_permissions::send_permission_request(
                 server.http(),
                 &config,
                 server.state(),
