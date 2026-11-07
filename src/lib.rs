@@ -5,7 +5,7 @@ pub mod config;
 pub(crate) mod config_candidate;
 pub mod config_store;
 pub mod config_watcher;
-pub mod contradictionary;
+pub mod contradictionary_diary;
 pub mod coordination;
 pub(crate) mod delivery;
 pub mod delivery_buffer;

@@ -13,12 +13,12 @@
 //! save-path shape that skipped the sidecar merge is gone — that asymmetry was
 //! the sidecar dual-publish defect the canonical pipeline eliminated.
 
-use crate::{
-    config::{Config, ConfigGenerationError, LoadedConfig},
-    contradictionary::Entry,
-};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::sync::atomic::AtomicU64;
+use {
+    crate::config::{Config, ConfigGenerationError, LoadedConfig},
+    dione_contradictionary::Entry,
+};
 
 /// Compose a validated candidate from an already-parsed raw config plus
 /// already-loaded contradictionary sidecar entries (the reload shape).
@@ -74,7 +74,7 @@ pub(crate) fn resolve_sidecar_path(config_path: &Utf8Path, sidecar_path: &str) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contradictionary::{Action, MatchMode};
+    use dione_contradictionary::{Action, MatchMode};
     use std::sync::atomic::Ordering;
     use test_case::test_case;
 

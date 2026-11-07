@@ -3,7 +3,6 @@ use serde_json::{Value, json};
 use serenity::model::id::MessageId;
 use {
     crate::{
-        contradictionary::AutoRewrite,
         discord::messaging::{
             DeliveryReceipt, DmDeliveryRoute, DmOutcome, MessagingError, MessagingErrorKind,
             ReplyOutcome, Report, TargetError,
@@ -14,6 +13,7 @@ use {
             queue::HoldHandle,
         },
     },
+    dione_contradictionary::AutoRewrite,
     dione_evidence::SentexRole,
 };
 /// Make every `auto` rewrite visible to the sender: one

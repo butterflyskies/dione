@@ -27,9 +27,7 @@ pub use types::{
 use {
     crate::{
         config::{ChunkMode, DmPolicy, LoadedConfig},
-        contradictionary::{
-            Action, AutoRewrite, AutoRewritten, BlockOutcome, DiaryRecord, append_diary_record,
-        },
+        contradictionary_diary::{BlockOutcome, DiaryRecord, append_diary_record},
         coordination::{ClaimOutcome, Coordinator},
         discord::{chunk, chunk_preserving_fences_with_context, events::NotificationEvent},
         gate::OutboundGate,
@@ -48,6 +46,7 @@ use {
         },
         state::State,
     },
+    dione_contradictionary::{Action, AutoRewrite, AutoRewritten},
     dione_evidence::{
         SentexHandles, SentexRole, SentexTransport, append_markers, has_terminal_sentex_syntax,
         locator_metadata, parse_sentex_locators,
@@ -1176,7 +1175,7 @@ fn validate_evidence_chunking(config: &LoadedConfig, content: &str) -> Result<()
 /// the judge unrewritten, and the judge holds it: its `auto` hit still gates
 /// like `block`.
 ///
-/// [`Contradictionary::apply_auto`]: crate::contradictionary::Contradictionary::apply_auto
+/// [`Contradictionary::apply_auto`]: dione_contradictionary::Contradictionary::apply_auto
 fn apply_auto_rewrites(ctx: &MessagingCtx, content: &str) -> Option<AutoRewritten> {
     ctx.config
         .contradictionary
@@ -1199,11 +1198,7 @@ fn auto_send_records(
         .map(|rewrite| DiaryRecord::auto_now(rewrite, written, sent))
         .collect();
     if let Some(ref contradictionary) = ctx.config.contradictionary {
-        records.extend(send_side_records(
-            contradictionary,
-            &contradictionary.check(sent),
-            sent,
-        ));
+        records.extend(send_side_records(&contradictionary.check(sent), sent));
     }
     records
 }
@@ -1211,12 +1206,8 @@ fn auto_send_records(
 /// The records a send of `content` owes the diary once every chunk lands:
 /// its `log`/`celebrate` hits, and the override when a held block is
 /// released.
-fn send_side_records(
-    contradictionary: &crate::contradictionary::Contradictionary,
-    hits: &[crate::contradictionary::Hit],
-    content: &str,
-) -> Vec<DiaryRecord> {
-    match contradictionary.evaluate_block(hits, content, true) {
+fn send_side_records(hits: &[dione_contradictionary::Hit], content: &str) -> Vec<DiaryRecord> {
+    match crate::contradictionary_diary::evaluate_block(hits, content, true) {
         BlockOutcome::Clear => Vec::new(),
         BlockOutcome::Overridden(records) | BlockOutcome::Recorded(records) => records,
         BlockOutcome::Rejected { .. } => {
@@ -1270,13 +1261,13 @@ async fn deliver_reply(
 
     let pending_diary_records = if !request.pending_diary_records.is_empty() {
         request.pending_diary_records.clone()
-    } else if let Some(ref contradictionary) = ctx.config.contradictionary {
+    } else if ctx.config.contradictionary.is_some() {
         // Hold send-side records until every chunk succeeds. Quiet tiers
         // describe published text, and an override is only a crossing after
         // publication. A partial delivery is intentionally not represented as
         // a successful full-message record; a retry evaluates its remainder
         // independently.
-        send_side_records(contradictionary, &contradictionary_hits, content)
+        send_side_records(&contradictionary_hits, content)
     } else {
         Vec::new()
     };
@@ -1978,22 +1969,24 @@ fn parse_reaction_type(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{ChannelConfig, Config},
-        contradictionary::{Action, Entry, MatchMode},
-        mute_store::{GuildMute, MuteState, MuteStore},
-        pre_send::{
-            Assessment, AuditSink, AuditTrail, ConstructFeedback, FeedbackSink, HookContext,
-            HookDecision, HookOutput, PipelineMode, PreSendHook, PreSendPipeline, SinkError,
-            SinkFailurePolicy,
-        },
-        state::new_state,
-    };
     use serde_json::Value;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::{
         io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
+    };
+    use {
+        crate::{
+            config::{ChannelConfig, Config},
+            mute_store::{GuildMute, MuteState, MuteStore},
+            pre_send::{
+                Assessment, AuditSink, AuditTrail, ConstructFeedback, FeedbackSink, HookContext,
+                HookDecision, HookOutput, PipelineMode, PreSendHook, PreSendPipeline, SinkError,
+                SinkFailurePolicy,
+            },
+            state::new_state,
+        },
+        dione_contradictionary::{Action, Entry, MatchMode},
     };
 
     #[test]
@@ -3831,11 +3824,14 @@ mod tests {
     }
 
     fn diary_records(dir: &tempfile::TempDir) -> Vec<Value> {
-        std::fs::read_to_string(dir.path().join(crate::contradictionary::DIARY_FILE_NAME))
-            .unwrap_or_default()
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).unwrap())
-            .collect()
+        std::fs::read_to_string(
+            dir.path()
+                .join(crate::contradictionary_diary::DIARY_FILE_NAME),
+        )
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect()
     }
 
     #[tokio::test]

@@ -18,14 +18,62 @@ use {
     crate::{
         config_candidate::{compose_candidate, resolve_sidecar_path},
         config_store::{BoxError, ConfigStore},
-        contradictionary::{Contradictionary, ContradictionaryConfig, Entry, load_sidecar_entries},
         coordination::{CoordinationConfig, Coordinator},
         discord::verified_action::PLURALKIT_APPLICATION_ID,
         pre_send::ConstructId,
         teams::ConversationId,
     },
+    dione_contradictionary::{Contradictionary, Entry, load_sidecar_entries},
     dione_messages::timestamp::Timestamp,
 };
+
+/// TOML-level config section.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct ContradictionaryConfig {
+    pub enabled: bool,
+    /// Path to the TOML sidecar file containing entries. Relative paths are
+    /// resolved against the directory containing `config.toml`. Defaults to
+    /// `contradictionary.toml` alongside the config file.
+    pub sidecar_path: String,
+    /// Inline entries — still supported but the sidecar file is preferred.
+    /// Sidecar entries replace inline entries with the same pattern and match mode.
+    /// They follow the retained inline entries.
+    pub entries: Vec<Entry>,
+    /// How long a bounced message stays claimable, in seconds. Default 180
+    /// (3 minutes): long enough to survive a bounce landing mid-tool-chain —
+    /// slow tool calls can hold the construct's attention for a minute or
+    /// more — but short enough that a release is still a decision about a
+    /// live message rather than archaeology.
+    pub hold_ttl_secs: u64,
+    /// Maximum number of messages held at once. A new bounce arriving at
+    /// capacity evicts the held entry closest to expiry (journaling it as
+    /// expired), so a runaway tool loop cannot grow the queue without bound
+    /// between sweeps. Default 32; values below 1 are treated as 1.
+    pub max_pending: usize,
+    /// How long raw bounce records stay in the no_rly journal before the
+    /// condense tool folds them into daily summaries, in days. Bounces are
+    /// low-volume, so the default keeps a full year of raw detail (chain
+    /// links and message text) at negligible disk cost.
+    pub journal_raw_retention_days: u32,
+    /// How long condensed summaries survive before the vacuum tool drops
+    /// them, in days. Default two years of aggregate history.
+    pub journal_summary_retention_days: u32,
+}
+
+impl Default for ContradictionaryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            sidecar_path: "contradictionary.toml".to_string(),
+            entries: Vec::new(),
+            hold_ttl_secs: 180,
+            max_pending: 32,
+            journal_raw_retention_days: 365,
+            journal_summary_retention_days: 730,
+        }
+    }
+}
 
 // ── Error type ───────────────────────────────────────────────────────────────
 
@@ -2692,6 +2740,16 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn config_max_pending_defaults_and_parses() {
+        let defaults = ContradictionaryConfig::default();
+        assert_eq!(defaults.max_pending, 32);
+
+        let parsed: ContradictionaryConfig =
+            toml::from_str("enabled = true\nmax_pending = 4\n").unwrap();
+        assert_eq!(parsed.max_pending, 4);
+    }
 
     fn temp_state_dir() -> (TempDir, Utf8PathBuf) {
         let dir = TempDir::new().unwrap();
@@ -5518,7 +5576,7 @@ action = "celebrate"
             .expect("contradictionary must be built");
         let hits = c.check("custom-word");
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].action, crate::contradictionary::Action::Celebrate);
+        assert_eq!(hits[0].action, dione_contradictionary::Action::Celebrate);
     }
 
     #[test]

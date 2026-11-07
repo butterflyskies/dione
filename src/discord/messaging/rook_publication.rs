@@ -5,11 +5,6 @@ use super::{
     TargetOperation, TargetPolicy, auto_send_records, channel_coordinator, check_outbound,
     prepare_outbound, send_side_records, verify_message_target,
 };
-use crate::{
-    contradictionary::{Action, DiaryRecord, append_diary_record},
-    coordination::{ClaimOutcome, ClaimProgress, Coordinator},
-    no_rly::judge::{OutboundJudge, Verdict},
-};
 use dione_contracts::{
     ConversationId, ConversationRef, MessageRef, ModuleInstanceId, ModuleSlotId, ProviderId,
 };
@@ -26,6 +21,14 @@ use serenity::{
 };
 use std::{num::NonZeroU64, sync::Arc, time::Duration};
 use thiserror::Error;
+use {
+    crate::{
+        contradictionary_diary::{DiaryRecord, append_diary_record},
+        coordination::{ClaimOutcome, ClaimProgress, Coordinator},
+        no_rly::judge::{OutboundJudge, Verdict},
+    },
+    dione_contradictionary::Action,
+};
 
 const CODEC: &str = "discord.rook.text";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -213,9 +216,7 @@ impl DiscordPublicationProvider {
         let records = match &prepared.auto {
             Some(auto) => auto_send_records(&ctx, &auto.rewrites, &auto.written, &prepared.text),
             None => match &ctx.config.contradictionary {
-                Some(judge) => {
-                    send_side_records(judge, &judge.check(&prepared.text), &prepared.text)
-                }
+                Some(judge) => send_side_records(&judge.check(&prepared.text), &prepared.text),
                 None => Vec::new(),
             },
         };
@@ -895,14 +896,14 @@ mod tests {
     mod policy_tests {
         use super::Fixture;
         use super::*;
-        use crate::{
-            contradictionary::{Entry, MatchMode},
-            pre_send::{
+        use serde_json::json;
+        use {
+            crate::pre_send::{
                 AuditTrail, ConstructFeedback, HookContext, HookDecision, HookName, HookOutput,
                 PipelineMode, PreSendHook, PreSendPipeline,
             },
+            dione_contradictionary::{Entry, MatchMode},
         };
-        use serde_json::json;
 
         struct DecisionHook(HookDecision);
         impl PreSendHook for DecisionHook {

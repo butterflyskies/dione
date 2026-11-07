@@ -1,0 +1,21 @@
+[package]
+name = "dione-contradictionary"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Conservative text matching and automatic rewrites"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["dictionary", "text", "matching"]
+categories = ["text-processing"]
+
+[dependencies]
+dione-evidence.workspace = true
+aho-corasick.workspace = true
+serde.workspace = true
+toml.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -244,6 +244,25 @@ message fixtures and the same assertions. They deliberately retain singleton
 batch formatting; public projection still selects single formatting for an
 ordinary singleton. No public helper or test-support feature is added for them.
 
+## Contradictionary boundary
+
+`dione-contradictionary` owns the matcher, automatic rewrite rules, and sidecar
+entry schema. Its seven public types and loader retain their visibility and
+behavior. Private matching helpers and tests move together. The shared evidence
+Markdown scanner remains the grammar owner.
+
+Raw settings and their test remain in the application configuration adapter.
+The diary owner retains record serialization, timestamps, truncation, append
+behavior, and seventeen evaluation/persistence tests. Evaluation becomes an
+application function because its former matcher receiver was unused. Remove the
+corresponding redundant send-side argument while preserving the presence branch
+and record deferral. Fifty-one matcher tests move to the member; all sixty-nine
+historical test cases retain their expected results.
+
+The two existing Aho-Corasick constructor `expect` calls, fully qualified fmt
+paths, and unrestricted descriptive fields remain recorded inherited limitations.
+This extraction does not redesign constructor errors or confer authority on hits.
+
 ## Ordered follow-up splits
 
 1. Rendering, including caller migration and workspace packaging.
@@ -261,6 +280,7 @@ ordinary singleton. No public helper or test-support feature is added for them.
 11. Literal identity display and the two enrichment clients.
 12. Coupled harness facets and bounded protocol output.
 13. Shared presentation and compact batch formatting.
+14. Contradictionary matching, rewrites, and sidecar entry schema.
 
 Each PR migrates callers and tests before removing the old module. Attention
 orchestration and whole platform adapters need further dependency work and are outside this
@@ -272,8 +292,8 @@ test preparation, and release builds separately before making speed claims.
 The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
-`dione-gaie`, `dione-identity-display`, `dione-harness`, and
-`dione-presentation`.
+`dione-gaie`, `dione-identity-display`, `dione-harness`,
+`dione-presentation`, and `dione-contradictionary`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -294,15 +314,16 @@ The already-published path remains mandatory.
 Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
-`dione-gaie`, `dione-identity-display`, `dione-harness`, and
-`dione-presentation`,
+`dione-gaie`, `dione-identity-display`, `dione-harness`,
+`dione-presentation`, and `dione-contradictionary`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all thirteen capabilities. Presentation publishing waits for
+publishing waits for all fourteen capabilities. Contradictionary publishing waits
+for evidence reconciliation. Presentation publishing waits for
 contracts, attention, evidence, messages, and identity-display reconciliation. Harness publishing waits for
 contracts and messages reconciliation. Messages publishing waits for
 contracts, attention, and evidence reconciliation. Attention publishing waits for

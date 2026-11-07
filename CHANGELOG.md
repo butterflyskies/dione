@@ -18,6 +18,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.100.2]
+
+### Fixed
+
+- Inherit the accepted Teams/OMP test allowances and contained guidance while
+  preserving this extraction and its assertions.
+
+## [0.100.1]
+
+### Fixed
+
+- Allow 120 seconds for authenticated Teams test event reads, child socket
+  readiness, and parent control connections on slower CI workers, preserving
+  assertions and production deadlines.
+
+## [0.100.0]
+
+### Changed
+
+- Extract Contradictionary matching, conservative rewrites, and sidecar parsing
+  into `dione-contradictionary`. Keep raw settings, diary policy, consent, and
+  persistence in Dione. Move the state-free evaluation method to the application
+  diary owner and migrate all callers directly.
+
 ## [0.99.2]
 
 ### Fixed

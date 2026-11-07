@@ -5,13 +5,13 @@ use std::{fmt, io};
 use thiserror::Error;
 use {
     crate::{
-        contradictionary::AutoRewrite,
         no_rly::{
             consent::{BounceTicket, RejectedHandle},
             delivery::{DeliveryCause, PostedMessages},
         },
         pre_send::PipelineError,
     },
+    dione_contradictionary::AutoRewrite,
     dione_evidence::SentexLocator,
 };
 
