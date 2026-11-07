@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.131.2] - 2026-11-07
+
+### Changed
+
+- Extend dione-access-requests 0.2.0 with complete configuration-backed
+  decisions and wire projections, preserving private durability tests and
+  actual MCP dispatch behavior.
+
+
 ## [0.130.4]
 
 ### Fixed

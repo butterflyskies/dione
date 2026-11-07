@@ -1,7 +1,7 @@
 //! Pending Discord access requests and configuration-backed decisions.
 
+use crate::{AccessQueue, AccessRequest};
 use camino::Utf8PathBuf;
-use dione_access_requests::{AccessQueue, AccessRequest};
 use dione_config::BoxError;
 use dione_config::ConfigDurability;
 use dione_config::LoadedConfig;
@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 
 /// An observed persisted user ID, including historical zero values.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct StoredAccessUserId(u64);
+pub struct StoredAccessUserId(u64);
 
 impl fmt::Display for StoredAccessUserId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -23,7 +23,7 @@ impl fmt::Display for StoredAccessUserId {
 }
 
 /// A pending request localized to the caller's configuration snapshot.
-pub(crate) struct PendingAccessRequest {
+pub struct PendingAccessRequest {
     user_id: StoredAccessUserId,
     username: String,
     message_preview: String,
@@ -32,28 +32,28 @@ pub(crate) struct PendingAccessRequest {
 
 impl PendingAccessRequest {
     /// The user ID observed in the persisted request.
-    pub(crate) fn user_id(&self) -> StoredAccessUserId {
+    pub fn user_id(&self) -> StoredAccessUserId {
         self.user_id
     }
 
     /// The requesting user's recorded name.
-    pub(crate) fn username(&self) -> &str {
+    pub fn username(&self) -> &str {
         &self.username
     }
 
     /// The recorded message preview.
-    pub(crate) fn message_preview(&self) -> &str {
+    pub fn message_preview(&self) -> &str {
         &self.message_preview
     }
 
     /// The localized request timestamp.
-    pub(crate) fn timestamp(&self) -> &Timestamp {
+    pub fn timestamp(&self) -> &Timestamp {
         &self.timestamp
     }
 }
 
 /// An applied access grant and its configuration durability.
-pub(crate) struct AccessApproval {
+pub struct AccessApproval {
     user_id: UserId,
     username: String,
     generation: u64,
@@ -62,40 +62,40 @@ pub(crate) struct AccessApproval {
 
 impl AccessApproval {
     /// The user whose access was granted.
-    pub(crate) fn user_id(&self) -> UserId {
+    pub fn user_id(&self) -> UserId {
         self.user_id
     }
 
     /// The name recorded on the pending request.
-    pub(crate) fn username(&self) -> &str {
+    pub fn username(&self) -> &str {
         &self.username
     }
 
     /// The published configuration generation.
-    pub(crate) fn generation(&self) -> u64 {
+    pub fn generation(&self) -> u64 {
         self.generation
     }
 
     /// The durability of the configuration mutation.
-    pub(crate) fn durability(&self) -> &ConfigDurability {
+    pub fn durability(&self) -> &ConfigDurability {
         &self.durability
     }
 }
 
 /// A request removed from the in-memory queue with best-effort persistence.
-pub(crate) struct AccessDenial {
+pub struct AccessDenial {
     user_id: UserId,
     username: String,
 }
 
 impl AccessDenial {
     /// The user whose request was denied.
-    pub(crate) fn user_id(&self) -> UserId {
+    pub fn user_id(&self) -> UserId {
         self.user_id
     }
 
     /// The name recorded on the removed request.
-    pub(crate) fn username(&self) -> &str {
+    pub fn username(&self) -> &str {
         &self.username
     }
 }
@@ -103,7 +103,7 @@ impl AccessDenial {
 /// A failed access decision with its requested user ID.
 #[derive(Debug, Error)]
 #[error("access decision failed for user {user_id}: {kind}")]
-pub(crate) struct AccessError {
+pub struct AccessError {
     pub(crate) user_id: UserId,
     #[source]
     pub(crate) kind: AccessErrorKind,
@@ -119,7 +119,7 @@ pub(crate) enum AccessErrorKind {
 }
 
 /// Owns access-request decisions across the queue and configuration store.
-pub(crate) struct AccessCtx {
+pub struct AccessCtx {
     queue: Arc<Mutex<AccessQueue>>,
     config: Arc<LoadedConfig>,
     state_dir: Utf8PathBuf,
@@ -127,7 +127,7 @@ pub(crate) struct AccessCtx {
 
 impl AccessCtx {
     /// Construct an access owner using the caller's configuration snapshot.
-    pub(crate) fn new(
+    pub fn new(
         queue: Arc<Mutex<AccessQueue>>,
         config: Arc<LoadedConfig>,
         state_dir: Utf8PathBuf,
@@ -140,7 +140,7 @@ impl AccessCtx {
     }
 
     /// List pending requests in the queue's existing chronological order.
-    pub(crate) async fn list(&self) -> Vec<PendingAccessRequest> {
+    pub async fn list(&self) -> Vec<PendingAccessRequest> {
         let queue = self.queue.lock().await;
         queue
             .list()
@@ -155,7 +155,7 @@ impl AccessCtx {
     }
 
     /// Apply an access grant, retaining the request when durability is unknown.
-    pub(crate) async fn approve(&self, user_id: UserId) -> Result<AccessApproval, AccessError> {
+    pub async fn approve(&self, user_id: UserId) -> Result<AccessApproval, AccessError> {
         let uid = user_id.get();
         let request = {
             let queue = self.queue.lock().await;
@@ -208,7 +208,7 @@ impl AccessCtx {
     }
 
     /// Deny a request with the queue's existing best-effort persistence.
-    pub(crate) async fn deny(&self, user_id: UserId) -> Result<AccessDenial, AccessError> {
+    pub async fn deny(&self, user_id: UserId) -> Result<AccessDenial, AccessError> {
         let removed = {
             let mut queue = self.queue.lock().await;
             queue.deny(user_id.get())

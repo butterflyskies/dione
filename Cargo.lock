@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.130.4"
+version = "0.131.2"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1018,13 +1018,18 @@ dependencies = [
 
 [[package]]
 name = "dione-access-requests"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "camino",
  "chrono",
+ "dione-config",
+ "dione-messages",
  "serde",
  "serde_json",
+ "serenity",
  "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
  "tracing",
 ]
 

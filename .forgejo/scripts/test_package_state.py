@@ -109,8 +109,12 @@ class ReleasePreflightTests(unittest.TestCase):
                 jobs[current] = ""
             elif current:
                 jobs[current] += line + "\n"
-        self.assertIn("needs: verify-dione", jobs["publish-access-requests"])
-        self.assertIn("needs: [verify-dione, publish-access-requests]", jobs["reconcile-access-requests"])
+        self.assertIn("needs: [verify-dione, reconcile-config, reconcile-messages]", jobs["publish-access-requests"])
+        self.assertIn("needs: [verify-dione, reconcile-config, reconcile-messages, publish-access-requests]", jobs["reconcile-access-requests"])
+        for dep in ("config", "messages"):
+            self.assertIn("needs.reconcile-" + dep + ".result == 'success'", jobs["reconcile-access-requests"])
+        self.assertIn("    permissions:\n      contents: read\n      id-token: write\n", jobs["publish-access-requests"])
+        self.assertIn("    permissions:\n      contents: read\n", jobs["reconcile-access-requests"])
         for job in ("publish-crate", "reconcile-dione"):
             self.assertIn("reconcile-access-requests", jobs[job].splitlines()[0])
         self.assertIn("needs.reconcile-access-requests.result == 'success'", jobs["reconcile-dione"])

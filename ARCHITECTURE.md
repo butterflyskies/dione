@@ -303,11 +303,11 @@ Its continuation hint measures raw Discord result groups before filtering.
 The [Discord search adapter](src/discord/search_wire.rs) preserves argument parsing and
 response formatting, including the separate argument and tool-result errors.
 
-[Discord access requests](src/discord/access.rs) own complete listing, approval,
+[Access decisions](crates/dione-access-requests/src/workflow.rs) own complete listing, approval,
 and denial operations. Private receipts reuse configuration durability to describe
 approval outcomes. Unknown durability retains the pending request for retry.
 Queue persistence remains best effort, so durable configuration does not prove
-durable queue removal. The [MCP access adapter](src/mcp/access_wire.rs) formats
+durable queue removal. The [Access wire projection](crates/dione-access-requests/src/wire.rs) formats
 responses. Dispatch preserves the existing mutation-disable switch before ID
 parsing and leaves listing ungated.
 

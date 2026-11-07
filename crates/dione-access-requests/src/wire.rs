@@ -1,14 +1,15 @@
 //! MCP projections of typed access requests and decisions.
 
-use crate::discord::access::AccessApproval;
-use crate::discord::access::AccessDenial;
-use crate::discord::access::AccessError;
-use crate::discord::access::AccessErrorKind;
-use crate::discord::access::PendingAccessRequest;
+use crate::workflow::AccessApproval;
+use crate::workflow::AccessDenial;
+use crate::workflow::AccessError;
+use crate::workflow::AccessErrorKind;
+use crate::workflow::PendingAccessRequest;
 use dione_config::ConfigDurability;
 use serde_json::{Value, json};
 
-pub(super) fn requests(requests: Vec<PendingAccessRequest>) -> Value {
+/// Projects pending observations in their existing order.
+pub fn requests(requests: Vec<PendingAccessRequest>) -> Value {
     let requests: Vec<Value> = requests
         .iter()
         .map(|request| {
@@ -23,7 +24,8 @@ pub(super) fn requests(requests: Vec<PendingAccessRequest>) -> Value {
     json!({ "requests": requests })
 }
 
-pub(super) fn approval(result: Result<AccessApproval, AccessError>) -> Value {
+/// Projects applied approval durability or its original decision failure.
+pub fn approval(result: Result<AccessApproval, AccessError>) -> Value {
     match result {
         Ok(receipt) => match receipt.durability() {
             ConfigDurability::Durable => json!({
@@ -48,7 +50,8 @@ pub(super) fn approval(result: Result<AccessApproval, AccessError>) -> Value {
     }
 }
 
-pub(super) fn denial(result: Result<AccessDenial, AccessError>) -> Value {
+/// Projects a denial receipt or its original decision failure.
+pub fn denial(result: Result<AccessDenial, AccessError>) -> Value {
     match result {
         Ok(receipt) => json!({
             "ok": true,
@@ -72,9 +75,9 @@ fn access_error(error: AccessError) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discord::access::AccessCtx;
+    use crate::workflow::AccessCtx;
+    use crate::{AccessQueue, AccessRequest};
     use camino::Utf8PathBuf;
-    use dione_access_requests::{AccessQueue, AccessRequest};
     use dione_config::Config;
     use dione_config::LoadedConfig;
     use serenity::model::id::UserId;
@@ -138,7 +141,7 @@ mod tests {
         );
         std::fs::write(
             ctx.state_dir.join("queue.json"),
-            include_str!("../../tests/fixtures/access-requests.json"),
+            include_str!("../tests/fixtures/access-requests.json"),
         )
         .unwrap();
         *ctx.queue.lock().await = AccessQueue::load(&ctx.state_dir);
