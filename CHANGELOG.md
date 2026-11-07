@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.94.1]
+
+### Fixed
+
+- Inherit the corrected Teams/OMP test allowances from the messages branch
+  while preserving the rate-limiter extraction and its assertions.
+
 ## [0.94.0]
 
 ### Changed
@@ -26,6 +33,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Preserve configuration resolution, explicit-time transitions, public API, and
   unit/property tests. Keep admission, key selection, reload, and denial handling
   in Dione.
+
+## [0.93.2]
+
+### Fixed
+
+- Allow 120 seconds for authenticated Teams test event reads, child socket
+  readiness, and parent control connections on slower CI workers, preserving
+  assertions and production deadlines.
+
+## [0.93.1]
+
+### Fixed
+
+- Preserve the real-child lifecycle test's 120-second bind-response allowance
+  alongside the messages extraction, retaining its shutdown and backlog checks.
 
 ## [0.93.0]
 
@@ -36,6 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Dione and use the existing timestamp conversion. Preserve event, presentation,
   and timestamp behavior while migrating callers directly.
 
+## [0.92.1]
+
+### Fixed
+
+- Preserve the real-child lifecycle test's 120-second bind-response allowance
+  alongside the evidence extraction, retaining its shutdown and backlog checks.
+
 ## [0.92.0]
 
 ### Changed
@@ -44,6 +73,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   shared Markdown scanner into `dione-evidence`. Preserve canonical encodings,
   validation order, and private handle representations. Migrate message,
   chunking, lint, and filtering callers directly.
+
+## [0.91.1]
+
+### Fixed
+
+- Allow the real-child lifecycle test up to 120 seconds for each bind response
+  on slower test runners, preserving its shutdown and backlog assertions.
 
 ## [0.91.0]
 

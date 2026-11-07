@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.94.0"
+version = "0.94.1"
 dependencies = [
  "aho-corasick",
  "arc-swap",
