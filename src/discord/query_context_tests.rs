@@ -92,7 +92,7 @@ impl Fixture {
         )
         .await
         .unwrap();
-        let (_, error) = crate::config::reload_config(&state_dir).await;
+        let (_, error) = dione_config::reload_config(&state_dir).await;
         assert!(error.is_none(), "{error:?}");
         let services = Arc::new(ReplyServices::new(
             Arc::new(
@@ -422,7 +422,7 @@ async fn context_errors_are_safe_and_policy_reload_prevents_http() {
     )
     .await
     .unwrap();
-    let (_, error) = crate::config::reload_config(&fixture.state_dir).await;
+    let (_, error) = dione_config::reload_config(&fixture.state_dir).await;
     assert!(error.is_none(), "{error:?}");
     for tool in ["get_message", "fetch_messages"] {
         assert_eq!(

@@ -40,9 +40,9 @@ pub struct CodexDeliveryConfig {
     /// Deadline for each handshake or request exchange.
     pub request_timeout: Duration,
     /// Policy controlling when a delivery preamble is included.
-    pub preamble_mode: crate::config::PreambleMode,
+    pub preamble_mode: dione_config::PreambleMode,
     /// Template rendered for the configured preamble policy.
-    pub preamble_template: crate::config::PreambleTemplate,
+    pub preamble_template: dione_config::PreambleTemplate,
     /// Optional authority guard for managed attention deliveries.
     pub attention_guard: Option<Arc<dyn AttentionDeliveryGuard>>,
 }
@@ -64,7 +64,7 @@ impl CodexDeliveryConfig {
             })
             .or_else(default_socket_path)
             .ok_or(CodexDeliveryErrorKind::MissingHome)?;
-        let defaults = crate::config::DeliveryConfig::default();
+        let defaults = dione_config::DeliveryConfig::default();
         Ok(Self {
             legacy_scope,
             socket_path,
@@ -332,7 +332,7 @@ impl AppServerClient {
     /// successfully delivered on this binding. The caller is responsible
     /// for tracking and advancing that flag after a confirmed delivery.
     fn resolve_preamble(&self, preamble_sent: bool) -> Option<String> {
-        use crate::config::PreambleMode;
+        use dione_config::PreambleMode;
         match self.config.preamble_mode {
             PreambleMode::Always => Some(self.config.preamble_template.as_str().to_owned()),
             PreambleMode::First if !preamble_sent => {
@@ -2087,7 +2087,7 @@ mod tests {
     }
 
     fn test_delivery_config(socket_path: Utf8PathBuf, timeout: Duration) -> CodexDeliveryConfig {
-        let defaults = crate::config::DeliveryConfig::default();
+        let defaults = dione_config::DeliveryConfig::default();
         CodexDeliveryConfig {
             legacy_scope: crate::codex::LegacyDiscordScope::new(
                 dione_contracts::ModuleInstanceId::new(
@@ -2165,8 +2165,8 @@ mod tests {
             }
         });
         let mut config = test_delivery_config(socket_path, Duration::from_secs(5));
-        config.preamble_mode = crate::config::PreambleMode::First;
-        config.preamble_template = crate::config::PreambleTemplate::new("binding preamble");
+        config.preamble_mode = dione_config::PreambleMode::First;
+        config.preamble_template = dione_config::PreambleTemplate::new("binding preamble");
         let gate = Arc::new(SettlementGate::default());
         config.attention_guard = Some(gate.clone());
         let queue = CodexEventQueue::open(&root, config.legacy_scope.clone())
@@ -4069,7 +4069,8 @@ mod tests {
 
     #[test]
     fn preamble_1025_bytes_clamped_to_exactly_1024() {
-        use crate::config::{MAX_PREAMBLE_BYTES, PreambleTemplate};
+        use dione_config::MAX_PREAMBLE_BYTES;
+        use dione_config::PreambleTemplate;
 
         let oversized = "a".repeat(1025);
         assert_eq!(oversized.len(), 1025);
@@ -4081,7 +4082,8 @@ mod tests {
 
     #[test]
     fn preamble_truncation_respects_multibyte_char_boundary() {
-        use crate::config::{MAX_PREAMBLE_BYTES, PreambleTemplate};
+        use dione_config::MAX_PREAMBLE_BYTES;
+        use dione_config::PreambleTemplate;
 
         // Build a string of 3-byte characters (e.g. U+2603 SNOWMAN = 0xE2 0x98 0x83)
         // that would split a multibyte char at the 1024-byte boundary.
@@ -4101,7 +4103,7 @@ mod tests {
 
     #[test]
     fn preamble_template_toml_deserialize_clamps() {
-        use crate::config::DeliveryConfig;
+        use dione_config::DeliveryConfig;
 
         let oversized = "b".repeat(2048);
         let toml_str = format!("preamble_template = \"{oversized}\"\npreamble_mode = \"always\"\n");
@@ -4112,7 +4114,8 @@ mod tests {
 
     #[test]
     fn oversized_1mb_preamble_template_is_clamped() {
-        use crate::config::{MAX_PREAMBLE_BYTES, PreambleTemplate};
+        use dione_config::MAX_PREAMBLE_BYTES;
+        use dione_config::PreambleTemplate;
 
         let phrase = "I will remember to length-bound my strings. ";
         let repeats = (1024 * 1024) / phrase.len() + 1;
@@ -4134,7 +4137,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_preamble_never_mode_returns_none() {
-        use crate::config::PreambleTemplate;
+        use dione_config::PreambleTemplate;
 
         let dir = TempDir::new().unwrap();
         let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
@@ -4162,7 +4165,7 @@ mod tests {
         });
 
         let mut config = test_delivery_config(socket_path, Duration::from_secs(1));
-        config.preamble_mode = crate::config::PreambleMode::Never;
+        config.preamble_mode = dione_config::PreambleMode::Never;
         config.preamble_template = PreambleTemplate::new("should never appear");
 
         let client =
@@ -4177,7 +4180,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_preamble_first_mode_emits_once() {
-        use crate::config::PreambleTemplate;
+        use dione_config::PreambleTemplate;
 
         let dir = TempDir::new().unwrap();
         let socket_path = Utf8PathBuf::from_path_buf(dir.path().join("app-server.sock")).unwrap();
@@ -4205,7 +4208,7 @@ mod tests {
         });
 
         let mut config = test_delivery_config(socket_path, Duration::from_secs(1));
-        config.preamble_mode = crate::config::PreambleMode::First;
+        config.preamble_mode = dione_config::PreambleMode::First;
         config.preamble_template = PreambleTemplate::new("hello");
 
         let client =
@@ -4225,7 +4228,7 @@ mod tests {
     /// the second input omits the preamble.
     #[tokio::test]
     async fn first_mode_preamble_survives_reconnect() {
-        use crate::config::PreambleTemplate;
+        use dione_config::PreambleTemplate;
 
         let dir = TempDir::new().unwrap();
         let state_path = Utf8PathBuf::from_path_buf(dir.path().join("state")).unwrap();
@@ -4301,7 +4304,7 @@ mod tests {
         let (_binding_tx, binding_rx) = thread_channel(Some(thread_id));
 
         let mut config = test_delivery_config(socket_path, Duration::from_secs(1));
-        config.preamble_mode = crate::config::PreambleMode::First;
+        config.preamble_mode = dione_config::PreambleMode::First;
         config.preamble_template = PreambleTemplate::new("preamble-text");
 
         let worker = tokio::spawn(run_delivery_worker_with_lease(

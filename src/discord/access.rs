@@ -1,18 +1,16 @@
 //! Pending Discord access requests and configuration-backed decisions.
 
 use camino::Utf8PathBuf;
-use dione_access_requests::AccessQueue;
+use dione_access_requests::{AccessQueue, AccessRequest};
+use dione_config::BoxError;
+use dione_config::ConfigDurability;
+use dione_config::LoadedConfig;
+use dione_config::{ConfigMutationOutcome, ConfigRuntime};
+use dione_messages::timestamp::Timestamp;
 use serenity::model::id::UserId;
 use std::{fmt, sync::Arc};
 use thiserror::Error;
 use tokio::sync::Mutex;
-use {
-    crate::{
-        config::{ConfigDurability, ConfigRuntime, LoadedConfig},
-        config_store::BoxError,
-    },
-    dione_messages::timestamp::Timestamp,
-};
 
 /// An observed persisted user ID, including historical zero values.
 #[derive(Debug, Clone, Copy)]
@@ -176,6 +174,17 @@ impl AccessCtx {
                 AccessError { user_id, kind: AccessErrorKind::PersistConfig(error) }
             })?;
 
+        Ok(self.complete_approval(user_id, request, outcome).await)
+    }
+
+    /// Complete the queue decision using an applied configuration receipt.
+    pub(crate) async fn complete_approval(
+        &self,
+        user_id: UserId,
+        request: AccessRequest,
+        outcome: ConfigMutationOutcome,
+    ) -> AccessApproval {
+        let uid = user_id.get();
         match &outcome.durability {
             ConfigDurability::Unknown { warning } => {
                 tracing::warn!(
@@ -190,12 +199,12 @@ impl AccessCtx {
                 queue.approve(uid);
             }
         }
-        Ok(AccessApproval {
+        AccessApproval {
             user_id,
             username: request.username,
             generation: outcome.generation,
             durability: outcome.durability,
-        })
+        }
     }
 
     /// Deny a request with the queue's existing best-effort persistence.

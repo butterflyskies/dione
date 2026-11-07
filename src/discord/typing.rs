@@ -1,6 +1,8 @@
 //! Discord typing notifications with live channel authorization.
 
-use crate::{config::LoadedConfig, gate::OutboundGate, state::State};
+use crate::gate::OutboundGate;
+use crate::state::State;
+use dione_config::LoadedConfig;
 use serenity::{http::Http, model::id::ChannelId};
 use std::{future::Future, sync::Arc};
 use thiserror::Error;
@@ -81,10 +83,9 @@ async fn send_authorized_typing(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{ChannelConfig, Config},
-        state::new_state,
-    };
+    use crate::state::new_state;
+    use dione_config::ChannelConfig;
+    use dione_config::Config;
     use std::{error::Error as _, sync::Mutex};
 
     struct FakeTyping {
@@ -104,13 +105,14 @@ mod tests {
     #[tokio::test]
     async fn typing_checks_live_dm_and_thread_authorization() {
         let state = new_state();
-        let config = LoadedConfig::from_raw(Config {
+        let config = LoadedConfig::try_from_raw(Config {
             channels: vec![ChannelConfig {
                 id: "500".into(),
                 ..Default::default()
             }],
             ..Default::default()
-        });
+        })
+        .expect("valid test configuration");
         let transport = FakeTyping {
             calls: Mutex::new(Vec::new()),
             fail: false,
@@ -157,7 +159,8 @@ mod tests {
     async fn typing_failure_retains_sdk_source_and_wire_text() {
         let state = new_state();
         state.write().await.dm_channel_ids.insert(600);
-        let config = LoadedConfig::from_raw(Config::default());
+        let config =
+            LoadedConfig::try_from_raw(Config::default()).expect("valid test configuration");
         let transport = FakeTyping {
             calls: Mutex::new(Vec::new()),
             fail: true,

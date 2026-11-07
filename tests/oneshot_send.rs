@@ -8,12 +8,16 @@
 //! the config-path oracles and the seam-absence guard compile.
 #![cfg_attr(not(feature = "oneshot-test-seam"), allow(unused_imports, dead_code))]
 
+use dione::oneshot::Outcome;
+use dione::oneshot::Reason;
+use dione::oneshot::SendRequest;
+use dione::oneshot::TokenSource;
 #[cfg(feature = "oneshot-test-seam")]
 use dione::oneshot::run_with_api_base as run;
-use dione::{
-    config::{ChannelConfig, ChunkMode, Config, LoadedConfig},
-    oneshot::{Outcome, Reason, SendRequest, TokenSource},
-};
+use dione_config::ChannelConfig;
+use dione_config::ChunkMode;
+use dione_config::Config;
+use dione_config::LoadedConfig;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::{

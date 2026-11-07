@@ -10,7 +10,7 @@ defaults to `~/.claude/channels/dione`. Pass `--config <path>` to read the file
 from somewhere else; the state directory still holds Dione's other files.
 
 If the file does not exist at startup, Dione writes a commented default from
-[`src/config_template.toml`](../src/config_template.toml). That template is the
+[`crates/dione-config/src/config_template.toml`](../crates/dione-config/src/config_template.toml). That template is the
 annotated list of optional sections: Teams admission, archive, pre-send hooks,
 Vaelii, memory recall (`bell_rings`), reply coordination, and the
 contradictionary.

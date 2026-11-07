@@ -1,4 +1,5 @@
-use dione::config::{Config, load_config_readonly};
+use dione_config::Config;
+use dione_config::load_config_readonly;
 use serde_json::{Value, json};
 
 fn bell_diagnostics() -> Vec<Value> {

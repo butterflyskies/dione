@@ -3,6 +3,7 @@
 use super::{MessagingCtx, MessagingError, MessagingErrorKind, check_outbound};
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::Utc;
+use dione_config::LoadedConfig;
 use dione_contracts::{
     ModuleInstanceId,
     context::{
@@ -12,6 +13,11 @@ use dione_contracts::{
         UnavailableReason,
     },
 };
+use dione_evidence::OfferedSentex;
+use dione_evidence::parse_offered_sentexes;
+use dione_messages::timestamp::Timestamp;
+use dione_vaelii::GetMessageReceipt;
+use dione_vaelii::VaeliiError;
 use serenity::{
     http::MessagePagination,
     model::{
@@ -22,12 +28,6 @@ use serenity::{
 use std::io;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
-use {
-    crate::config::LoadedConfig,
-    dione_evidence::{OfferedSentex, parse_offered_sentexes},
-    dione_messages::timestamp::Timestamp,
-    dione_vaelii::{GetMessageReceipt, VaeliiError},
-};
 
 /// A provider observation that cannot satisfy a requested read.
 #[derive(Debug, Error)]
@@ -989,12 +989,11 @@ mod tests {
         },
         *,
     };
-    use crate::{
-        config::{ChannelConfig, Config},
-        discord::query_wire,
-        gate::OutboundGate,
-        no_rly::consent::ConsentGate,
-    };
+    use crate::discord::query_wire;
+    use crate::gate::OutboundGate;
+    use crate::no_rly::consent::ConsentGate;
+    use dione_config::ChannelConfig;
+    use dione_config::Config;
     use serde_json::{Value, json};
     use std::{collections::BTreeMap, fmt, sync::Arc};
     use tokio::{
@@ -1074,7 +1073,10 @@ mod tests {
             id: "42".into(),
             ..Default::default()
         });
-        let mut ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), Arc::new(http));
+        let mut ctx = messaging_ctx_with_http(
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+            Arc::new(http),
+        );
         ctx.state_dir = Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
         (ctx, directory, server)
     }
@@ -1464,7 +1466,10 @@ mod tests {
             id: "42".into(),
             ..Default::default()
         });
-        let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), discord_http);
+        let ctx = messaging_ctx_with_http(
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+            discord_http,
+        );
 
         let retrieved = get_message(&ctx, ChannelId::new(42), MessageId::new(9001))
             .await
@@ -1485,7 +1490,10 @@ mod tests {
         });
         raw.vaelii.server_url = Some(server_url);
         raw.vaelii.actor_term = Some("Syne".to_owned());
-        let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), discord_http);
+        let ctx = messaging_ctx_with_http(
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+            discord_http,
+        );
 
         let retrieved = get_message(&ctx, ChannelId::new(42), MessageId::new(9001))
             .await
@@ -1520,7 +1528,10 @@ mod tests {
         });
         raw.vaelii.server_url = Some(server_url);
         raw.vaelii.actor_term = Some("Syne".to_owned());
-        let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), discord_http);
+        let ctx = messaging_ctx_with_http(
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+            discord_http,
+        );
 
         let retrieved = get_message(&ctx, ChannelId::new(42), MessageId::new(9001))
             .await
@@ -1556,7 +1567,10 @@ mod tests {
         });
         raw.vaelii.server_url = Some(format!("http://{vaelii_address}"));
         raw.vaelii.actor_term = Some("Syne".to_owned());
-        let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), discord_http);
+        let ctx = messaging_ctx_with_http(
+            LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+            discord_http,
+        );
 
         let projected =
             query_wire::fetched(fetch_messages(&ctx, ChannelId::new(42), None, None, 10).await);
@@ -1625,7 +1639,8 @@ mod tests {
             "2026-06-09T12:00:00.000000+00:00",
             json!([])
         )]));
-        let disabled = LoadedConfig::from_raw(Config::default());
+        let disabled =
+            LoadedConfig::try_from_raw(Config::default()).expect("valid test configuration");
 
         let projected = query_wire::message(
             &MessageView::from_discord(&disabled, &messages[0], ObservationOrigin::Exact).unwrap(),
@@ -1984,7 +1999,7 @@ mod tests {
             id: "42".into(),
             ..Default::default()
         });
-        let ctx = messaging_ctx(LoadedConfig::from_raw(raw));
+        let ctx = messaging_ctx(LoadedConfig::try_from_raw(raw).expect("valid test configuration"));
         let before = Some(MessageId::new(10));
         let after = Some(MessageId::new(11));
         assert_eq!(
@@ -2027,7 +2042,7 @@ mod tests {
         let ctx = MessagingCtx::new(
             Arc::new(serenity::http::Http::new(&token)),
             crate::state::new_state(),
-            Arc::new(LoadedConfig::from_raw(raw)),
+            Arc::new(LoadedConfig::try_from_raw(raw).expect("valid test configuration")),
             state_dir.clone(),
             Arc::new(ConsentGate::new(&state_dir)),
             Arc::new(crate::ingress_ledger::IngressLedger::new()),
@@ -2265,19 +2280,21 @@ mod observation_tests {
             original.timestamp().to_rfc3339(),
             "2026-07-15T12:34:56.123456789+05:30"
         );
-        let config = LoadedConfig::from_raw(crate::config::Config {
+        let config = LoadedConfig::try_from_raw(dione_config::Config {
             timezone: Some("UTC".into()),
             ..Default::default()
-        });
+        })
+        .expect("valid test configuration");
         let utc = MessageView::from_discord(&config, &message, ObservationOrigin::Exact).unwrap();
         assert_eq!(
             utc.timestamp().to_rfc3339(),
             "2026-07-15T07:04:56.123456789+00:00"
         );
-        let config = LoadedConfig::from_raw(crate::config::Config {
+        let config = LoadedConfig::try_from_raw(dione_config::Config {
             timezone: Some("America/Chicago".into()),
             ..Default::default()
-        });
+        })
+        .expect("valid test configuration");
         let local = MessageView::from_discord(&config, &message, ObservationOrigin::Exact).unwrap();
         assert_eq!(
             local.timestamp().to_rfc3339(),

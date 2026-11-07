@@ -27,10 +27,10 @@ async fn main() -> Result<()> {
     color_eyre::install()?;
     let cli = Cli::parse();
     if let Some(path) = cli.config {
-        dione::config::set_config_path(path);
+        dione_config::set_config_path(path);
     }
-    let state_dir = dione::config::state_dir();
-    let loaded = dione::config::reload_config(&state_dir).await.0;
+    let state_dir = dione_config::state_dir();
+    let loaded = dione_config::reload_config(&state_dir).await.0;
     loaded
         .archive
         .validate(&loaded.channels)
@@ -76,12 +76,12 @@ fn report_quarantine(read: &dione_gaie::ReadResult) {
 }
 
 async fn backfill_parent(
-    config: &dione::config::LoadedConfig,
+    config: &dione_config::LoadedConfig,
     paths: ArchivePaths,
     corpus: CorpusId,
     created_at: &str,
 ) -> Result<()> {
-    let token = dione::config::resolve_token(config)
+    let token = dione_config::resolve_token(config)
         .ok_or_else(|| color_eyre::eyre::eyre!("no Discord bot token found"))?;
     let client = DiscordArchiveClient::new();
     let added = dione_gaie::run_backfill(

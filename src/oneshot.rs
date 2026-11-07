@@ -19,13 +19,15 @@
 //! The binary prints exactly one JSON object ([`Outcome::to_json`]) on
 //! stdout and maps [`Outcome::exit_code`] to the process status.
 
-use crate::{
-    config::{ChunkMode, ConfigError, LoadedConfig, ReadOnlyConfigError},
-    discord::chunk_preserving_fences,
-    gate::OutboundGate,
-    no_rly::{OutboundJudge as _, Verdict},
-};
+use crate::discord::chunk_preserving_fences;
+use crate::gate::OutboundGate;
+use crate::no_rly::OutboundJudge as _;
+use crate::no_rly::Verdict;
 use camino::Utf8Path;
+use dione_config::ChunkMode;
+use dione_config::ConfigError;
+use dione_config::LoadedConfig;
+use dione_config::ReadOnlyConfigError;
 use dione_pre_send::{
     ChannelType, HookContext, HookDecision, NoRly, OutboundDestination, observe_pipeline,
 };
@@ -312,7 +314,7 @@ fn identity_json(identity: &Identity) -> serde_json::Value {
 /// message text that could echo config values (a malformed `token = "..."`
 /// line would otherwise reach stdout verbatim).
 pub fn load_config_for_send(config_path: &Utf8Path) -> Result<LoadedConfig, Refusal> {
-    crate::config::load_config_readonly(config_path).map_err(|error| {
+    dione_config::load_config_readonly(config_path).map_err(|error| {
         Refusal::new(
             Reason::ConfigInvalid,
             redacted_config_error(config_path, &error),
@@ -885,10 +887,11 @@ pub fn scrub_token(detail: &str, token: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use {
-        crate::config::{ChannelConfig, Config},
-        dione_contradictionary::{Action, Entry, MatchMode},
-    };
+    use dione_config::ChannelConfig;
+    use dione_config::Config;
+    use dione_contradictionary::Action;
+    use dione_contradictionary::Entry;
+    use dione_contradictionary::MatchMode;
 
     fn config_with(channel: &str, mutate: impl FnOnce(&mut Config)) -> LoadedConfig {
         let mut raw = Config::default();

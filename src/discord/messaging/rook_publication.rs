@@ -641,11 +641,12 @@ async fn post_once(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{ChannelConfig, Config, LoadedConfig, ReplyToMode},
-        ingress_ledger::IngressLedger,
-        no_rly::consent::ConsentGate,
-    };
+    use crate::ingress_ledger::IngressLedger;
+    use crate::no_rly::consent::ConsentGate;
+    use dione_config::ChannelConfig;
+    use dione_config::Config;
+    use dione_config::LoadedConfig;
+    use dione_config::ReplyToMode;
     use serde_json::{Value, json};
     use serenity::http::Http;
     use std::sync::Mutex;
@@ -716,7 +717,9 @@ mod tests {
                 ..Default::default()
             });
             raw.delivery.reply_to_mode = ReplyToMode::Off;
-            let config = Arc::new(Mutex::new(LoadedConfig::from_raw(raw)));
+            let config = Arc::new(Mutex::new(
+                LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+            ));
             let current = config.clone();
             let state = crate::state::new_state();
             let shared_state = state.clone();
@@ -872,7 +875,8 @@ mod tests {
             .prepare(&fixture.request("hello"))
             .await
             .unwrap();
-        *fixture.config.lock().unwrap() = LoadedConfig::from_raw(Config::default());
+        *fixture.config.lock().unwrap() =
+            LoadedConfig::try_from_raw(Config::default()).expect("valid test configuration");
         assert!(matches!(
             fixture.dispatch(&prepared).await,
             DispatchOutcome::NotSent(PublicationRejection::AuthorityChanged)
@@ -972,7 +976,8 @@ mod tests {
                     reason: Some("fixture".into()),
                 },
             ];
-            *fixture.config.lock().unwrap() = crate::config::LoadedConfig::from_raw(raw);
+            *fixture.config.lock().unwrap() =
+                dione_config::LoadedConfig::try_from_raw(raw).expect("valid test configuration");
             assert_eq!(
                 fixture
                     .provider
@@ -1123,7 +1128,8 @@ mod tests {
                         fail_open,
                     },
                 );
-                *fixture.config.lock().unwrap() = LoadedConfig::from_raw(raw);
+                *fixture.config.lock().unwrap() =
+                    LoadedConfig::try_from_raw(raw).expect("valid test configuration");
             }
             fn count(&self, method: &str) -> usize {
                 self.messages

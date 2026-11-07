@@ -125,8 +125,8 @@ async fn harness_session_delivery_survives_process_cancellation_and_rebinds() {
     let (peer, mut received) = peer(listener, barrier.clone());
     let process = CancellationToken::new();
     let delivery = DeliveryConfig {
-        preamble_mode: crate::config::PreambleMode::Always,
-        preamble_template: crate::config::PreambleTemplate::new("session preamble"),
+        preamble_mode: dione_config::PreambleMode::Always,
+        preamble_template: dione_config::PreambleTemplate::new("session preamble"),
         ..DeliveryConfig::default()
     };
     let running = session

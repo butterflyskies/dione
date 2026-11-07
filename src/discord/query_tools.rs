@@ -9,16 +9,15 @@ use super::{
     search_wire::{self, SearchInputErrorKind},
     tool_arguments::{ArgumentError, parse_id},
 };
-use crate::{
-    config::load_config,
-    mcp::{
-        protocol::tool,
-        tool_registry::{
-            McpTool, RegisteredTool, ToolCallError, ToolCallErrorKind, ToolDefinition, ToolName,
-            ToolNameError,
-        },
-    },
-};
+use crate::mcp::protocol::tool;
+use crate::mcp::tool_registry::McpTool;
+use crate::mcp::tool_registry::RegisteredTool;
+use crate::mcp::tool_registry::ToolCallError;
+use crate::mcp::tool_registry::ToolCallErrorKind;
+use crate::mcp::tool_registry::ToolDefinition;
+use crate::mcp::tool_registry::ToolName;
+use crate::mcp::tool_registry::ToolNameError;
+use dione_config::load_config;
 use dione_contracts::ModuleInstanceId;
 use dione_discord_identities::Snowflake;
 use futures_util::future::BoxFuture;

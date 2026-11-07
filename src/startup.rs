@@ -88,7 +88,7 @@ pub async fn run() -> Result<(), StartupError> {
     let cli = Cli::parse();
 
     if let Some(config_path) = cli.config {
-        crate::config::set_config_path(config_path);
+        dione_config::set_config_path(config_path);
     }
 
     let stderr_filter = log_filter(&cli.log_level)?;
@@ -129,9 +129,9 @@ pub async fn run() -> Result<(), StartupError> {
         .try_init()
         .map_err(StartupErrorKind::Tracing)?;
 
-    let state_dir = crate::config::state_dir();
-    let (config, config_warning) = crate::config::ConfigRuntime::new(state_dir.clone())
-        .startup_load(crate::config::NoLkgPolicy::default())
+    let state_dir = dione_config::state_dir();
+    let (config, config_warning) = dione_config::ConfigRuntime::new(state_dir.clone())
+        .startup_load(dione_config::NoLkgPolicy::default())
         .await
         .map_err(StartupErrorKind::Config)?;
     if let Some(warning) = config_warning {
@@ -160,7 +160,7 @@ pub async fn run() -> Result<(), StartupError> {
         "dione starting"
     );
 
-    let token = crate::config::resolve_token(&config).ok_or(StartupErrorKind::DiscordToken)?;
+    let token = dione_config::resolve_token(&config).ok_or(StartupErrorKind::DiscordToken)?;
 
     let cancel = CancellationToken::new();
     let state = Arc::new(RwLock::new(SharedState::new()));
@@ -461,7 +461,7 @@ async fn drain_shutdown(
 async fn run_attention_command(
     path: &Utf8PathBuf,
     state_dir: &Utf8PathBuf,
-    config: &crate::config::LoadedConfig,
+    config: &dione_config::LoadedConfig,
     policy: AttentionPolicy,
 ) -> Result<(), StartupError> {
     let mut bytes = Vec::new();
@@ -491,7 +491,7 @@ async fn run_attention_command(
     ) {
         String::new()
     } else {
-        crate::config::resolve_token(config).ok_or(StartupErrorKind::ValidationToken)?
+        dione_config::resolve_token(config).ok_or(StartupErrorKind::ValidationToken)?
     };
     let runtime = Arc::new(
         crate::attention::runtime::AttentionRuntime::new(
@@ -546,7 +546,7 @@ fn validate_teams_control(
 async fn prepare_teams(
     session: &HarnessSession,
     state_dir: &Utf8Path,
-    teams_config: &crate::config::TeamsConfig,
+    teams_config: &dione_config::TeamsConfig,
     environment: impl Fn(&str) -> Result<String, env::VarError>,
 ) -> Result<Option<PreparedTeams>, StartupError> {
     let Ok(app_id) = environment("TEAMS_APP_ID") else {

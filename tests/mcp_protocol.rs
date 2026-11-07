@@ -126,7 +126,7 @@ impl Drop for ConfigFixtureGuard {
                 .enable_all()
                 .build()
                 .expect("config reset runtime");
-            let (_, error) = runtime.block_on(dione::config::reload_config(&state_dir));
+            let (_, error) = runtime.block_on(dione_config::reload_config(&state_dir));
             assert!(error.is_none(), "reset config fixture: {error:?}");
         })
         .join()
@@ -137,7 +137,7 @@ impl Drop for ConfigFixtureGuard {
 async fn load_config_fixture(state_dir: &camino::Utf8PathBuf, toml: &str) -> ConfigFixtureGuard {
     let lease = CONFIG_FIXTURE_LOCK.lock().await;
     std::fs::write(state_dir.join("config.toml"), toml).expect("write test config");
-    let (_, error) = dione::config::reload_config(state_dir).await;
+    let (_, error) = dione_config::reload_config(state_dir).await;
     assert!(error.is_none(), "load config fixture: {error:?}");
     ConfigFixtureGuard {
         state_dir: state_dir.clone(),

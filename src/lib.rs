@@ -1,9 +1,6 @@
 pub mod attention;
 mod bell_rings;
 pub mod codex;
-pub mod config;
-pub(crate) mod config_candidate;
-pub mod config_store;
 pub mod config_watcher;
 pub mod contradictionary_diary;
 pub(crate) mod delivery;
@@ -38,3 +35,13 @@ pub mod composition;
 
 #[cfg(test)]
 mod coordination_consumers;
+
+#[cfg(test)]
+static CONFIG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+fn config_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    CONFIG_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}

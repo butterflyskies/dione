@@ -1,12 +1,9 @@
 //! Guild search requests, Discord execution, and authorized message observations.
-use crate::{
-    config::LoadedConfig,
-    discord::messaging::{
-        MessagingCtx,
-        queries::{MessageView, ObservationError},
-    },
-    gate::OutboundGate,
-};
+use crate::discord::messaging::MessagingCtx;
+use crate::discord::messaging::queries::MessageView;
+use crate::discord::messaging::queries::ObservationError;
+use crate::gate::OutboundGate;
+use dione_config::LoadedConfig;
 use dione_discord_identities::Snowflake;
 use serde::Deserialize;
 use serde_json::Value;
@@ -600,13 +597,12 @@ fn filter_results(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{ChannelConfig, Config},
-        discord::search_wire,
-        ingress_ledger::IngressLedger,
-        no_rly::consent::ConsentGate,
-        state::new_state,
-    };
+    use crate::discord::search_wire;
+    use crate::ingress_ledger::IngressLedger;
+    use crate::no_rly::consent::ConsentGate;
+    use crate::state::new_state;
+    use dione_config::ChannelConfig;
+    use dione_config::Config;
     use serde_json::json;
     use std::{sync::Arc, time::Duration};
     use tokio::{
@@ -666,7 +662,7 @@ mod tests {
         MessagingCtx::new(
             Arc::new(serenity::http::Http::new("fake")),
             new_state(),
-            Arc::new(LoadedConfig::from_raw(config)),
+            Arc::new(LoadedConfig::try_from_raw(config).expect("valid test configuration")),
             "/tmp".into(),
             Arc::new(ConsentGate::new(camino::Utf8Path::new("/tmp"))),
             Arc::new(IngressLedger::new()),
@@ -719,7 +715,8 @@ mod tests {
     #[test]
     fn search_observation_conversion_error_is_visible_instead_of_a_hit() {
         let mut message: Message = serde_json::from_value(wire_search_message("7", "42")).unwrap();
-        let config = LoadedConfig::from_raw(Config::default());
+        let config =
+            LoadedConfig::try_from_raw(Config::default()).expect("valid test configuration");
         assert_eq!(
             SearchHit::from_discord(&config, &message)
                 .unwrap()
@@ -1086,7 +1083,8 @@ mod tests {
             id: "42".into(),
             ..Default::default()
         });
-        let config = crate::config::LoadedConfig::from_raw(raw);
+        let config =
+            dione_config::LoadedConfig::try_from_raw(raw).expect("valid test configuration");
 
         let configured_msg = json!({
             "id": "1",
@@ -1149,7 +1147,8 @@ mod tests {
             id: "42".into(),
             ..Default::default()
         });
-        let config = crate::config::LoadedConfig::from_raw(raw);
+        let config =
+            dione_config::LoadedConfig::try_from_raw(raw).expect("valid test configuration");
 
         let thread_msg = wire_search_message("100", "77");
 
@@ -1165,7 +1164,8 @@ mod tests {
 
     #[test]
     fn filter_results_passes_dm_channel() {
-        let config = crate::config::LoadedConfig::from_raw(Config::default());
+        let config = dione_config::LoadedConfig::try_from_raw(Config::default())
+            .expect("valid test configuration");
 
         let dm_msg = wire_search_message("101", "55");
 
@@ -1203,7 +1203,8 @@ mod tests {
 
     #[test]
     fn query_contract_filter_results_preserves_complete_payloads_and_transport_order() {
-        let config = crate::config::LoadedConfig::from_raw(crate::config::Config::default());
+        let config = dione_config::LoadedConfig::try_from_raw(dione_config::Config::default())
+            .expect("valid test configuration");
         let raw_messages = vec![
             json!([
                 wire_search_message("30", "42"),
@@ -1290,7 +1291,8 @@ mod tests {
             id: "42".into(),
             ..Default::default()
         });
-        let config = crate::config::LoadedConfig::from_raw(raw);
+        let config =
+            dione_config::LoadedConfig::try_from_raw(raw).expect("valid test configuration");
 
         fn make_msg(id: &str) -> Value {
             json!({

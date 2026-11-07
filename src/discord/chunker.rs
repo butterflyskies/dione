@@ -1,9 +1,9 @@
+use dione_config::ChunkMode;
+use dione_evidence::markdown::FenceTransition;
+use dione_evidence::markdown::fence_transition;
+use dione_evidence::markdown::is_fence_delimiter;
 use std::ops::Range;
 use thiserror::Error;
-use {
-    crate::config::ChunkMode,
-    dione_evidence::markdown::{FenceTransition, fence_transition, is_fence_delimiter},
-};
 
 /// Splits `text` into chunks of at most `limit` bytes, respecting UTF-8
 /// character boundaries and (in `Paragraph` mode) preferring paragraph or

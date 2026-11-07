@@ -187,7 +187,7 @@ Teams event carries a single-use reply handle for the `teams_reply` tool.
 Dione keeps its state in `DIONE_STATE_DIR`, default `~/.claude/channels/dione`,
 and reads `config.toml` from there; `--config <path>` points elsewhere. If the
 file is missing, Dione writes a commented default from
-[`src/config_template.toml`](src/config_template.toml). The bot token comes
+[`crates/dione-config/src/config_template.toml`](crates/dione-config/src/config_template.toml). The bot token comes
 from `DISCORD_BOT_TOKEN` or the top-level `token` key.
 
 The main sections:

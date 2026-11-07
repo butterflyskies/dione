@@ -157,10 +157,9 @@ pub(crate) fn native_supplement(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{Config, LoadedConfig},
-        discord::messaging::queries::MessageView,
-    };
+    use crate::discord::messaging::queries::MessageView;
+    use dione_config::Config;
+    use dione_config::LoadedConfig;
     use dione_contracts::{
         ModuleInstanceId, ModuleSlotId, ProviderId,
         context::ObservationOrigin,
@@ -183,7 +182,7 @@ mod tests {
             ModuleSlotId::new("secondary").unwrap(),
         );
         let view = MessageView::from_discord(
-            &LoadedConfig::from_raw(Config::default()),
+            &LoadedConfig::try_from_raw(Config::default()).expect("valid test configuration"),
             &message,
             ObservationOrigin::GatewayCreate,
         )

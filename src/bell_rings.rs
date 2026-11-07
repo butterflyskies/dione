@@ -1,9 +1,8 @@
 //! Native message eligibility for memory retrieval. Delivery policy stays in Dione.
-use crate::{
-    config::{BellRingsConfig, BellTrigger},
-    discord::events::NotificationEvent,
-};
+use crate::discord::events::NotificationEvent;
 use dione_bell_rings::{Bell, BellEvaluator, BellStatus};
+use dione_config::BellRingsConfig;
+use dione_config::BellTrigger;
 
 pub(crate) async fn evaluate_native(
     event: NotificationEvent,
@@ -35,16 +34,15 @@ pub(crate) async fn evaluate_native(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::Config,
-        discord::events::{MessageEvent, MessageTargeting},
-        gate::MentionKind,
-        harness::test_support::FixtureNotification,
-    };
+    use crate::discord::events::MessageEvent;
+    use crate::discord::events::MessageTargeting;
+    use crate::gate::MentionKind;
+    use crate::harness::test_support::FixtureNotification;
     use axum::response::IntoResponse;
     use dione_bell_rings::{
         BellProviderConfig, BellProviderUrl, BellScope, BellTimbre, RecallOptions,
     };
+    use dione_config::Config;
     use dione_messages::timestamp::Timestamp;
     use serde_json::{Value, json};
     use serenity::model::id::{ChannelId, MessageId, UserId};
@@ -337,13 +335,13 @@ mod tests {
     fn config() -> BellRingsConfig {
         BellRingsConfig {
             enabled: true,
-            mode: crate::config::BellMode::Live,
+            mode: dione_config::BellMode::Live,
             providers: vec![BellProviderConfig {
                 url: BellProviderUrl::parse("http://memory.example/mcp").unwrap(),
                 scope: BellScope::parse("syne").unwrap(),
                 alias: None,
             }],
-            trigger: crate::config::BellTrigger::Directed,
+            trigger: dione_config::BellTrigger::Directed,
             channel_overrides: vec![],
             recall: RecallOptions::default(),
         }
@@ -456,7 +454,7 @@ mod tests {
         assert_eq!(defaults.bell_rings.recall.deadline_ms(), 300);
         assert_eq!(
             defaults.bell_rings.trigger,
-            crate::config::BellTrigger::Directed
+            dione_config::BellTrigger::Directed
         );
 
         for invalid in [
@@ -618,7 +616,7 @@ mod tests {
     async fn all_trigger_rings_on_ambient_messages() {
         let provider = McpFixture::value(envelope(vec![hit("a", "found", 0.1, "semantic")])).await;
         let mut all_config = config();
-        all_config.trigger = crate::config::BellTrigger::All;
+        all_config.trigger = dione_config::BellTrigger::All;
         let outcome =
             evaluate_fixture(&message(MessageTargeting::Ambient), &all_config, &provider).await;
         let Some(bells) = outcome else {
@@ -632,10 +630,10 @@ mod tests {
     async fn channel_override_trigger_takes_precedence() {
         let provider = McpFixture::value(envelope(vec![hit("a", "found", 0.1, "semantic")])).await;
         let mut override_config = config();
-        override_config.trigger = crate::config::BellTrigger::Directed;
-        override_config.channel_overrides = vec![crate::config::BellChannelOverride {
+        override_config.trigger = dione_config::BellTrigger::Directed;
+        override_config.channel_overrides = vec![dione_config::BellChannelOverride {
             channel_id: "1".to_owned(),
-            trigger: crate::config::BellTrigger::All,
+            trigger: dione_config::BellTrigger::All,
         }];
         let outcome = evaluate_fixture(
             &message(MessageTargeting::Ambient),
@@ -663,10 +661,10 @@ mod tests {
     async fn global_all_with_directed_channel_override_skips_ambient() {
         let provider = McpFixture::value(envelope(vec![hit("a", "found", 0.1, "semantic")])).await;
         let mut override_config = config();
-        override_config.trigger = crate::config::BellTrigger::All;
-        override_config.channel_overrides = vec![crate::config::BellChannelOverride {
+        override_config.trigger = dione_config::BellTrigger::All;
+        override_config.channel_overrides = vec![dione_config::BellChannelOverride {
             channel_id: "1".to_owned(),
-            trigger: crate::config::BellTrigger::Directed,
+            trigger: dione_config::BellTrigger::Directed,
         }];
         let outcome = evaluate_fixture(
             &message(MessageTargeting::Ambient),
@@ -756,6 +754,6 @@ mod tests {
             [bell_rings.provider]\nurl='http://memory/mcp'\nscope='syne'",
         )
         .unwrap();
-        assert_eq!(cfg.bell_rings.trigger, crate::config::BellTrigger::All);
+        assert_eq!(cfg.bell_rings.trigger, dione_config::BellTrigger::All);
     }
 }

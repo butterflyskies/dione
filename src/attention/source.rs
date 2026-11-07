@@ -1,17 +1,18 @@
 //! Bounded live source recovery. Metadata is not proof that a source still exists.
 
-use crate::{
-    config::load_config,
-    discord::{events::MessageTargeting, verified_action::LifecycleContext},
-    gate::{GateDecision, InboundGate, OutboundGate},
-    ingress_ledger::IngressLedger,
-    state::State,
-};
+use crate::discord::events::MessageTargeting;
+use crate::discord::verified_action::LifecycleContext;
+use crate::gate::GateDecision;
+use crate::gate::InboundGate;
+use crate::gate::OutboundGate;
+use crate::ingress_ledger::IngressLedger;
+use crate::state::State;
 use camino::Utf8PathBuf;
 use dione_attention::{
     provider::SourceExcerpt,
     types::{DirectAuthorKind, SourceAuthorKind, SourceKey, SourceVersion, content_hash},
 };
+use dione_config::load_config;
 use serenity::{http::Http, model::channel::Channel};
 use std::{sync::Arc, time::Duration};
 

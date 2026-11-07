@@ -11,8 +11,8 @@ use super::{
         VerifiedUpdateCandidate, fresh_policy_snapshot, resolve_webhook_action,
     },
 };
-use crate::config::LoadedConfig;
 use chrono::{DateTime, Utc};
+use dione_config::LoadedConfig;
 use dione_contracts::{
     ModuleInstanceId,
     context::ObservationOrigin,
@@ -342,10 +342,10 @@ impl ObservationIngress {
             handler
                 .bot_user_id
                 .load(std::sync::atomic::Ordering::Relaxed),
-            || crate::config::load_config(&handler.state_dir),
+            || dione_config::load_config(&handler.state_dir),
             super::events::resolve_thread_parent(http, &handler.state, message.channel_id.get()),
             |message: Message| async move {
-                let config = crate::config::load_config(&handler.state_dir);
+                let config = dione_config::load_config(&handler.state_dir);
                 let action = DiscordTransportVerifier::new()
                     .verify(
                         http,
@@ -415,11 +415,11 @@ impl ObservationIngress {
             handler
                 .bot_user_id
                 .load(std::sync::atomic::Ordering::Relaxed),
-            || crate::config::load_config(&handler.state_dir),
+            || dione_config::load_config(&handler.state_dir),
             super::events::resolve_thread_parent(http, &handler.state, event.channel_id.get()),
             http.get_message(event.channel_id, event.id),
             |message: Message| async move {
-                let config = crate::config::load_config(&handler.state_dir);
+                let config = dione_config::load_config(&handler.state_dir);
                 let action = DiscordTransportVerifier::new()
                     .verify(
                         http,
@@ -866,11 +866,11 @@ fn same_attachments(left: &[Attachment], right: &[Attachment]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{ChannelConfig, Config},
-        gate::{GateDecision, InboundGate},
-    };
+    use crate::gate::GateDecision;
+    use crate::gate::InboundGate;
     use dione_access_requests::AccessQueue;
+    use dione_config::ChannelConfig;
+    use dione_config::Config;
     use dione_contracts::{ModuleSlotId, ProviderId};
     use std::num::NonZeroUsize;
 
@@ -888,7 +888,7 @@ mod tests {
             allow_from: vec!["20".into()],
             ..Default::default()
         });
-        LoadedConfig::from_raw(raw)
+        LoadedConfig::try_from_raw(raw).expect("valid test configuration")
     }
     fn message() -> Message {
         serde_json::from_value(serde_json::json!({
@@ -1481,7 +1481,8 @@ mod tests {
             allow_from: vec!["21".into()],
             ..Default::default()
         });
-        let child_cfg = Arc::new(LoadedConfig::from_raw(raw));
+        let child_cfg =
+            Arc::new(LoadedConfig::try_from_raw(raw).expect("valid test configuration"));
         assert_eq!(
             ingress
                 .create_with(
@@ -1524,7 +1525,10 @@ mod tests {
                 99,
                 || snapshots.load_full(),
                 async {
-                    snapshots.store(Arc::new(LoadedConfig::from_raw(Config::default())));
+                    snapshots.store(Arc::new(
+                        LoadedConfig::try_from_raw(Config::default())
+                            .expect("valid test configuration"),
+                    ));
                     None
                 },
                 no_verification,

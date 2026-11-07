@@ -92,7 +92,7 @@ fn a01_absent_explicit_off_and_emergency_off_have_the_exact_same_sink_and_no_pro
         drop(absent);
 
         let mut emergency = Fixture::new(AttentionMode::On).await;
-        let mut settings = crate::config::load_config(&emergency.path)
+        let mut settings = dione_config::load_config(&emergency.path)
             .raw
             .attention
             .clone();
@@ -102,7 +102,7 @@ fn a01_absent_explicit_off_and_emergency_off_have_the_exact_same_sink_and_no_pro
             .control(AttentionCommand::Configure { settings })
             .await;
         assert_eq!(
-            crate::config::load_config(&emergency.path)
+            dione_config::load_config(&emergency.path)
                 .raw
                 .attention
                 .effective_mode(ChannelId::new(100)),
@@ -127,7 +127,7 @@ fn a02_log_and_on_ineligible_rooms_are_exact_off_delivery_without_provider_reque
 
         for mode in [AttentionMode::Log, AttentionMode::On] {
             let mut fixture = Fixture::new(mode).await;
-            let mut settings = crate::config::load_config(&fixture.path)
+            let mut settings = dione_config::load_config(&fixture.path)
                 .raw
                 .attention
                 .clone();
@@ -140,7 +140,7 @@ fn a02_log_and_on_ineligible_rooms_are_exact_off_delivery_without_provider_reque
                 .control(AttentionCommand::Configure { settings })
                 .await;
             assert_eq!(
-                crate::config::load_config(&fixture.path)
+                dione_config::load_config(&fixture.path)
                     .raw
                     .attention
                     .effective_mode(ChannelId::new(100)),
@@ -174,7 +174,7 @@ fn a02_provider_ineligible_ancestor_is_excluded_and_forces_ordinary_delivery() {
         drop(off);
 
         let mut fixture = Fixture::new(AttentionMode::On).await;
-        let mut settings = crate::config::load_config(&fixture.path)
+        let mut settings = dione_config::load_config(&fixture.path)
             .raw
             .attention
             .clone();
@@ -244,7 +244,7 @@ fn a04_production_ingress_gate_receipts_cover_denied_and_muted_direct_variants()
             .unwrap();
         assert!(mute_store.is_guild_muted(MUTED_GUILD));
 
-        let config = crate::config::load_config(&fixture.path);
+        let config = dione_config::load_config(&fixture.path);
         use crate::gate::GateDecision::{Drop, Queue};
 
         // The production gateway receipt
@@ -471,7 +471,7 @@ fn a07_missing_and_stale_briefs_are_unknown_with_exact_off_delivery() {
         drop(off);
 
         let mut missing = Fixture::new(AttentionMode::On).await;
-        let mut settings = crate::config::load_config(&missing.path)
+        let mut settings = dione_config::load_config(&missing.path)
             .raw
             .attention
             .clone();
@@ -487,10 +487,7 @@ fn a07_missing_and_stale_briefs_are_unknown_with_exact_off_delivery() {
         drop(missing);
 
         let mut stale = Fixture::new(AttentionMode::On).await;
-        let mut settings = crate::config::load_config(&stale.path)
-            .raw
-            .attention
-            .clone();
+        let mut settings = dione_config::load_config(&stale.path).raw.attention.clone();
         settings.brief = Some(AttentionBrief {
             text: "explicitly stale recipient-authored brief".into(),
             expires_at_ms: 1,

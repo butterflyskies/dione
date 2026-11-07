@@ -1,12 +1,13 @@
 //! Authorized Discord message mutations and thread creation.
 
-use crate::{
-    config::LoadedConfig,
-    discord::messaging::{TargetError, TargetOperation, TargetPolicy, verify_message_target},
-    gate::OutboundGate,
-    ingress_ledger::IngressLedger,
-    state::State,
-};
+use crate::discord::messaging::TargetError;
+use crate::discord::messaging::TargetOperation;
+use crate::discord::messaging::TargetPolicy;
+use crate::discord::messaging::verify_message_target;
+use crate::gate::OutboundGate;
+use crate::ingress_ledger::IngressLedger;
+use crate::state::State;
+use dione_config::LoadedConfig;
 use serenity::{
     builder::CreateThread,
     http::Http,
@@ -165,12 +166,12 @@ pub(crate) async fn create_thread(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{ChannelConfig, Config, LoadedConfig},
-        discord::management_wire,
-        state::new_state,
-    };
+    use crate::discord::management_wire;
+    use crate::state::new_state;
     use dione_access_requests::AccessQueue;
+    use dione_config::ChannelConfig;
+    use dione_config::Config;
+    use dione_config::LoadedConfig;
     use serde_json::{Value, json};
     use serenity::model::id::{ChannelId, UserId};
     use std::{error::Error as _, sync::Arc, time::Duration};
@@ -186,7 +187,7 @@ mod tests {
             id: channel_id.to_string(),
             ..Default::default()
         });
-        LoadedConfig::from_raw(raw)
+        LoadedConfig::try_from_raw(raw).expect("valid test configuration")
     }
 
     fn ctx(config: LoadedConfig) -> ManagementCtx {
@@ -989,7 +990,7 @@ mod tests {
             );
         }
         std::fs::write(path.join("config.toml"), "[[channels]]\nid = \"42\"\n").unwrap();
-        assert!(crate::config::reload_config(&path).await.1.is_none());
+        assert!(dione_config::reload_config(&path).await.1.is_none());
         for name in ["pin_message", "unpin_message", "delete_message"] {
             let result = crate::mcp::dispatch::call_tool(
                 &server,
@@ -1023,7 +1024,7 @@ mod tests {
             Some(&Some(42))
         );
         std::fs::write(path.join("config.toml"), "").unwrap();
-        assert!(crate::config::reload_config(&path).await.1.is_none());
+        assert!(dione_config::reload_config(&path).await.1.is_none());
         let denied = crate::mcp::dispatch::call_tool(
             &server,
             "pin_message",

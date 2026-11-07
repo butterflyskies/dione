@@ -1,33 +1,36 @@
 //! Tool dispatch: routes `tools/call` requests to the correct handler.
-use crate::{
-    config_store::{ConfigStore, DiscordId},
-    discord::{
-        messaging::{
-            LinkPreviews, edit_message_with_embed_control, react as discord_react, release_held,
-            rephrase_held, send_dm_with_evidence_and_hook_overrides, send_file_with_hook_overrides,
-        },
-        messaging_wire,
-        rendering::render_to_channel,
-        tool_arguments::{
-            parse_enabled_sentex_handles, parse_hook_overrides, parse_id, parse_optional_bool,
-        },
-        typing::send_typing,
-    },
-    mcp::{
-        access_wire, presence_wire, render_wire,
-        server::DioneServer,
-        tools::{
-            diagnostics::{get_version, set_stderr_level, set_trace_level},
-            no_rly::{no_rly_condense, no_rly_stats, no_rly_vacuum},
-        },
-    },
-    no_rly::queue::HoldHandle,
-};
+use crate::discord::messaging::LinkPreviews;
+use crate::discord::messaging::edit_message_with_embed_control;
+use crate::discord::messaging::react as discord_react;
+use crate::discord::messaging::release_held;
+use crate::discord::messaging::rephrase_held;
+use crate::discord::messaging::send_dm_with_evidence_and_hook_overrides;
+use crate::discord::messaging::send_file_with_hook_overrides;
+use crate::discord::messaging_wire;
+use crate::discord::rendering::render_to_channel;
+use crate::discord::tool_arguments::parse_enabled_sentex_handles;
+use crate::discord::tool_arguments::parse_hook_overrides;
+use crate::discord::tool_arguments::parse_id;
+use crate::discord::tool_arguments::parse_optional_bool;
+use crate::discord::typing::send_typing;
+use crate::mcp::access_wire;
+use crate::mcp::presence_wire;
+use crate::mcp::render_wire;
+use crate::mcp::server::DioneServer;
+use crate::mcp::tools::diagnostics::get_version;
+use crate::mcp::tools::diagnostics::set_stderr_level;
+use crate::mcp::tools::diagnostics::set_trace_level;
+use crate::mcp::tools::no_rly::no_rly_condense;
+use crate::mcp::tools::no_rly::no_rly_stats;
+use crate::mcp::tools::no_rly::no_rly_vacuum;
+use crate::no_rly::queue::HoldHandle;
+use dione_config::ConfigStore;
+use dione_config::DiscordId;
 use dione_mutes::MAX_TTL_MINUTES;
 use dione_rendering as rendering;
 use serde_json::{Value, json};
 
-fn check_admin_gate(config: &crate::config::LoadedConfig) -> Result<(), String> {
+fn check_admin_gate(config: &dione_config::LoadedConfig) -> Result<(), String> {
     if config.access.admin_only_mutations {
         Err("admin_only_mutations is enabled; config mutation tools are disabled".to_string())
     } else {
@@ -35,14 +38,14 @@ fn check_admin_gate(config: &crate::config::LoadedConfig) -> Result<(), String> 
     }
 }
 
-fn mutation_receipt(outcome: crate::config::ConfigMutationOutcome) -> Value {
+fn mutation_receipt(outcome: dione_config::ConfigMutationOutcome) -> Value {
     match outcome.durability {
-        crate::config::ConfigDurability::Durable => json!({
+        dione_config::ConfigDurability::Durable => json!({
             "ok": true,
             "generation": outcome.generation,
             "durability": "durable",
         }),
-        crate::config::ConfigDurability::Unknown { warning } => json!({
+        dione_config::ConfigDurability::Unknown { warning } => json!({
             "ok": true,
             "generation": outcome.generation,
             "durability": "unknown",
@@ -52,7 +55,7 @@ fn mutation_receipt(outcome: crate::config::ConfigMutationOutcome) -> Value {
 }
 
 fn mutation_receipt_with(
-    outcome: crate::config::ConfigMutationOutcome,
+    outcome: dione_config::ConfigMutationOutcome,
     key: &str,
     value: impl Into<Value>,
 ) -> Value {
@@ -70,7 +73,7 @@ pub(crate) async fn call_tool(
     name: &str,
     args: Value,
 ) -> Result<Value, String> {
-    let config = crate::config::load_config(server.state_dir());
+    let config = dione_config::load_config(server.state_dir());
 
     let result = if let Some(tool) = server.module_tools.find(name) {
         tool.call(&args).await.map_err(|error| error.to_string())?
@@ -258,7 +261,7 @@ pub(crate) async fn call_tool(
                 for af in &allow_from {
                     DiscordId::parse(af)?;
                 }
-                match crate::config::ConfigRuntime::new(server.state_dir().clone())
+                match dione_config::ConfigRuntime::new(server.state_dir().clone())
                     .mutate(move |editor| {
                         editor.add_channel_entry(&id, require_mention.unwrap_or(true), allow_from)
                     })
@@ -273,7 +276,7 @@ pub(crate) async fn call_tool(
                 let id = parse_str(&args, "id")?.to_owned();
                 let response_id = id.clone();
                 DiscordId::parse(&id)?;
-                match crate::config::ConfigRuntime::new(server.state_dir().clone())
+                match dione_config::ConfigRuntime::new(server.state_dir().clone())
                     .mutate(move |editor| editor.remove_channel_entry(&id))
                     .await
                 {
@@ -296,7 +299,7 @@ pub(crate) async fn call_tool(
                             DiscordId::parse(entry)?;
                         }
                     }
-                    match crate::config::ConfigRuntime::new(server.state_dir().clone())
+                    match dione_config::ConfigRuntime::new(server.state_dir().clone())
                         .mutate(move |editor| {
                             editor.update_channel_entry(&id, require_mention, allow_from)
                         })
@@ -314,7 +317,7 @@ pub(crate) async fn call_tool(
                 if !matches!(policy.as_str(), "drop" | "queue" | "disabled") {
                     json!({ "error": format!("invalid dm_policy: {policy}; must be one of: drop, queue, disabled") })
                 } else {
-                    match crate::config::ConfigRuntime::new(server.state_dir().clone())
+                    match dione_config::ConfigRuntime::new(server.state_dir().clone())
                         .mutate(move |editor| {
                             editor.set_dm_policy(&policy);
                             Ok(())
@@ -331,7 +334,7 @@ pub(crate) async fn call_tool(
                 let user_id = parse_str(&args, "user_id")?.to_owned();
                 let response_user_id = user_id.clone();
                 DiscordId::parse(&user_id)?;
-                match crate::config::ConfigRuntime::new(server.state_dir().clone())
+                match dione_config::ConfigRuntime::new(server.state_dir().clone())
                     .mutate(move |editor| editor.add_to_allow_from(&user_id))
                     .await
                 {
@@ -344,7 +347,7 @@ pub(crate) async fn call_tool(
                 let user_id = parse_str(&args, "user_id")?.to_owned();
                 let response_user_id = user_id.clone();
                 DiscordId::parse(&user_id)?;
-                match crate::config::ConfigRuntime::new(server.state_dir().clone())
+                match dione_config::ConfigRuntime::new(server.state_dir().clone())
                     .mutate(move |editor| editor.remove_from_allow_from(&user_id))
                     .await
                 {
@@ -392,7 +395,7 @@ pub(crate) async fn call_tool(
                 check_admin_gate(&config)?;
                 // Async entry: serialized under the config writer, file I/O on
                 // the blocking pool — never blocks the async runtime.
-                let (_, error) = crate::config::ConfigRuntime::new(server.state_dir().clone())
+                let (_, error) = dione_config::ConfigRuntime::new(server.state_dir().clone())
                     .reload()
                     .await;
                 match error {
@@ -593,7 +596,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            crate::config::reload_config(server.state_dir())
+            dione_config::reload_config(server.state_dir())
                 .await
                 .1
                 .is_none()
@@ -614,7 +617,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            crate::config::reload_config(server.state_dir())
+            dione_config::reload_config(server.state_dir())
                 .await
                 .1
                 .is_none()
@@ -662,7 +665,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            crate::config::reload_config(server.state_dir())
+            dione_config::reload_config(server.state_dir())
                 .await
                 .1
                 .is_none()
@@ -687,7 +690,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            crate::config::reload_config(server.state_dir())
+            dione_config::reload_config(server.state_dir())
                 .await
                 .1
                 .is_none()
@@ -849,7 +852,7 @@ mod tests {
             )
             .unwrap();
             assert!(
-                crate::config::reload_config(server.state_dir())
+                dione_config::reload_config(server.state_dir())
                     .await
                     .1
                     .is_none()

@@ -227,10 +227,10 @@ pub(crate) fn emojis(result: Result<Vec<EmojiObservation>, IntrospectionError>) 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::{
-        config::{Config, LoadedConfig},
-        discord::introspection::{self, IntrospectionCtx},
-    };
+    use crate::discord::introspection;
+    use crate::discord::introspection::IntrospectionCtx;
+    use dione_config::Config;
+    use dione_config::LoadedConfig;
     use serenity::model::{
         Permissions,
         id::{ChannelId, GuildId, RoleId, UserId},
@@ -300,10 +300,13 @@ pub(crate) mod tests {
         });
         let ctx = IntrospectionCtx {
             http: Arc::new(fixture_http(address)),
-            config: Arc::new(LoadedConfig::from_raw(Config {
-                timezone: Some("America/Chicago".into()),
-                ..Config::default()
-            })),
+            config: Arc::new(
+                LoadedConfig::try_from_raw(Config {
+                    timezone: Some("America/Chicago".into()),
+                    ..Config::default()
+                })
+                .expect("valid test configuration"),
+            ),
         };
         (ctx, server)
     }

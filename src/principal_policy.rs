@@ -5,7 +5,7 @@
 //! integration remains in [`crate::gate`] until the typed policy cutover is
 //! complete.
 
-use crate::config::DmPolicy;
+use dione_config::DmPolicy;
 
 /// Whether a principal may enter a receiver's context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

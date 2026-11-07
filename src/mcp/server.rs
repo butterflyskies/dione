@@ -11,14 +11,50 @@
 //! - Error    → `{"jsonrpc":"2.0","id":N,"error":{"code":-32000,"message":"..."}}`
 //! - Notification (no id) → `{"jsonrpc":"2.0","method":"...","params":{...}}`
 
+use crate::bell_rings::evaluate_native;
+use crate::discord::access::AccessCtx;
+use crate::discord::events::MessageEvent;
+use crate::discord::events::NotificationEvent;
+use crate::discord::messaging::MessagingCtx;
+use crate::discord::presence::PresenceCapability;
+use crate::discord::scheduling::DeliveryBuffer;
+use crate::discord::typing::TypingCtx;
+use crate::mcp::dispatch::call_tool;
+use crate::mcp::harness_wire::PRIVATE_CONTROL_TOOLS;
+use crate::mcp::harness_wire::RequestOrigin;
+use crate::mcp::protocol::initialize_response;
+use crate::mcp::protocol::tools_list;
+use crate::mcp::tool_registry::RegisteredTool;
+use crate::mcp::tool_registry::RegistrationError;
+use crate::mcp::tool_registry::ToolNameError;
+use crate::mcp::tool_registry::ToolRegistry;
+use crate::mcp::tools::diagnostics::DiagnosticsCtx;
+use crate::mcp::tools::no_rly::NoRlyCtx;
+use crate::no_rly::consent::ConsentGate;
 pub use crate::tracing_channel::TraceLevelController;
 use camino::Utf8PathBuf;
 use dione_access_requests::AccessQueue;
+use dione_attention::delivery::AttentionGuardFailure;
+use dione_attention::types::Admission;
+use dione_attention::types::DeliveryState;
 use dione_bell_rings::{BellEvaluator, render_bells};
+use dione_config::BellMode;
 use dione_contracts::ModuleInstanceId;
 #[cfg(test)]
 use dione_contracts::{ModuleSlotId, ProviderId};
 use dione_delivery_scheduler::BufferResult;
+use dione_harness::AttentionPolicy;
+use dione_harness::HarnessConnection;
+use dione_harness::HarnessError;
+use dione_harness::ProtocolOutput;
+use dione_messages::delivery::Delivery;
+use dione_messages::delivery::DeliveryKind;
+use dione_messages::delivery::EvidenceVisibility;
+use dione_messages::delivery::PresentationContext;
+use dione_rate_limiter::ChannelRef;
+use dione_rate_limiter::ParticipantId;
+use dione_rate_limiter::RateLimitDecision;
+use dione_rate_limiter::RateLimiter;
 use serde_json::{Value, json};
 use std::{
     os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
@@ -32,35 +68,6 @@ use tokio::{
     sync::{Mutex, Semaphore, mpsc},
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
-use {
-    crate::{
-        bell_rings::evaluate_native,
-        config::BellMode,
-        discord::{
-            access::AccessCtx,
-            events::{MessageEvent, NotificationEvent},
-            messaging::MessagingCtx,
-            presence::PresenceCapability,
-            scheduling::DeliveryBuffer,
-            typing::TypingCtx,
-        },
-        mcp::{
-            dispatch::call_tool,
-            harness_wire::{PRIVATE_CONTROL_TOOLS, RequestOrigin},
-            protocol::{initialize_response, tools_list},
-            tool_registry::{RegisteredTool, RegistrationError, ToolNameError, ToolRegistry},
-            tools::{diagnostics::DiagnosticsCtx, no_rly::NoRlyCtx},
-        },
-        no_rly::consent::ConsentGate,
-    },
-    dione_attention::{
-        delivery::AttentionGuardFailure,
-        types::{Admission, DeliveryState},
-    },
-    dione_harness::{AttentionPolicy, HarnessConnection, HarnessError, ProtocolOutput},
-    dione_messages::delivery::{Delivery, DeliveryKind, EvidenceVisibility, PresentationContext},
-    dione_rate_limiter::{ChannelRef, ParticipantId, RateLimitDecision, RateLimiter},
-};
 
 /// Failure to construct the server's immutable owner registrations.
 #[derive(Debug, Error)]
@@ -231,22 +238,22 @@ impl DioneServer {
         &self.harness
     }
 
-    pub(crate) fn messaging_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> MessagingCtx {
+    pub(crate) fn messaging_ctx(&self, config: Arc<dione_config::LoadedConfig>) -> MessagingCtx {
         self.discord.messaging_ctx(config)
     }
 
-    pub(crate) fn no_rly_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> NoRlyCtx {
+    pub(crate) fn no_rly_ctx(&self, config: Arc<dione_config::LoadedConfig>) -> NoRlyCtx {
         NoRlyCtx {
             gate: self.no_rly().clone(),
             config,
         }
     }
 
-    pub(crate) fn access_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> AccessCtx {
+    pub(crate) fn access_ctx(&self, config: Arc<dione_config::LoadedConfig>) -> AccessCtx {
         AccessCtx::new(self.queue.clone(), config, self.state_dir().clone())
     }
 
-    pub(crate) fn typing_ctx(&self, config: Arc<crate::config::LoadedConfig>) -> TypingCtx {
+    pub(crate) fn typing_ctx(&self, config: Arc<dione_config::LoadedConfig>) -> TypingCtx {
         TypingCtx::new(self.http().clone(), self.state().clone(), config)
     }
 
@@ -295,7 +302,7 @@ async fn run_with_input(
     // Both rate limiter and delivery buffer configs are live-reloadable
     // via the ArcSwap config cache. Rate limiter config is refreshed per
     // event; existing bucket state is preserved across config changes.
-    let config = crate::config::load_config(server.state_dir());
+    let config = dione_config::load_config(server.state_dir());
     let mut rate_limiter = RateLimiter::new(config.rate_limit_runtime().clone());
     let mut delivery_buffer = DeliveryBuffer::new(server.attention.authority_module().clone());
     let bell_evaluator = Arc::new(BellEvaluator::new());
@@ -353,7 +360,7 @@ async fn run_with_input(
         const PRUNE_INTERVAL: u64 = 100;
         let mut admissions = crate::attention::admission::AdmissionController::default();
         let mut evaluations = tokio::task::JoinSet::new();
-        let mut attention_config = crate::config::subscribe_generation();
+        let mut attention_config = dione_config::subscribe_generation();
         let mut maintenance = tokio::task::JoinSet::new();
         let mut notices = tokio::task::JoinSet::new();
         let mut attention_tick = tokio::time::interval(Duration::from_secs(1));
@@ -390,7 +397,7 @@ async fn run_with_input(
                 completed = evaluations.join_next(), if !evaluations.is_empty() => {
                     match completed {
                         Some(Ok(record)) => {
-                            let cfg = crate::config::load_config(&state_dir_notif);
+                            let cfg = dione_config::load_config(&state_dir_notif);
                             let ready = admissions.complete(record, &cfg);
                             if let Err(error) = forward_attention_results(
                                 ready,
@@ -443,7 +450,7 @@ async fn run_with_input(
                     if maintenance.is_empty() && now >= next_maintenance {
                         let runtime = attention.clone();
                         let incarnation = admissions.incarnation().to_owned();
-                        let cfg = crate::config::load_config(&state_dir_notif);
+                        let cfg = dione_config::load_config(&state_dir_notif);
                         next_maintenance = now + Duration::from_millis(cfg.raw.attention.revalidate_ms);
                         maintenance.spawn(async move {
                             runtime.clone().maintain().await;
@@ -508,7 +515,7 @@ async fn run_with_input(
                     let Some(event) = event else { break };
 
                     // Reload config from ArcSwap (cheap Arc pointer load).
-                    let cfg = crate::config::load_config(&state_dir_notif);
+                    let cfg = dione_config::load_config(&state_dir_notif);
 
                     // Keep tz in sync with config changes so flushes use
                     // the current value without a separate config load.
@@ -981,7 +988,7 @@ async fn dispatch(
             Ok(json!({}))
         }
         "tools/list" => {
-            let config = crate::config::load_config(server.state_dir());
+            let config = dione_config::load_config(server.state_dir());
             let mut response =
                 tools_list(&server.harness, config.delivery.evidence_markers_enabled);
             server.module_tools.append_definitions(
@@ -1037,7 +1044,7 @@ async fn dispatch(
                 .and_then(Value::as_str)
                 .unwrap_or("");
 
-            let config = crate::config::load_config(server.state_dir());
+            let config = dione_config::load_config(server.state_dir());
             if let Err(e) = crate::permissions::send_permission_request(
                 server.http(),
                 &config,
@@ -1178,7 +1185,7 @@ fn message_rate_limit_key(event: &NotificationEvent) -> Option<MessageRateLimitK
 ///
 /// Returns the configured delay for channel events (Message, MessageEdit,
 /// MessageDelete, Reaction). Control events have no delay.
-fn extract_delay(event: &NotificationEvent, config: &crate::config::LoadedConfig) -> Duration {
+fn extract_delay(event: &NotificationEvent, config: &dione_config::LoadedConfig) -> Duration {
     let channel_id = match event {
         NotificationEvent::Message(msg) => Some(msg.chat_id.get()),
         NotificationEvent::MessageEdit { chat_id, .. }
@@ -1292,18 +1299,18 @@ pub mod test_helpers {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::discord::scheduling::DeliveryBuffer;
+    use crate::harness::test_support::FixtureNotification;
+    use crate::teams::ReplyHandle;
+    use dione_config::ChannelConfig;
+    use dione_config::Config;
+    use dione_config::LoadedConfig;
+    use dione_messages::timestamp::Timestamp;
+    use dione_rate_limiter::OverflowPolicy;
+    use dione_rate_limiter::RateLimitConfig;
+    use dione_rate_limiter::ScopeConfig;
     use serenity::model::id::{ChannelId, MessageId, UserId};
     use std::collections::HashMap;
-    use {
-        crate::{
-            config::{ChannelConfig, Config, LoadedConfig},
-            discord::scheduling::DeliveryBuffer,
-            harness::test_support::FixtureNotification,
-            teams::ReplyHandle,
-        },
-        dione_messages::timestamp::Timestamp,
-        dione_rate_limiter::{OverflowPolicy, RateLimitConfig, ScopeConfig},
-    };
 
     #[test]
     fn resident_control_allows_only_bounded_tools() {
@@ -1562,7 +1569,9 @@ mod tests {
         .await
         .expect("Discord reply registration");
 
-        let context = server.messaging_ctx(Arc::new(LoadedConfig::from_raw(Config::default())));
+        let context = server.messaging_ctx(Arc::new(
+            LoadedConfig::try_from_raw(Config::default()).expect("valid test configuration"),
+        ));
 
         assert!(context.has_pre_send_pipeline());
         crate::composition::pre_send::install_pipeline(None);
@@ -1575,13 +1584,13 @@ mod tests {
             delivery_delay_ms: Some(delay_ms),
             ..Default::default()
         });
-        LoadedConfig::from_raw(raw)
+        LoadedConfig::try_from_raw(raw).expect("valid test configuration")
     }
 
     fn config_with_global_delay(delay_ms: u64) -> LoadedConfig {
         let mut raw = Config::default();
         raw.delivery.delivery_delay_ms = delay_ms;
-        LoadedConfig::from_raw(raw)
+        LoadedConfig::try_from_raw(raw).expect("valid test configuration")
     }
 
     fn message_event(channel: u64) -> NotificationEvent {
@@ -1953,7 +1962,7 @@ mod tests {
 
 async fn prepare_bells(
     mut event: NotificationEvent,
-    cfg: &crate::config::LoadedConfig,
+    cfg: &dione_config::LoadedConfig,
     evaluator: &Arc<BellEvaluator>,
 ) -> NotificationEvent {
     match cfg.bell_rings.mode {
@@ -1985,7 +1994,7 @@ async fn prepare_bells(
 /// The same forwarding unit serves off, log, direct, and failure fallback paths.
 async fn forward_ordinary(
     event: NotificationEvent,
-    cfg: &crate::config::LoadedConfig,
+    cfg: &dione_config::LoadedConfig,
     buffer: &mut DeliveryBuffer,
     evaluator: &Arc<BellEvaluator>,
     sink: &HarnessConnection,
@@ -2046,7 +2055,7 @@ async fn forward_attention_results(
 ) -> Result<(), HarnessError> {
     let mut results = results.into_iter();
     while let Some(mut result) = results.next() {
-        let cfg = crate::config::load_config(&attention.resolver.state_dir);
+        let cfg = dione_config::load_config(&attention.resolver.state_dir);
         if result.record.recipient != cfg.raw.attention.recipient {
             continue;
         }
@@ -2199,10 +2208,10 @@ async fn attention_transition(
     admissions: &mut crate::attention::admission::AdmissionController,
     attention: &Arc<crate::attention::runtime::AttentionRuntime>,
 ) -> Vec<crate::attention::admission::AdmissionResult> {
-    let _publication = crate::config::attention_effect_guard().await;
+    let _publication = dione_config::attention_effect_guard().await;
     admissions.cancel_work();
     let incarnation = admissions.incarnation().to_owned();
-    let recipient = crate::config::load_config(&attention.resolver.state_dir)
+    let recipient = dione_config::load_config(&attention.resolver.state_dir)
         .raw
         .attention
         .recipient
@@ -2240,7 +2249,7 @@ fn begin_attention(
     admissions: &mut crate::attention::admission::AdmissionController,
     attention: &crate::attention::runtime::AttentionRuntime,
     event: NotificationEvent,
-    config: &crate::config::LoadedConfig,
+    config: &dione_config::LoadedConfig,
 ) -> crate::attention::admission::Submission {
     use crate::attention::admission::Submission;
     let duplicate = match &event {
