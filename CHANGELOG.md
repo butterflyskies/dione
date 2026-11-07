@@ -22,10 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
-- Keep invalid configuration source snippets out of reload warnings and watcher
+- Keep invalid configuration values out of reload warnings and watcher
   error notifications while preserving last-valid configuration recovery.
 - Remove Bell endpoint query and fragment material from connection diagnostics,
-  including HTTP client errors logged by the MCP transport. Preserve original
+  including HTTP client errors, malformed JSON warnings, and reflected non-protocol
+  error bodies logged by the MCP transport. Preserve original
   request URLs, authentication, transport behavior, and connection deadlines.
 - Patch affected member versions and consumers whose normalized manifests embed
   the updated exact dependency versions.

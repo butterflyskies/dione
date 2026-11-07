@@ -1,0 +1,13 @@
+This package includes code adapted from rmcp 1.8.0, part of the Model Context
+Protocol Rust SDK, distributed under the Apache License, Version 2.0.
+https://github.com/modelcontextprotocol/rust-sdk
+
+Source files:
+crates/rmcp/src/transport/common/reqwest/streamable_http_client.rs
+crates/rmcp/src/transport/common/http_header.rs
+
+The private POST implementation and necessary header/JSON helpers retain the
+upstream protocol behavior. Modifications remove credential-bearing request URLs
+and raw reflected non-protocol error bodies from diagnostics, retain typed error
+categories, use public error constructors, and use the supported spelling of the
+SSE stream constructor. GET and DELETE requests remain delegated to rmcp.

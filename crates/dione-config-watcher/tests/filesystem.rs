@@ -171,50 +171,59 @@ async fn real_filesystem_publication_replacement_error_recovery_and_normal_cance
     tokio::fs::remove_file(dione_config::lkg_path(&canonical))
         .await
         .unwrap();
-    let before_no_lkg = load_config(&state).generation();
     let canary = "SYNTHETIC_CONFIG_DIAGNOSTIC_CANARY";
-    let invalid = format!("token = \"{canary}\" trailing\n");
-    diagnostics.lock().unwrap().clear();
-    tokio::fs::write(&canonical, &invalid).await.unwrap();
-    let retained = config_error(&mut errors).await;
-    assert!(!retained.contains("canonical restored from last-known-good"));
-    assert!(
-        !retained.contains(canary),
-        "forwarded ConfigError must omit source credentials"
-    );
-    assert!(retained.contains("line 1"), "safe parse location remains");
-    let captured = diagnostics.lock().unwrap().clone();
-    assert!(captured.contains("continuing with last valid config"));
-    assert!(
-        !captured.contains(canary),
-        "every captured warning must omit source credentials"
-    );
-    // A directory at the LKG path forces a real restore read failure, not Missing.
-    tokio::fs::create_dir(dione_config::lkg_path(&canonical))
-        .await
-        .unwrap();
-    diagnostics.lock().unwrap().clear();
-    tokio::fs::write(&canonical, &invalid).await.unwrap();
-    let failed_restore = config_error(&mut errors).await;
-    assert!(
-        !failed_restore.contains(canary),
-        "failed-restore ConfigError must omit credentials"
-    );
-    let captured = diagnostics.lock().unwrap().clone();
-    assert!(captured.contains("failed to restore config from last-known-good"));
-    assert!(
-        !captured.contains(canary),
-        "failed-restore warnings must omit credentials"
-    );
-    tokio::fs::remove_dir(dione_config::lkg_path(&canonical))
-        .await
-        .unwrap();
-    assert_eq!(load_config(&state).raw.delivery.delivery_delay_ms, 55);
-    assert_eq!(load_config(&state).generation(), before_no_lkg);
-    assert_eq!(
-        tokio::fs::read_to_string(&canonical).await.unwrap(),
-        invalid
-    );
+    let invalid_cases = [
+        format!("token = \"{canary}\" trailing\n"),
+        format!("[delivery]\ntext_chunk_limit = \"{canary}\"\n"),
+        format!("[delivery]\nreply_to_mode = \"{canary}\"\n"),
+    ];
+    for invalid in invalid_cases {
+        let before_no_lkg = load_config(&state).generation();
+        diagnostics.lock().unwrap().clear();
+        tokio::fs::write(&canonical, &invalid).await.unwrap();
+        let retained = config_error(&mut errors).await;
+        assert!(!retained.contains("canonical restored from last-known-good"));
+        assert!(
+            !retained.contains(canary),
+            "forwarded ConfigError must omit source credentials"
+        );
+        assert!(
+            retained.contains("TOML parse error at line"),
+            "safe parse location remains"
+        );
+        let captured = diagnostics.lock().unwrap().clone();
+        assert!(captured.contains("continuing with last valid config"));
+        assert!(
+            !captured.contains(canary),
+            "every captured warning must omit source credentials"
+        );
+        // A directory at the LKG path forces a real restore read failure, not Missing.
+        tokio::fs::create_dir(dione_config::lkg_path(&canonical))
+            .await
+            .unwrap();
+        diagnostics.lock().unwrap().clear();
+        tokio::fs::write(&canonical, &invalid).await.unwrap();
+        let failed_restore = config_error(&mut errors).await;
+        assert!(
+            !failed_restore.contains(canary),
+            "failed-restore ConfigError must omit credentials"
+        );
+        let captured = diagnostics.lock().unwrap().clone();
+        assert!(captured.contains("failed to restore config from last-known-good"));
+        assert!(
+            !captured.contains(canary),
+            "failed-restore warnings must omit credentials"
+        );
+        tokio::fs::remove_dir(dione_config::lkg_path(&canonical))
+            .await
+            .unwrap();
+        assert_eq!(load_config(&state).raw.delivery.delivery_delay_ms, 55);
+        assert_eq!(load_config(&state).generation(), before_no_lkg);
+        assert_eq!(
+            tokio::fs::read_to_string(&canonical).await.unwrap(),
+            invalid
+        );
+    }
     tokio::fs::write(&canonical, text(66)).await.unwrap();
     published(&mut generation, &state, 66).await;
     quiet(&mut generation).await;

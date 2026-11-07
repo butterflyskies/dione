@@ -1061,6 +1061,7 @@ dependencies = [
  "rmcp",
  "serde",
  "serde_json",
+ "sse-stream",
  "thiserror 2.0.21",
  "tokio",
  "tracing",

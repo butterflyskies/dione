@@ -1726,26 +1726,25 @@ fn sweep_temp_siblings(config_path: &Utf8Path) -> usize {
     swept
 }
 
-/// One-line, snippet-free rendering of a TOML parse error for surfaces that
-/// may be stored or forwarded (startup errors, recovery notes): the error
-/// type and location line, plus the parser's first message line — never the
-/// quoted source line, which for `config.toml` can carry the Discord token.
-///
-/// Deliberately local: the general parse-error-snippet class across the
-/// codebase is #371's lane (central redaction), not this function's.
+/// Credential-safe rendering for startup, reload and recovery diagnostics.
+/// Only a fixed category and numeric parser location may cross these surfaces:
+/// even serde's first error-message line can quote a credential-bearing value.
 fn sanitize_toml_error(error: &toml::de::Error) -> String {
     let display = error.to_string();
     let location = display
         .lines()
         .next()
-        .unwrap_or("TOML parse error")
-        .trim()
-        .to_owned();
-    let message = error.message().lines().next().unwrap_or("").trim();
-    if message.is_empty() || location.contains(message) {
-        location
-    } else {
-        format!("{location}: {message}")
+        .and_then(|line| line.strip_prefix("TOML parse error at line "))
+        .and_then(|location| location.split_once(", column "))
+        .and_then(|(line, column)| {
+            Some((line.parse::<usize>().ok()?, column.parse::<usize>().ok()?))
+        });
+    match (error.span(), location) {
+        (Some(_), Some((line, column))) if line > 0 && column > 0 => {
+            format!("TOML parse error at line {line}, column {column}")
+        }
+        (Some(span), _) => format!("TOML parse error at byte {}", span.start),
+        (None, _) => "TOML parse error".to_owned(),
     }
 }
 
@@ -2724,6 +2723,71 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         (dir, path)
+    }
+
+    #[test]
+    fn sanitizer_excludes_semantic_values_and_untrusted_custom_messages() {
+        let canary = "SYNTHETIC_CONFIG_DIAGNOSTIC_CANARY";
+        for key in ["text_chunk_limit", "reply_to_mode"] {
+            let error = toml::from_str::<Config>(&format!("[delivery]\n{key} = \"{canary}\"\n"))
+                .unwrap_err();
+            assert!(
+                error.message().contains(canary),
+                "real serde failure must exercise the credential-bearing message"
+            );
+            let safe = sanitize_toml_error(&error);
+            assert!(safe.starts_with("TOML parse error at line 2, column "));
+            assert!(
+                !safe.contains(canary),
+                "semantic diagnostic must omit the unexpected value"
+            );
+        }
+        let forged: toml::de::Error =
+            serde::de::Error::custom(format!("TOML parse error at line {canary}, column 1"));
+        assert_eq!(sanitize_toml_error(&forged), "TOML parse error");
+    }
+
+    #[test]
+    fn semantic_diagnostics_omit_values_across_startup_and_recovery() {
+        let _cache = config_cache_guard();
+        let canary = "SYNTHETIC_CONFIG_DIAGNOSTIC_CANARY";
+        for key in ["text_chunk_limit", "reply_to_mode"] {
+            let invalid = format!("[delivery]\n{key} = \"{canary}\"\n");
+            for regenerate in [false, true] {
+                let (_directory, state) = temp_state_dir();
+                fs::write(state.join("config.toml"), &invalid).unwrap();
+                let runtime = ConfigRuntime::new(state);
+                let diagnostic = if regenerate {
+                    startup_load_now(&runtime, NoLkgPolicy::RegenerateDefaults)
+                        .unwrap()
+                        .1
+                        .unwrap()
+                } else {
+                    let StartupConfigError::InvalidConfigNoLkg { parse_error, .. } =
+                        startup_load_now(&runtime, NoLkgPolicy::FailStartup).unwrap_err();
+                    parse_error
+                };
+                assert!(diagnostic.contains("line 2, column "));
+                assert!(
+                    !diagnostic.contains(canary),
+                    "startup semantic diagnostic must omit values"
+                );
+            }
+            let (_directory, state) = temp_state_dir();
+            let path = state.join("config.toml");
+            fs::write(&path, VALID_DROP).unwrap();
+            let runtime = ConfigRuntime::new(state);
+            assert!(reload_now(&runtime).1.is_none());
+            replace_file(&path, invalid.as_bytes());
+            let note = reload_now(&runtime).1.unwrap();
+            assert!(note.contains("canonical restored from last-known-good"));
+            assert!(note.contains("line 2, column "));
+            assert!(
+                !note.contains(canary),
+                "recovery semantic diagnostic must omit values"
+            );
+            assert_eq!(fs::read_to_string(path).unwrap(), VALID_DROP);
+        }
     }
 
     #[test]
