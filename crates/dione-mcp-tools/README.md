@@ -10,3 +10,6 @@ This crate has no harness or platform dependency and owns no transport origin,
 readiness, native permission or reply authority. Registrations default to
 seat-only access; resident access requires explicit opt-in. Representations stay
 private and there is no unchecked name construction or deserialization.
+
+`ToolDiscoveryContext` carries the typed outbound evidence marker version with
+its enable flag, so handlers describe one current configuration snapshot.

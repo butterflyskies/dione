@@ -2,6 +2,7 @@ use arc_swap::ArcSwap;
 use camino::{Utf8Path, Utf8PathBuf};
 use dione_bell_rings::{BellProviderConfig, RecallOptions};
 use dione_coordination::{CoordinationConfig, Coordinator};
+pub use dione_evidence::EvidenceMarkerVersion;
 use dione_gaie::{DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES, DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES};
 use dione_pluralkit_identities::{PLURALKIT_APPLICATION_ID, PkUuid};
 use dione_pre_send::ConstructId;
@@ -948,6 +949,8 @@ pub struct DeliveryConfig {
     ///
     /// Default-off while the tracer bullet is being validated in production.
     pub evidence_markers_enabled: bool,
+    /// Per-seat outbound grammar pin; omission is concretely V3, independent of inbound readers.
+    pub evidence_marker_version: EvidenceMarkerVersion,
     /// When to prepend the preamble to delivered events.
     ///
     /// - `always` (default): every event gets the preamble.
@@ -971,6 +974,7 @@ impl Default for DeliveryConfig {
             chunk_mode: ChunkMode::Paragraph,
             delivery_delay_ms: 0,
             evidence_markers_enabled: false,
+            evidence_marker_version: EvidenceMarkerVersion::default(),
             preamble_mode: PreambleMode::Always,
             preamble_template: PreambleTemplate::default(),
         }
@@ -2736,6 +2740,148 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn invalid_evidence_marker_version_fails_fresh_startup_without_lkg() {
+        let _cache = config_cache_guard();
+        let (_dir, state_dir) = temp_state_dir();
+        fs::write(
+            state_dir.join("config.toml"),
+            "[delivery]\nevidence_marker_version = \"v4\"\n",
+        )
+        .unwrap();
+        let error =
+            startup_load_now(&ConfigRuntime::new(state_dir), NoLkgPolicy::FailStartup).unwrap_err();
+        let StartupConfigError::InvalidConfigNoLkg { parse_error, .. } = error;
+        assert!(parse_error.starts_with("TOML parse error"));
+    }
+
+    #[test]
+    fn evidence_marker_version_reload_preserves_snapshots_and_recovers_invalid_pin() {
+        let _cache = config_cache_guard();
+        let (_dir, state_dir) = temp_state_dir();
+        let path = state_dir.join("config.toml");
+        let runtime = ConfigRuntime::new(state_dir.clone());
+        let mut snapshots = Vec::new();
+        for (name, expected) in [
+            ("v2", EvidenceMarkerVersion::V2),
+            ("v3", EvidenceMarkerVersion::V3),
+            ("v2", EvidenceMarkerVersion::V2),
+        ] {
+            fs::write(&path, format!("[delivery]\nevidence_markers_enabled = true\nevidence_marker_version = {name:?}\n")).unwrap();
+            let (snapshot, error) = reload_now(&runtime);
+            assert!(error.is_none(), "{error:?}");
+            assert_eq!(snapshot.delivery.evidence_marker_version, expected);
+            snapshots.push(snapshot);
+        }
+        assert_eq!(
+            snapshots[0].delivery.evidence_marker_version,
+            EvidenceMarkerVersion::V2
+        );
+        assert_eq!(
+            snapshots[1].delivery.evidence_marker_version,
+            EvidenceMarkerVersion::V3
+        );
+        fs::write(&path, "[delivery]\nevidence_marker_version = \"v4\"\n").unwrap();
+        let (recovered, error) = reload_now(&runtime);
+        assert!(error.is_some());
+        assert_eq!(
+            recovered.delivery.evidence_marker_version,
+            EvidenceMarkerVersion::V2
+        );
+        assert_eq!(
+            try_load_config(&path)
+                .unwrap()
+                .0
+                .delivery
+                .evidence_marker_version,
+            EvidenceMarkerVersion::V2
+        );
+        let fresh_runtime = ConfigRuntime::new(state_dir);
+        assert_eq!(
+            reload_now(&fresh_runtime)
+                .0
+                .delivery
+                .evidence_marker_version,
+            EvidenceMarkerVersion::V2
+        );
+    }
+
+    #[test]
+    fn evidence_marker_version_is_a_concrete_validated_pin() {
+        assert_eq!(
+            Config::default().delivery.evidence_marker_version,
+            EvidenceMarkerVersion::V3
+        );
+        assert_eq!(
+            toml::from_str::<Config>("[delivery]")
+                .unwrap()
+                .delivery
+                .evidence_marker_version,
+            EvidenceMarkerVersion::V3
+        );
+        for enabled in [false, true] {
+            for (name, expected) in [
+                ("v2", EvidenceMarkerVersion::V2),
+                ("v3", EvidenceMarkerVersion::V3),
+            ] {
+                let text = format!(
+                    "[delivery]\nevidence_markers_enabled = {enabled}\nevidence_marker_version = {name:?}\n"
+                );
+                let config: Config = toml::from_str(&text).unwrap();
+                assert_eq!(config.delivery.evidence_marker_version, expected);
+                assert_eq!(config.delivery.evidence_markers_enabled, enabled);
+                assert_eq!(
+                    LoadedConfig::from_raw(config)
+                        .delivery
+                        .evidence_marker_version,
+                    expected
+                );
+            }
+        }
+        for invalid in [
+            "\"v1\"",
+            "\"v4\"",
+            "\"current\"",
+            "\"latest\"",
+            "\"V3\"",
+            "4",
+            "true",
+            "[]",
+        ] {
+            let error = toml::from_str::<Config>(&format!("[delivery]\nevidence_markers_enabled = false\nevidence_marker_version = {invalid}\n")).unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains("evidence_marker_version"), "{message}");
+            assert!(
+                message.contains("v2") && message.contains("v3"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn fresh_default_config_omits_operator_marker_pin_but_loads_v3_disabled() {
+        let _cache = config_cache_guard();
+        let (_dir, state_dir) = temp_state_dir();
+        let path = state_dir.join("config.toml");
+        assert!(!path.exists());
+
+        write_default_config(&path).unwrap();
+
+        let written = fs::read_to_string(&path).unwrap();
+        let raw: toml::Value = toml::from_str(&written).unwrap();
+        let delivery = raw["delivery"].as_table().unwrap();
+        assert!(
+            !delivery.contains_key("evidence_marker_version"),
+            "a generated default must not masquerade as an operator-selected format pin"
+        );
+        let (loaded, _) = try_load_config(&path).unwrap();
+        assert_eq!(
+            loaded.delivery.evidence_marker_version,
+            EvidenceMarkerVersion::V3
+        );
+        assert!(!loaded.delivery.evidence_markers_enabled);
+    }
+
+    #[test]
     fn config_max_pending_defaults_and_parses() {
         let defaults = ContradictionaryConfig::default();
         assert_eq!(defaults.max_pending, 32);
@@ -2743,6 +2889,26 @@ mod tests {
         let parsed: ContradictionaryConfig =
             toml::from_str("enabled = true\nmax_pending = 4\n").unwrap();
         assert_eq!(parsed.max_pending, 4);
+    }
+
+    #[test]
+    fn unsupported_evidence_marker_pin_is_rejected_even_when_disabled() {
+        for pin in [
+            "v1",
+            "v4",
+            "current",
+            "latest",
+            "V3",
+            "SYNTHETIC_INVALID_PIN_CANARY",
+        ] {
+            let text = format!(
+                "[delivery]\nevidence_markers_enabled = false\nevidence_marker_version = {pin:?}\n"
+            );
+            assert!(
+                toml::from_str::<Config>(&text).is_err(),
+                "unsupported outbound marker pin must not be ignored"
+            );
+        }
     }
 
     fn temp_state_dir() -> (TempDir, Utf8PathBuf) {

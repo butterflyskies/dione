@@ -119,7 +119,7 @@ pub struct DioneServer {
 }
 
 pub(crate) fn reserved_tool_names(harness: &HarnessConnection) -> BTreeSet<String> {
-    let definitions = tools_list(harness, true);
+    let definitions = tools_list(harness, true, dione_evidence::EvidenceMarkerVersion::V3);
     let mut reserved: BTreeSet<String> = dione_codex::TOOL_NAMES
         .iter()
         .map(|name| (*name).to_owned())
@@ -1002,12 +1002,16 @@ async fn dispatch(
         }
         "tools/list" => {
             let config = dione_config::load_config(server.state_dir());
-            let mut response =
-                tools_list(&server.harness, config.delivery.evidence_markers_enabled);
+            let mut response = tools_list(
+                &server.harness,
+                config.delivery.evidence_markers_enabled,
+                config.delivery.evidence_marker_version,
+            );
             server.module_tools.append_definitions(
                 &mut response,
                 dione_mcp_tools::ToolDiscoveryContext {
                     evidence_markers_enabled: config.delivery.evidence_markers_enabled,
+                    evidence_marker_version: config.delivery.evidence_marker_version,
                 },
             );
             Ok(response)
@@ -1250,11 +1254,17 @@ pub mod test_helpers {
     }
 
     fn complete_tools_list(harness: &HarnessConnection, evidence: bool) -> Value {
-        let mut response = crate::mcp::protocol::tools_list(harness, evidence);
-        response["tools"]
-            .as_array_mut()
-            .expect("tools array")
-            .push(crate::discord::reply_tool::definition(evidence));
+        let mut response = crate::mcp::protocol::tools_list(
+            harness,
+            evidence,
+            dione_evidence::EvidenceMarkerVersion::V3,
+        );
+        response["tools"].as_array_mut().expect("tools array").push(
+            crate::discord::reply_tool::definition(
+                evidence,
+                dione_evidence::EvidenceMarkerVersion::V3,
+            ),
+        );
         response["tools"]
             .as_array_mut()
             .expect("tools array")

@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.130.8]
+
+### Fixed
+
+- Restore validated per-seat V2/V3 outbound evidence marker selection through
+  extracted codec, configuration and discovery owners and live reply/DM callers.
+  Preserve V3 defaults, inbound compatibility, disabled gates and hook ordering.
+- Version the shared typed public APIs and exact normal dependency closure.
+
 ## [0.130.7]
 
 ### Fixed
