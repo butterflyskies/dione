@@ -1552,7 +1552,7 @@ pub async fn rephrase_held(
             })
         }
         Err(error) => Err(MessagingError {
-            kind: MessagingErrorKind::Handle(error),
+            kind: MessagingErrorKind::Handle(Box::new(error)),
             auto_rewrites: auto_rewrites.to_vec(),
         }),
     }
@@ -4362,7 +4362,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             &failure.kind,
-            MessagingErrorKind::Handle(RejectedHandle::Unknown(_))
+            MessagingErrorKind::Handle(error) if matches!(error.as_ref(), RejectedHandle::Unknown(_))
         ));
         let response = crate::discord::messaging_wire::error(failure);
         assert_eq!(

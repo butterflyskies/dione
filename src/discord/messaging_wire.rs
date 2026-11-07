@@ -112,7 +112,7 @@ pub(crate) fn error(error: MessagingError) -> Value {
         MessagingErrorKind::DeliveryUnknown { cause, confirmed } => {
             json!({"error":format!("delivery completion unknown: {cause}; reconcile before resending"), "delivery_ambiguous":true,"retryable":false,"message_ids":confirmed.iter().map(|id|id.get()).collect::<Vec<_>>() })
         }
-        MessagingErrorKind::Handle(handle) => rejected_handle_json(handle),
+        MessagingErrorKind::Handle(handle) => rejected_handle_json(*handle),
         MessagingErrorKind::HookHalted { reason, feedback } => {
             json!({"error": reason, "pre_send_feedback": feedback})
         }
@@ -437,7 +437,10 @@ mod tests {
                     expires_in: Duration::from_secs(30),
                 };
                 let projected = if rephrased {
-                    rephrase(&handle, Err(MessagingErrorKind::Handle(failure).into()))
+                    rephrase(
+                        &handle,
+                        Err(MessagingErrorKind::Handle(Box::new(failure)).into()),
+                    )
                 } else {
                     release(&handle, Err(failure))
                 };

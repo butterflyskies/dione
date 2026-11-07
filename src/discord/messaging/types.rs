@@ -210,7 +210,7 @@ pub enum MessagingErrorKind {
     EmptyRephrase,
     /// Consent rejected the requested handle action.
     #[error(transparent)]
-    Handle(#[from] RejectedHandle),
+    Handle(#[from] Box<RejectedHandle>),
     /// Discord rejected an operation.
     #[error(transparent)]
     Discord(#[from] Box<serenity::Error>),

@@ -538,8 +538,9 @@ impl ConsentGate {
     /// be sent once a replacement was offered — the chain carries the story
     /// forward instead.
     ///
-    /// A judged-clear replacement whose *delivery* fails leaves the handle
-    /// live for retry — holding the replacement, not the original. Offering
+    /// A judged-clear replacement whose delivery is known not to have completed
+    /// leaves the handle live for retry, holding the replacement, not the original.
+    /// Unknown completion consumes the handle and requires reconciliation. Offering
     /// a replacement withdraws consent for the original text on every path,
     /// so a later release or rephrase of the still-live handle operates on
     /// the rephrased content and can never silently revert. What is held is
