@@ -394,9 +394,8 @@ impl AttentionStore {
             validate_loaded_bounds(state, limits)?;
             Ok::<_, StoreError>(report)
         })
-        .map(|report| {
+        .inspect(|_| {
             self.limits = limits;
-            report
         })
     }
 
