@@ -1,0 +1,5 @@
+error[E0616]: field `desired` of struct `PresenceSnapshot` is private
+ --> tests/ui/snapshot.rs:3:14
+  |
+3 |     snapshot.desired = None;
+  |              ^^^^^^^ private field

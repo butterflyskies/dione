@@ -549,7 +549,7 @@ The application uses versioned path dependencies on `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, `dione-provider-delivery`, `dione-teams`, `dione-omp`, `dione-codex`, and `dione-claude`.
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, `dione-provider-delivery`, `dione-teams`, `dione-omp`, `dione-codex`, `dione-claude`, and `dione-discord-presence`.
 `cargo package --workspace --locked` verifies the interdependent packages
 before their new versions exist on crates.io. The gate checks all archives with the existing
 public-package privacy checker. Do not replace verification with an unchecked
@@ -571,7 +571,7 @@ Before the first release, an authorized operator must reserve `dione-rendering`,
 `dione-durable`, `dione-contracts`, `dione-rook`, `dione-attention`,
 `dione-evidence`, `dione-messages`, `dione-rate-limiter`, `dione-vaelii`,
 `dione-gaie`, `dione-identity-display`, `dione-harness`,
-`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, `dione-provider-delivery`, `dione-teams`, `dione-omp`, `dione-codex`, and `dione-claude`,
+`dione-presentation`, `dione-contradictionary`, `dione-bell-rings`, `dione-delivery-scheduler`, `dione-access-requests`, `dione-mutes`, `dione-coordination`, `dione-pre-send`, `dione-teams-identities`, `dione-discord-identities`, `dione-pluralkit-identities`, `dione-config`, `dione-outbound-consent`, `dione-mcp-tools`, `dione-provider-delivery`, `dione-teams`, `dione-omp`, `dione-codex`, `dione-claude`, and `dione-discord-presence`,
 configure its approved owners, and register the repository's trusted publisher
 for `.github/workflows/publish-crate.yml` and its `release` environment. Local
 package verification does not prove those registry settings exist. This
@@ -636,3 +636,7 @@ Private process fixtures preserve actual root dispatch and native admission effe
 ## Claude adapter owner
 
 `dione-claude` owns channel and permission envelopes, protocol metadata, reserved-tool rejection and shared-output error classification. Application composition supplies one `ProtocolOutput` and the actual immutable Codex catalog. The owner reuses harness output and presentation; it has no Codex runtime dependency. Root retains selection, stdout construction, lifecycle and native authorization. Publication waits for contracts, harness, messages and presentation before Claude and root reconciliation.
+
+## Discord presence owner
+
+`dione-discord-presence` owns complete requests, shared requested state, direct and queued acknowledgements, effect ordering and reconnect replay. Application composition gives the gateway and MCP handles onto the same authority. The existing `PresenceSink` connects the root Serenity adapter; MCP parsing and wire projection remain root-owned. Sink callbacks run outside the state lock under ordered effects, and replay preserves the original decision timestamp. Applied and Accepted describe local progress, not Discord acknowledgement. Publication has no capability prerequisite; root waits for its reconciliation.

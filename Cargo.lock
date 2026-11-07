@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.117.2"
+version = "0.118.2"
 dependencies = [
  "arc-swap",
  "axum",
@@ -949,6 +949,7 @@ dependencies = [
  "dione-coordination",
  "dione-delivery-scheduler",
  "dione-discord-identities",
+ "dione-discord-presence",
  "dione-durable",
  "dione-evidence",
  "dione-gaie",
@@ -1188,6 +1189,17 @@ version = "0.1.0"
 dependencies = [
  "native-tls",
  "serenity",
+]
+
+[[package]]
+name = "dione-discord-presence"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "trybuild",
 ]
 
 [[package]]

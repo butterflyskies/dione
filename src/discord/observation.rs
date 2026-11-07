@@ -1143,7 +1143,7 @@ mod tests {
             state_dir,
             bot_user_id: std::sync::atomic::AtomicU64::new(0),
             discord_cmd_rx: tokio::sync::Mutex::new(None),
-            presence: super::super::presence::SharedPresence::new(),
+            presence: dione_discord_presence::SharedPresence::new(),
             pronoun_service: None,
             nameplate_service: None,
             ingress_ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),

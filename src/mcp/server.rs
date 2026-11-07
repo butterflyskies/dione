@@ -16,7 +16,6 @@ use crate::discord::access::AccessCtx;
 use crate::discord::events::MessageEvent;
 use crate::discord::events::NotificationEvent;
 use crate::discord::messaging::MessagingCtx;
-use crate::discord::presence::PresenceCapability;
 use crate::discord::scheduling::DeliveryBuffer;
 use crate::discord::typing::TypingCtx;
 use crate::mcp::dispatch::call_tool;
@@ -38,6 +37,7 @@ use dione_contracts::ModuleInstanceId;
 #[cfg(test)]
 use dione_contracts::{ModuleSlotId, ProviderId};
 use dione_delivery_scheduler::BufferResult;
+use dione_discord_presence::PresenceCapability;
 use dione_harness::AttentionPolicy;
 use dione_harness::HarnessConnection;
 use dione_harness::HarnessError;

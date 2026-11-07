@@ -1,6 +1,10 @@
 use super::observation::PreparedAdmission;
 use dione_access_requests::{AccessQueue, AccessRequest};
 use dione_bell_rings::BellStatus;
+use dione_discord_presence::{
+    ActivityType as PresenceActivityType, OnlineStatus as PresenceStatus, PresenceRequest,
+    PresenceSink, SharedPresence, run_presence_commands,
+};
 use serenity::{
     async_trait,
     builder::{CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage},
@@ -16,10 +20,6 @@ use {
     crate::{
         discord::{
             messaging::create_dm_channel,
-            presence::{
-                ActivityType as PresenceActivityType, OnlineStatus as PresenceStatus,
-                PresenceRequest, PresenceSink, SharedPresence, run_presence_commands,
-            },
             verified_action::{
                 LifecycleContext, LifecycleProvenance, VerifiedActionGate, VerifiedGateVerdict,
             },
@@ -4520,7 +4520,7 @@ mod tests {
         ] {
             let request = PresenceRequest::new(
                 PresenceStatus::Online,
-                Some(crate::discord::presence::PresenceActivity::new(
+                Some(dione_discord_presence::PresenceActivity::new(
                     kind,
                     "human text".into(),
                 )),

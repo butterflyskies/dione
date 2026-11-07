@@ -1,5 +1,7 @@
 //! Requested Discord presence, acknowledgement, and reconnect replay.
 
+#![warn(missing_docs)]
+
 use chrono::{DateTime, Utc};
 use std::{fmt, str::FromStr, sync::Arc};
 use thiserror::Error;

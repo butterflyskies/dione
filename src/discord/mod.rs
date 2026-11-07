@@ -10,7 +10,6 @@ pub(crate) mod management_tools;
 pub(crate) mod management_wire;
 pub mod messaging;
 pub(crate) mod observation;
-pub mod presence;
 pub(crate) mod rendering;
 pub mod rook_context;
 pub(crate) mod rook_observation;

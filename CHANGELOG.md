@@ -18,6 +18,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.118.2]
+
+### Fixed
+
+- Inherit the accepted Teams/OMP test allowances and contained guidance while
+  preserving this extraction and its assertions.
+
+## [0.118.1]
+
+### Fixed
+
+- Allow 120 seconds for authenticated Teams test event reads, child socket
+  readiness, and parent control connections on slower CI workers, preserving
+  assertions and production deadlines.
+
+## [0.118.0] - 2026-11-05
+
+### Changed
+
+- Extract the shared Discord presence owner into `dione-discord-presence`,
+  preserving direct and queued acknowledgements, state ordering, and reconnect replay.
+
 ## [0.117.2]
 
 ### Fixed

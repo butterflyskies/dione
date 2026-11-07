@@ -1,0 +1,5 @@
+error[E0616]: field `status` of struct `PresenceRequest` is private
+ --> tests/ui/request.rs:4:13
+  |
+4 |     request.status = OnlineStatus::Idle;
+  |             ^^^^^^ private field

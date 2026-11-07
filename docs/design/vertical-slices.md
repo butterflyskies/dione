@@ -86,7 +86,7 @@ Focused verification covers the existing consent, fences, expiry, coordination, 
 
 ## Typed Discord presence and typing slice
 
-Presence requests, desired state, queue submission, and reconnect replay now share `discord/presence.rs`. `PresenceActivity` pairs a kind with its required unrestricted text. `PresenceCapability` distinguishes direct application, queued acceptance, and unavailability. The gateway and MCP receive handles from one assembly function. Production uses the direct capability without creating an unused queue; queue-only callers retain the existing receiver lifecycle and Accepted response.
+Presence requests, desired state, queue submission, and reconnect replay now share `dione-discord-presence`. `PresenceActivity` pairs a kind with its required unrestricted text. `PresenceCapability` distinguishes direct application, queued acceptance, and unavailability. The gateway and MCP receive handles from one assembly function. Production uses the direct capability without creating an unused queue; queue-only callers retain the existing receiver lifecycle and Accepted response.
 
 The design comparison selected a dedicated presence owner over keeping authority in gateway events or adding a service that forwards every operation. Request and activity fields are private with constructors and read-only accessors. MCP interprets permissive optional arguments and projects snapshots and typed results. Events alone converts domain requests to Serenity activities and statuses. `typing.rs` owns live channel authorization and typed transport failures through a private transport seam.
 
