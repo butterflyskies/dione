@@ -264,6 +264,9 @@ pub struct OpenedEvaluation {
     pub limits: PromotionLimits,
     /// Holdout declaration time in milliseconds since the Unix epoch.
     pub opened_at_ms: u64,
+    /// Bounded anti-reuse deadline; never extended by later retention increases.
+    #[serde(default)]
+    pub expires_at_ms: u64,
     /// Whether fitting reused a conversation reserved by this holdout.
     pub invalidated_for_tuning: bool,
     /// Whether source changes or loss invalidated this holdout.
@@ -627,9 +630,34 @@ impl AttentionStore {
         &mut self,
         actor: &RecipientId,
         recipient: &RecipientId,
+        plan: EvaluationPlan,
+    ) -> Result<OpenedEvaluation, LearningError> {
+        self.open_evaluation_at(actor, recipient, plan, super::store::store_clock_ms()?)
+    }
+
+    fn open_evaluation_at(
+        &mut self,
+        actor: &RecipientId,
+        recipient: &RecipientId,
         mut plan: EvaluationPlan,
+        now_ms: u64,
     ) -> Result<OpenedEvaluation, LearningError> {
         require_recipient(actor, recipient)?;
+        let expires_at_ms = plan
+            .opened_at_ms
+            .checked_add(self.limits.max_record_ttl_ms)
+            .ok_or(StoreError::Invalid(
+                "evaluation retention deadline overflow",
+            ))?;
+        if plan.opened_at_ms > now_ms
+            || expires_at_ms <= now_ms
+            || now_ms < self.state.maintenance_highwater_ms
+        {
+            return Err(
+                StoreError::Invalid("evaluation declaration time is outside retention").into(),
+            );
+        }
+        self.prune(now_ms)?;
         plan.fixed_baseline.validate()?;
         plan.limits.validate()?;
         if plan.id.as_str().is_empty() || plan.record_ids.is_empty() {
@@ -653,6 +681,7 @@ impl AttentionStore {
                     .get(id)
                     .ok_or_else(|| StoreError::RecordNotFound(id.clone()))?;
                 if &record.recipient != recipient
+                    || record.created_at_ms > plan.opened_at_ms
                     || record.judgment.is_none()
                     || record.delivery == super::types::DeliveryState::Invalidated
                 {
@@ -713,6 +742,7 @@ impl AttentionStore {
                 fixed_baseline: plan.fixed_baseline,
                 limits: plan.limits,
                 opened_at_ms: plan.opened_at_ms,
+                expires_at_ms,
                 invalidated_for_tuning: false,
                 invalidated_source: false,
             };
@@ -737,6 +767,10 @@ impl AttentionStore {
         now_ms: u64,
     ) -> Result<LearnedArtifact, LearningError> {
         require_recipient(actor, recipient)?;
+        if now_ms < self.state.maintenance_highwater_ms {
+            return Err(StoreError::Invalid("learning clock moved backwards").into());
+        }
+        self.prune(now_ms)?;
         validate_fit_options(&options, self.limits.max_record_ttl_ms)?;
         let mut unique_ids = record_ids.to_vec();
         unique_ids.sort();
@@ -905,6 +939,10 @@ impl AttentionStore {
         evaluated_at_ms: u64,
     ) -> Result<EvaluationReceipt, LearningError> {
         require_recipient(actor, recipient)?;
+        if evaluated_at_ms < self.state.maintenance_highwater_ms {
+            return Err(StoreError::Invalid("learning clock moved backwards").into());
+        }
+        self.prune(evaluated_at_ms)?;
         let opened = self
             .opened_evaluation(evaluation_id)
             .cloned()
@@ -1037,6 +1075,10 @@ impl AttentionStore {
         promoted_at_ms: u64,
     ) -> Result<PromotionResult, LearningError> {
         require_recipient(actor, recipient)?;
+        if promoted_at_ms < self.state.maintenance_highwater_ms {
+            return Err(StoreError::Invalid("learning clock moved backwards").into());
+        }
+        self.prune(promoted_at_ms)?;
         self.update(|state, limits| {
             let opened = state
                 .opened_evaluations
@@ -1127,6 +1169,10 @@ impl AttentionStore {
         rolled_back_at_ms: u64,
     ) -> Result<PromotionResult, LearningError> {
         require_recipient(actor, recipient)?;
+        if rolled_back_at_ms < self.state.maintenance_highwater_ms {
+            return Err(StoreError::Invalid("learning clock moved backwards").into());
+        }
+        self.prune(rolled_back_at_ms)?;
         self.update(|state, limits| {
             let artifact = state
                 .artifacts
@@ -1795,10 +1841,301 @@ mod tests {
         }
     }
 
+    impl AttentionStore {
+        fn open_evaluation_at_declared_time(
+            &mut self,
+            actor: &RecipientId,
+            recipient: &RecipientId,
+            plan: EvaluationPlan,
+        ) -> Result<OpenedEvaluation, LearningError> {
+            let now_ms = plan.opened_at_ms;
+            self.open_evaluation_at(actor, recipient, plan, now_ms)
+        }
+    }
+
+    fn lifecycle_plan(id: &str) -> EvaluationPlan {
+        EvaluationPlan {
+            id: id.into(),
+            record_ids: vec![RecordId::new("r5").unwrap(), RecordId::new("r6").unwrap()],
+            fixed_baseline: FixedThresholdPolicy {
+                wanted: 0.5,
+                prompt: 0.5,
+                participation: 1.0,
+                change: 1.0,
+            },
+            limits: permissive_limits(),
+            opened_at_ms: 600,
+        }
+    }
+
+    #[test]
+    fn bounded_holdout_expiry_deletes_persisted_membership() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = store_path(&directory);
+        let mut store = AttentionStore::open_with_limits_for_test(path.clone(), limits()).unwrap();
+        populate(&mut store);
+        store
+            .open_evaluation_at_declared_time(
+                &"recipient".into(),
+                &"recipient".into(),
+                lifecycle_plan("heldout"),
+            )
+            .unwrap();
+        store.prune(20_599).unwrap();
+        assert!(
+            store.opened_evaluation(&"heldout".into()).is_some(),
+            "pre-expiry invalidated holdout still reserves conversations"
+        );
+        store.prune(20_600).unwrap();
+        assert!(
+            store.opened_evaluation(&"heldout".into()).is_none(),
+            "expired holdout membership must be deleted"
+        );
+        assert!(
+            !store
+                .state
+                .evaluation_samples
+                .contains_key(&EvaluationId::from("heldout"))
+        );
+        let persisted = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !persisted.contains("heldout"),
+            "expired holdout identity must not survive persistence"
+        );
+        drop(store);
+        let reopened = AttentionStore::open_with_limits_for_test(path, limits()).unwrap();
+        assert!(reopened.opened_evaluation(&"heldout".into()).is_none());
+    }
+
+    #[test]
+    fn invalid_revalidation_withdraws_review_and_sealed_provenance_before_reopen() {
+        for sealed in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = store_path(&directory);
+            let mut store =
+                AttentionStore::open_with_limits_for_test(path.clone(), limits()).unwrap();
+            populate(&mut store);
+            if sealed {
+                store
+                    .open_evaluation_at_declared_time(
+                        &"recipient".into(),
+                        &"recipient".into(),
+                        lifecycle_plan("heldout"),
+                    )
+                    .unwrap();
+            }
+            let affected = store.record(&RecordId::new("r5").unwrap()).unwrap().sources[0].clone();
+            store
+                .revalidate(crate::store::ValidationFact {
+                    source: affected,
+                    status: crate::store::ValidationStatus::Invalid,
+                    checked_at_ms: 700,
+                })
+                .unwrap();
+            assert!(
+                store.state.review_batches.is_empty(),
+                "invalid source must withdraw review provenance"
+            );
+            assert!(
+                store.state.evaluation_samples.is_empty(),
+                "invalid source must withdraw sealed provenance"
+            );
+            assert!(
+                store
+                    .record(&RecordId::new("r5").unwrap())
+                    .unwrap()
+                    .judgment
+                    .is_none()
+            );
+            assert!(
+                store
+                    .record(&RecordId::new("r6").unwrap())
+                    .unwrap()
+                    .judgment
+                    .is_some()
+            );
+            drop(store);
+            AttentionStore::open_with_limits_for_test(path, limits()).unwrap();
+        }
+    }
+
+    #[test]
+    fn holdout_creation_clock_and_deadline_are_bounded() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store =
+            AttentionStore::open_with_limits_for_test(store_path(&directory), limits()).unwrap();
+        populate(&mut store);
+        let before = std::fs::read(store.path()).unwrap();
+        let mut future = lifecycle_plan("future");
+        future.opened_at_ms = 701;
+        assert!(
+            store
+                .open_evaluation_at(&"recipient".into(), &"recipient".into(), future, 700)
+                .is_err()
+        );
+        let mut overflow = lifecycle_plan("overflow");
+        overflow.opened_at_ms = u64::MAX;
+        assert!(
+            store
+                .open_evaluation_at(&"recipient".into(), &"recipient".into(), overflow, u64::MAX)
+                .is_err()
+        );
+        assert_eq!(std::fs::read(store.path()).unwrap(), before);
+        store
+            .open_evaluation_at(
+                &"recipient".into(),
+                &"recipient".into(),
+                lifecycle_plan("heldout"),
+                600,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .opened_evaluation(&"heldout".into())
+                .unwrap()
+                .expires_at_ms,
+            20_600
+        );
+        let mut increased = limits();
+        increased.max_record_ttl_ms = 40_000;
+        store.maintain(700, increased).unwrap();
+        assert_eq!(
+            store
+                .opened_evaluation(&"heldout".into())
+                .unwrap()
+                .expires_at_ms,
+            20_600
+        );
+        let mut reduced = limits();
+        reduced.max_record_ttl_ms = 1_000;
+        store.maintain(1_599, reduced).unwrap();
+        assert_eq!(
+            store
+                .opened_evaluation(&"heldout".into())
+                .unwrap()
+                .expires_at_ms,
+            1_600
+        );
+        store.maintain(1_600, reduced).unwrap();
+        assert!(store.opened_evaluation(&"heldout".into()).is_none());
+        store.prune(600).unwrap();
+        assert!(store.opened_evaluation(&"heldout".into()).is_none());
+        assert!(
+            store
+                .open_evaluation_at(
+                    &"recipient".into(),
+                    &"recipient".into(),
+                    lifecycle_plan("heldout"),
+                    600
+                )
+                .is_err()
+        );
+        let mut fresh = record(7, "eval-a", 1_601, 0.9);
+        fresh.expires_at_ms = 2_601;
+        store.insert_record(fresh).unwrap();
+        store.sample_review(&"recipient".into(), 1, 43).unwrap();
+        let mut fresh_plan = lifecycle_plan("heldout");
+        fresh_plan.opened_at_ms = 1_601;
+        fresh_plan.record_ids = vec![RecordId::new("r7").unwrap()];
+        store
+            .open_evaluation_at(&"recipient".into(), &"recipient".into(), fresh_plan, 1_601)
+            .unwrap();
+        assert!(
+            store.evaluation(&"heldout".into()).is_none(),
+            "reused ID must not restore an old receipt"
+        );
+    }
+
+    #[test]
+    fn holdout_expiry_withdraws_promotion_and_rollback_authority() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = store_path(&directory);
+        let mut store = AttentionStore::open_with_limits_for_test(path.clone(), limits()).unwrap();
+        populate(&mut store);
+        let ids = ["r1", "r2", "r3", "r4"].map(|id| RecordId::new(id).unwrap());
+        let artifact = store
+            .fit(
+                &"recipient".into(),
+                &"recipient".into(),
+                &ids,
+                compatibility(),
+                fit_options(),
+                500,
+            )
+            .unwrap();
+        store
+            .open_evaluation_at_declared_time(
+                &"recipient".into(),
+                &"recipient".into(),
+                lifecycle_plan("heldout"),
+            )
+            .unwrap();
+        let receipt = store
+            .evaluate(
+                &"recipient".into(),
+                &"recipient".into(),
+                &"heldout".into(),
+                &artifact.digest,
+                700,
+            )
+            .unwrap();
+        assert!(receipt.passed);
+        store
+            .promote(
+                &"recipient".into(),
+                &"recipient".into(),
+                &artifact.digest,
+                &"heldout".into(),
+                &compatibility(),
+                701,
+            )
+            .unwrap();
+        store
+            .state
+            .rollback
+            .insert("recipient".into(), vec![artifact.digest.clone()]);
+        // Different recipient declaration is retained when its own deadline has not elapsed.
+        let mut unrelated = store.opened_evaluation(&"heldout".into()).unwrap().clone();
+        unrelated.id = "unrelated".into();
+        unrelated.recipient = "other".into();
+        unrelated.opened_at_ms = 20_000;
+        unrelated.expires_at_ms = 40_000;
+        unrelated.record_ids.clear();
+        unrelated.conversations = vec!["other-room".into()];
+        store
+            .state
+            .opened_evaluations
+            .insert(unrelated.id.clone(), unrelated);
+        store.prune(20_600).unwrap();
+        assert!(store.selected_artifact(&"recipient".into()).is_none());
+        assert!(store.state.rollback.is_empty());
+        assert!(store.artifact(&artifact.digest).is_none());
+        assert!(store.evaluation(&"heldout".into()).is_none());
+        assert!(store.opened_evaluation(&"unrelated".into()).is_some());
+        assert!(
+            store
+                .promote(
+                    &"recipient".into(),
+                    &"recipient".into(),
+                    &artifact.digest,
+                    &"heldout".into(),
+                    &compatibility(),
+                    700
+                )
+                .is_err()
+        );
+        drop(store);
+        let reopened = AttentionStore::open_with_limits_for_test(path, limits()).unwrap();
+        assert!(reopened.evaluation(&"heldout".into()).is_none());
+        assert!(reopened.opened_evaluation(&"heldout".into()).is_none());
+        assert!(reopened.opened_evaluation(&"unrelated".into()).is_some());
+    }
+
     #[test]
     fn temporal_partition_keeps_a_conversation_whole() {
         let directory = tempfile::tempdir().unwrap();
-        let mut store = AttentionStore::open_with_limits(store_path(&directory), limits()).unwrap();
+        let mut store =
+            AttentionStore::open_with_limits_for_test(store_path(&directory), limits()).unwrap();
         store.insert_record(record(1, "a", 100, 0.8)).unwrap();
         store.insert_record(record(2, "a", 250, 0.8)).unwrap();
         store.insert_record(record(3, "b", 350, 0.8)).unwrap();
@@ -1823,9 +2160,10 @@ mod tests {
     fn fitting_is_deterministic_and_uses_recipient_labels() {
         let first_dir = tempfile::tempdir().unwrap();
         let second_dir = tempfile::tempdir().unwrap();
-        let mut first = AttentionStore::open_with_limits(store_path(&first_dir), limits()).unwrap();
+        let mut first =
+            AttentionStore::open_with_limits_for_test(store_path(&first_dir), limits()).unwrap();
         let mut second =
-            AttentionStore::open_with_limits(store_path(&second_dir), limits()).unwrap();
+            AttentionStore::open_with_limits_for_test(store_path(&second_dir), limits()).unwrap();
         populate(&mut first);
         populate(&mut second);
         // A disagreeing non-recipient annotation is retained but cannot change the target.
@@ -1893,7 +2231,7 @@ mod tests {
     fn failed_candidate_persistence_does_not_publish_artifact() {
         let directory = tempfile::tempdir().unwrap();
         let path = store_path(&directory);
-        let mut store = AttentionStore::open_with_limits(path, limits()).unwrap();
+        let mut store = AttentionStore::open_with_limits_for_test(path, limits()).unwrap();
         populate(&mut store);
         let before = store.state.artifacts.len();
         std::fs::create_dir(directory.path().join(".attention.json.tmp")).unwrap();
@@ -1922,7 +2260,8 @@ mod tests {
     #[test]
     fn fitting_rejects_cross_recipient_records_without_committing_candidate() {
         let directory = tempfile::tempdir().unwrap();
-        let mut store = AttentionStore::open_with_limits(store_path(&directory), limits()).unwrap();
+        let mut store =
+            AttentionStore::open_with_limits_for_test(store_path(&directory), limits()).unwrap();
         populate(&mut store);
         let mut outsider = record(7, "outsider", 140, 0.9);
         outsider.recipient = "other".into();
@@ -1966,7 +2305,7 @@ mod tests {
     fn opened_holdout_reuse_invalidates_persisted_evaluation() {
         let directory = tempfile::tempdir().unwrap();
         let path = store_path(&directory);
-        let mut store = AttentionStore::open_with_limits(path.clone(), limits()).unwrap();
+        let mut store = AttentionStore::open_with_limits_for_test(path.clone(), limits()).unwrap();
         populate(&mut store);
         let artifact = store
             .fit(
@@ -1984,7 +2323,7 @@ mod tests {
             )
             .unwrap();
         store
-            .open_evaluation(
+            .open_evaluation_at_declared_time(
                 &"recipient".into(),
                 &"recipient".into(),
                 EvaluationPlan {
@@ -2002,7 +2341,7 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(
-            store.open_evaluation(
+            store.open_evaluation_at_declared_time(
                 &"recipient".into(),
                 &"recipient".into(),
                 EvaluationPlan {
@@ -2074,7 +2413,7 @@ mod tests {
                 .invalidated_for_tuning
         );
         drop(store);
-        let reopened = AttentionStore::open_with_limits(path, limits()).unwrap();
+        let reopened = AttentionStore::open_with_limits_for_test(path, limits()).unwrap();
         assert!(reopened.evaluation(&"heldout".into()).is_none());
         assert!(
             reopened
@@ -2087,7 +2426,8 @@ mod tests {
     #[test]
     fn evaluation_reports_weighted_coverage_and_both_baselines() {
         let directory = tempfile::tempdir().unwrap();
-        let mut store = AttentionStore::open_with_limits(store_path(&directory), limits()).unwrap();
+        let mut store =
+            AttentionStore::open_with_limits_for_test(store_path(&directory), limits()).unwrap();
         populate(&mut store);
         let ids = ["r1", "r2", "r3", "r4"].map(|id| RecordId::new(id).unwrap());
         let artifact = store
@@ -2101,7 +2441,7 @@ mod tests {
             )
             .unwrap();
         store
-            .open_evaluation(
+            .open_evaluation_at_declared_time(
                 &"recipient".into(),
                 &"recipient".into(),
                 EvaluationPlan {
@@ -2158,7 +2498,8 @@ mod tests {
     #[test]
     fn incomplete_review_frame_and_record_propensity_cannot_authorize_promotion() {
         let directory = tempfile::tempdir().unwrap();
-        let mut store = AttentionStore::open_with_limits(store_path(&directory), limits()).unwrap();
+        let mut store =
+            AttentionStore::open_with_limits_for_test(store_path(&directory), limits()).unwrap();
         populate(&mut store);
         let artifact = store
             .fit(
@@ -2207,7 +2548,7 @@ mod tests {
             "the record field alone must not make an incomplete frame representative"
         );
         let opened = store
-            .open_evaluation(
+            .open_evaluation_at_declared_time(
                 &"recipient".into(),
                 &"recipient".into(),
                 EvaluationPlan {
@@ -2351,7 +2692,8 @@ mod tests {
     #[test]
     fn promotion_requires_recipient_passing_evidence_and_valid_members() {
         let directory = tempfile::tempdir().unwrap();
-        let mut store = AttentionStore::open_with_limits(store_path(&directory), limits()).unwrap();
+        let mut store =
+            AttentionStore::open_with_limits_for_test(store_path(&directory), limits()).unwrap();
         populate(&mut store);
         let artifact = store
             .fit(
@@ -2369,7 +2711,7 @@ mod tests {
             )
             .unwrap();
         store
-            .open_evaluation(
+            .open_evaluation_at_declared_time(
                 &"recipient".into(),
                 &"recipient".into(),
                 EvaluationPlan {
@@ -2453,7 +2795,8 @@ mod tests {
     #[test]
     fn failed_predeclared_promotion_requirements_remain_unpromoted() {
         let directory = tempfile::tempdir().unwrap();
-        let mut store = AttentionStore::open_with_limits(store_path(&directory), limits()).unwrap();
+        let mut store =
+            AttentionStore::open_with_limits_for_test(store_path(&directory), limits()).unwrap();
         populate(&mut store);
         let artifact = store
             .fit(
@@ -2474,7 +2817,7 @@ mod tests {
         strict.minimum_labeled = 3;
         strict.minimum_volume_reduction = 1.0;
         store
-            .open_evaluation(
+            .open_evaluation_at_declared_time(
                 &"recipient".into(),
                 &"recipient".into(),
                 EvaluationPlan {
@@ -2529,7 +2872,7 @@ mod tests {
     fn restart_withdraws_active_policy_until_every_member_is_revalidated() {
         let directory = tempfile::tempdir().unwrap();
         let path = store_path(&directory);
-        let mut store = AttentionStore::open_with_limits(path.clone(), limits()).unwrap();
+        let mut store = AttentionStore::open_with_limits_for_test(path.clone(), limits()).unwrap();
         populate(&mut store);
         let artifact = store
             .fit(
@@ -2547,7 +2890,7 @@ mod tests {
             )
             .unwrap();
         store
-            .open_evaluation(
+            .open_evaluation_at_declared_time(
                 &"recipient".into(),
                 &"recipient".into(),
                 EvaluationPlan {
@@ -2588,7 +2931,7 @@ mod tests {
             .unwrap();
         drop(store);
 
-        let mut reopened = AttentionStore::open_with_limits(path, limits()).unwrap();
+        let mut reopened = AttentionStore::open_with_limits_for_test(path, limits()).unwrap();
         assert!(reopened.active_artifact(&"recipient".into()).is_none());
         assert_eq!(
             reopened.artifact(&artifact.digest).unwrap().availability,
@@ -2645,7 +2988,8 @@ mod tests {
     #[test]
     fn expiration_invalidates_opened_holdout_and_rejects_pending_promotion() {
         let directory = tempfile::tempdir().unwrap();
-        let mut store = AttentionStore::open_with_limits(store_path(&directory), limits()).unwrap();
+        let mut store =
+            AttentionStore::open_with_limits_for_test(store_path(&directory), limits()).unwrap();
         populate(&mut store);
         let artifact = store
             .fit(
@@ -2663,7 +3007,7 @@ mod tests {
             )
             .unwrap();
         store
-            .open_evaluation(
+            .open_evaluation_at_declared_time(
                 &"recipient".into(),
                 &"recipient".into(),
                 EvaluationPlan {
@@ -2721,7 +3065,8 @@ mod tests {
     #[test]
     fn invalidated_active_artifact_can_only_roll_back_to_compatible_unaffected_policy() {
         let directory = tempfile::tempdir().unwrap();
-        let mut store = AttentionStore::open_with_limits(store_path(&directory), limits()).unwrap();
+        let mut store =
+            AttentionStore::open_with_limits_for_test(store_path(&directory), limits()).unwrap();
         populate(&mut store);
         let first = store
             .fit(
@@ -2739,7 +3084,7 @@ mod tests {
             )
             .unwrap();
         store
-            .open_evaluation(
+            .open_evaluation_at_declared_time(
                 &"recipient".into(),
                 &"recipient".into(),
                 EvaluationPlan {
@@ -2830,7 +3175,7 @@ mod tests {
             label(&mut store, id, feedback);
         }
         store
-            .open_evaluation(
+            .open_evaluation_at_declared_time(
                 &"recipient".into(),
                 &"recipient".into(),
                 EvaluationPlan {

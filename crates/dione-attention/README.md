@@ -28,3 +28,11 @@ additive Cargo functionality, not a security boundary. Production dependencies
 do not enable it.
 
 This package uses Rust 1.98 or newer and the MIT OR Apache-2.0 license.
+
+Holdout anti-reuse reservations use the configured record-retention horizon
+(default seven days) from opening, with checked, persisted deadlines that never
+extend. Expiry deletes declarations, sealed provenance and receipts and withdraws
+dependent active/rollback authority. Invalidated reservations remain until that
+boundary; new evidence after expiry must satisfy the ordinary source, temporal
+partition and fitting constraints. Confirmed source loss removes review and
+sealed-evaluation provenance together; unavailable sources remain Unknown.

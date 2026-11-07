@@ -837,9 +837,8 @@ impl AttentionRuntime {
         };
         let sources = self
             .with_store(move |store| {
-                store.prune(now_ms()).map_err(|error| error.to_string())?;
                 store
-                    .update_limits(limits)
+                    .maintain(now_ms(), limits)
                     .map_err(|error| error.to_string())?;
                 Ok(store
                     .selected_artifact(&recipient)
@@ -1564,6 +1563,155 @@ mod tests {
         tokio::time::pause();
         tokio::time::advance(duration).await;
         tokio::time::resume();
+    }
+
+    #[test]
+    fn confirmed_source_loss_withdraws_review_and_sealed_provenance_and_reopens() {
+        scenario(|| async {
+            use dione_attention::learning::{
+                EvaluationPlan, FixedThresholdPolicy, PromotionLimits,
+            };
+            use dione_attention::types::{Feedback, FeedbackLabel};
+            for sealed in [false, true] {
+                for access_denied in [false, true] {
+                    let mut fixture =
+                        NoticeFixture::new(AttentionMode::Log, NoticeMode::Off, 200).await;
+                    let record = fixture
+                        .classify(1, "Synthetic revalidation source")
+                        .await
+                        .unwrap();
+                    let source = record.sources[0].clone();
+                    let recipient = record.recipient.clone();
+                    let record_id = record.id.clone();
+                    fixture
+                        .runtime
+                        .with_store(move |store| {
+                            let sample = store
+                                .sample_review(&recipient, 1, 42)
+                                .map_err(|e| e.to_string())?;
+                            assert_eq!(sample.len(), 1);
+                            store
+                                .label(
+                                    &recipient,
+                                    Feedback {
+                                        record_id: record_id.clone(),
+                                        annotator: recipient.clone(),
+                                        label: FeedbackLabel::WantedPromptly,
+                                        assessed_at_ms: now_ms(),
+                                        source_versions: record.sources.clone(),
+                                    },
+                                )
+                                .map_err(|e| e.to_string())?;
+                            if sealed {
+                                store
+                                    .open_evaluation(
+                                        &recipient,
+                                        &recipient,
+                                        EvaluationPlan {
+                                            id: "resolver-heldout".into(),
+                                            record_ids: vec![record_id],
+                                            opened_at_ms: now_ms(),
+                                            fixed_baseline: FixedThresholdPolicy {
+                                                wanted: 0.5,
+                                                prompt: 0.5,
+                                                participation: 1.0,
+                                                change: 1.0,
+                                            },
+                                            limits: PromotionLimits {
+                                                minimum_labeled: 1,
+                                                minimum_wanted: 1,
+                                                minimum_promptly: 1,
+                                                minimum_wanted_recall: 0.0,
+                                                minimum_timely_recall: 0.0,
+                                                minimum_volume_reduction: 0.0,
+                                                maximum_unwanted_delivery_rate: 1.0,
+                                                maximum_standard_error: 1.0,
+                                            },
+                                        },
+                                    )
+                                    .map_err(|e| e.to_string())?;
+                            }
+                            Ok(())
+                        })
+                        .await
+                        .unwrap();
+                    let store_path = fixture.path.join("attention/records.json");
+                    let before: Value =
+                        serde_json::from_slice(&std::fs::read(&store_path).unwrap()).unwrap();
+                    assert_eq!(
+                        before["review_batches"].as_array().unwrap().len(),
+                        usize::from(!sealed)
+                    );
+                    assert_eq!(
+                        before["evaluation_samples"].as_object().unwrap().len(),
+                        usize::from(sealed)
+                    );
+                    // A real HTTP200 undecodable Message is unavailable, never confirmed loss.
+                    fixture
+                        .network
+                        .state
+                        .lock()
+                        .messages
+                        .insert((100, 1), json!({}));
+                    assert!(matches!(
+                        fixture
+                            .runtime
+                            .validate_sources(std::slice::from_ref(&source))
+                            .await,
+                        Err(SourceFailure::Unknown)
+                    ));
+                    let unknown: Value =
+                        serde_json::from_slice(&std::fs::read(&store_path).unwrap()).unwrap();
+                    assert_eq!(unknown["review_batches"], before["review_batches"]);
+                    assert_eq!(unknown["evaluation_samples"], before["evaluation_samples"]);
+                    if access_denied {
+                        let config_path = fixture.path.join("config.toml");
+                        let mut document: toml_edit::DocumentMut =
+                            std::fs::read_to_string(&config_path)
+                                .unwrap()
+                                .parse()
+                                .unwrap();
+                        let mut ignored = toml_edit::Array::new();
+                        ignored.push("7");
+                        document["access"]["ignore_from"] = toml_edit::value(ignored);
+                        std::fs::write(config_path, document.to_string()).unwrap();
+                        assert!(
+                            ConfigRuntime::new(fixture.path.clone())
+                                .reload()
+                                .await
+                                .1
+                                .is_none()
+                        );
+                    } else {
+                        fixture.network.state.lock().messages.remove(&(100, 1));
+                    }
+                    let result = fixture
+                        .runtime
+                        .validate_sources(std::slice::from_ref(&source))
+                        .await;
+                    assert!(matches!(
+                        (&result, access_denied),
+                        (Err(SourceFailure::Access), true)
+                            | (Err(SourceFailure::Invalidated), false)
+                    ));
+                    let after: Value =
+                        serde_json::from_slice(&std::fs::read(&store_path).unwrap()).unwrap();
+                    assert!(
+                        after["review_batches"].as_array().unwrap().is_empty(),
+                        "real confirmed source loss must withdraw review provenance"
+                    );
+                    assert!(
+                        after["evaluation_samples"].as_object().unwrap().is_empty(),
+                        "real confirmed source loss must withdraw sealed provenance"
+                    );
+                    let id = source.key.message_id;
+                    assert_eq!(id.get(), 1);
+                    drop(fixture.runtime);
+                    AttentionStore::open(store_path)
+                        .expect("confirmed loss persists a restart-valid store");
+                }
+            }
+        });
     }
 
     #[test]

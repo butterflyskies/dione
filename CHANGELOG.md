@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.130.7]
+
+### Fixed
+
+- Bound attention holdout reservations and their proof references by the existing
+  retention horizon, preserving anti-reuse before expiry and rejecting future,
+  overflowing and backwards-time authority.
+- Withdraw review and sealed evaluation provenance after confirmed source loss
+  so the persisted store remains valid on restart; retain Unknown evidence.
+- Version the attention lifecycle API and exact normal dependency closure.
+
 ## [0.130.6]
 
 ### Security
