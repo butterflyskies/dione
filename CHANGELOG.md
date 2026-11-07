@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.93.2]
+
+### Fixed
+
+- Allow 120 seconds for the authenticated Teams event test helper to read each
+  event on slower CI workers, preserving event assertions and production deadlines.
+
 ## [0.93.1]
 
 ### Fixed

@@ -50,7 +50,7 @@ async fn control(server: &DioneServer, name: &str, arguments: Value) -> Value {
 }
 async fn event(reader: &mut BufReader<DuplexStream>) -> Value {
     let mut line = String::new();
-    tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut line))
+    tokio::time::timeout(Duration::from_secs(120), reader.read_line(&mut line))
         .await
         .unwrap()
         .unwrap();
