@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.105.2"
+version = "0.106.2"
 dependencies = [
  "arc-swap",
  "axum",
@@ -953,6 +953,7 @@ dependencies = [
  "dione-identity-display",
  "dione-messages",
  "dione-mutes",
+ "dione-pre-send",
  "dione-presentation",
  "dione-rate-limiter",
  "dione-rendering",
@@ -1192,6 +1193,18 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "dione-pre-send"
+version = "0.1.0"
+dependencies = [
+ "dione-evidence",
+ "regex",
+ "reqwest 0.12.28",
+ "serenity",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

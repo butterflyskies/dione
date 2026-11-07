@@ -1535,10 +1535,10 @@ mod tests {
 
     #[tokio::test]
     async fn messaging_context_uses_process_installed_pipeline() {
-        let pipeline = crate::pre_send::configured_pipeline(true, Vec::new())
+        let pipeline = dione_pre_send::configured_pipeline(true, Vec::new())
             .expect("configured pipeline")
             .expect("enabled pipeline");
-        crate::pre_send::install_pipeline(Some(pipeline));
+        crate::composition::pre_send::install_pipeline(Some(pipeline));
         let dir = tempfile::TempDir::new().expect("temp dir");
         let state_dir =
             camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf-8 path");
@@ -1565,7 +1565,7 @@ mod tests {
         let context = server.messaging_ctx(Arc::new(LoadedConfig::from_raw(Config::default())));
 
         assert!(context.has_pre_send_pipeline());
-        crate::pre_send::install_pipeline(None);
+        crate::composition::pre_send::install_pipeline(None);
     }
 
     fn config_with_channel_delay(channel_id: u64, delay_ms: u64) -> LoadedConfig {

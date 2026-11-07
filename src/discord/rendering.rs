@@ -1,9 +1,7 @@
 //! Authorized rendering and delivery of a math attachment.
 
-use crate::{
-    discord::messaging::{self, MessagingCtx, MessagingError, OutboundSurface},
-    pre_send::HookName,
-};
+use crate::discord::messaging::{self, MessagingCtx, MessagingError, OutboundSurface};
+use dione_pre_send::HookName;
 use dione_rendering::{self as rendering, RenderError};
 use serenity::{
     builder::CreateAttachment,

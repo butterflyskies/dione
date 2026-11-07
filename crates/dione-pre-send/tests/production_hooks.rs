@@ -1,6 +1,6 @@
 //! Integration tests for the production pre-send hook roster.
 //!
-//! These assert against [`dione::pre_send::production_pipeline`] — the same
+//! These assert against [`dione_pre_send::production_pipeline`] — the same
 //! expression `main` calls — rather than constructing a hook set locally, which
 //! would certify a parallel wiring instead of the shipped one.
 //!
@@ -9,7 +9,7 @@
 //! they prove is that `production_pipeline()` contains and executes the hook,
 //! not that `main` calls it.
 
-use dione::pre_send::{
+use dione_pre_send::{
     ChannelType, ConstructId, HookDecision, HookName, NoRly, OutboundDestination,
     production_pipeline,
 };
@@ -17,8 +17,8 @@ use serenity::model::id::ChannelId;
 
 const STATUS_LINT: &str = "status-packet-lint";
 
-fn context(text: &str) -> dione::pre_send::HookContext {
-    dione::pre_send::HookContext::new(
+fn context(text: &str) -> dione_pre_send::HookContext {
+    dione_pre_send::HookContext::new(
         text,
         OutboundDestination::Channel(ChannelId::new(1)),
         ChannelType::Public,

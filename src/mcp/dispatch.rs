@@ -556,9 +556,10 @@ fn parse_string_array(args: &Value, key: &str) -> Option<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{discord::tool_arguments::parse_optional_id, pre_send::HookName};
+    use crate::discord::tool_arguments::parse_optional_id;
     use dione_access_requests::AccessQueue;
     use dione_mutes::MuteStore;
+    use dione_pre_send::HookName;
     use proptest::prelude::*;
 
     #[tokio::test]

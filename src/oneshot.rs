@@ -24,11 +24,11 @@ use crate::{
     discord::chunk_preserving_fences,
     gate::OutboundGate,
     no_rly::{OutboundJudge as _, Verdict},
-    pre_send::{
-        ChannelType, HookContext, HookDecision, NoRly, OutboundDestination, observe_pipeline,
-    },
 };
 use camino::Utf8Path;
+use dione_pre_send::{
+    ChannelType, HookContext, HookDecision, NoRly, OutboundDestination, observe_pipeline,
+};
 use serde::Serialize;
 use serenity::{
     builder::CreateMessage,

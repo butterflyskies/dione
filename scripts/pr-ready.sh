@@ -88,6 +88,8 @@ mutes_version=$(sh scripts/workspace-package-version.sh dione-mutes)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-mutes-${mutes_version}.crate"
 coordination_version=$(sh scripts/workspace-package-version.sh dione-coordination)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-coordination-${coordination_version}.crate"
+pre_send_version=$(sh scripts/workspace-package-version.sh dione-pre-send)
+sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-pre-send-${pre_send_version}.crate"
 presentation_version=$(sh scripts/workspace-package-version.sh dione-presentation)
 sh scripts/verify-public-package-privacy.sh "${target_dir}/package/dione-presentation-${presentation_version}.crate"
 harness_version=$(sh scripts/workspace-package-version.sh dione-harness)

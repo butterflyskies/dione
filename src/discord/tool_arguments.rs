@@ -1,12 +1,10 @@
 //! Shared Discord tool argument parsing at the MCP boundary.
+use dione_pre_send::{HookName, PipelineError};
 use serde_json::{Value, json};
 use std::num::ParseIntError;
 use thiserror::Error;
 use {
-    crate::{
-        discord::ids::Snowflake,
-        pre_send::{HookName, PipelineError},
-    },
+    crate::discord::ids::Snowflake,
     dione_evidence::{SentexError, SentexHandles, parse_tool_sentex_handles},
 };
 

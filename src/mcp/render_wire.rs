@@ -58,10 +58,10 @@ mod tests {
     use crate::{
         config::{Config, LoadedConfig},
         discord::{messaging::MessagingCtx, rendering::render_to_channel},
-        pre_send::HookName,
         state::new_state,
     };
     use camino::Utf8PathBuf;
+    use dione_pre_send::HookName;
     use serenity::model::id::ChannelId;
     use std::{io, path::PathBuf, sync::Arc};
 
@@ -164,13 +164,13 @@ mod contract_tests {
         discord::{messaging::MessagingCtx, rendering::render_to_channel},
         ingress_ledger::IngressLedger,
         no_rly::consent::ConsentGate,
-        pre_send::{
-            AuditTrail, ConstructFeedback, HookContext, HookDecision, HookName, HookOutput,
-            PipelineMode, PreSendHook, PreSendPipeline,
-        },
         state::new_state,
     };
     use camino::Utf8PathBuf;
+    use dione_pre_send::{
+        AuditTrail, ConstructFeedback, HookContext, HookDecision, HookName, HookOutput,
+        PipelineMode, PreSendHook, PreSendPipeline,
+    };
     use dione_rendering::render_file;
     use serenity::model::id::ChannelId;
     use std::{

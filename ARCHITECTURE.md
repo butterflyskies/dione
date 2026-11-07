@@ -279,8 +279,9 @@ original SDK error text; [registered introspection tools](src/discord/introspect
 nonempty partial progress and retain retry state privately. Attention consumes
 the same typed outcomes and treats only complete delivery as success.
 
-[pre_send.rs](src/pre_send.rs) installs the production hook pipeline in Observe
-mode. Observe records findings without changing or stopping output. Separately,
+[dione-pre-send](crates/dione-pre-send/src/lib.rs) owns the hook runner, private
+status lint and production roster. [Process composition](src/composition/pre_send.rs)
+installs the production pipeline in Observe mode. Observe records findings without changing or stopping output. Separately,
 the [no_rly consent gate](src/no_rly/consent.rs) can hold rejected message text
 for an explicit release or rephrase. Its pending handles are in memory, while
 resolved outcomes go to the journal. These are different mechanisms.

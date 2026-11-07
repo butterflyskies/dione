@@ -8,6 +8,10 @@ mod types;
 use camino::Utf8PathBuf;
 use dione_coordination::{ClaimOutcome, Coordinator};
 use dione_mutes::MuteStore;
+use dione_pre_send::{
+    ChannelType as HookChannelType, ConstructId, HookContext, HookDecision, HookName,
+    OutboundDestination, PreSendPipeline,
+};
 pub use rook_publication::{DiscordPublicationInitError, DiscordPublicationProvider};
 use serde::Deserialize;
 use serde_json::json;
@@ -40,10 +44,6 @@ use {
             },
             judge::{AlwaysClear, OutboundJudge, Verdict},
             queue::HoldHandle,
-        },
-        pre_send::{
-            ChannelType as HookChannelType, ConstructId, HookContext, HookDecision, HookName,
-            OutboundDestination, PreSendPipeline,
         },
         state::State,
     },
@@ -390,7 +390,7 @@ impl MessagingCtx {
         let pre_send_pipeline = config
             .pre_send
             .enabled
-            .then(crate::pre_send::installed_pipeline)
+            .then(crate::composition::pre_send::installed_pipeline)
             .flatten();
         Self {
             author_id: config.pre_send_author_id,
@@ -1972,6 +1972,11 @@ mod tests {
     use super::*;
     use dione_access_requests::AccessQueue;
     use dione_mutes::{GuildMute, MuteState};
+    use dione_pre_send::{
+        Assessment, AuditSink, AuditTrail, ConstructFeedback, FeedbackSink, HookContext,
+        HookDecision, HookOutput, PipelineMode, PreSendHook, PreSendPipeline, SinkError,
+        SinkFailurePolicy,
+    };
     use serde_json::Value;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::{
@@ -1981,11 +1986,6 @@ mod tests {
     use {
         crate::{
             config::{ChannelConfig, Config},
-            pre_send::{
-                Assessment, AuditSink, AuditTrail, ConstructFeedback, FeedbackSink, HookContext,
-                HookDecision, HookOutput, PipelineMode, PreSendHook, PreSendPipeline, SinkError,
-                SinkFailurePolicy,
-            },
             state::new_state,
         },
         dione_contradictionary::{Action, Entry, MatchMode},
@@ -4361,8 +4361,8 @@ mod tests {
 
     #[tokio::test]
     async fn pre_send_hot_reload_enabled_to_disabled_applies_to_next_context() {
-        let installed = crate::pre_send::observe_pipeline(Vec::new()).expect("pipeline");
-        crate::pre_send::install_pipeline(Some(installed));
+        let installed = dione_pre_send::observe_pipeline(Vec::new()).expect("pipeline");
+        crate::composition::pre_send::install_pipeline(Some(installed));
         let enabled = messaging_ctx(LoadedConfig::from_raw(Config::default()));
         assert!(enabled.has_pre_send_pipeline());
 
@@ -4374,8 +4374,8 @@ mod tests {
 
     #[tokio::test]
     async fn pre_send_hot_reload_disabled_to_enabled_applies_to_next_context() {
-        let installed = crate::pre_send::observe_pipeline(Vec::new()).expect("pipeline");
-        crate::pre_send::install_pipeline(Some(installed));
+        let installed = dione_pre_send::observe_pipeline(Vec::new()).expect("pipeline");
+        crate::composition::pre_send::install_pipeline(Some(installed));
         let mut disabled_config = Config::default();
         disabled_config.pre_send.enabled = false;
         let disabled = messaging_ctx(LoadedConfig::from_raw(disabled_config));

@@ -3,6 +3,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use dione_bell_rings::{BellProviderConfig, RecallOptions};
 use dione_coordination::{CoordinationConfig, Coordinator};
 use dione_gaie::{DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES, DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES};
+use dione_pre_send::ConstructId;
 use regex::RegexSet;
 use serde::{Deserialize, Deserializer, de::Error as _};
 use serenity::model::id::{ChannelId, UserId};
@@ -21,7 +22,6 @@ use {
         config_candidate::{compose_candidate, resolve_sidecar_path},
         config_store::{BoxError, ConfigStore},
         discord::verified_action::PLURALKIT_APPLICATION_ID,
-        pre_send::ConstructId,
         teams::ConversationId,
     },
     dione_contradictionary::{Contradictionary, Entry, load_sidecar_entries},

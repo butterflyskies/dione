@@ -1,0 +1,21 @@
+[package]
+name = "dione-pre-send"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Synchronous outbound hook pipeline and private status-packet lint"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["discord", "hooks", "lint"]
+categories = ["text-processing"]
+
+[dependencies]
+dione-evidence.workspace = true
+serenity.workspace = true
+tracing.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true

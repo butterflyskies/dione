@@ -138,8 +138,8 @@ pub async fn run() -> Result<(), StartupError> {
         tracing::warn!(warning = %warning, "config loaded with a startup warning");
     }
     let pre_send_pipeline =
-        crate::pre_send::production_pipeline().map_err(StartupErrorKind::Observe)?;
-    crate::pre_send::install_pipeline(Some(pre_send_pipeline));
+        dione_pre_send::production_pipeline().map_err(StartupErrorKind::Observe)?;
+    crate::composition::pre_send::install_pipeline(Some(pre_send_pipeline));
 
     let mute_store = MuteStore::load(&state_dir)
         .await

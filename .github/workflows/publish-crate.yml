@@ -60,6 +60,8 @@ jobs:
       publish-mutes: ${{ steps.package.outputs.publish-mutes }}
       coordination-version: ${{ steps.package.outputs.coordination-version }}
       publish-coordination: ${{ steps.package.outputs.publish-coordination }}
+      pre-send-version: ${{ steps.package.outputs.pre-send-version }}
+      publish-pre-send: ${{ steps.package.outputs.publish-pre-send }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -353,6 +355,20 @@ jobs:
             missing) echo "publish-coordination=true" >> "${GITHUB_OUTPUT}" ;;
           esac
           echo "coordination-version=${coordination_version}" >> "${GITHUB_OUTPUT}"
+
+          pre_send_version="$(scripts/workspace-package-version.sh dione-pre-send)"
+          pre_send_crate="target/package/dione-pre-send-${pre_send_version}.crate"
+          scripts/verify-public-package-privacy.sh "${pre_send_crate}"
+          scripts/verify-crates-io-owners.sh dione-pre-send \
+            butterflysky \
+            github:butterflyskies:lacuna-blinkers \
+            github:butterflyskies:superadmins
+          package_state="$(scripts/crates-io-package-state.sh dione-pre-send "${pre_send_version}" "${pre_send_crate}" --ignore-vcs-info)"
+          case "$package_state" in
+            published) echo "publish-pre-send=false" >> "${GITHUB_OUTPUT}" ;;
+            missing) echo "publish-pre-send=true" >> "${GITHUB_OUTPUT}" ;;
+          esac
+          echo "pre-send-version=${pre_send_version}" >> "${GITHUB_OUTPUT}"
 
   publish-rendering:
     needs: verify-dione
@@ -2179,8 +2195,105 @@ jobs:
             github:butterflyskies:lacuna-blinkers \
             github:butterflyskies:superadmins
 
+  publish-pre-send:
+    needs: [verify-dione, reconcile-evidence]
+    if: needs.verify-dione.outputs.publish-pre-send == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: "1.98.0"
+      - name: Recheck pre-send package contents
+        id: preflight
+        run: |
+          set -euo pipefail
+
+          pre_send_version="$(scripts/workspace-package-version.sh dione-pre-send)"
+          test "${pre_send_version}" = "${{ needs.verify-dione.outputs.pre-send-version }}"
+          cargo package -p dione-pre-send --locked --no-verify
+          pre_send_crate="target/package/dione-pre-send-${pre_send_version}.crate"
+          scripts/verify-public-package-privacy.sh "${pre_send_crate}"
+          scripts/verify-crates-io-owners.sh dione-pre-send \
+            butterflysky \
+            github:butterflyskies:lacuna-blinkers \
+            github:butterflyskies:superadmins
+
+          package_state="$(scripts/crates-io-package-state.sh dione-pre-send "${pre_send_version}" "${pre_send_crate}" --ignore-vcs-info)"
+          case "$package_state" in
+            published)
+              echo "pre-send ${pre_send_version} was already published with matching contents"
+              echo "upload=false" >> "${GITHUB_OUTPUT}"
+              ;;
+            missing)
+              echo "upload=true" >> "${GITHUB_OUTPUT}"
+              ;;
+          esac
+      - name: Authenticate with crates.io
+        if: steps.preflight.outputs.upload == 'true'
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
+        id: auth
+      - name: Upload pre-verified pre-send package
+        if: steps.preflight.outputs.upload == 'true'
+        continue-on-error: true
+        run: cargo publish -p dione-pre-send --locked --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  reconcile-pre-send:
+    needs: [verify-dione, reconcile-evidence, publish-pre-send]
+    if: >-
+      always() &&
+      needs.verify-dione.result == 'success' &&
+      needs.reconcile-evidence.result == 'success' &&
+      (needs.publish-pre-send.result == 'success' || needs.publish-pre-send.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: "1.98.0"
+      - name: Reconcile pre-send registry contents
+        run: |
+          set -euo pipefail
+
+          pre_send_version="${{ needs.verify-dione.outputs.pre-send-version }}"
+          for attempt in $(seq 1 20); do
+            if timeout 10s cargo info --registry crates-io "dione-pre-send@${pre_send_version}" > /dev/null 2>&1; then
+              break
+            fi
+            if [ "${attempt}" = 20 ]; then
+              echo "Cargo could not resolve dione-pre-send ${pre_send_version} after bounded retries" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          cargo package -p dione-pre-send --locked
+          pre_send_crate="target/package/dione-pre-send-${pre_send_version}.crate"
+          scripts/verify-public-package-privacy.sh "${pre_send_crate}"
+          test "$(scripts/crates-io-package-state.sh dione-pre-send "${pre_send_version}" "${pre_send_crate}" --ignore-vcs-info)" = published
+          scripts/verify-crates-io-owners.sh dione-pre-send \
+            butterflysky \
+            github:butterflyskies:lacuna-blinkers \
+            github:butterflyskies:superadmins
+
   publish-crate:
-    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination]
+    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send]
     if: needs.verify-dione.outputs.publish-dione == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -2233,7 +2346,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   reconcile-dione:
-    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, publish-crate]
+    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, publish-crate]
     if: >-
       always() &&
       needs.verify-dione.result == 'success' &&
@@ -2256,6 +2369,7 @@ jobs:
       needs.reconcile-access-requests.result == 'success' &&
       needs.reconcile-mutes.result == 'success' &&
       needs.reconcile-coordination.result == 'success' &&
+      needs.reconcile-pre-send.result == 'success' &&
       (needs.publish-crate.result == 'success' || needs.publish-crate.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 20
