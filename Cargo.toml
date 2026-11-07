@@ -3,7 +3,7 @@ members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-
 
 [package]
 name = "dione"
-version = "0.130.13"
+version = "0.130.14"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -15,21 +15,21 @@ categories = ["command-line-utilities"]
 
 [workspace.dependencies]
 dione-discord-scheduling = { version = "=0.1.4", path = "crates/dione-discord-scheduling" }
-dione-harness-runtime = { version = "=0.1.8", path = "crates/dione-harness-runtime" }
+dione-harness-runtime = { version = "=0.1.9", path = "crates/dione-harness-runtime" }
 clap = { version = "4", features = ["derive", "env"] }
-dione-oneshot = { version = "=0.1.8", path = "crates/dione-oneshot" }
-dione-discord-gate = { version = "=0.1.7", path = "crates/dione-discord-gate" }
-dione-discord-bells = { version = "=0.1.6", path = "crates/dione-discord-bells" }
-dione-permissions = { version = "=0.1.6", path = "crates/dione-permissions" }
+dione-oneshot = { version = "=0.1.9", path = "crates/dione-oneshot" }
+dione-discord-gate = { version = "=0.1.8", path = "crates/dione-discord-gate" }
+dione-discord-bells = { version = "=0.1.7", path = "crates/dione-discord-bells" }
+dione-permissions = { version = "=0.1.7", path = "crates/dione-permissions" }
 dione-drop-ledger = { version = "=0.1.0", path = "crates/dione-drop-ledger" }
 notify = "8"
-dione-config-watcher = { version = "=0.1.6", path = "crates/dione-config-watcher" }
+dione-config-watcher = { version = "=0.1.7", path = "crates/dione-config-watcher" }
 dione-tracing-channel = { version = "=0.1.4", path = "crates/dione-tracing-channel" }
 dione-discord-events = { version = "=0.1.4", path = "crates/dione-discord-events" }
 dione-discord-state = { version = "=0.1.0", path = "crates/dione-discord-state" }
 dione-discord-presence = { version = "=0.1.0", path = "crates/dione-discord-presence" }
 dione-claude = { version = "=0.1.3", path = "crates/dione-claude" }
-dione-codex = { version = "=0.1.7", path = "crates/dione-codex" }
+dione-codex = { version = "=0.1.8", path = "crates/dione-codex" }
 tokio-tungstenite = { version = "0.21", default-features = false, features = ["handshake"] }
 dione-omp = { version = "=0.2.4", path = "crates/dione-omp" }
 dione-teams = { version = "=0.1.2", path = "crates/dione-teams" }
@@ -40,8 +40,8 @@ rcgen = "0.13"
 dione-provider-delivery = { version = "=0.1.2", path = "crates/dione-provider-delivery" }
 dione-mcp-tools = { version = "=0.2.0", path = "crates/dione-mcp-tools" }
 insta = { version = "1", features = ["json", "redactions"] }
-dione-outbound-consent = { version = "=0.2.2", path = "crates/dione-outbound-consent" }
-dione-config = { version = "=0.2.3", path = "crates/dione-config" }
+dione-outbound-consent = { version = "=0.2.3", path = "crates/dione-outbound-consent" }
+dione-config = { version = "=0.3.0", path = "crates/dione-config" }
 toml_edit = "0.25"
 dione-pluralkit-identities = { version = "=0.1.0", path = "crates/dione-pluralkit-identities" }
 dione-discord-identities = { version = "=0.1.0", path = "crates/dione-discord-identities" }
@@ -67,7 +67,7 @@ test-case = "3"
 dione-gaie = { version = "=0.1.1", path = "crates/dione-gaie" }
 dione-vaelii = { version = "=0.1.0", path = "crates/dione-vaelii" }
 proptest = "1"
-dione-rate-limiter = { version = "=0.1.0", path = "crates/dione-rate-limiter" }
+dione-rate-limiter = { version = "=0.2.0", path = "crates/dione-rate-limiter" }
 chrono-tz = "0.10"
 dione-messages = { version = "=0.2.2", path = "crates/dione-messages" }
 base64 = "0.22"

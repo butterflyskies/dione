@@ -492,3 +492,212 @@ async fn wrong_observation_exchange() {
     assert!(denied.get("content").is_none());
     peer.abort();
 }
+
+#[tokio::test]
+async fn registered_attachment_diagnostics_keep_capability_urls_private() {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        attachment_diagnostics_exchange(),
+    )
+    .await
+    .expect("registered attachment diagnostic fixture completed");
+}
+
+async fn attachment_diagnostics_exchange() {
+    use tracing::instrument::WithSubscriber;
+    use tracing_subscriber::{Layer, layer::SubscriberExt};
+    #[derive(Clone)]
+    struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    const PATH_CANARY: &str = "SYNTHETIC_ATTACHMENT_PATH_CANARY";
+    const QUERY_CANARY: &str = "SYNTHETIC_ATTACHMENT_QUERY_CANARY";
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let closed_address = closed.local_addr().unwrap();
+    drop(closed);
+    let signed = |origin: &str, kind: &str| {
+        format!("{origin}/{PATH_CANARY}/{kind}?signature={QUERY_CANARY}")
+    };
+    let attachments = json!([
+        {"id":"1","filename":"status.txt","size":1,"url":signed(&base,"status"),"proxy_url":signed(&base,"status")},
+        {"id":"2","filename":"oversize.txt","size":1,"url":signed(&base,"oversize"),"proxy_url":signed(&base,"oversize")},
+        {"id":"3","filename":"connect.txt","size":1,"url":signed(&format!("http://{closed_address}"),"connect"),"proxy_url":signed(&format!("http://{closed_address}"),"connect")},
+        {"id":"4","filename":"positive.txt","size":8,"url":format!("{base}/positive"),"proxy_url":format!("{base}/positive")}
+    ]);
+    let requests = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let captured_requests = requests.clone();
+    let peer = tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut reader = tokio::io::BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).await.unwrap() == 0 || header == "\r\n" {
+                    break;
+                }
+            }
+            let path = line.split_whitespace().nth(1).unwrap().to_owned();
+            captured_requests.lock().unwrap().push(path.clone());
+            let response = if path.starts_with("/api/v10/channels/42/messages/") {
+                let body = observed_message(attachments.clone()).to_string();
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+            } else if path == "/positive" {
+                "HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\npositive"
+                    .to_owned()
+            } else if path.contains("/oversize?") {
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    25 * 1024 * 1024 + 1
+                )
+            } else if path.contains("/status?") {
+                "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned()
+            } else {
+                panic!("unexpected synthetic fixture route");
+            };
+            reader
+                .get_mut()
+                .write_all(response.as_bytes())
+                .await
+                .unwrap();
+        }
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let state = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).unwrap();
+    tokio::fs::write(state.join("config.toml"), "[[channels]]\nid = \"42\"\n")
+        .await
+        .unwrap();
+    assert!(dione_config::reload_config(&state).await.1.is_none());
+    let services = Arc::new(ReplyServices::new(
+        Arc::new(
+            serenity::http::HttpBuilder::new("fake")
+                .proxy(&base)
+                .ratelimiter_disabled(true)
+                .build(),
+        ),
+        dione_discord_state::new_state(),
+        state.clone(),
+        Arc::new(dione_outbound_consent::consent::ConsentGate::new(&state)),
+        Arc::new(crate::ingress_ledger::IngressLedger::new()),
+        None,
+    ));
+    let registry = ToolRegistry::new(
+        &crate::mcp::server::reserved_tool_names(&dione_claude::connect(
+            dione_harness::ProtocolOutput::new(tokio::io::stdout()),
+            dione_codex::TOOL_NAMES,
+        )),
+        registrations_with_search(
+            services,
+            dione_contracts::ModuleInstanceId::new(
+                dione_contracts::ProviderId::new("discord").unwrap(),
+                dione_contracts::ModuleSlotId::new("primary").unwrap(),
+            ),
+            search::SearchTransport::local(format!("{base}/api/v10")),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let ordinary = Capture(Default::default());
+    let writer = ordinary.clone();
+    let trace_path = state.join("synthetic-trace.log");
+    let subscriber = tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(move || writer.clone())
+                .with_filter(tracing_subscriber::filter::LevelFilter::WARN),
+        )
+        .with(
+            tracing_subscriber::fmt::layer()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(std::sync::Mutex::new(
+                    std::fs::File::create(&trace_path).unwrap(),
+                ))
+                .with_filter(tracing_subscriber::filter::LevelFilter::TRACE),
+        );
+    let tool = registry.find("download_attachment").unwrap();
+    let result = tool
+        .call(&json!({"channel_id":"42","message_id":"9001"}))
+        .with_subscriber(subscriber)
+        .await
+        .unwrap();
+    assert_eq!(result, json!({"saved":[state.join("inbox/positive.txt")]}));
+    assert_eq!(
+        tokio::fs::read(state.join("inbox/positive.txt"))
+            .await
+            .unwrap(),
+        b"positive"
+    );
+    let logs = [
+        String::from_utf8(ordinary.0.lock().unwrap().clone()).unwrap(),
+        std::fs::read_to_string(trace_path).unwrap(),
+    ];
+    for log in logs {
+        assert!(
+            log.contains("failed to download attachment"),
+            "ordinary and trace diagnostics must remain present"
+        );
+        assert!(
+            !log.contains(PATH_CANARY),
+            "attachment path capability must not enter diagnostics"
+        );
+        assert!(
+            !log.contains(QUERY_CANARY),
+            "attachment query capability must not enter diagnostics"
+        );
+        for category in ["http_status", "too_large", "connect"] {
+            assert!(
+                log.contains(category),
+                "safe diagnostic category must remain useful"
+            );
+        }
+        assert!(log.contains("500"), "safe HTTP status retained");
+    }
+    let seen = requests.lock().unwrap().clone();
+    assert_eq!(
+        seen.len(),
+        4,
+        "one metadata lookup and three reachable attachment requests"
+    );
+    assert!(seen.contains(&format!("/{PATH_CANARY}/status?signature={QUERY_CANARY}")));
+    assert!(seen.contains(&format!("/{PATH_CANARY}/oversize?signature={QUERY_CANARY}")));
+    // An exact-target mismatch must reject before following any capability URL.
+    assert!(
+        tool.call(&json!({"channel_id":"42","message_id":"9002"}))
+            .await
+            .unwrap()["error"]
+            .is_string()
+    );
+    assert_eq!(requests.lock().unwrap().len(), 5);
+    tokio::fs::write(state.join("config.toml"), "[[channels]]\nid = \"43\"\n")
+        .await
+        .unwrap();
+    assert!(dione_config::reload_config(&state).await.1.is_none());
+    assert!(
+        tool.call(&json!({"channel_id":"42","message_id":"9001"}))
+            .await
+            .unwrap()["error"]
+            .is_string()
+    );
+    assert_eq!(
+        requests.lock().unwrap().len(),
+        5,
+        "revoked authorization prevents metadata or download requests"
+    );
+    peer.abort();
+}

@@ -375,6 +375,7 @@ pub fn redacted_config_error(config_path: &Utf8Path, error: &ReadOnlyConfigError
         ReadOnlyConfigError::Sidecar(_) => format!(
             "{config_path}: contradictionary sidecar failed to load (details withheld; see stderr)"
         ),
+        ReadOnlyConfigError::RateLimit(error) => format!("{config_path}: {error}"),
         ReadOnlyConfigError::Generation(_) => {
             format!("{config_path}: configuration generation counter exhausted")
         }

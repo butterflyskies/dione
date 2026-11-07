@@ -514,7 +514,8 @@ pub async fn download_attachment(
                 }
             },
             Err(e) => {
-                tracing::warn!(url = %attachment.url, error = %e, "failed to download attachment");
+                let (category, status) = e.diagnostic();
+                tracing::warn!(category, status = ?status, "failed to download attachment");
             }
         }
     }
@@ -588,6 +589,32 @@ enum DownloadErrorKind {
     Request(#[from] reqwest::Error),
     #[error("attachment too large: {bytes} bytes (max {MAX_ATTACHMENT_BYTES})")]
     TooLarge { bytes: u64 },
+}
+impl DownloadError {
+    // Provider capability URLs and error source chains are not diagnostic audience data.
+    // Keep the concrete error privately for classification, never format it at this boundary.
+    fn diagnostic(&self) -> (&'static str, Option<u16>) {
+        match &self.kind {
+            DownloadErrorKind::TooLarge { .. } => ("too_large", None),
+            DownloadErrorKind::Request(error) => {
+                let status = error.status().map(|status| status.as_u16());
+                let category = if status.is_some() {
+                    "http_status"
+                } else if error.is_timeout() {
+                    "timeout"
+                } else if error.is_connect() {
+                    "connect"
+                } else if error.is_body() {
+                    "body"
+                } else if error.is_decode() {
+                    "decode"
+                } else {
+                    "request"
+                };
+                (category, status)
+            }
+        }
+    }
 }
 impl From<reqwest::Error> for DownloadError {
     fn from(source: reqwest::Error) -> Self {
@@ -1311,10 +1338,14 @@ mod tests {
         assert_eq!(warnings.len(), 2, "one warning per failed attachment");
         assert!(
             warnings.iter().any(|fields| fields
-                .get("url")
-                .is_some_and(|url| url.contains("/bytes/1/1"))
-                && fields.contains_key("error")),
-            "download warning identifies the failed URL: {warnings:?}"
+                .get("category")
+                .is_some_and(|category| category == "http_status")
+                && fields
+                    .get("status")
+                    .is_some_and(|status| status.contains("404"))
+                && !fields.contains_key("url")
+                && !fields.contains_key("error")),
+            "download warning retains safe category and status: {warnings:?}"
         );
         assert!(
             warnings.iter().any(|fields| fields

@@ -102,6 +102,17 @@ pub enum ConfigError {
 /// The process-wide generation allocator has exhausted its range.
 pub struct ConfigGenerationError;
 
+/// Candidate composition failed before generation allocation or publication.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ConfigCompositionError {
+    /// The process-wide generation allocator is exhausted.
+    #[error(transparent)]
+    Generation(#[from] ConfigGenerationError),
+    /// An enabled rate-limit setting cannot safely be used by the runtime.
+    #[error(transparent)]
+    RateLimit(#[from] dione_rate_limiter::RateLimitConfigurationError),
+}
+
 /// What startup does when the on-disk config is invalid and there is no
 /// last-known-good to restore from.
 ///
@@ -127,6 +138,9 @@ pub enum NoLkgPolicy {
 /// Typed startup-time config failure.
 #[derive(Debug, Error)]
 pub enum StartupConfigError {
+    /// Parsed settings are semantically invalid; disk and cached policy are untouched.
+    #[error(transparent)]
+    InvalidRateLimit(#[from] dione_rate_limiter::RateLimitConfigurationError),
     /// Invalid main config at boot with no last-known-good to restore from,
     /// under [`NoLkgPolicy::FailStartup`].
     #[error(
@@ -1057,7 +1071,22 @@ pub struct RateLimitTomlConfig {
 }
 
 impl RateLimitTomlConfig {
-    /// Convert to the runtime rate limit config.
+    /// Validate enabled settings before composition or publication.
+    pub fn validate(&self) -> Result<(), dione_rate_limiter::RateLimitConfigurationError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        dione_rate_limiter::ScopeConfig {
+            max_tokens: self.max_tokens.unwrap_or(20),
+            window: std::time::Duration::from_secs(self.window_secs.unwrap_or(3600)),
+            cooldown: std::time::Duration::from_secs(self.cooldown_secs.unwrap_or(3600)),
+            overflow: dione_rate_limiter::OverflowPolicy::Drop { notify: true },
+        }
+        .validate_at(std::time::Instant::now())
+    }
+
+    /// Convert settings without publication. Config composition validates enabled settings first;
+    /// direct consumers must handle the runtime limiter's typed unavailable decision.
     pub fn into_runtime(self) -> dione_rate_limiter::RateLimitConfig {
         use dione_rate_limiter::{OverflowPolicy, RateLimitConfig, ScopeConfig};
         use std::time::Duration;
@@ -1196,15 +1225,16 @@ impl std::ops::Deref for LoadedConfig {
 }
 
 impl LoadedConfig {
-    /// Build from raw Config, parsing IDs and compiling regexes.
-    pub fn try_from_raw(raw: Config) -> Result<Self, ConfigGenerationError> {
+    /// Validate enabled rate-limit settings, then allocate a generation, parse IDs, and compile regexes.
+    pub fn try_from_raw(raw: Config) -> Result<Self, ConfigCompositionError> {
         Self::try_from_raw_with_counter(raw, &NEXT_CONFIG_GENERATION)
     }
 
     pub(crate) fn try_from_raw_with_counter(
         raw: Config,
         counter: &AtomicU64,
-    ) -> Result<Self, ConfigGenerationError> {
+    ) -> Result<Self, ConfigCompositionError> {
+        raw.rate_limit.validate()?;
         let generation = allocate_generation(counter)?;
         Ok(Self::from_raw_with_generation(raw, generation))
     }
@@ -1604,7 +1634,7 @@ fn build_and_store_raw_config(
     raw: Config,
     counter: &AtomicU64,
     cache: &ArcSwap<LoadedConfig>,
-) -> Result<LoadedConfig, ConfigGenerationError> {
+) -> Result<LoadedConfig, ConfigCompositionError> {
     let loaded = compose_candidate(raw, Vec::new(), counter)?;
     cache.store(Arc::new(loaded.clone()));
     Ok(loaded)
@@ -2205,6 +2235,8 @@ impl ConfigRuntime {
     /// Startup-time load with boot-brick-proof recovery.
     ///
     /// - Valid config → normal pipeline (and LKG maintenance).
+    /// - Parsed but invalid rate-limit settings → typed error, without disk/LKG/cache changes.
+    ///   The syntax recovery policy below is unchanged.
     /// - Missing file → today's first-boot path: write the default template
     ///   and proceed. This is NOT open decision #1.
     /// - Invalid config + LKG present → quarantine + restore + boot from the
@@ -2234,7 +2266,10 @@ impl ConfigRuntime {
             );
         }
         match try_load_config(&config_path) {
-            Ok((raw, snapshot)) => Ok(self.finish(&config_path, raw, None, Some(snapshot))),
+            Ok((raw, snapshot)) => {
+                raw.rate_limit.validate()?;
+                Ok(self.finish(&config_path, raw, None, Some(snapshot)))
+            }
             Err(ConfigError::NotFound { .. }) => match write_default_config(&config_path) {
                 Ok(applied) => {
                     let warning = default_durability_warning(&config_path, applied);
@@ -2339,7 +2374,7 @@ impl ConfigRuntime {
             Ok(loaded) => loaded,
             Err(error) => {
                 let cached = (**LAST_VALID_CONFIG.load()).clone();
-                tracing::error!(%error, "failed to allocate configuration generation");
+                tracing::error!(%error, "configuration candidate rejected");
                 return (cached, Some(error.to_string()));
             }
         };
@@ -2506,6 +2541,9 @@ pub async fn reload_config(state_dir: &Utf8Path) -> (LoadedConfig, Option<String
 /// Why a read-only config load failed. See [`load_config_readonly`].
 #[derive(Debug, Error)]
 pub enum ReadOnlyConfigError {
+    /// Parsed settings cannot safely be used by the runtime.
+    #[error(transparent)]
+    RateLimit(#[from] dione_rate_limiter::RateLimitConfigurationError),
     #[error(transparent)]
     /// The canonical configuration could not be loaded.
     Config(#[from] ConfigError),
@@ -2515,6 +2553,15 @@ pub enum ReadOnlyConfigError {
     #[error(transparent)]
     /// A fresh configuration generation could not be allocated.
     Generation(#[from] ConfigGenerationError),
+}
+
+impl From<ConfigCompositionError> for ReadOnlyConfigError {
+    fn from(error: ConfigCompositionError) -> Self {
+        match error {
+            ConfigCompositionError::Generation(error) => Self::Generation(error),
+            ConfigCompositionError::RateLimit(error) => Self::RateLimit(error),
+        }
+    }
 }
 
 /// Parses `config_path` (and its contradictionary sidecar) into a
@@ -2740,6 +2787,117 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn rate_limit_invalid_semantics_preserve_disk_lkg_cache_and_next_budget() {
+        use dione_rate_limiter::{ChannelRef, ParticipantId, RateLimitDecision, RateLimiter};
+        let _cache = config_cache_guard();
+        let extreme = i64::MAX;
+        let mut invalid_settings = vec!["max_tokens = 0".to_owned()];
+        if std::time::Instant::now()
+            .checked_add(std::time::Duration::from_secs(extreme as u64))
+            .is_none()
+        {
+            invalid_settings.extend([
+                format!("window_secs = {extreme}"),
+                format!("cooldown_secs = {extreme}"),
+            ]);
+        } else {
+            // A huge but representable duration is valid, rather than an arbitrary policy limit.
+            for field in ["window_secs", "cooldown_secs"] {
+                let raw: Config = toml::from_str(&format!(
+                    "[rate_limit]\nenabled = true\n{field} = {extreme}\n"
+                ))
+                .unwrap();
+                assert!(LoadedConfig::try_from_raw(raw).is_ok());
+            }
+        }
+        for keep_lkg in [false, true] {
+            for setting in &invalid_settings {
+                let (_dir, state) = temp_state_dir();
+                let path = state.join("config.toml");
+                let valid = "[rate_limit]\nenabled = true\nmax_tokens = 2\nwindow_secs = 60\ncooldown_secs = 30\n";
+                fs::write(&path, valid).unwrap();
+                let runtime = ConfigRuntime::new(state.clone());
+                assert!(reload_now(&runtime).1.is_none());
+                if !keep_lkg {
+                    fs::remove_file(lkg_path(&path)).unwrap();
+                }
+                let lkg_before = fs::read(lkg_path(&path)).ok();
+                let before = load_config(&state);
+                let generation_before = NEXT_CONFIG_GENERATION.load(Ordering::Relaxed);
+                let mut subscription = subscribe_generation();
+                subscription.borrow_and_update();
+                let invalid = format!("[rate_limit]\nenabled = true\n{setting}\n");
+                replace_file(&path, invalid.as_bytes());
+                let (_, warning) = reload_now(&runtime);
+                assert!(warning.unwrap().starts_with("rate_limit."));
+                assert!(Arc::ptr_eq(&before, &load_config(&state)));
+                assert_eq!(
+                    NEXT_CONFIG_GENERATION.load(Ordering::Relaxed),
+                    generation_before
+                );
+                assert!(!subscription.has_changed().unwrap());
+                assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
+                assert_eq!(fs::read(lkg_path(&path)).ok(), lkg_before);
+                assert!(!quarantine_path(&path).exists());
+                assert!(matches!(
+                    startup_load_now(&runtime, NoLkgPolicy::FailStartup),
+                    Err(StartupConfigError::InvalidRateLimit(_))
+                ));
+                assert!(matches!(
+                    load_config_readonly(&path),
+                    Err(ReadOnlyConfigError::RateLimit(_))
+                ));
+                let mutation = single_thread_rt()
+                    .block_on(runtime.mutate(|editor| editor.add_to_allow_from("424242")));
+                assert!(mutation.is_err());
+                assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
+                assert_eq!(fs::read(lkg_path(&path)).ok(), lkg_before);
+                assert!(Arc::ptr_eq(&before, &load_config(&state)));
+                assert_eq!(
+                    NEXT_CONFIG_GENERATION.load(Ordering::Relaxed),
+                    generation_before
+                );
+                let mut limiter =
+                    RateLimiter::new(load_config(&state).rate_limit_runtime().clone());
+                assert!(matches!(
+                    limiter.check_message(
+                        &ParticipantId::new("fixture"),
+                        &ChannelRef::new("fixture"),
+                        &[],
+                        std::time::Instant::now()
+                    ),
+                    RateLimitDecision::Allowed { remaining: 1, .. }
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn rate_limit_disabled_and_zero_duration_semantics_are_preserved() {
+        for enabled in [false, true] {
+            let raw: Config = toml::from_str(&format!("[rate_limit]\nenabled = {enabled}\nmax_tokens = 1\nwindow_secs = 0\ncooldown_secs = 0\n")).unwrap();
+            assert!(LoadedConfig::try_from_raw(raw).is_ok());
+        }
+        let raw: Config = toml::from_str("[rate_limit]\nenabled = false\nmax_tokens = 0\nwindow_secs = 9223372036854775807\ncooldown_secs = 9223372036854775807\n").unwrap();
+        assert!(LoadedConfig::try_from_raw(raw).is_ok());
+    }
+
+    #[test]
+    fn rate_limit_boundary_rejects_enabled_zero_before_generation() {
+        let counter = AtomicU64::new(17);
+        let raw: Config = toml::from_str("[rate_limit]\nenabled = true\nmax_tokens = 0\n").unwrap();
+        assert!(
+            LoadedConfig::try_from_raw_with_counter(raw, &counter).is_err(),
+            "enabled zero-token config must be rejected before publication"
+        );
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            17,
+            "invalid candidate cannot consume generation"
+        );
+    }
+
+    #[test]
     fn invalid_evidence_marker_version_fails_fresh_startup_without_lkg() {
         let _cache = config_cache_guard();
         let (_dir, state_dir) = temp_state_dir();
@@ -2750,7 +2908,9 @@ mod tests {
         .unwrap();
         let error =
             startup_load_now(&ConfigRuntime::new(state_dir), NoLkgPolicy::FailStartup).unwrap_err();
-        let StartupConfigError::InvalidConfigNoLkg { parse_error, .. } = error;
+        let StartupConfigError::InvalidConfigNoLkg { parse_error, .. } = error else {
+            panic!("expected syntax failure")
+        };
         assert!(parse_error.starts_with("TOML parse error"));
     }
 
@@ -2956,7 +3116,10 @@ mod tests {
                         .unwrap()
                 } else {
                     let StartupConfigError::InvalidConfigNoLkg { parse_error, .. } =
-                        startup_load_now(&runtime, NoLkgPolicy::FailStartup).unwrap_err();
+                        startup_load_now(&runtime, NoLkgPolicy::FailStartup).unwrap_err()
+                    else {
+                        panic!("expected syntax failure")
+                    };
                     parse_error
                 };
                 assert!(diagnostic.contains("line 2, column "));
@@ -3000,7 +3163,7 @@ mod tests {
 
         assert!(matches!(
             build_and_store_raw_config(Config::default(), &counter, &cache),
-            Err(ConfigGenerationError)
+            Err(ConfigCompositionError::Generation(ConfigGenerationError))
         ));
         let after = cache.load_full();
         assert!(Arc::ptr_eq(&before, &after));
@@ -4607,7 +4770,9 @@ mod tests {
             NoLkgPolicy::FailStartup,
         )
         .expect_err("bad main + no LKG must fail startup");
-        let StartupConfigError::InvalidConfigNoLkg { parse_error, .. } = error;
+        let StartupConfigError::InvalidConfigNoLkg { parse_error, .. } = error else {
+            panic!("expected syntax failure")
+        };
         assert!(
             !parse_error.contains('\n'),
             "parse_error must be one line, got: {parse_error:?}"

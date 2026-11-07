@@ -159,7 +159,9 @@ fn pipeline_step(
         let channel = ChannelRef::new(&chat_id_str);
         match rate_limiter.check_message(&sender, &channel, &[], now) {
             RateLimitDecision::Allowed { .. } => {}
-            RateLimitDecision::Denied { .. } => return None,
+            RateLimitDecision::Denied { .. } | RateLimitDecision::Unavailable { .. } => {
+                return None;
+            }
         }
     }
 

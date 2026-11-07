@@ -18,6 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.130.14]
+
+### Security
+
+- Keep attachment capability URLs out of failed-download diagnostics while
+  preserving request authorization, byte limits, and partial success.
+
+### Fixed
+
+- Reject unsafe enabled rate-limit settings before config publication and
+  report unrepresentable runtime deadlines without consuming tokens or
+  terminating inbound delivery. Preserve disabled and zero-duration behavior.
+
 ## [0.130.13]
 
 ### Security

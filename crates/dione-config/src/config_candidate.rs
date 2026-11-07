@@ -16,7 +16,7 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use std::sync::atomic::AtomicU64;
 use {
-    crate::config::{Config, ConfigGenerationError, LoadedConfig},
+    crate::config::{Config, ConfigCompositionError, LoadedConfig},
     dione_contradictionary::Entry,
 };
 
@@ -43,7 +43,7 @@ pub(crate) fn compose_candidate(
     mut raw: Config,
     sidecar_entries: Vec<Entry>,
     counter: &AtomicU64,
-) -> Result<LoadedConfig, ConfigGenerationError> {
+) -> Result<LoadedConfig, ConfigCompositionError> {
     raw.contradictionary.entries.retain(|inline| {
         !sidecar_entries
             .iter()
@@ -189,7 +189,9 @@ mod tests {
         let counter = AtomicU64::new(u64::MAX);
         assert!(matches!(
             compose_candidate(Config::default(), Vec::new(), &counter),
-            Err(ConfigGenerationError)
+            Err(ConfigCompositionError::Generation(
+                crate::config::ConfigGenerationError
+            ))
         ));
     }
 

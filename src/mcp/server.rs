@@ -557,6 +557,10 @@ async fn run_with_input(
                                     "rate limiter: message allowed"
                                 );
                             }
+                            RateLimitDecision::Unavailable { reason } => {
+                                tracing::warn!(%reason, "rate limiter unavailable, dropping message");
+                                continue;
+                            }
                             RateLimitDecision::Denied { retry_after, overflow: _ } => {
                                 // All denied messages are dropped for now.
                                 // OverflowPolicy::Buffer is accepted by config but not
@@ -1967,6 +1971,71 @@ mod tests {
             extract_delay(&message_event(42), &config),
             Duration::from_millis(500)
         );
+    }
+
+    #[tokio::test]
+    async fn rejected_rate_limit_reload_keeps_next_admitted_message_on_previous_budget() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let state = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let path = state.join("config.toml");
+        let runtime = dione_config::ConfigRuntime::new(state.clone());
+        std::fs::write(
+            &path,
+            "[rate_limit]\nenabled = true\nmax_tokens = 2\nwindow_secs = 60\ncooldown_secs = 30\n",
+        )
+        .unwrap();
+        assert!(runtime.reload().await.1.is_none());
+        let before = dione_config::load_config(&state);
+        let lkg_before = std::fs::read(dione_config::lkg_path(&path)).unwrap();
+        let mut limiter = RateLimiter::new(before.rate_limit_runtime().clone());
+        let event = message_event(42);
+        let key =
+            message_rate_limit_key(&event).expect("admitted message retains effective identity");
+        let now = Instant::now();
+        assert!(matches!(
+            limiter.check_message(&key.participant, &key.channel, &[], now),
+            RateLimitDecision::Allowed { remaining: 1, .. }
+        ));
+        let mut invalid_settings = vec!["max_tokens = 0"];
+        if now
+            .checked_add(Duration::from_secs(i64::MAX as u64))
+            .is_none()
+        {
+            invalid_settings.extend([
+                "window_secs = 9223372036854775807",
+                "cooldown_secs = 9223372036854775807",
+            ]);
+        }
+        for setting in invalid_settings {
+            let invalid = format!("[rate_limit]\nenabled = true\n{setting}\n");
+            std::fs::write(&path, &invalid).unwrap();
+            assert!(runtime.reload().await.1.unwrap().starts_with("rate_limit."));
+            let current = dione_config::load_config(&state);
+            assert!(std::sync::Arc::ptr_eq(&before, &current));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), invalid);
+            assert_eq!(
+                std::fs::read(dione_config::lkg_path(&path)).unwrap(),
+                lkg_before
+            );
+            if current.rate_limit_runtime() != limiter.config_ref() {
+                limiter.update_config(current.rate_limit_runtime().clone());
+            }
+        }
+        assert!(matches!(
+            limiter.check_message(&key.participant, &key.channel, &[], now),
+            RateLimitDecision::Allowed { remaining: 0, .. }
+        ));
+        assert!(matches!(
+            limiter.check_message(&key.participant, &key.channel, &[], now),
+            RateLimitDecision::Denied { .. }
+        ));
+        let mut manual_invalid = before.rate_limit_runtime().clone();
+        manual_invalid.default.max_tokens = 0;
+        limiter.update_config(manual_invalid);
+        assert!(matches!(
+            limiter.check_message(&key.participant, &key.channel, &[], now),
+            RateLimitDecision::Unavailable { .. }
+        ));
     }
 
     #[test]
