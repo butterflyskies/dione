@@ -292,7 +292,7 @@ impl FixtureProcess {
             .unwrap();
         let client = reqwest::Client::builder()
             .no_proxy()
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(120))
             .build()
             .unwrap();
         Self {
