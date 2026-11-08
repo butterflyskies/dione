@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.143.0"
+version = "0.144.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1780,7 +1780,7 @@ dependencies = [
 
 [[package]]
 name = "dione-rendering"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mitex",
  "png 0.17.16",

@@ -377,7 +377,7 @@ pub(crate) async fn call_tool(
                     .get("latex")
                     .and_then(Value::as_str)
                     .ok_or_else(|| "missing latex".to_string())?;
-                render_wire::file(rendering::render_file(latex))
+                dione_rendering::wire::file(rendering::render_file(latex))
             }
             "render_latex_to_channel" => {
                 let ctx = server.messaging_ctx(config.clone());

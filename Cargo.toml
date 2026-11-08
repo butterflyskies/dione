@@ -3,7 +3,7 @@ members = [".", "crates/dione-rendering", "crates/dione-durable", "crates/dione-
 
 [package]
 name = "dione"
-version = "0.143.0"
+version = "0.144.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -98,7 +98,7 @@ camino = { version = "1", features = ["serde1"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "fs", "io-util", "io-std", "net", "time"] }
 dione-durable = { version = "=0.2.0", path = "crates/dione-durable" }
-dione-rendering = { version = "=0.1.0", path = "crates/dione-rendering" }
+dione-rendering = { version = "=0.2.0", path = "crates/dione-rendering" }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 native-tls = { version = "0.2", features = ["vendored"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }

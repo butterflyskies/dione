@@ -1,6 +1,6 @@
 [package]
 name = "dione-rendering"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -11,6 +11,7 @@ keywords = ["latex", "typst", "png"]
 categories = ["multimedia::images"]
 
 [dependencies]
+serde_json.workspace = true
 mitex.workspace = true
 png.workspace = true
 tempfile.workspace = true

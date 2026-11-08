@@ -2,6 +2,9 @@
 
 #![warn(missing_docs)]
 
+/// JSON result projection for retained files and rendering errors.
+pub mod wire;
+
 use std::{
     io,
     path::{Path, PathBuf},

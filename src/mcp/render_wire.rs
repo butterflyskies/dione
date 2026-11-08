@@ -3,31 +3,15 @@
 use crate::discord::rendering::RenderToChannelError;
 use crate::discord::rendering::RenderToChannelErrorKind;
 use dione_discord_messaging_contracts::wire as messaging_wire;
+use dione_rendering::wire::render_error;
+#[cfg(test)]
 use dione_rendering::{
-    FileRenderError, FileRenderErrorKind, PersistedImage, RenderError, RenderErrorKind,
+    FileRenderError, FileRenderErrorKind, RenderError, RenderErrorKind, wire::file,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 use serenity::model::id::MessageId;
-
-pub(super) fn file(result: Result<PersistedImage, FileRenderError>) -> Value {
-    match result {
-        Ok(image) => {
-            json!({"ok": true, "path": image.path().to_string_lossy(), "size_bytes": image.size_bytes()})
-        }
-        Err(error) => match error.kind {
-            FileRenderErrorKind::Render(error) => render_error(error),
-            FileRenderErrorKind::Create(error) => {
-                json!({"error": format!("failed to create temp file: {error}")})
-            }
-            FileRenderErrorKind::Write { source, .. } => {
-                json!({"error": format!("failed to write PNG: {source}")})
-            }
-            FileRenderErrorKind::Persist(error) => {
-                json!({"error": format!("failed to persist temp file: {error}")})
-            }
-        },
-    }
-}
 
 pub(super) fn channel(result: Result<MessageId, RenderToChannelError>) -> Value {
     match result {
@@ -37,18 +21,6 @@ pub(super) fn channel(result: Result<MessageId, RenderToChannelError>) -> Value 
             RenderToChannelErrorKind::Messaging(error) => messaging_wire::message(Err(*error)),
         },
     }
-}
-
-fn render_error(error: RenderError) -> Value {
-    let message = match error.kind {
-        RenderErrorKind::IfTypstUnsupported => "\\iftypst is not supported".to_string(),
-        RenderErrorKind::Parse(error) => format!("LaTeX parse error: {error}"),
-        RenderErrorKind::UnsafeTypstOutput => "expression produces unsafe typst output".to_string(),
-        RenderErrorKind::Compile(error) => format!("typst compile error: {error}"),
-        RenderErrorKind::NoPages => "typst produced no pages".to_string(),
-        RenderErrorKind::Encode(error) => format!("PNG encode error: {error}"),
-    };
-    json!({"error": message})
 }
 
 #[cfg(test)]

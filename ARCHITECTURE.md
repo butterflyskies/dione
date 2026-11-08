@@ -402,7 +402,7 @@ Publishing a new snapshot does not reconstruct those captured values.
 Tokio, Serenity, serde, ArcSwap, and tracing. Reqwest supports HTTP integrations.
 Typst, its renderer and fonts, and mitex support [PNG rendering and retained files](crates/dione-rendering/src/lib.rs).
 [Discord rendering](src/discord/rendering.rs) authorizes and sends math attachments;
-[MCP rendering projection](src/mcp/render_wire.rs) formats typed results and failures.
+The rendering member [file contract](crates/dione-rendering/src/wire.rs) projects retained-file results and rendering failures. The root [channel projection](src/mcp/render_wire.rs) retains Discord messaging results.
 The package currently requires Rust 1.98 and edition 2024. Unix sockets and Unix
 signal handling appear in the runtime, so this map does not claim native Windows
 support. The [justfile](justfile) defines `just check` and the broader
