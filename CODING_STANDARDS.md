@@ -189,6 +189,11 @@ Use `cargo test --doc` only for documentation tests.
   crate if complex).
 - Fixture data in dedicated modules or files. Prefer models over hand-written
   spot checks.
+- Use invented names for identity fixtures, including people, agents,
+  organizations, and other named constructs. Known real identities in durable
+  fixtures are blocking P1 findings under the PII lens. Technical protocol, API,
+  package, and schema identifiers needed to exercise actual contracts are distinct
+  from identity fixtures.
 
 ### Practices
 

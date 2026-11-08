@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.130.16] - 2026-11-08
+
+### Security
+
+- Replace real agent identity fixtures with invented scopes and preserve their
+  literal diagnostic and delivery expectations.
+
+### Fixed
+
+- Require successful evidence reconciliation before MCP-tools publication and
+  reconciliation, preserving first-publication dependency ordering.
+
 ## [0.130.15]
 
 ### Fixed

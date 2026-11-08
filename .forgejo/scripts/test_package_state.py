@@ -180,11 +180,13 @@ class ReleasePreflightTests(unittest.TestCase):
             self.assertIn("reconcile-config", jobs[name].splitlines()[0])
         self.assertIn("needs.reconcile-config.result == 'success'", jobs["reconcile-dione"])
 
-    def test_mcp_tools_leaf_and_root_reconciliation(self):
+    def test_mcp_tools_requires_evidence_and_root_reconciliation(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
         jobs = read_jobs(workflow)
-        self.assertEqual(jobs["publish-mcp-tools"].splitlines()[0].strip(), "needs: verify-dione")
-        self.assertEqual(jobs["reconcile-mcp-tools"].splitlines()[0].strip(), "needs: [verify-dione, publish-mcp-tools]")
+        for name, extra in (("publish-mcp-tools", set()), ("reconcile-mcp-tools", {"publish-mcp-tools"})):
+            needs = jobs[name].splitlines()[0].strip().removeprefix("needs: ").removeprefix("[").removesuffix("]")
+            self.assertEqual(set(needs.split(", ")), {"verify-dione", "reconcile-evidence"} | extra)
+            self.assertIn("needs.reconcile-evidence.result == 'success'", jobs[name])
         self.assertIn("always()", jobs["reconcile-mcp-tools"])
         self.assertIn("needs.verify-dione.result == 'success'", jobs["reconcile-mcp-tools"])
         self.assertIn("(needs.publish-mcp-tools.result == 'success' || needs.publish-mcp-tools.result == 'skipped')", jobs["reconcile-mcp-tools"])
