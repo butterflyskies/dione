@@ -1,5 +1,6 @@
 //! Lossless bounded native metadata beside the durable common observation.
 
+use dione_discord_queries::queries::DiscordNativeObservation;
 use serde::Serialize;
 use serenity::model::{
     Timestamp,
@@ -8,7 +9,7 @@ use serenity::model::{
 };
 use thiserror::Error;
 
-use super::{messaging::queries::DiscordNativeObservation, observation::DiscordMessageObservation};
+use super::observation::DiscordMessageObservation;
 use dione_contracts::context::{Availability, UnavailableReason};
 use dione_rook::{NativeSupplement, ObservationError, RetainedObservation};
 
@@ -157,7 +158,6 @@ pub(crate) fn native_supplement(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discord::messaging::queries::MessageView;
     use dione_config::Config;
     use dione_config::LoadedConfig;
     use dione_contracts::{
@@ -165,6 +165,7 @@ mod tests {
         context::ObservationOrigin,
         observation::{MessageObservation, MessageOccurrence},
     };
+    use dione_discord_queries::queries::MessageView;
     use serenity::model::channel::Message;
 
     fn fixture() -> DiscordMessageObservation {

@@ -1,5 +1,12 @@
 //! MCP response shapes for typed Discord query results.
 
+use crate::{
+    QueryError, QueryErrorKind,
+    queries::{
+        DiscordNativeObservation, FetchedMessages, MessageView, NewMessages, PinnedMessages,
+        RetrievedMessage,
+    },
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use camino::Utf8PathBuf;
 use dione_contracts::{
@@ -10,26 +17,14 @@ use dione_contracts::{
         UnavailableReason,
     },
 };
+use dione_evidence::project_offered_sentexes;
+use dione_vaelii::{GetMessageReceipt, VaeliiError};
 use serde_json::{Value, json};
 use serenity::http::HttpError;
-use {
-    crate::discord::{
-        messaging::{
-            MessagingError, MessagingErrorKind,
-            queries::{
-                DiscordNativeObservation, FetchedMessages, MessageView, NewMessages,
-                PinnedMessages, RetrievedMessage,
-            },
-        },
-        messaging_wire,
-    },
-    dione_evidence::project_offered_sentexes,
-    dione_vaelii::{GetMessageReceipt, VaeliiError},
-};
 
 /// Projects an exact read with explicit observation and receipt states.
-pub(crate) fn retrieved_v2(
-    result: Result<RetrievedMessage, MessagingError>,
+pub fn retrieved_v2(
+    result: Result<RetrievedMessage, QueryError>,
     source: &ModuleInstanceId,
 ) -> Value {
     let result = match result {
@@ -46,10 +41,7 @@ pub(crate) fn retrieved_v2(
 }
 
 /// Projects history with the actual requested direction and effective limit.
-pub(crate) fn fetched_v2(
-    result: Result<FetchedMessages, MessagingError>,
-    source: &ModuleInstanceId,
-) -> Value {
+pub fn fetched_v2(result: Result<FetchedMessages, QueryError>, source: &ModuleInstanceId) -> Value {
     let result = match result {
         Ok(result) => result,
         Err(error) => return query_error(&error),
@@ -119,40 +111,15 @@ impl ContextError {
     }
 }
 
-fn query_error(error: &MessagingError) -> Value {
+fn query_error(error: &QueryError) -> Value {
     match &error.kind {
-        MessagingErrorKind::OutboundDenied(_) => ContextError::LocalAccessDenied,
-        MessagingErrorKind::Observation(_) => ContextError::InvalidObservation,
-        MessagingErrorKind::ConflictingPagination => ContextError::InvalidQuery,
-        MessagingErrorKind::Discord(error) | MessagingErrorKind::FetchMessage(error) => {
+        QueryErrorKind::OutboundDenied(_) => ContextError::LocalAccessDenied,
+        QueryErrorKind::Observation(_) => ContextError::InvalidObservation,
+        QueryErrorKind::ConflictingPagination => ContextError::InvalidQuery,
+        QueryErrorKind::Discord(error) | QueryErrorKind::FetchMessage(error) => {
             provider_error(error)
         }
-        MessagingErrorKind::Target(_)
-        | MessagingErrorKind::Pipeline(_)
-        | MessagingErrorKind::PipelineTask(_)
-        | MessagingErrorKind::HooksNotRegistered
-        | MessagingErrorKind::HookHalted { .. }
-        | MessagingErrorKind::RedirectUnsupported(_)
-        | MessagingErrorKind::CaptionlessHookOverrides
-        | MessagingErrorKind::RawSentexLocators
-        | MessagingErrorKind::SentexInsideQuoteOrFence
-        | MessagingErrorKind::SentexRequiresSingleMessage
-        | MessagingErrorKind::SentexCannotBeHeld
-        | MessagingErrorKind::DmDisabled
-        | MessagingErrorKind::CreateDm(_)
-        | MessagingErrorKind::CoordinationUnavailable(_)
-        | MessagingErrorKind::CoordinationBusy { .. }
-        | MessagingErrorKind::Delivery(_)
-        | MessagingErrorKind::DeliveryUnknown { .. }
-        | MessagingErrorKind::EmptyRephrase
-        | MessagingErrorKind::Handle(_)
-        | MessagingErrorKind::SendAttachment(_)
-        | MessagingErrorKind::ReadFile(_)
-        | MessagingErrorKind::CreateInbox(_)
-        | MessagingErrorKind::NoAttachments
-        | MessagingErrorKind::RelativeFilePath
-        | MessagingErrorKind::FileNotPermitted
-        | MessagingErrorKind::ZeroEmojiId(_) => ContextError::QueryFailed,
+        QueryErrorKind::CreateInbox(_) | QueryErrorKind::NoAttachments => ContextError::QueryFailed,
     }
     .project()
 }
@@ -238,7 +205,7 @@ fn relation(value: &ReferenceObservation) -> Value {
 fn context_message(
     message: &MessageView,
     source: &ModuleInstanceId,
-) -> Result<Value, crate::discord::messaging::queries::ObservationError> {
+) -> Result<Value, crate::queries::ObservationError> {
     let context = message.context(source)?;
     let sender = context.sender();
     Ok(json!({
@@ -296,7 +263,7 @@ fn native(native: &DiscordNativeObservation) -> Value {
 }
 
 /// Projects fetched history while preserving optional cursor metadata.
-pub(crate) fn fetched(result: Result<FetchedMessages, MessagingError>) -> Value {
+pub fn fetched(result: Result<FetchedMessages, QueryError>) -> Value {
     match result {
         Ok(result) => {
             let mut projected =
@@ -307,46 +274,46 @@ pub(crate) fn fetched(result: Result<FetchedMessages, MessagingError>) -> Value 
             }
             projected
         }
-        Err(error) => messaging_wire::error(error),
+        Err(error) => self::error(error),
     }
 }
 
 /// Projects a forward history page and its pagination hint.
-pub(crate) fn new_since(result: Result<NewMessages, MessagingError>) -> Value {
+pub fn new_since(result: Result<NewMessages, QueryError>) -> Value {
     match result {
         Ok(result) => json!({
             "messages": result.messages().iter().map(message).collect::<Vec<_>>(),
             "count": result.messages().len(),
             "has_more": result.has_more(),
         }),
-        Err(error) => messaging_wire::error(error),
+        Err(error) => self::error(error),
     }
 }
 
 /// Projects pinned observations and their count.
-pub(crate) fn pins(result: Result<PinnedMessages, MessagingError>) -> Value {
+pub fn pins(result: Result<PinnedMessages, QueryError>) -> Value {
     match result {
         Ok(result) => json!({
             "messages": result.messages().iter().map(message).collect::<Vec<_>>(),
             "count": result.messages().len(),
         }),
-        Err(error) => messaging_wire::error(error),
+        Err(error) => self::error(error),
     }
 }
 
 /// Projects successfully saved attachment paths.
-pub(crate) fn downloaded(result: Result<Vec<Utf8PathBuf>, MessagingError>) -> Value {
+pub fn downloaded(result: Result<Vec<Utf8PathBuf>, QueryError>) -> Value {
     match result {
         Ok(paths) => json!({"saved": paths}),
-        Err(error) => messaging_wire::error(error),
+        Err(error) => self::error(error),
     }
 }
 
 /// Projects a single observation and its optional evidence receipt.
-pub(crate) fn retrieved(result: Result<RetrievedMessage, MessagingError>) -> Value {
+pub fn retrieved(result: Result<RetrievedMessage, QueryError>) -> Value {
     let result = match result {
         Ok(result) => result,
-        Err(error) => return messaging_wire::error(error),
+        Err(error) => return self::error(error),
     };
     let mut projected = project_message(result.message(), AttachmentProjection::Details);
     match result.receipt() {
@@ -369,7 +336,7 @@ enum AttachmentProjection {
 }
 
 /// Projects an observed message with summary attachment metadata.
-pub(crate) fn message(message: &MessageView) -> Value {
+pub fn message(message: &MessageView) -> Value {
     project_message(message, AttachmentProjection::Summary)
 }
 
@@ -461,24 +428,23 @@ mod context_tests {
     #[test]
     fn context_errors_use_fixed_messages_instead_of_provider_or_owner_text() {
         let hostile = serenity::Error::Other("https://private.invalid/token message body");
-        let error: MessagingError = MessagingErrorKind::FetchMessage(Box::new(hostile)).into();
+        let error: QueryError = QueryErrorKind::FetchMessage(Box::new(hostile)).into();
         assert_eq!(
             query_error(&error),
             json!({"response_version": 2, "status": "error", "error": {"code": "provider_error", "message": "The provider request failed."}})
         );
-        let error: MessagingError =
-            MessagingErrorKind::CoordinationUnavailable("secret".into()).into();
+        let error: QueryError = QueryErrorKind::CreateInbox(std::io::Error::other("secret")).into();
         assert_eq!(
             query_error(&error)["error"],
             json!({"code": "query_failed", "message": "The read could not be completed."})
         );
-        let error: MessagingError = MessagingErrorKind::ConflictingPagination.into();
+        let error: QueryError = QueryErrorKind::ConflictingPagination.into();
         assert_eq!(
             query_error(&error)["error"],
             json!({"code": "invalid_query", "message": "The query arguments conflict."})
         );
-        let error: MessagingError =
-            MessagingErrorKind::OutboundDenied(serenity::all::ChannelId::new(100)).into();
+        let error: QueryError =
+            QueryErrorKind::OutboundDenied(serenity::all::ChannelId::new(100)).into();
         assert_eq!(
             query_error(&error)["error"],
             json!({"code": "local_access_denied", "message": "Current policy does not permit this read."})
@@ -505,7 +471,7 @@ mod context_tests {
         let (_stream, _) = accepted.unwrap();
         let error = response.unwrap_err();
         assert!(error.is_timeout());
-        let error: MessagingError = MessagingErrorKind::Discord(Box::new(serenity::Error::Http(
+        let error: QueryError = QueryErrorKind::Discord(Box::new(serenity::Error::Http(
             serenity::http::HttpError::Request(error),
         )))
         .into();
@@ -536,4 +502,9 @@ mod context_tests {
             json!({"status": "unavailable", "reason": "unsupported"})
         );
     }
+}
+
+/// Projects the original unversioned read failure text.
+pub fn error(error: QueryError) -> Value {
+    json!({"error":error.kind.to_string()})
 }

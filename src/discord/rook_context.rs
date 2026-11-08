@@ -8,11 +8,9 @@ use serenity::{
     model::id::{ChannelId, MessageId},
 };
 
-use super::{
-    messaging::{MessagingCtx, MessagingError, MessagingErrorKind, queries},
-    rook_observation::native_supplement,
-};
+use super::{messaging::MessagingCtx, rook_observation::native_supplement};
 use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
+use dione_discord_queries::{QueryError, QueryErrorKind, queries};
 use dione_rook::{
     ContextCapabilities, ContextDirection, ContextError, ContextErrorKind, ContextObservation,
     ContextPage, ContextProvider, ContextQuery, ContextResponse, ConversationKey,
@@ -94,9 +92,10 @@ impl ContextProvider for DiscordContextProvider {
                     let id = target
                         .numeric()
                         .ok_or_else(|| ContextError::new(ContextErrorKind::InvalidReference))?;
-                    let result = queries::get_message(&ctx, channel, MessageId::new(id.get()))
-                        .await
-                        .map_err(map_error)?;
+                    let result =
+                        queries::get_message(&ctx.query_ctx(), channel, MessageId::new(id.get()))
+                            .await
+                            .map_err(map_error)?;
                     Ok::<_, ContextError>(ContextResponse::exact(
                         self.project(result.message(), thread_parent(&ctx, channel).await)?,
                     ))
@@ -121,9 +120,15 @@ impl ContextProvider for DiscordContextProvider {
                         ContextDirection::Before(_) => (anchor, None),
                         ContextDirection::After(_) => (None, anchor),
                     };
-                    let result = queries::fetch_messages(&ctx, channel, before, after, limit.get())
-                        .await
-                        .map_err(map_error)?;
+                    let result = queries::fetch_messages(
+                        &ctx.query_ctx(),
+                        channel,
+                        before,
+                        after,
+                        limit.get(),
+                    )
+                    .await
+                    .map_err(map_error)?;
                     let parent = thread_parent(&ctx, channel).await;
                     let messages = result
                         .messages()
@@ -140,7 +145,7 @@ impl ContextProvider for DiscordContextProvider {
             }?;
             super::messaging::check_outbound(&(self.context)(), channel)
                 .await
-                .map_err(map_error)?;
+                .map_err(|error| ContextError::with_cause(ContextErrorKind::AccessDenied, error))?;
             Ok(response)
         })
     }
@@ -158,11 +163,11 @@ async fn thread_parent(ctx: &MessagingCtx, channel: ChannelId) -> Option<Channel
         .map(|id| ChannelId::new(id.get()))
 }
 
-fn map_error(error: MessagingError) -> ContextError {
+fn map_error(error: QueryError) -> ContextError {
     let kind = match &error.kind {
-        MessagingErrorKind::OutboundDenied(_) => Some(ContextErrorKind::AccessDenied),
-        MessagingErrorKind::Observation(_) => Some(ContextErrorKind::InvalidResponse),
-        MessagingErrorKind::Discord(cause) => match cause.as_ref() {
+        QueryErrorKind::OutboundDenied(_) => Some(ContextErrorKind::AccessDenied),
+        QueryErrorKind::Observation(_) => Some(ContextErrorKind::InvalidResponse),
+        QueryErrorKind::Discord(cause) => match cause.as_ref() {
             serenity::Error::Http(HttpError::UnsuccessfulRequest(response)) => {
                 match response.status_code.as_u16() {
                     401 | 403 => Some(ContextErrorKind::AccessDenied),
@@ -402,9 +407,9 @@ mod tests {
         assert!(matches!(invalid.kind, ContextErrorKind::InvalidResponse));
         let cause = std::error::Error::source(&invalid)
             .unwrap()
-            .downcast_ref::<MessagingError>()
+            .downcast_ref::<QueryError>()
             .unwrap();
-        assert!(matches!(cause.kind, MessagingErrorKind::Observation(_)));
+        assert!(matches!(cause.kind, QueryErrorKind::Observation(_)));
         let missing = Fixture::new(
             "404 Not Found",
             json!({"code":10008,"message":"Unknown Message"}),
@@ -418,9 +423,9 @@ mod tests {
         assert!(matches!(not_found.kind, ContextErrorKind::NotFound));
         let cause = std::error::Error::source(&not_found)
             .unwrap()
-            .downcast_ref::<MessagingError>()
+            .downcast_ref::<QueryError>()
             .unwrap();
-        let MessagingErrorKind::Discord(cause) = &cause.kind else {
+        let QueryErrorKind::Discord(cause) = &cause.kind else {
             panic!("Discord cause")
         };
         let serenity::Error::Http(HttpError::UnsuccessfulRequest(response)) = cause.as_ref() else {
@@ -505,7 +510,7 @@ mod tests {
         let error = response.unwrap_err();
         assert!(error.is_timeout());
         let mapped = map_error(
-            MessagingErrorKind::Discord(Box::new(serenity::Error::Http(HttpError::Request(error))))
+            QueryErrorKind::Discord(Box::new(serenity::Error::Http(HttpError::Request(error))))
                 .into(),
         );
         assert!(matches!(mapped.kind, ContextErrorKind::Timeout));

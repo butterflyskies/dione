@@ -1,5 +1,5 @@
 //! Domain outcomes for Discord publication and typed preparation failures.
-use super::queries::ObservationError;
+use dione_discord_queries::queries::ObservationError;
 use dione_pre_send::PipelineError;
 use serenity::model::id::{ChannelId, MessageId};
 use std::{fmt, io};

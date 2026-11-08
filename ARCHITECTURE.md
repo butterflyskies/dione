@@ -294,15 +294,15 @@ access.
 
 Discord replies, DMs, and consent actions return typed outcomes. The
 [Discord messaging adapter](src/discord/messaging_wire.rs) projects tool response fields.
-[Discord queries](src/discord/messaging/queries.rs) own authorized message reads,
+[Discord queries](crates/dione-discord-queries/src/queries.rs) own authorized message reads,
 receipt attempts, and attachment downloads. Their private result fields preserve
-message ordering and derive page metadata. The [Discord query adapter](src/discord/query_wire.rs)
+message ordering and derive page metadata. The [Discord query adapter](crates/dione-discord-queries/src/wire.rs)
 formats these results, including receipt failures that leave a message read successful.
-[Discord search](src/discord/messaging/search.rs) owns prepared search requests,
+[Discord search](crates/dione-discord-queries/src/search.rs) owns prepared search requests,
 HTTP execution, current channel permission checks, and typed result pages. Search
 shares the message observation while retaining transport order and duplicates.
 Its continuation hint measures raw Discord result groups before filtering.
-The [Discord search adapter](src/discord/search_wire.rs) preserves argument parsing and
+The [Discord search adapter](crates/dione-discord-queries/src/search_wire.rs) preserves argument parsing and
 response formatting, including the separate argument and tool-result errors.
 
 [Access decisions](crates/dione-access-requests/src/workflow.rs) own complete listing, approval,
@@ -371,7 +371,7 @@ not imply that all writes have the same durability guarantee.
 | Guild mutes | [MuteStore](crates/dione-mutes/src/lib.rs) rebuilds state from `guild_mute_receipts.jsonl`. Receipt append precedes snapshot publication. |
 | Attention | [AttentionRuntime](src/attention/runtime.rs) uses `attention/records.json` through the [attention store](crates/dione-attention/src/store.rs), plus `attention-status.json` for health reporting. |
 | Consent outcomes | [JournalHandle](crates/dione-outbound-consent/src/journal.rs) serializes writes to `no_rly_journal.jsonl`. Pending consent handles are owned by [HoldQueue](crates/dione-outbound-consent/src/queue.rs). |
-| Attachments | [Discord queries](src/discord/messaging/queries.rs) download Discord attachments into the state directory's `inbox/`. |
+| Attachments | [Discord queries](crates/dione-discord-queries/src/queries.rs) download Discord attachments into the state directory's `inbox/`. |
 | Transient Discord state | [shared Discord state](crates/dione-discord-state/src/lib.rs) holds entity caches, DM indexes, sent-message identities, and permission requests. The [ingress ledger](src/ingress_ledger.rs), delivery buffer, and rate limiter are also process-local. |
 | Archive data | The separate [GAIE archive](crates/dione-gaie/src/archive.rs) owns corpus NDJSON, checkpoints, attachment data, origin evidence, and archive locks. See the [archive guide](docs/gaie-archive.md). |
 
@@ -447,3 +447,5 @@ The [native gate owner](crates/dione-discord-gate/src/lib.rs) contains DM, guild
 reaction, reply-parent, mention, outbound file/channel, and principal translation
 policy. Guild checks borrow the existing live MuteStore; root composition retains
 the only singleton and callers retain verified-action authority.
+
+Discord message read, search, attachment and native observation ownership resides in [dione-discord-queries](crates/dione-discord-queries/src/lib.rs). Root query registrations retain resident admission, argument parsing and call-entry configuration. QueryCtx carries read dependencies only; typed native observations do not confer sealed ingress or delivery authority.

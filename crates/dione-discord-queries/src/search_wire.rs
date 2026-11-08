@@ -1,10 +1,10 @@
 //! MCP search argument parsing and response formatting.
-use crate::discord::{
-    messaging::search::{
+use crate::{
+    search::{
         SearchError, SearchErrorKind, SearchHas, SearchLimit, SearchOffset, SearchPage,
         SearchPreparationError, SearchRequest, SearchTimestamp, SortBy, SortOrder,
     },
-    query_wire,
+    wire as query_wire,
 };
 use dione_discord_identities::Snowflake;
 use serde::{Deserialize, de};
@@ -198,24 +198,24 @@ impl SearchArguments {
 /// Search input failure retaining its deserialization path or preparation cause.
 #[derive(Debug, Error)]
 #[error("{kind}")]
-pub(crate) struct SearchInputError {
+pub struct SearchInputError {
     #[source]
-    pub(crate) kind: SearchInputErrorKind,
+    /// The typed argument rejection and its source.
+    pub kind: SearchInputErrorKind,
 }
 /// Distinguishes malformed arguments from a well-formed, rejected search request.
 #[derive(Debug, Error)]
-pub(crate) enum SearchInputErrorKind {
+pub enum SearchInputErrorKind {
     #[error("invalid search params: {}", .0.inner())]
+    /// The supplied search arguments do not match their typed shape.
     Deserialize(#[source] serde_path_to_error::Error<serde_json::Error>),
     #[error("{0}")]
+    /// The typed search arguments violate the search constraints.
     Preparation(#[source] SearchPreparationError),
 }
 
 /// Parses owner arguments without losing the concrete JSON deserialization error.
-pub(crate) fn parse_request(
-    guild: GuildId,
-    args: &Value,
-) -> Result<SearchRequest, SearchInputError> {
+pub fn parse_request(guild: GuildId, args: &Value) -> Result<SearchRequest, SearchInputError> {
     let arguments: SearchArguments =
         serde_path_to_error::deserialize(args).map_err(|source| SearchInputError {
             kind: SearchInputErrorKind::Deserialize(source),
@@ -228,12 +228,12 @@ pub(crate) fn parse_request(
 }
 
 /// Projects a known preparation rejection as the existing tool error shape.
-pub(crate) fn invalid_request(error: SearchPreparationError) -> Value {
+pub fn invalid_request(error: SearchPreparationError) -> Value {
     json!({"error": error.to_string()})
 }
 
 /// Projects a search page or its concrete execution failure.
-pub(crate) fn result(result: Result<SearchPage, SearchError>) -> Value {
+pub fn result(result: Result<SearchPage, SearchError>) -> Value {
     match result {
         Ok(page) => {
             let messages: Vec<Value> = page

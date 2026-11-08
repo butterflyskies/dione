@@ -1,0 +1,39 @@
+[package]
+name = "dione-discord-queries"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Authorized Discord message reads, search and typed observations"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["discord", "messages", "search"]
+categories = ["asynchronous"]
+
+[dependencies]
+dione-config.workspace = true
+dione-contracts.workspace = true
+dione-discord-gate.workspace = true
+dione-discord-identities.workspace = true
+dione-discord-state.workspace = true
+dione-evidence.workspace = true
+dione-messages.workspace = true
+dione-pre-send.workspace = true
+dione-vaelii.workspace = true
+base64.workspace = true
+camino.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+serenity.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
+tracing-subscriber.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

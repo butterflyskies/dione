@@ -1,9 +1,7 @@
 //! Discord messaging operations with access, verification, and consent checks.
 
 /// Discord message reads and attachment downloads.
-pub mod queries;
 mod rook_publication;
-pub(crate) mod search;
 mod types;
 use crate::ingress_ledger::IngressLedger;
 use crate::ingress_ledger::VerifyResult;
@@ -392,6 +390,15 @@ pub struct MessagingCtx {
 }
 
 impl MessagingCtx {
+    pub(crate) fn query_ctx(&self) -> dione_discord_queries::QueryCtx {
+        dione_discord_queries::QueryCtx::new(
+            self.http.clone(),
+            self.state.clone(),
+            self.config.clone(),
+            self.state_dir.clone(),
+            self.construct_id.clone(),
+        )
+    }
     pub fn new(
         http: Arc<serenity::http::Http>,
         state: State,

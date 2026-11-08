@@ -2,7 +2,6 @@
 
 use super::{
     events::Handler,
-    messaging::queries::{DiscordNativeObservation, MessageView},
     verified_action::{
         AdmissionFacts, DiscordTransportVerifier, Resolved, VerifiedActionGate, VerifiedAppAction,
         VerifiedGateVerdict,
@@ -18,6 +17,7 @@ use dione_contracts::{
     context::ObservationOrigin,
     observation::{MessageObservation, MessageOccurrence},
 };
+use dione_discord_queries::queries::{DiscordNativeObservation, MessageView};
 use serenity::{
     http::Http,
     model::{event::MessageUpdateEvent, prelude::*},

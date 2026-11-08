@@ -1,7 +1,7 @@
 //! Guild search requests, Discord execution, and authorized message observations.
-use crate::discord::messaging::MessagingCtx;
-use crate::discord::messaging::queries::MessageView;
-use crate::discord::messaging::queries::ObservationError;
+use crate::QueryCtx;
+use crate::queries::MessageView;
+use crate::queries::ObservationError;
 use dione_config::LoadedConfig;
 use dione_discord_gate::OutboundGate;
 use dione_discord_identities::Snowflake;
@@ -20,23 +20,27 @@ use thiserror::Error;
 /// A rejected search input, before HTTP execution.
 #[derive(Debug, Error)]
 #[error("{kind}")]
-pub(crate) struct SearchPreparationError {
+pub struct SearchPreparationError {
     #[source]
     kind: SearchPreparationErrorKind,
 }
 
 /// Exhaustive reasons a search request cannot be prepared.
 #[derive(Debug, Error)]
-pub(crate) enum SearchPreparationErrorKind {
+pub enum SearchPreparationErrorKind {
     #[error(
         "at least one search filter is required (content, author_id, mentions, has, before, after, or channel_id)"
     )]
+    /// No supported search filter was supplied.
     NoFilters,
     #[error("invalid date '{0}': expected YYYY-MM-DD")]
+    /// A date filter could not be parsed in the supported calendar format.
     InvalidDate(String),
     #[error("search limit must be 1..=25, got {0}")]
+    /// The supplied result limit is outside 1 through 25.
     InvalidLimit(u64),
     #[error("search offset must be 0..=9975, got {0}")]
+    /// The supplied offset is outside 0 through 9975.
     InvalidOffset(u64),
 }
 
@@ -49,10 +53,11 @@ impl From<SearchPreparationErrorKind> for SearchPreparationError {
 /// Search result limit, validated to Discord's 1..=25 range. Default: 25.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(try_from = "u64")]
-pub(crate) struct SearchLimit(u8);
+pub struct SearchLimit(u8);
 
 impl SearchLimit {
-    pub(crate) fn get(self) -> u8 {
+    /// Returns the validated numeric value.
+    pub fn get(self) -> u8 {
         self.0
     }
 }
@@ -79,10 +84,11 @@ impl TryFrom<u64> for SearchLimit {
 /// Search result offset, validated to 0..=9975. Default: 0.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(try_from = "u64")]
-pub(crate) struct SearchOffset(u16);
+pub struct SearchOffset(u16);
 
 impl SearchOffset {
-    pub(crate) fn get(self) -> u16 {
+    /// Returns the validated numeric value.
+    pub fn get(self) -> u16 {
         self.0
     }
 }
@@ -102,14 +108,16 @@ impl TryFrom<u64> for SearchOffset {
 
 /// A message identity or calendar date used as a search bound.
 #[derive(Debug, Clone)]
-pub(crate) enum SearchTimestamp {
+pub enum SearchTimestamp {
+    /// An exact message snowflake bound.
     MessageId(MessageId),
+    /// A calendar-day bound using the existing snowflake conversion.
     Date(chrono::NaiveDate),
 }
 
 impl SearchTimestamp {
     /// Date bounds preserve epoch zero and the existing wrapping snowflake conversion.
-    pub(crate) fn to_query_param(&self) -> Result<String, SearchPreparationError> {
+    pub fn to_query_param(&self) -> Result<String, SearchPreparationError> {
         match self {
             Self::MessageId(id) => Ok(id.to_string()),
             Self::Date(nd) => {
@@ -132,13 +140,20 @@ impl SearchTimestamp {
 /// Attachment type filter for search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum SearchHas {
+pub enum SearchHas {
+    /// Messages containing links.
     Link,
+    /// Messages containing embeds.
     Embed,
+    /// Messages containing files.
     File,
+    /// Messages containing video.
     Video,
+    /// Messages containing images.
     Image,
+    /// Messages containing audio.
     Sound,
+    /// Messages containing stickers.
     Sticker,
 }
 
@@ -159,8 +174,10 @@ impl fmt::Display for SearchHas {
 /// Sort field for search results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum SortBy {
+pub enum SortBy {
+    /// Order by the provider message timestamp.
     Timestamp,
+    /// Order by provider relevance.
     Relevance,
 }
 
@@ -176,8 +193,10 @@ impl fmt::Display for SortBy {
 /// Sort direction for search results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum SortOrder {
+pub enum SortOrder {
+    /// Ascending provider order.
     Asc,
+    /// Descending provider order.
     Desc,
 }
 
@@ -194,7 +213,7 @@ const DISCORD_EPOCH_MS: i64 = 1_420_070_400_000;
 
 /// Typed search choices awaiting filter and calendar-bound validation.
 #[derive(Debug)]
-pub(crate) struct SearchRequestBuilder {
+pub struct SearchRequestBuilder {
     guild: GuildId,
     content: Option<String>,
     author_ids: Vec<UserId>,
@@ -211,51 +230,63 @@ pub(crate) struct SearchRequestBuilder {
 }
 
 impl SearchRequestBuilder {
-    pub(crate) fn content(mut self, value: String) -> Self {
+    /// Selects the text content filter.
+    pub fn content(mut self, value: String) -> Self {
         self.content = Some(value);
         self
     }
-    pub(crate) fn author_ids(mut self, value: Vec<UserId>) -> Self {
+    /// Restricts results to the supplied authors.
+    pub fn author_ids(mut self, value: Vec<UserId>) -> Self {
         self.author_ids = value;
         self
     }
-    pub(crate) fn mentions(mut self, value: Vec<UserId>) -> Self {
+    /// Restricts results to messages mentioning the supplied users.
+    pub fn mentions(mut self, value: Vec<UserId>) -> Self {
         self.mentions = value;
         self
     }
-    pub(crate) fn has(mut self, value: Vec<SearchHas>) -> Self {
+    /// Selects attachment and embedded-content categories.
+    pub fn has(mut self, value: Vec<SearchHas>) -> Self {
         self.has = value;
         self
     }
-    pub(crate) fn before(mut self, value: SearchTimestamp) -> Self {
+    /// Sets the exclusive upper message/date bound.
+    pub fn before(mut self, value: SearchTimestamp) -> Self {
         self.before = Some(value);
         self
     }
-    pub(crate) fn after(mut self, value: SearchTimestamp) -> Self {
+    /// Sets the exclusive lower message/date bound.
+    pub fn after(mut self, value: SearchTimestamp) -> Self {
         self.after = Some(value);
         self
     }
-    pub(crate) fn channel_ids(mut self, value: Vec<ChannelId>) -> Self {
+    /// Restricts search to the supplied channel identifiers.
+    pub fn channel_ids(mut self, value: Vec<ChannelId>) -> Self {
         self.channel_ids = value;
         self
     }
-    pub(crate) fn pinned(mut self, value: bool) -> Self {
+    /// Restricts the pinned state when specified.
+    pub fn pinned(mut self, value: bool) -> Self {
         self.pinned = Some(value);
         self
     }
-    pub(crate) fn sort_by(mut self, value: SortBy) -> Self {
+    /// Selects the provider sort key.
+    pub fn sort_by(mut self, value: SortBy) -> Self {
         self.sort_by = Some(value);
         self
     }
-    pub(crate) fn sort_order(mut self, value: SortOrder) -> Self {
+    /// Selects ascending or descending provider order.
+    pub fn sort_order(mut self, value: SortOrder) -> Self {
         self.sort_order = Some(value);
         self
     }
-    pub(crate) fn limit(mut self, value: SearchLimit) -> Self {
+    /// Sets the validated result-page limit.
+    pub fn limit(mut self, value: SearchLimit) -> Self {
         self.limit = Some(value);
         self
     }
-    pub(crate) fn offset(mut self, value: SearchOffset) -> Self {
+    /// Sets or returns the validated provider-page offset.
+    pub fn offset(mut self, value: SearchOffset) -> Self {
         self.offset = Some(value);
         self
     }
@@ -270,7 +301,8 @@ impl SearchRequestBuilder {
             || self.pinned.is_some()
     }
 
-    pub(crate) fn build(self) -> Result<SearchRequest, SearchPreparationError> {
+    /// Validates the selected filters and constructs the provider request.
+    pub fn build(self) -> Result<SearchRequest, SearchPreparationError> {
         if !self.has_any_filter() {
             return Err(SearchPreparationErrorKind::NoFilters.into());
         }
@@ -326,7 +358,7 @@ impl SearchRequestBuilder {
 
 /// An executable guild search with a filter and prepared bounds.
 #[derive(Debug)]
-pub(crate) struct SearchRequest {
+pub struct SearchRequest {
     guild: GuildId,
     query: Vec<(&'static str, String)>,
     limit: SearchLimit,
@@ -334,7 +366,8 @@ pub(crate) struct SearchRequest {
 }
 
 impl SearchRequest {
-    pub(crate) fn builder(guild: GuildId) -> SearchRequestBuilder {
+    /// Starts a search request for the supplied guild.
+    pub fn builder(guild: GuildId) -> SearchRequestBuilder {
         SearchRequestBuilder {
             guild,
             content: Default::default(),
@@ -355,7 +388,7 @@ impl SearchRequest {
 
 /// An authorized message observation and its originating channel.
 #[derive(Debug)]
-pub(crate) struct SearchHit {
+pub struct SearchHit {
     channel: ChannelId,
     message: MessageView,
 }
@@ -371,17 +404,19 @@ impl SearchHit {
             )?,
         })
     }
-    pub(crate) fn channel(&self) -> ChannelId {
+    /// Returns the observed message channel.
+    pub fn channel(&self) -> ChannelId {
         self.channel
     }
-    pub(crate) fn message(&self) -> &MessageView {
+    /// Returns the typed observed message.
+    pub fn message(&self) -> &MessageView {
         &self.message
     }
 }
 
 /// Ordered visible hits and continuation derived from the unfiltered Discord page.
 #[derive(Debug)]
-pub(crate) struct SearchPage {
+pub struct SearchPage {
     messages: Vec<SearchHit>,
     offset: SearchOffset,
     has_more: bool,
@@ -400,13 +435,16 @@ impl SearchPage {
             has_more: raw_count >= usize::from(limit.get()),
         }
     }
-    pub(crate) fn messages(&self) -> &[SearchHit] {
+    /// Returns visible hits in the provider ordering.
+    pub fn messages(&self) -> &[SearchHit] {
         &self.messages
     }
-    pub(crate) fn offset(&self) -> SearchOffset {
+    /// Sets or returns the validated provider-page offset.
+    pub fn offset(&self) -> SearchOffset {
         self.offset
     }
-    pub(crate) fn has_more(&self) -> bool {
+    /// Whether the raw provider page indicates more results, before visibility filtering.
+    pub fn has_more(&self) -> bool {
         self.has_more
     }
 }
@@ -414,40 +452,52 @@ impl SearchPage {
 /// An execution failure retaining its guild and underlying cause.
 #[derive(Debug, Error)]
 #[error("search in guild {guild} failed: {kind}")]
-pub(crate) struct SearchError {
+pub struct SearchError {
     guild: GuildId,
     #[source]
     kind: SearchErrorKind,
 }
 
 impl SearchError {
-    pub(crate) fn kind(&self) -> &SearchErrorKind {
+    /// Returns the original typed failure cause.
+    pub fn kind(&self) -> &SearchErrorKind {
         &self.kind
     }
 }
 
 /// Transport, status, and decoding failures from an attempted search.
 #[derive(Debug, Error)]
-pub(crate) enum SearchErrorKind {
+pub enum SearchErrorKind {
     #[error(transparent)]
+    /// The provider returned an invalid message observation.
     Observation(#[from] ObservationError),
     #[error("http request failed: {0}")]
+    /// The HTTP request could not be built or completed.
     Request(#[source] reqwest::Error),
     #[error("rate limited by Discord")]
-    RateLimited { retry_after: Option<String> },
+    /// The provider rate-limited the search.
+    RateLimited {
+        /// The provider retry hint, if supplied.
+        retry_after: Option<String>,
+    },
     #[error("discord API error {status}: {body}")]
+    /// The provider returned an unsuccessful status.
     Api {
+        /// The unsuccessful provider status.
         status: reqwest::StatusCode,
+        /// The original response body retained as the typed failure payload.
         body: String,
     },
     #[error("failed to read response: {0}")]
+    /// The response body could not be read.
     Read(#[source] reqwest::Error),
     #[error("failed to parse response: {0}")]
+    /// The response body was not valid JSON.
     Parse(#[source] serde_json::Error),
 }
 
 /// Discord search endpoint; production always uses the fixed Discord API base.
-pub(crate) struct SearchTransport {
+pub struct SearchTransport {
     api_base: String,
 }
 impl Default for SearchTransport {
@@ -458,16 +508,30 @@ impl Default for SearchTransport {
     }
 }
 impl SearchTransport {
-    #[cfg(test)]
-    /// Uses a local HTTP fixture endpoint.
-    pub(crate) fn local(api_base: String) -> Self {
-        Self { api_base }
+    /// Selects the HTTP API base that will receive the Discord authorization token.
+    ///
+    /// The caller must trust this credential destination. The endpoint must be an
+    /// HTTP(S) base URL; default construction keeps Discord's v10 endpoint.
+    pub fn with_endpoint(api_base: reqwest::Url) -> Result<Self, SearchEndpointError> {
+        if !matches!(api_base.scheme(), "http" | "https")
+            || api_base.cannot_be_a_base()
+            || api_base.host_str().is_none()
+            || !api_base.username().is_empty()
+            || api_base.password().is_some()
+            || api_base.query().is_some()
+            || api_base.fragment().is_some()
+        {
+            return Err(SearchEndpointError);
+        }
+        Ok(Self {
+            api_base: api_base.as_str().trim_end_matches('/').to_owned(),
+        })
     }
 
     /// Executes a prepared search and filters observations through current policy.
-    pub(crate) async fn search_messages(
+    pub async fn search_messages(
         &self,
-        ctx: &MessagingCtx,
+        ctx: &QueryCtx,
         request: SearchRequest,
     ) -> Result<SearchPage, SearchError> {
         let url = format!(
@@ -489,7 +553,7 @@ impl SearchTransport {
 }
 
 async fn execute_search(
-    ctx: &MessagingCtx,
+    ctx: &QueryCtx,
     request: SearchRequest,
     http: reqwest::RequestBuilder,
 ) -> Result<SearchPage, SearchError> {
@@ -597,12 +661,10 @@ fn filter_results(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discord::search_wire;
-    use crate::ingress_ledger::IngressLedger;
+    use crate::search_wire;
     use dione_config::ChannelConfig;
     use dione_config::Config;
     use dione_discord_state::new_state;
-    use dione_outbound_consent::consent::ConsentGate;
     use serde_json::json;
     use std::{sync::Arc, time::Duration};
     use tokio::{
@@ -653,19 +715,18 @@ mod tests {
         }
     }
 
-    fn search_context() -> MessagingCtx {
+    fn search_context() -> QueryCtx {
         let mut config = Config::default();
         config.channels.push(ChannelConfig {
             id: "42".into(),
             ..Default::default()
         });
-        MessagingCtx::new(
+        QueryCtx::new(
             Arc::new(serenity::http::Http::new("fake")),
             new_state(),
             Arc::new(LoadedConfig::try_from_raw(config).expect("valid test configuration")),
             "/tmp".into(),
-            Arc::new(ConsentGate::new(camino::Utf8Path::new("/tmp"))),
-            Arc::new(IngressLedger::new()),
+            dione_pre_send::ConstructId::parse("fixture-orbit-30").unwrap(),
         )
     }
 
@@ -1366,3 +1427,8 @@ mod tests {
         }
     }
 }
+
+/// The search credential destination is not an HTTP(S) base URL.
+#[derive(Debug, Error)]
+#[error("search endpoint must be an HTTP(S) base URL without userinfo, query or fragment")]
+pub struct SearchEndpointError;

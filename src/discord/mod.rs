@@ -19,8 +19,6 @@ pub(crate) mod reply_tool;
 pub(crate) mod tool_arguments;
 
 pub(crate) mod query_tools;
-pub(crate) mod query_wire;
-pub(crate) mod search_wire;
 
 #[cfg(test)]
 pub(crate) mod introspection_test_support;

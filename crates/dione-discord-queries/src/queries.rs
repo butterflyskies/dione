@@ -1,6 +1,6 @@
 //! Authorized Discord reads, message observations, and attachment downloads.
 
-use super::{MessagingCtx, MessagingError, MessagingErrorKind, check_outbound};
+use crate::{QueryCtx, QueryError, QueryErrorKind, check_outbound};
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::Utc;
 use dione_config::LoadedConfig;
@@ -163,7 +163,8 @@ pub struct MessageView {
 }
 
 impl MessageView {
-    pub(crate) fn from_discord(
+    /// Validates and captures the observed message using this configuration and origin.
+    pub fn from_discord(
         config: &LoadedConfig,
         message: &Message,
         origin: ObservationOrigin,
@@ -252,7 +253,8 @@ impl MessageView {
     pub fn reply_to_user_id(&self) -> Option<UserId> {
         self.reply_to_user_id
     }
-    pub(crate) fn offered_sentexes(&self) -> &[OfferedSentex] {
+    /// Returns offered evidence markers parsed from the observed content.
+    pub fn offered_sentexes(&self) -> &[OfferedSentex] {
         &self.offered_sentexes
     }
 }
@@ -384,9 +386,9 @@ impl RetrievedMessage {
 fn resolve_pagination(
     before: Option<MessageId>,
     after: Option<MessageId>,
-) -> Result<Option<MessagePagination>, MessagingError> {
+) -> Result<Option<MessagePagination>, QueryError> {
     match (before, after) {
-        (Some(_), Some(_)) => Err(MessagingErrorKind::ConflictingPagination.into()),
+        (Some(_), Some(_)) => Err(QueryErrorKind::ConflictingPagination.into()),
         (Some(id), None) => Ok(Some(MessagePagination::Before(id))),
         (None, Some(id)) => Ok(Some(MessagePagination::After(id))),
         (None, None) => Ok(None),
@@ -395,12 +397,12 @@ fn resolve_pagination(
 
 /// Fetch a permitted channel in ascending message ID order.
 pub async fn fetch_messages(
-    ctx: &MessagingCtx,
+    ctx: &QueryCtx,
     channel_id: ChannelId,
     before: Option<MessageId>,
     after: Option<MessageId>,
     limit: u8,
-) -> Result<FetchedMessages, MessagingError> {
+) -> Result<FetchedMessages, QueryError> {
     check_outbound(ctx, channel_id).await?;
 
     let pagination = resolve_pagination(before, after)?;
@@ -428,15 +430,15 @@ pub async fn fetch_messages(
                 },
             )?)
         }
-        Err(e) => Err(MessagingErrorKind::Discord(e.into()).into()),
+        Err(e) => Err(QueryErrorKind::Discord(e.into()).into()),
     }
 }
 
 /// Fetch all visible pins in ascending message ID order.
 pub async fn fetch_pins(
-    ctx: &MessagingCtx,
+    ctx: &QueryCtx,
     channel_id: ChannelId,
-) -> Result<PinnedMessages, MessagingError> {
+) -> Result<PinnedMessages, QueryError> {
     check_outbound(ctx, channel_id).await?;
 
     match ctx.http.get_pins(channel_id).await {
@@ -444,17 +446,17 @@ pub async fn fetch_pins(
             check_page_channel(&messages, channel_id)?;
             Ok(PinnedMessages::new(&ctx.config, messages)?)
         }
-        Err(e) => Err(MessagingErrorKind::Discord(e.into()).into()),
+        Err(e) => Err(QueryErrorKind::Discord(e.into()).into()),
     }
 }
 
 /// Fetch messages newer than the cursor in ascending message ID order.
 pub async fn fetch_new_since(
-    ctx: &MessagingCtx,
+    ctx: &QueryCtx,
     channel_id: ChannelId,
     after_message_id: MessageId,
     limit: u8,
-) -> Result<NewMessages, MessagingError> {
+) -> Result<NewMessages, QueryError> {
     check_outbound(ctx, channel_id).await?;
 
     match ctx
@@ -470,32 +472,32 @@ pub async fn fetch_new_since(
             check_page_channel(&messages, channel_id)?;
             Ok(NewMessages::new(&ctx.config, messages, limit)?)
         }
-        Err(e) => Err(MessagingErrorKind::Discord(e.into()).into()),
+        Err(e) => Err(QueryErrorKind::Discord(e.into()).into()),
     }
 }
 
 /// Download each available attachment into the inbox, returning successful paths.
 pub async fn download_attachment(
-    ctx: &MessagingCtx,
+    ctx: &QueryCtx,
     channel_id: ChannelId,
     message_id: MessageId,
-) -> Result<Vec<Utf8PathBuf>, MessagingError> {
+) -> Result<Vec<Utf8PathBuf>, QueryError> {
     check_outbound(ctx, channel_id).await?;
 
     let msg = match ctx.http.get_message(channel_id, message_id).await {
         Ok(m) => m,
-        Err(e) => return Err(MessagingErrorKind::FetchMessage(e.into()).into()),
+        Err(e) => return Err(QueryErrorKind::FetchMessage(e.into()).into()),
     };
 
     check_exact_target(&msg, channel_id, message_id)?;
 
     if msg.attachments.is_empty() {
-        return Err(MessagingErrorKind::NoAttachments.into());
+        return Err(QueryErrorKind::NoAttachments.into());
     }
 
     let inbox_dir = ctx.state_dir.join("inbox");
     if let Err(e) = tokio::fs::create_dir_all(&inbox_dir).await {
-        return Err(MessagingErrorKind::CreateInbox(e).into());
+        return Err(QueryErrorKind::CreateInbox(e).into());
     }
 
     let mut saved_paths = Vec::new();
@@ -654,16 +656,16 @@ async fn download_url(url: &str) -> Result<Vec<u8>, DownloadError> {
 
 /// Fetch a permitted message and attempt its configured provenance receipt.
 pub async fn get_message(
-    ctx: &MessagingCtx,
+    ctx: &QueryCtx,
     channel_id: ChannelId,
     message_id: MessageId,
-) -> Result<RetrievedMessage, MessagingError> {
+) -> Result<RetrievedMessage, QueryError> {
     check_outbound(ctx, channel_id).await?;
     let message = ctx
         .http
         .get_message(channel_id, message_id)
         .await
-        .map_err(|error| MessagingError::from(MessagingErrorKind::Discord(error.into())))?;
+        .map_err(|error| QueryError::from(QueryErrorKind::Discord(error.into())))?;
     check_exact_target(&message, channel_id, message_id)?;
     let message = MessageView::from_discord(&ctx.config, &message, ObservationOrigin::Exact)?;
     let receipt = if ctx.config.vaelii.is_enabled() {
@@ -688,7 +690,7 @@ pub async fn get_message(
 
 /// Native reference coordinates and sender, without recursively retained message bodies.
 #[derive(Debug)]
-pub(crate) struct DiscordResolvedReference {
+pub struct DiscordResolvedReference {
     channel_id: ChannelId,
     message_id: MessageId,
     guild_id: Option<GuildId>,
@@ -703,23 +705,27 @@ impl DiscordResolvedReference {
             author_id: message.author.id,
         }
     }
-    pub(crate) fn channel_id(&self) -> ChannelId {
+    /// Returns the observed channel identifier.
+    pub fn channel_id(&self) -> ChannelId {
         self.channel_id
     }
-    pub(crate) fn message_id(&self) -> MessageId {
+    /// Returns the observed message identifier.
+    pub fn message_id(&self) -> MessageId {
         self.message_id
     }
-    pub(crate) fn guild_id(&self) -> Option<GuildId> {
+    /// Returns the guild identifier when supplied by Discord.
+    pub fn guild_id(&self) -> Option<GuildId> {
         self.guild_id
     }
-    pub(crate) fn author_id(&self) -> UserId {
+    /// Returns the observed author identifier.
+    pub fn author_id(&self) -> UserId {
         self.author_id
     }
 }
 
 /// Metadata captured from the SDK at the existing read boundary.
 #[derive(Debug)]
-pub(crate) struct DiscordNativeObservation {
+pub struct DiscordNativeObservation {
     message_type: MessageType,
     channel_id: ChannelId,
     message_id: MessageId,
@@ -755,43 +761,56 @@ impl DiscordNativeObservation {
             edited_at: message.edited_timestamp,
         }
     }
-    pub(crate) fn message_type(&self) -> MessageType {
+    /// Returns the native Discord message category.
+    pub fn message_type(&self) -> MessageType {
         self.message_type
     }
-    pub(crate) fn channel_id(&self) -> ChannelId {
+    /// Returns the observed channel identifier.
+    pub fn channel_id(&self) -> ChannelId {
         self.channel_id
     }
-    pub(crate) fn message_id(&self) -> MessageId {
+    /// Returns the observed message identifier.
+    pub fn message_id(&self) -> MessageId {
         self.message_id
     }
-    pub(crate) fn guild_id(&self) -> Option<GuildId> {
+    /// Returns the guild identifier when supplied by Discord.
+    pub fn guild_id(&self) -> Option<GuildId> {
         self.guild_id
     }
-    pub(crate) fn author_id(&self) -> UserId {
+    /// Returns the observed author identifier.
+    pub fn author_id(&self) -> UserId {
         self.author_id
     }
-    pub(crate) fn author_bot(&self) -> bool {
+    /// Whether Discord marks the observed author as a bot.
+    pub fn author_bot(&self) -> bool {
         self.author_bot
     }
-    pub(crate) fn webhook_id(&self) -> Option<WebhookId> {
+    /// Returns the webhook identifier supplied by Discord.
+    pub fn webhook_id(&self) -> Option<WebhookId> {
         self.webhook_id
     }
-    pub(crate) fn application_id(&self) -> Option<ApplicationId> {
+    /// Returns the application identifier supplied by Discord.
+    pub fn application_id(&self) -> Option<ApplicationId> {
         self.application_id
     }
-    pub(crate) fn author_name(&self) -> &str {
+    /// Returns the observed author display name.
+    pub fn author_name(&self) -> &str {
         &self.author_name
     }
-    pub(crate) fn reference(&self) -> Option<&MessageReference> {
+    /// Returns the native reference coordinates without retaining a recursive body.
+    pub fn reference(&self) -> Option<&MessageReference> {
         self.reference.as_ref()
     }
-    pub(crate) fn resolved_reference(&self) -> Option<&DiscordResolvedReference> {
+    /// Returns the resolved referenced message identity when supplied.
+    pub fn resolved_reference(&self) -> Option<&DiscordResolvedReference> {
         self.resolved_reference.as_ref()
     }
-    pub(crate) fn attachments(&self) -> &[Attachment] {
+    /// Returns native attachment metadata for this observation.
+    pub fn attachments(&self) -> &[Attachment] {
         &self.attachments
     }
-    pub(crate) fn edited_at(&self) -> Option<serenity::model::Timestamp> {
+    /// Returns the observed edit timestamp, if present.
+    pub fn edited_at(&self) -> Option<serenity::model::Timestamp> {
         self.edited_at
     }
 }
@@ -890,15 +909,18 @@ impl DiscordNativeObservation {
 }
 
 impl MessageView {
-    pub(crate) fn into_native(self) -> DiscordNativeObservation {
+    /// Consumes this view and returns its bounded native metadata.
+    pub fn into_native(self) -> DiscordNativeObservation {
         self.native
     }
 
-    pub(crate) fn native(&self) -> &DiscordNativeObservation {
+    /// Returns the bounded native metadata retained with this view.
+    pub fn native(&self) -> &DiscordNativeObservation {
         &self.native
     }
 
-    pub(crate) fn context(
+    /// Projects this observation into the named provider/module source.
+    pub fn context(
         &self,
         source: &ModuleInstanceId,
     ) -> Result<ContextObservation, ObservationError> {
@@ -981,7 +1003,8 @@ struct DiscordHistoryQuery {
     limit: u8,
 }
 impl FetchedMessages {
-    pub(crate) fn context_page(&self, source: &ModuleInstanceId) -> PageMetadata {
+    /// Returns source-qualified page metadata for the observed query.
+    pub fn context_page(&self, source: &ModuleInstanceId) -> PageMetadata {
         let query = &self.query;
         let direction = match query.direction {
             DiscordHistoryDirection::Recent => HistoryDirection::Recent,
@@ -1010,17 +1033,14 @@ impl FetchedMessages {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        super::tests::{
-            fake_discord_http, messaging_ctx, messaging_ctx_with_http, test_config, wire_message,
-        },
-        *,
+    use super::*;
+    use crate::test_support::{
+        fake_discord_http, messaging_ctx, messaging_ctx_with_http, test_config, wire_message,
     };
-    use crate::discord::query_wire;
+    use crate::wire as query_wire;
     use dione_config::ChannelConfig;
     use dione_config::Config;
     use dione_discord_gate::OutboundGate;
-    use dione_outbound_consent::consent::ConsentGate;
     use serde_json::{Value, json};
     use std::{collections::BTreeMap, fmt, sync::Arc};
     use tokio::{
@@ -1032,7 +1052,7 @@ mod tests {
     async fn attachment_download_fixture(
         filenames: Vec<String>,
         concurrent_downloads: bool,
-    ) -> (MessagingCtx, tempfile::TempDir, tokio::task::JoinHandle<()>) {
+    ) -> (QueryCtx, tempfile::TempDir, tokio::task::JoinHandle<()>) {
         let directory = tempfile::tempdir().expect("attachment inbox fixture");
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -2070,13 +2090,12 @@ mod tests {
 
         let dir = tempfile::TempDir::new().expect("tempdir");
         let state_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf-8 path");
-        let ctx = MessagingCtx::new(
+        let ctx = QueryCtx::new(
             Arc::new(serenity::http::Http::new(&token)),
             dione_discord_state::new_state(),
             Arc::new(LoadedConfig::try_from_raw(raw).expect("valid test configuration")),
             state_dir.clone(),
-            Arc::new(ConsentGate::new(&state_dir)),
-            Arc::new(crate::ingress_ledger::IngressLedger::new()),
+            dione_pre_send::ConstructId::parse("fixture-orbit-30").unwrap(),
         );
 
         let resp =
@@ -2290,10 +2309,8 @@ mod tests {
 
 #[cfg(test)]
 mod observation_tests {
-    use super::{
-        super::tests::{test_config, wire_message},
-        *,
-    };
+    use super::*;
+    use crate::test_support::{test_config, wire_message};
     use serde_json::json;
 
     #[test]
@@ -2359,11 +2376,9 @@ mod observation_tests {
 
 #[cfg(test)]
 mod context_tests {
-    use super::{
-        super::tests::{test_config, wire_message},
-        *,
-    };
-    use crate::discord::query_wire;
+    use super::*;
+    use crate::test_support::{test_config, wire_message};
+    use crate::wire as query_wire;
     use serde_json::json;
 
     fn source() -> ModuleInstanceId {

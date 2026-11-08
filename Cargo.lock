@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.133.0"
+version = "0.134.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -952,11 +952,13 @@ dependencies = [
  "dione-discord-bells",
  "dione-discord-events",
  "dione-discord-gate",
- "dione-discord-introspection",
  "dione-discord-identities",
+ "dione-discord-introspection",
  "dione-discord-presence",
+ "dione-discord-queries",
  "dione-discord-scheduling",
  "dione-discord-state",
+ "dione-discord-typing",
  "dione-drop-ledger",
  "dione-durable",
  "dione-evidence",
@@ -1015,7 +1017,6 @@ dependencies = [
  "trybuild",
  "url",
  "uuid",
- "dione-discord-typing",
 ]
 
 [[package]]
@@ -1294,6 +1295,35 @@ dependencies = [
  "tokio",
  "tracing",
  "trybuild",
+]
+
+[[package]]
+name = "dione-discord-queries"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "camino",
+ "chrono",
+ "dione-config",
+ "dione-contracts",
+ "dione-discord-gate",
+ "dione-discord-identities",
+ "dione-discord-state",
+ "dione-evidence",
+ "dione-messages",
+ "dione-pre-send",
+ "dione-vaelii",
+ "proptest",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "serenity",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

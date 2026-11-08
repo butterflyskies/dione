@@ -1,14 +1,15 @@
 //! Discord-owned history, attachment, and search tool boundary.
 use super::{
-    messaging::{
-        queries,
-        search::{self, SearchPreparationError, SearchRequest},
-    },
-    query_wire,
     reply_tool::ReplyServices,
-    search_wire::{self, SearchInputErrorKind},
     tool_arguments::{ArgumentError, parse_id},
 };
+use dione_discord_queries::{
+    queries,
+    search::{self, SearchPreparationError, SearchRequest},
+    search_wire::{self, SearchInputErrorKind},
+    wire as query_wire,
+};
+
 use crate::mcp::protocol::tool;
 use dione_config::load_config;
 use dione_contracts::ModuleInstanceId;
@@ -387,7 +388,7 @@ impl McpTool for QueryHandler {
                 })?;
             let ctx = self
                 .services
-                .messaging_ctx(load_config(self.services.state_dir()));
+                .query_ctx(load_config(self.services.state_dir()));
             Ok(match request {
                 QueryRequest::Messages {
                     version,

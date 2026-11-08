@@ -45,6 +45,19 @@ pub(crate) struct ReplyServices {
 }
 
 impl ReplyServices {
+    pub(crate) fn query_ctx(
+        &self,
+        config: Arc<dione_config::LoadedConfig>,
+    ) -> dione_discord_queries::QueryCtx {
+        let construct_id = config.pre_send_construct_id.clone();
+        dione_discord_queries::QueryCtx::new(
+            self.http.clone(),
+            self.state.clone(),
+            config,
+            self.state_dir.clone(),
+            construct_id,
+        )
+    }
     pub(crate) fn new(
         http: Arc<Http>,
         state: State,

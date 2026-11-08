@@ -183,7 +183,8 @@ async fn registered_queries_parse_execute_project_and_reload_policy() {
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             ),
-            search::SearchTransport::local(format!("{base}/api/v10")),
+            search::SearchTransport::with_endpoint(format!("{base}/api/v10").parse().unwrap())
+                .unwrap(),
         )
         .unwrap(),
     )
@@ -426,7 +427,8 @@ async fn wrong_observation_exchange() {
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             ),
-            search::SearchTransport::local(format!("{base}/api/v10")),
+            search::SearchTransport::with_endpoint(format!("{base}/api/v10").parse().unwrap())
+                .unwrap(),
         )
         .unwrap(),
     )
@@ -605,7 +607,8 @@ async fn attachment_diagnostics_exchange() {
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
             ),
-            search::SearchTransport::local(format!("{base}/api/v10")),
+            search::SearchTransport::with_endpoint(format!("{base}/api/v10").parse().unwrap())
+                .unwrap(),
         )
         .unwrap(),
     )
