@@ -1104,7 +1104,9 @@ async fn assert_identity_change_race(axis: IdentityAxis, base: u64) {
     let old_worker = tokio::spawn(fixture.attention.clone().evaluate(work));
     let mut completed = tokio::time::timeout(Duration::from_secs(120), captured)
         .await
-        .unwrap_or_else(|_| panic!("{axis:?}: completed HTTP judgment was not captured within 120s"))
+        .unwrap_or_else(|_| {
+            panic!("{axis:?}: completed HTTP judgment was not captured within 120s")
+        })
         .unwrap_or_else(|_| panic!("{axis:?}: completed HTTP judgment capture closed"));
     assert!(
         completed.judgment.is_some(),
