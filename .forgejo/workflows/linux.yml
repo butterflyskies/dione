@@ -12,6 +12,7 @@ on:
     branches:
       - main
       - refactor/plugin-crates
+      - refactor/access-decisions-continuation
       - "refactor/*-crate"
       - refactor/vertical-slices
       - refactor/teams-identities-publication
