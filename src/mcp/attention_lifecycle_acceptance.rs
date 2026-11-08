@@ -1261,7 +1261,10 @@ async fn assert_identity_change_race(axis: IdentityAxis, base: u64) {
     assert_eq!(shadow.hypothetical, Admission::Prompt, "{axis:?}");
     assert!(shadow.judgment.is_some(), "{axis:?}");
     assert!(shadow.policy_digest.is_none(), "{axis:?}");
-    assert!(fixture.attention.health().degraded.is_some(), "{axis:?}");
+    assert!(
+        fixture.attention.health.snapshot().degraded.is_some(),
+        "{axis:?}"
+    );
     assert_eq!(fixture.drain().await.len(), 1);
 
     let recipient = legacy.recipient.clone();
@@ -1849,7 +1852,8 @@ fn denied_antecedent_stays_absent_in_the_same_provider_fault_fallback_trace() {
         assert!(
             fixture
                 .attention
-                .health()
+                .health
+                .snapshot()
                 .degraded
                 .as_deref()
                 .is_some_and(|reason| reason.contains("503"))

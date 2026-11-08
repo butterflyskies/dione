@@ -377,7 +377,7 @@ async fn await_ordered_provider(
             }
             result = &mut *evaluation => {
                 let paths: Vec<_> = fixture.network.state.lock().requests.iter().map(|request| request.path.clone()).collect();
-                panic!("evaluation ended before provider arrival for {source:?}: {result:?}; health={:?}; requests={paths:?}", fixture.attention.health());
+                panic!("evaluation ended before provider arrival for {source:?}: {result:?}; health={:?}; requests={paths:?}", fixture.attention.health.snapshot());
             }
         }
     }
@@ -519,7 +519,7 @@ fn a07_missing_and_stale_briefs_are_unknown_with_exact_off_delivery() {
             .await;
         let missing_trace = trace_one_ambient(&mut missing, 100, ID, TEXT, None).await;
         assert_eq!(missing.network.provider_requests(), Vec::<Value>::new());
-        assert!(missing.attention.health().last_unknown.is_some());
+        assert!(missing.attention.health.snapshot().last_unknown.is_some());
         assert!(!has_training_target(&missing).await);
         assert_eq!(missing_trace, baseline);
         drop(missing);
@@ -536,7 +536,7 @@ fn a07_missing_and_stale_briefs_are_unknown_with_exact_off_delivery() {
             .await;
         let stale_trace = trace_one_ambient(&mut stale, 100, ID, TEXT, None).await;
         assert_eq!(stale.network.provider_requests(), Vec::<Value>::new());
-        assert!(stale.attention.health().last_unknown.is_some());
+        assert!(stale.attention.health.snapshot().last_unknown.is_some());
         assert!(!has_training_target(&stale).await);
         assert_eq!(stale_trace, baseline);
     });

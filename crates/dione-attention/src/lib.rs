@@ -7,6 +7,7 @@
 pub mod config;
 pub mod control;
 pub mod delivery;
+pub mod health;
 pub mod learning;
 pub mod provider;
 mod record_id;

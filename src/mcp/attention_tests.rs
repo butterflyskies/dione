@@ -866,7 +866,7 @@ fn provider_faults_use_ordinary_delivery_and_recovery_does_not_override_controls
                 .unwrap();
             assert_eq!(record.actual, Admission::Ordinary);
             assert!(record.judgment.is_none());
-            assert!(fixture.attention.health().degraded.is_some());
+            assert!(fixture.attention.health.snapshot().degraded.is_some());
             assert_eq!(
                 fixture.drain().await[0]["params"]["meta"]["message_id"],
                 id.to_string()
@@ -901,7 +901,7 @@ fn provider_faults_use_ordinary_delivery_and_recovery_does_not_override_controls
             .await
             .unwrap();
         assert_eq!(record.actual, Admission::Ordinary);
-        assert!(fixture.attention.health().degraded.is_some());
+        assert!(fixture.attention.health.snapshot().degraded.is_some());
         fixture.drain().await;
         advance_health(Duration::from_secs(31)).await;
         fixture.network.state.lock().provider_body = None;
@@ -913,8 +913,8 @@ fn provider_faults_use_ordinary_delivery_and_recovery_does_not_override_controls
             .await
             .unwrap();
         assert!(record.judgment.is_some());
-        assert!(fixture.attention.health().degraded.is_none());
-        assert_eq!(fixture.attention.health().recoveries, 1);
+        assert!(fixture.attention.health.snapshot().degraded.is_none());
+        assert_eq!(fixture.attention.health.snapshot().recoveries, 1);
         assert_eq!(
             dione_config::load_config(&fixture.path).raw.attention.mode,
             AttentionMode::On
@@ -967,7 +967,8 @@ fn timeout_and_metadata_failure_leave_direct_and_ambient_baseline_delivery_live(
         assert!(
             fixture
                 .attention
-                .health()
+                .health
+                .snapshot()
                 .degraded
                 .as_deref()
                 .unwrap()
@@ -998,7 +999,8 @@ fn timeout_and_metadata_failure_leave_direct_and_ambient_baseline_delivery_live(
         assert!(
             fixture
                 .attention
-                .health()
+                .health
+                .snapshot()
                 .degraded
                 .as_deref()
                 .unwrap()
@@ -1055,7 +1057,7 @@ fn missing_evidence_media_and_untrusted_controls_never_become_enforcement() {
         assert_eq!(event.attachments[0].name, "evidence.png");
         assert!(fixture.dispatch(event).await.is_none());
         assert_eq!(fixture.network.provider_requests().len(), before);
-        assert!(fixture.attention.health().last_unknown.is_some());
+        assert!(fixture.attention.health.snapshot().last_unknown.is_some());
 
         fixture.network.insert(
             100,
@@ -1302,7 +1304,7 @@ fn context_cycles_are_unknown_without_duplicating_the_trigger() {
             ["cyclic parent"]
         );
         assert_eq!(requests[0]["state"]["missing_context"], true);
-        assert!(fixture.attention.health().degraded.is_none());
+        assert!(fixture.attention.health.snapshot().degraded.is_none());
     });
 }
 
@@ -1492,9 +1494,9 @@ fn recipient_workflow_promotes_only_evaluated_policy_and_recovers_only_unconfirm
                 persisted.judgment.is_some(),
                 "new model scores must remain available for shadow calibration"
             );
-            assert!(fixture.attention.health().degraded.is_some());
+            assert!(fixture.attention.health.snapshot().degraded.is_some());
             assert!(
-                fixture.attention.probe_due(),
+                fixture.attention.health.probe_due(),
                 "calibration incompatibility must not suppress healthy shadow scoring"
             );
         }

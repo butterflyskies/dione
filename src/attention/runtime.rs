@@ -4,6 +4,7 @@ use crate::discord::messaging;
 use crate::discord::messaging::MessagingCtx;
 use crate::ingress_ledger::SourceDeliveryFailure;
 use dione_attention::delivery::AttentionGuardFailure as Failure;
+use dione_attention::health::{AttentionHealth, AttentionHealthController};
 #[cfg(test)]
 use dione_attention::store_access::AttentionStoreAccessError;
 use dione_attention_admission::JudgmentWork;
@@ -13,13 +14,9 @@ use dione_config::subscribe_generation;
 use dione_discord_events::MessageTargeting;
 use dione_discord_events::NotificationEvent;
 use dione_outbound_consent::consent::ConsentGate;
-use serde::{Deserialize, Serialize};
 use std::{
     fmt,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use {
@@ -48,32 +45,12 @@ pub const SHADOW_BASELINE: FixedThresholdPolicy = FixedThresholdPolicy {
     change: 0.5,
 };
 
-/// Inspectable degraded-state counters and notice bookkeeping, without source excerpts.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct AttentionHealth {
-    pub degraded: Option<String>,
-    pub last_unknown: Option<String>,
-    pub failures: u64,
-    pub recoveries: u64,
-    pub retry_after_ms: u64,
-    pub last_notice_ms: Option<u64>,
-    pub noticed_failures: u64,
-    pub noticed_recoveries: u64,
-    pub status_write_error: Option<String>,
-    pub notice_failures: u64,
-    pub last_notice_error: Option<String>,
-}
-
 /// Coordinates source validation, durable decisions, provider work and guarded delivery.
 pub struct AttentionRuntime {
     pub resolver: SourceResolver,
     authority_module: dione_contracts::ModuleInstanceId,
     store: Arc<dione_attention::store_access::AttentionStoreAccess>,
-    health: Mutex<AttentionHealth>,
-    health_dirty: AtomicBool,
-    health_epoch_ms: u64,
-    health_epoch: tokio::time::Instant,
+    pub(crate) health: Arc<AttentionHealthController>,
     provider: Mutex<Option<(u64, Arc<TypeSafeProvider>)>>,
     #[cfg(test)]
     test_provider: Option<Arc<TypeSafeProvider>>,
@@ -134,31 +111,16 @@ impl AttentionRuntime {
         let outage_retry_ms = attention.outage_retry_ms;
         let store_path = resolver.state_dir.join("attention").join("records.json");
         let health_path = resolver.state_dir.join("attention-status.json");
-        let initialized =
-            tokio::task::spawn_blocking(move || {
-                let store = AttentionStore::open_with_limits(store_path, limits).map_err(|error| {
-                    Arc::new(AttentionInitializationError {
-                        kind: AttentionInitializationErrorKind::Store(error),
-                    })
-                });
-                let health =
-                    match std::fs::read(health_path) {
-                        Ok(bytes) => serde_json::from_slice::<AttentionHealth>(&bytes)
-                            .unwrap_or_else(|_| AttentionHealth {
-                                degraded: Some("attention status is corrupt".to_owned()),
-                                ..AttentionHealth::default()
-                            }),
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                            AttentionHealth::default()
-                        }
-                        Err(_) => AttentionHealth {
-                            degraded: Some("attention status is unreadable".to_owned()),
-                            ..AttentionHealth::default()
-                        },
-                    };
-                (store, health)
-            })
-            .await;
+        let initialized = tokio::task::spawn_blocking(move || {
+            let store = AttentionStore::open_with_limits(store_path, limits).map_err(|error| {
+                Arc::new(AttentionInitializationError {
+                    kind: AttentionInitializationErrorKind::Store(error),
+                })
+            });
+            let health = AttentionHealthController::load(&health_path);
+            (store, health)
+        })
+        .await;
         let (store, mut health) = match initialized {
             Ok(initialized) => initialized,
             Err(error) => (
@@ -178,16 +140,18 @@ impl AttentionRuntime {
         if store.is_err() {
             health.degraded = Some("attention metadata is unavailable".to_owned());
         }
+        let health_dir = resolver.state_dir.clone();
         Self {
             authority_module,
             resolver,
             store: Arc::new(
                 dione_attention::store_access::AttentionStoreAccess::from_initialized(store),
             ),
-            health: Mutex::new(health),
-            health_dirty: AtomicBool::new(true),
-            health_epoch_ms: now_ms(),
-            health_epoch: tokio::time::Instant::now(),
+            health: Arc::new(AttentionHealthController::from_restored(
+                health,
+                health_dir,
+                now_ms(),
+            )),
             provider: Mutex::new(None),
             #[cfg(test)]
             test_provider: None,
@@ -212,34 +176,10 @@ impl AttentionRuntime {
 
     /// Persists dirty health state off the async worker and reports persistence failure.
     pub async fn persist_health(self: &Arc<Self>) -> Result<(), String> {
-        if !self.health_dirty.swap(false, Ordering::AcqRel) {
-            return Ok(());
-        }
-        let runtime = self.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut health = runtime
-                .health
-                .lock()
-                .map_err(|_| "attention health lock failed".to_owned())?;
-            let path = runtime.resolver.state_dir.join("attention-status.json");
-            let result = (|| -> std::io::Result<()> {
-                std::fs::create_dir_all(&runtime.resolver.state_dir)?;
-                let mut temporary = tempfile::NamedTempFile::new_in(&runtime.resolver.state_dir)?;
-                health.status_write_error = None;
-                serde_json::to_writer(&mut temporary, &*health).map_err(std::io::Error::other)?;
-                temporary.as_file().sync_all()?;
-                temporary.persist(&path).map_err(|error| error.error)?;
-                std::fs::File::open(&runtime.resolver.state_dir)?.sync_all()
-            })();
-            if result.is_err() {
-                health.status_write_error = Some("attention status persistence failed".to_owned());
-                runtime.health_dirty.store(true, Ordering::Release);
-                return Err("attention status persistence failed".to_owned());
-            }
-            Ok(())
-        })
-        .await
-        .map_err(|_| "attention status worker failed".to_owned())?
+        self.health
+            .persist()
+            .await
+            .map_err(|error| error.to_string())
     }
 
     /// Publishes a bounded opt-in notice under the current route and publication guard.
@@ -252,26 +192,8 @@ impl AttentionRuntime {
         // or removed route cannot become an asynchronous stale send.
         let publication = attention_effect_guard().await;
         let config = load_config(&self.resolver.state_dir);
-        let text = {
-            let Ok(mut health) = self.health.lock() else {
-                return;
-            };
-            let before = (
-                health.last_notice_ms,
-                health.noticed_failures,
-                health.noticed_recoveries,
-            );
-            let text = health.notice_text(&config.raw.attention, self.health_now());
-            if before
-                != (
-                    health.last_notice_ms,
-                    health.noticed_failures,
-                    health.noticed_recoveries,
-                )
-            {
-                self.health_dirty.store(true, Ordering::Release);
-            }
-            text
+        let Ok(text) = self.health.propose_notice(&config.raw.attention) else {
+            return;
         };
         if let Some(text) = text {
             let outcome = match config
@@ -318,95 +240,16 @@ impl AttentionRuntime {
                 Ok(None) => Err("attention notice route is not configured"),
                 Err(error) => Err(error),
             };
-            if let Ok(mut health) = self.health.lock() {
-                match outcome {
-                    Ok(()) => health.last_notice_error = None,
-                    Err(error) => {
-                        health.notice_failures = health.notice_failures.saturating_add(1);
-                        health.last_notice_error = Some(error.to_owned());
-                    }
-                }
-                self.health_dirty.store(true, Ordering::Release);
-            }
+            self.health.record_notice_outcome(outcome);
         }
         drop(publication);
         let _ = self.persist_health().await;
     }
 
-    /// Returns health, visibly degraded if its synchronization state is unavailable.
-    pub fn health(&self) -> AttentionHealth {
-        self.health
-            .lock()
-            .map(|health| health.clone())
-            .unwrap_or_else(|_| AttentionHealth {
-                degraded: Some("attention health lock failed".to_owned()),
-                ..AttentionHealth::default()
-            })
-    }
-
-    /// Records an unknown outcome without treating absent evidence as a negative judgment.
-    pub fn unknown(&self, reason: impl Into<String>) {
-        let reason = reason.into();
-        if let Ok(mut health) = self.health.lock()
-            && health.last_unknown.as_deref() != Some(reason.as_str())
-        {
-            health.last_unknown = Some(reason);
-            self.health_dirty.store(true, Ordering::Release);
-        }
-    }
-
-    fn health_now(&self) -> u64 {
-        self.health_epoch_ms.saturating_add(
-            self.health_epoch
-                .elapsed()
-                .as_millis()
-                .min(u64::MAX as u128) as u64,
-        )
-    }
-
-    /// Reports whether the bounded provider recovery backoff has elapsed.
-    pub fn probe_due(&self) -> bool {
-        self.health().retry_after_ms <= self.health_now()
-    }
-
     fn failed(&self, reason: String) {
         let config = load_config(&self.resolver.state_dir);
-        if let Ok(mut health) = self.health.lock() {
-            health.degraded = Some(reason);
-            health.failures = health.failures.saturating_add(1);
-            health.retry_after_ms = self
-                .health_now()
-                .saturating_add(config.raw.attention.outage_retry_ms);
-            self.health_dirty.store(true, Ordering::Release);
-        }
-    }
-
-    // Healthy scoring must continue while an explicitly selected calibration is unavailable.
-    fn policy_unavailable(&self, reason: String) {
-        if let Ok(mut health) = self.health.lock() {
-            let changed = health.degraded.as_ref() != Some(&reason);
-            if changed || health.retry_after_ms != 0 {
-                if changed {
-                    health.failures = health.failures.saturating_add(1);
-                }
-                health.degraded = Some(reason);
-                health.retry_after_ms = 0;
-                self.health_dirty.store(true, Ordering::Release);
-            }
-        }
-    }
-
-    fn recovered(&self) {
-        if let Ok(mut health) = self.health.lock() {
-            if health.degraded.take().is_some() {
-                health.recoveries = health.recoveries.saturating_add(1);
-                self.health_dirty.store(true, Ordering::Release);
-            }
-            if health.retry_after_ms != 0 {
-                health.retry_after_ms = 0;
-                self.health_dirty.store(true, Ordering::Release);
-            }
-        }
+        self.health
+            .failed(reason, config.raw.attention.outage_retry_ms);
     }
 
     fn provider(
@@ -619,7 +462,9 @@ impl AttentionRuntime {
                                 }
                             }
                         } else {
-                            runtime.unknown("no current explicitly selected policy membership");
+                            runtime
+                                .health
+                                .unknown("no current explicitly selected policy membership");
                         }
                         finalized.delivery = match finalized.actual {
                             Admission::Prompt | Admission::NextTurn => DeliveryState::Admitted,
@@ -636,9 +481,9 @@ impl AttentionRuntime {
                     Ok((finalized, policy_failure)) => {
                         record = finalized;
                         if let Some(reason) = policy_failure {
-                            self.policy_unavailable(reason);
+                            self.health.policy_unavailable(reason);
                         } else if record.judgment.is_some() {
-                            self.recovered();
+                            self.health.recovered();
                         }
                     }
                     Err(_) => {
@@ -654,7 +499,7 @@ impl AttentionRuntime {
                 record.judgment = None;
             }
             Err(EvaluationFailure::Source(error)) => {
-                self.unknown(error.to_string());
+                self.health.unknown(error.to_string());
                 record.actual = Admission::Ordinary;
                 if error != SourceFailure::Unknown {
                     record.delivery = DeliveryState::Invalidated;
@@ -730,7 +575,8 @@ impl AttentionRuntime {
             .judge_guarded(&input, cancel, || self.export_current(record))
             .await?;
         record.hypothetical = if missing_context || judgment.context_sufficient.get() <= 0.5 {
-            self.unknown("insufficient authorized conversation evidence");
+            self.health
+                .unknown("insufficient authorized conversation evidence");
             Admission::Unknown
         } else {
             SHADOW_BASELINE
@@ -831,7 +677,7 @@ impl AttentionRuntime {
         match sources {
             Ok(sources) if !sources.is_empty() => {
                 if let Err(error) = self.validate_sources(&sources).await {
-                    self.unknown(error.to_string());
+                    self.health.unknown(error.to_string());
                 }
             }
             Ok(_) => {}
@@ -890,7 +736,8 @@ impl AttentionRuntime {
                 tokio::time::timeout_at(deadline, self.validate_record(&record)).await,
                 Ok(Ok(()))
             ) {
-                self.unknown("pending source is unavailable during recovery");
+                self.health
+                    .unknown("pending source is unavailable during recovery");
                 continue;
             }
             if record.incarnation == live_incarnation {
@@ -1094,47 +941,6 @@ impl dione_attention::delivery::AttentionDeliveryGuard for AttentionRuntime {
     }
 }
 
-impl AttentionHealth {
-    fn notice_text(
-        &mut self,
-        config: &dione_attention::config::AttentionConfig,
-        now: u64,
-    ) -> Option<String> {
-        use dione_attention::config::NoticeMode;
-        if config.notices == NoticeMode::Off {
-            self.noticed_failures = self.failures;
-            self.noticed_recoveries = self.recoveries;
-            return None;
-        }
-        if self
-            .last_notice_ms
-            .is_some_and(|last| now.saturating_sub(last) < config.notice_cooldown_ms)
-        {
-            return None;
-        }
-        let text = if self.degraded.is_some() && self.failures > self.noticed_failures {
-            Some(format!(
-                "Attention is degraded: {}. Eligible messages are using ordinary delivery.",
-                self.degraded.as_deref().unwrap_or("evaluation unavailable")
-            ))
-        } else if self.degraded.is_none() && self.recoveries > self.noticed_recoveries {
-            if config.notices == NoticeMode::FailuresAndRecovery {
-                Some("Attention evaluation recovered. Existing modes and room settings are unchanged.".to_owned())
-            } else {
-                self.noticed_recoveries = self.recoveries;
-                None
-            }
-        } else {
-            None
-        };
-        if text.is_some() {
-            self.last_notice_ms = Some(now);
-            self.noticed_failures = self.failures;
-            self.noticed_recoveries = self.recoveries;
-        }
-        text
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1509,7 +1315,7 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            if !self.runtime.probe_due() {
+            if !self.runtime.health.probe_due() {
                 return None;
             }
             let config = load_config(&self.path);
@@ -1737,7 +1543,7 @@ mod tests {
             fixture.runtime.failed("fixture failure".into());
             fixture.publish_notice().await;
             assert_eq!(fixture.network.notice_attempts(), 0);
-            assert_eq!(fixture.runtime.health().notice_failures, 1);
+            assert_eq!(fixture.runtime.health.snapshot().notice_failures, 1);
 
             let mut settings = load_config(&fixture.path).raw.attention.clone();
             settings.notices = NoticeMode::Off;
@@ -1876,7 +1682,7 @@ mod tests {
                 fixture.publish_notice().await;
                 fixture.runtime.failed("fixture provider outage".into());
                 fixture.publish_notice().await;
-                fixture.runtime.recovered();
+                fixture.runtime.health.recovered();
                 fixture.publish_notice().await;
                 fixture.runtime.failed("fixture provider outage".into());
                 fixture.publish_notice().await;
@@ -1892,13 +1698,13 @@ mod tests {
                         .iter()
                         .all(|text| text.contains("fixture provider outage"))
                 );
-                let health = fixture.runtime.health();
+                let health = fixture.runtime.health.snapshot();
                 assert_eq!((health.failures, health.recoveries), (3, 1));
                 assert_eq!(health.degraded.as_deref(), Some("fixture provider outage"));
 
                 advance_health(Duration::from_secs(61)).await;
                 fixture.publish_notice().await;
-                fixture.runtime.recovered();
+                fixture.runtime.health.recovered();
                 fixture.publish_notice().await;
                 advance_health(Duration::from_secs(61)).await;
                 fixture.publish_notice().await;
@@ -1917,7 +1723,7 @@ mod tests {
                 if notices == NoticeMode::FailuresAndRecovery {
                     assert!(!delivered[2].contains("fixture provider outage"));
                 }
-                let health = fixture.runtime.health();
+                let health = fixture.runtime.health.snapshot();
                 assert_eq!((health.failures, health.recoveries), (3, 2));
                 assert!(health.degraded.is_none());
                 assert_eq!(health.notice_failures, 0);
@@ -1951,13 +1757,13 @@ mod tests {
             fixture.publish_notice().await;
             advance_health(Duration::from_secs(61)).await;
             fixture.publish_notice().await;
-            fixture.runtime.recovered();
+            fixture.runtime.health.recovered();
             fixture.publish_notice().await;
 
             assert_eq!(fixture.network.notice_attempts(), 2);
             assert!(fixture.network.delivered_notices().is_empty());
             assert_eq!(fixture.network.provider_calls(), 0);
-            let health = fixture.runtime.health();
+            let health = fixture.runtime.health.snapshot();
             assert_eq!(
                 (health.failures, health.recoveries, health.notice_failures),
                 (1, 1, 2)
@@ -2000,7 +1806,7 @@ mod tests {
                 fixture.publish_notice().await;
                 assert_eq!(fixture.network.delivered_notices().len(), delivered);
                 assert_eq!(fixture.no_rly.pending().await, pending);
-                let health = fixture.runtime.health();
+                let health = fixture.runtime.health.snapshot();
                 assert_eq!(health.notice_failures, failures);
                 assert_eq!(
                     health.last_notice_error.as_deref(),
@@ -2024,7 +1830,7 @@ mod tests {
                 assert!(failed.judgment.is_none());
                 assert_eq!(fixture.network.provider_calls(), 1);
                 assert_eq!(load_config(&fixture.path).raw.attention.mode, mode);
-                assert!(fixture.runtime.health().degraded.is_some());
+                assert!(fixture.runtime.health.snapshot().degraded.is_some());
 
                 fixture.network.set_provider_malformed(false);
                 advance_health(Duration::from_secs(31)).await;
@@ -2035,7 +1841,7 @@ mod tests {
                 assert!(recovered.judgment.is_some());
                 assert_eq!(fixture.network.provider_calls(), 2);
                 assert_eq!(load_config(&fixture.path).raw.attention.mode, mode);
-                let health = fixture.runtime.health();
+                let health = fixture.runtime.health.snapshot();
                 assert!(health.degraded.is_none());
                 assert_eq!(health.recoveries, 1);
             }
@@ -2092,7 +1898,7 @@ mod tests {
             muted.publish_notice().await;
             assert_eq!(muted.network.delivered_notices().len(), 1);
             assert_eq!(muted.network.provider_calls(), calls + 1);
-            let health = muted.runtime.health();
+            let health = muted.runtime.health.snapshot();
             assert!(health.degraded.is_none());
             assert_eq!(health.recoveries, 1);
             assert_eq!(

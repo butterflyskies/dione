@@ -155,7 +155,7 @@ pub async fn execute(
                 .await;
             Ok(
                 json!({"settings": initial.raw.attention, "generation": initial.generation(),
-                "safe_delivery_supported": runtime.enforcement_supported, "health": runtime.health(),
+                "safe_delivery_supported": runtime.enforcement_supported, "health": runtime.health.snapshot(),
                 "store": state.as_ref().ok(), "store_error": state.err()}),
             )
         }

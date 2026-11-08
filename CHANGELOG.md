@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.147.0] - 2026-11-08
+
+- Move Attention health lifecycle, backoff, notice bookkeeping and status persistence into the existing owner while retaining root publication and delivery authority.
+
 ## [0.146.0] - 2026-11-08
 
 - Move Attention serialized store transactions and nonblocking read access into the existing owner while preserving sticky initialization, worker causes and root delivery authority.

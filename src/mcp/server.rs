@@ -430,7 +430,7 @@ async fn run_with_input(
                             }
                         }
                         Some(Err(_)) => {
-                            attention.unknown("attention worker failed");
+                            attention.health.unknown("attention worker failed");
                             let ready = attention_transition(&mut admissions, &attention).await;
                             if let Err(error) = forward_attention_results(
                                 ready,
@@ -496,7 +496,7 @@ async fn run_with_input(
                                 tracing::error!(%error, "attention recovery delivery failed"); cancel_notif.cancel(); break;
                             }
                         }
-                        Some(Err(_)) => attention.unknown("attention recovery worker failed"),
+                        Some(Err(_)) => attention.health.unknown("attention recovery worker failed"),
                         None => {}
                     }
                 }
@@ -585,13 +585,13 @@ async fn run_with_input(
                         | NotificationEvent::MessageDelete { chat_id, message_id, .. } = &event {
                         let source = dione_attention::types::SourceKey { channel_id: *chat_id, message_id: *message_id };
                         let ready = admissions.invalidate(source);
-                        if let Err(error) = attention.invalidate(source).await { attention.unknown(error.to_string()); }
+                        if let Err(error) = attention.invalidate(source).await { attention.health.unknown(error.to_string()); }
                         let scoped_source = dione_contracts::MessageRef::new(
                             dione_contracts::ConversationRef::new(attention.authority_module().clone(), dione_contracts::ConversationId::numeric(source.channel_id.into())),
                             dione_contracts::MessageId::numeric(source.message_id.into()),
                         );
                         if let Err(error) = notification_sink.invalidate_attention(scoped_source).await {
-                            attention.unknown(error.to_string());
+                            attention.health.unknown(error.to_string());
                         }
                         if let Err(error) = forward_attention_results(
                             ready,
@@ -2260,7 +2260,9 @@ async fn forward_attention_results(
         ) {
             Ok(()) => {}
             Err(crate::ingress_ledger::SourceDeliveryFailure::Unavailable) => {
-                attention.unknown("pending source authority is unavailable");
+                attention
+                    .health
+                    .unknown("pending source authority is unavailable");
                 let mut deferred = Vec::with_capacity(results.len() + 1);
                 deferred.push(result);
                 deferred.extend(results);
@@ -2272,7 +2274,7 @@ async fn forward_attention_results(
                     .mark_delivery(result.record.id, DeliveryState::Invalidated)
                     .await
                 {
-                    attention.unknown(error.to_string());
+                    attention.health.unknown(error.to_string());
                 }
                 continue;
             }
@@ -2281,7 +2283,9 @@ async fn forward_attention_results(
             Admission::RetrievalOnly => {}
             Admission::Prompt | Admission::NextTurn => {
                 if !attention.enforcement_supported {
-                    attention.unknown("consumer has no safe-turn capability");
+                    attention
+                        .health
+                        .unknown("consumer has no safe-turn capability");
                     continue;
                 }
                 // Retain the original source-bound event until the nonblocking final
@@ -2346,7 +2350,9 @@ async fn forward_attention_results(
                 ) {
                     Ok(()) => sink.deliver(&notification).await?,
                     Err(AttentionGuardFailure::Unavailable) => {
-                        attention.unknown("pending source authority is unavailable");
+                        attention
+                            .health
+                            .unknown("pending source authority is unavailable");
                         let mut deferred = Vec::with_capacity(results.len() + 1);
                         deferred.push(result);
                         deferred.extend(results);
@@ -2358,7 +2364,7 @@ async fn forward_attention_results(
                             .mark_delivery(result.record.id, DeliveryState::Invalidated)
                             .await
                         {
-                            attention.unknown(error.to_string());
+                            attention.health.unknown(error.to_string());
                         }
                     }
                 }
@@ -2378,7 +2384,7 @@ async fn forward_attention_results(
                     .mark_delivery(result.record.id, DeliveryState::Observed)
                     .await
                 {
-                    attention.unknown(error.to_string());
+                    attention.health.unknown(error.to_string());
                 }
             }
         }
@@ -2420,7 +2426,9 @@ async fn attention_transition(
     let committed = match committed {
         Ok(records) => records,
         Err(_) => {
-            attention.unknown("attention transition metadata unavailable");
+            attention
+                .health
+                .unknown("attention transition metadata unavailable");
             Vec::new()
         }
     };
@@ -2445,7 +2453,7 @@ fn begin_attention(
     };
     let submission = if duplicate {
         Submission::Duplicate
-    } else if attention.probe_due() {
+    } else if attention.health.probe_due() {
         admissions.submit(
             event,
             config,
@@ -2456,8 +2464,10 @@ fn begin_attention(
         Submission::Ordinary(event)
     };
     match &submission {
-        Submission::Unknown { reason, .. } => attention.unknown(*reason),
-        Submission::Saturated { .. } => attention.unknown("attention evaluation capacity reached"),
+        Submission::Unknown { reason, .. } => attention.health.unknown(*reason),
+        Submission::Saturated { .. } => attention
+            .health
+            .unknown("attention evaluation capacity reached"),
         _ => {}
     }
     submission
