@@ -277,8 +277,9 @@ configured MCP providers in shadow or live mode.
 ## Tools and outbound actions
 
 [protocol.rs](src/mcp/protocol.rs) defines the remaining legacy MCP tool schemas.
-[Discord reply registration](src/discord/reply_tool.rs) owns the reply schema,
-argument parsing, execution, and evidence-dependent discovery.
+[Discord reply contracts](crates/dione-discord-tool-contracts/src/reply.rs) own the reply schema
+and argument parsing. [Discord reply registration](src/discord/reply_tool.rs) keeps execution
+and evidence-dependent discovery using the current configuration.
 [dispatch.rs](src/mcp/dispatch.rs) loads a fresh configuration snapshot for a
 tool call and routes it to Discord operations and the remaining
 [tool handlers](src/mcp/tools).
@@ -318,7 +319,8 @@ delete, and thread creation. A complete message command selects a mutation;
 thread creation returns its own typed result and registers the requested parent
 before returning. The narrow context contains HTTP, state, configuration, and
 the ingress ledger. The [Discord management adapter](src/discord/management_wire.rs)
-formats outcomes and errors; [registered management tools](src/discord/management_tools.rs) own argument parsing.
+formats outcomes and errors. [Management contracts](crates/dione-discord-tool-contracts/src/management.rs)
+own argument parsing; [registered management tools](src/discord/management_tools.rs) keep registration and execution.
 
 [Discord introspection](crates/dione-discord-introspection/src/introspection.rs) owns guild, channel, user,
 member, role, and emoji reads. It returns typed observations and failures,
@@ -326,7 +328,8 @@ resolves private-channel names through the SDK, and localizes member join times
 using the configuration selected at call entry. These reads use the bot HTTP
 client's authority and have no local allowlist or ingress checks. The
 [Discord introspection adapter](crates/dione-discord-introspection/src/wire.rs) formats results and
-original SDK error text; [registered introspection tools](src/discord/introspection_tools.rs) own argument parsing.
+original SDK error text. [Metadata contracts](crates/dione-discord-tool-contracts/src/metadata.rs)
+own argument parsing; [registered introspection tools](src/discord/introspection_tools.rs) keep registration and execution.
 
 [Consent delivery types](crates/dione-outbound-consent/src/delivery.rs) distinguish total failure from
 nonempty partial progress and retain retry state privately. Attention consumes
