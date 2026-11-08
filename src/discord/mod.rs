@@ -7,7 +7,6 @@ pub(crate) mod management_wire;
 pub mod messaging;
 pub(crate) mod observation;
 pub(crate) mod rendering;
-pub mod rook_context;
 pub(crate) mod rook_observation;
 pub(crate) mod verified_action;
 pub(crate) mod verified_action_runtime;

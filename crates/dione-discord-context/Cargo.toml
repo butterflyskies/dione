@@ -1,0 +1,29 @@
+[package]
+name = "dione-discord-context"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Discord Rook context reads and bounded native metadata projection"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["discord", "context", "observation"]
+categories = ["asynchronous"]
+
+[dependencies]
+dione-contracts.workspace = true
+dione-discord-queries.workspace = true
+dione-rook.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serenity.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+dione-config.workspace = true
+dione-discord-state.workspace = true
+dione-pre-send.workspace = true
+camino.workspace = true
+reqwest.workspace = true
+tokio.workspace = true

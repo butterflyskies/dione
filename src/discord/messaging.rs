@@ -390,15 +390,6 @@ pub struct MessagingCtx {
 }
 
 impl MessagingCtx {
-    pub(crate) fn query_ctx(&self) -> dione_discord_queries::QueryCtx {
-        dione_discord_queries::QueryCtx::new(
-            self.http.clone(),
-            self.state.clone(),
-            self.config.clone(),
-            self.state_dir.clone(),
-            self.construct_id.clone(),
-        )
-    }
     pub fn new(
         http: Arc<serenity::http::Http>,
         state: State,

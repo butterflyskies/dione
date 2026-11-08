@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.135.0"
+version = "0.136.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -951,6 +951,7 @@ dependencies = [
  "dione-coordination",
  "dione-delivery-scheduler",
  "dione-discord-bells",
+ "dione-discord-context",
  "dione-discord-events",
  "dione-discord-gate",
  "dione-discord-identities",
@@ -1248,6 +1249,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "dione-discord-context"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "dione-config",
+ "dione-contracts",
+ "dione-discord-queries",
+ "dione-discord-state",
+ "dione-pre-send",
+ "dione-rook",
+ "futures-util",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serenity",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "dione-discord-events"
 version = "0.1.5"
 dependencies = [
@@ -1313,7 +1334,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-queries"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "camino",

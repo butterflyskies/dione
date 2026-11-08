@@ -82,16 +82,34 @@ pub enum QueryErrorKind {
     #[error("message has no attachments")]
     NoAttachments,
 }
-async fn check_outbound(ctx: &QueryCtx, channel: ChannelId) -> Result<(), QueryError> {
-    let state = ctx.state.read().await;
-    if dione_discord_gate::OutboundGate::check_channel_with_threads(
-        &ctx.config,
-        channel.get(),
-        &state.dm_channel_ids,
-        &state.thread_parents,
-    ) {
-        Ok(())
-    } else {
-        Err(QueryErrorKind::OutboundDenied(channel).into())
+impl QueryCtx {
+    /// Revalidates current channel policy using this configuration snapshot and live DM/thread state.
+    ///
+    /// # Errors
+    /// Returns the existing typed outbound denial without contacting Discord.
+    pub async fn check_outbound(&self, channel: ChannelId) -> Result<(), QueryError> {
+        let state = self.state.read().await;
+        if dione_discord_gate::OutboundGate::check_channel_with_threads(
+            &self.config,
+            channel.get(),
+            &state.dm_channel_ids,
+            &state.thread_parents,
+        ) {
+            Ok(())
+        } else {
+            Err(QueryErrorKind::OutboundDenied(channel).into())
+        }
+    }
+    /// Observes the live thread-parent mapping without granting read or delivery authority.
+    pub async fn thread_parent(&self, channel: ChannelId) -> Option<ChannelId> {
+        self.state
+            .read()
+            .await
+            .thread_parents
+            .get(&channel.get())
+            .copied()
+            .flatten()
+            .and_then(std::num::NonZeroU64::new)
+            .map(|id| ChannelId::new(id.get()))
     }
 }

@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.136.0]
+
+- Extract complete Discord Rook context reads and native metadata projection; retain sealed observation capture at root. Add narrowly typed read-policy and thread-parent observations to dione-discord-queries 0.2.0.
+
 ## [0.135.0]
 
 - Extract complete process-local attention admission, ordering and cancellation ownership.

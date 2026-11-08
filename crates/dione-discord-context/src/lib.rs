@@ -1,4 +1,6 @@
 //! Recipient context through Discord's existing authorized query boundary.
+#![warn(missing_docs)]
+pub mod native;
 
 use std::sync::Arc;
 
@@ -8,9 +10,9 @@ use serenity::{
     model::id::{ChannelId, MessageId},
 };
 
-use super::{messaging::MessagingCtx, rook_observation::native_supplement};
+use crate::native::native_supplement;
 use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
-use dione_discord_queries::{QueryError, QueryErrorKind, queries};
+use dione_discord_queries::{QueryCtx, QueryError, QueryErrorKind, queries};
 use dione_rook::{
     ContextCapabilities, ContextDirection, ContextError, ContextErrorKind, ContextObservation,
     ContextPage, ContextProvider, ContextQuery, ContextResponse, ConversationKey,
@@ -23,7 +25,7 @@ use dione_rook::{
 /// this adapter additionally enforces Dione's current channel policy.
 pub struct DiscordContextProvider {
     source: ModuleInstanceId,
-    context: Arc<dyn Fn() -> MessagingCtx + Send + Sync>,
+    context: Arc<dyn Fn() -> QueryCtx + Send + Sync>,
 }
 
 impl DiscordContextProvider {
@@ -33,7 +35,7 @@ impl DiscordContextProvider {
     /// Returns `InvalidReference` for an empty module slot.
     pub fn new(
         slot: &str,
-        context: Arc<dyn Fn() -> MessagingCtx + Send + Sync>,
+        context: Arc<dyn Fn() -> QueryCtx + Send + Sync>,
     ) -> Result<Self, ContextError> {
         let provider = ProviderId::new("discord")
             .map_err(|_| ContextError::new(ContextErrorKind::InvalidReference))?;
@@ -92,12 +94,11 @@ impl ContextProvider for DiscordContextProvider {
                     let id = target
                         .numeric()
                         .ok_or_else(|| ContextError::new(ContextErrorKind::InvalidReference))?;
-                    let result =
-                        queries::get_message(&ctx.query_ctx(), channel, MessageId::new(id.get()))
-                            .await
-                            .map_err(map_error)?;
+                    let result = queries::get_message(&ctx, channel, MessageId::new(id.get()))
+                        .await
+                        .map_err(map_error)?;
                     Ok::<_, ContextError>(ContextResponse::exact(
-                        self.project(result.message(), thread_parent(&ctx, channel).await)?,
+                        self.project(result.message(), ctx.thread_parent(channel).await)?,
                     ))
                 }
                 ContextQuery::History {
@@ -120,16 +121,10 @@ impl ContextProvider for DiscordContextProvider {
                         ContextDirection::Before(_) => (anchor, None),
                         ContextDirection::After(_) => (None, anchor),
                     };
-                    let result = queries::fetch_messages(
-                        &ctx.query_ctx(),
-                        channel,
-                        before,
-                        after,
-                        limit.get(),
-                    )
-                    .await
-                    .map_err(map_error)?;
-                    let parent = thread_parent(&ctx, channel).await;
+                    let result = queries::fetch_messages(&ctx, channel, before, after, limit.get())
+                        .await
+                        .map_err(map_error)?;
+                    let parent = ctx.thread_parent(channel).await;
                     let messages = result
                         .messages()
                         .iter()
@@ -143,24 +138,13 @@ impl ContextProvider for DiscordContextProvider {
                     )?))
                 }
             }?;
-            super::messaging::check_outbound(&(self.context)(), channel)
+            (self.context)()
+                .check_outbound(channel)
                 .await
                 .map_err(|error| ContextError::with_cause(ContextErrorKind::AccessDenied, error))?;
             Ok(response)
         })
     }
-}
-
-async fn thread_parent(ctx: &MessagingCtx, channel: ChannelId) -> Option<ChannelId> {
-    ctx.state
-        .read()
-        .await
-        .thread_parents
-        .get(&channel.get())
-        .copied()
-        .flatten()
-        .and_then(std::num::NonZeroU64::new)
-        .map(|id| ChannelId::new(id.get()))
 }
 
 fn map_error(error: QueryError) -> ContextError {
@@ -270,15 +254,12 @@ mod tests {
             let provider = DiscordContextProvider::new(
                 "primary",
                 Arc::new(move || {
-                    MessagingCtx::new(
+                    QueryCtx::new(
                         http.clone(),
                         shared_state.clone(),
                         Arc::new(current.lock().unwrap().clone()),
                         "/tmp".into(),
-                        Arc::new(dione_outbound_consent::consent::ConsentGate::new(
-                            camino::Utf8Path::new("/tmp"),
-                        )),
-                        Arc::new(crate::ingress_ledger::IngressLedger::new()),
+                        dione_pre_send::ConstructId::parse("fixture-orbit-38").unwrap(),
                     )
                 }),
             )
@@ -382,15 +363,27 @@ mod tests {
             }
             factory()
         });
-        assert!(matches!(
-            fixture
-                .provider
-                .read(&ContextQuery::Exact(fixture.message(30)))
-                .await
-                .unwrap_err()
-                .kind,
-            ContextErrorKind::AccessDenied
-        ));
+        let denied = fixture
+            .provider
+            .read(&ContextQuery::Exact(fixture.message(30)))
+            .await
+            .unwrap_err();
+        assert!(matches!(denied.kind, ContextErrorKind::AccessDenied));
+        assert_eq!(
+            denied.to_string(),
+            "rook context read failed: context access denied"
+        );
+        let cause = std::error::Error::source(&denied)
+            .unwrap()
+            .downcast_ref::<QueryError>()
+            .unwrap();
+        assert!(
+            matches!(cause.kind, QueryErrorKind::OutboundDenied(channel) if channel.get() == 10)
+        );
+        assert_eq!(
+            cause.to_string(),
+            "channel 10 is not a permitted outbound target"
+        );
         assert_eq!(fixture.paths.lock().unwrap().len(), 1);
     }
 

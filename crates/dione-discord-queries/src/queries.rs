@@ -1,6 +1,6 @@
 //! Authorized Discord reads, message observations, and attachment downloads.
 
-use crate::{QueryCtx, QueryError, QueryErrorKind, check_outbound};
+use crate::{QueryCtx, QueryError, QueryErrorKind};
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::Utc;
 use dione_config::LoadedConfig;
@@ -403,7 +403,7 @@ pub async fn fetch_messages(
     after: Option<MessageId>,
     limit: u8,
 ) -> Result<FetchedMessages, QueryError> {
-    check_outbound(ctx, channel_id).await?;
+    ctx.check_outbound(channel_id).await?;
 
     let pagination = resolve_pagination(before, after)?;
     let paginating = before.is_some() || after.is_some();
@@ -439,7 +439,7 @@ pub async fn fetch_pins(
     ctx: &QueryCtx,
     channel_id: ChannelId,
 ) -> Result<PinnedMessages, QueryError> {
-    check_outbound(ctx, channel_id).await?;
+    ctx.check_outbound(channel_id).await?;
 
     match ctx.http.get_pins(channel_id).await {
         Ok(messages) => {
@@ -457,7 +457,7 @@ pub async fn fetch_new_since(
     after_message_id: MessageId,
     limit: u8,
 ) -> Result<NewMessages, QueryError> {
-    check_outbound(ctx, channel_id).await?;
+    ctx.check_outbound(channel_id).await?;
 
     match ctx
         .http
@@ -482,7 +482,7 @@ pub async fn download_attachment(
     channel_id: ChannelId,
     message_id: MessageId,
 ) -> Result<Vec<Utf8PathBuf>, QueryError> {
-    check_outbound(ctx, channel_id).await?;
+    ctx.check_outbound(channel_id).await?;
 
     let msg = match ctx.http.get_message(channel_id, message_id).await {
         Ok(m) => m,
@@ -660,7 +660,7 @@ pub async fn get_message(
     channel_id: ChannelId,
     message_id: MessageId,
 ) -> Result<RetrievedMessage, QueryError> {
-    check_outbound(ctx, channel_id).await?;
+    ctx.check_outbound(channel_id).await?;
     let message = ctx
         .http
         .get_message(channel_id, message_id)
