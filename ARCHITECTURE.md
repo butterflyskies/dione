@@ -276,7 +276,7 @@ configured MCP providers in shadow or live mode.
 
 ## Tools and outbound actions
 
-[protocol.rs](crates/dione-mcp-protocol/src/lib.rs) defines the remaining legacy MCP tool schemas.
+[MCP response contracts](crates/dione-mcp-protocol/src/lib.rs) define protocol negotiation and the thirty-three built-in discovery schemas.
 [Discord reply contracts](crates/dione-discord-tool-contracts/src/reply.rs) own the reply schema
 and argument parsing. [Discord reply registration](src/discord/reply_tool.rs) keeps execution
 and evidence-dependent discovery using the current configuration.
@@ -353,7 +353,7 @@ authority, queue acceptance, and reconnect replay. [Discord introspection](crate
 authorizes and sends typing notifications. The public
 [`dione-discord-identities`](crates/dione-discord-identities/src/lib.rs) owner validates
 external Discord IDs through `dione_discord_identities::Snowflake`.
-Production gateway code uses the Discord owners directly. The [Discord tool catalog](crates/dione-discord-tool-contracts/src/lib.rs) owns the twenty remaining root-adapted tool definitions and typed request decoding. Root MCP adapters retain current configuration, resident registration and execution; legacy protocol definitions remain in MCP. Application messaging remains at
+Production gateway code uses the Discord owners directly. The [Discord tool catalog](crates/dione-discord-tool-contracts/src/lib.rs) owns the twenty remaining root-adapted tool definitions and typed request decoding. Root MCP adapters retain current configuration, resident registration and execution; the MCP response library owns built-in discovery metadata. Application messaging remains at
 `discord::messaging`; the former MCP messaging and ID aliases were removed.
 The former
 `mcp::tools::bot_state` alias was removed in 0.53.0.
