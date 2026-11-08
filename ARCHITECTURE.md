@@ -293,7 +293,7 @@ have their own access checks; an MCP connection is not unrestricted Discord
 access.
 
 Discord replies, DMs, and consent actions return typed outcomes. The
-[Discord messaging adapter](src/discord/messaging_wire.rs) projects tool response fields.
+[Discord messaging adapter](crates/dione-discord-messaging-contracts/src/wire.rs) projects tool response fields.
 [Discord queries](crates/dione-discord-queries/src/queries.rs) own authorized message reads,
 receipt attempts, and attachment downloads. Their private result fields preserve
 message ordering and derive page metadata. The [Discord query adapter](crates/dione-discord-queries/src/wire.rs)
