@@ -255,10 +255,10 @@ mod tests {
         let logs = CapturedLogs::default();
         assert_eq!(
             service
-                .resolve_display_name(42, "Iris")
+                .resolve_display_name(42, "Fixture-Orbit-28")
                 .with_subscriber(logs.subscriber())
                 .await,
-            "Iris"
+            "Fixture-Orbit-28"
         );
         let requests = requests.lock().unwrap().clone();
         assert!(
@@ -284,7 +284,7 @@ mod tests {
     async fn interrupted_body_and_status_failure_preserve_real_stale_nameplate() {
         use crate::test_support::{CapturedLogs, http_fixture, response};
         use tracing::instrument::WithSubscriber;
-        let yaml = "nameplates:\n  \"42\":\n    name: Iris\n    pronouns: [she/her]\n";
+        let yaml = "nameplates:\n  \"42\":\n    name: Fixture-Orbit-28\n    pronouns: [she/her]\n";
         let truncated =
             b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nConnection: close\r\n\r\nshort".to_vec();
         let (origin, requests, server) = http_fixture(vec![
@@ -302,17 +302,19 @@ mod tests {
         let logs = CapturedLogs::default();
         async {
             assert_eq!(
-                service.resolve_display_name(42, "Iris").await,
-                "Iris (she/her)"
+                service.resolve_display_name(42, "Fixture-Orbit-28").await,
+                "Fixture-Orbit-28 (she/her)"
             );
             assert_eq!(
-                service.resolve_display_name(42, "Iris").await,
-                "Iris (she/her)",
+                service.resolve_display_name(42, "Fixture-Orbit-28").await,
+                "Fixture-Orbit-28 (she/her)",
                 "interrupted body must serve actually fetched stale data"
             );
             assert_eq!(
-                service.resolve_display_name(42, "Iris (xe/it)").await,
-                "Iris (xe/it)"
+                service
+                    .resolve_display_name(42, "Fixture-Orbit-28 (xe/it)")
+                    .await,
+                "Fixture-Orbit-28 (xe/it)"
             );
         }
         .with_subscriber(logs.subscriber())
@@ -343,10 +345,10 @@ mod tests {
         let logs = CapturedLogs::default();
         assert_eq!(
             service
-                .resolve_display_name(42, "Iris")
+                .resolve_display_name(42, "Fixture-Orbit-28")
                 .with_subscriber(logs.subscriber())
                 .await,
-            "Iris"
+            "Fixture-Orbit-28"
         );
         let text = logs.text();
         assert!(text.contains("request_failed"));
@@ -532,7 +534,7 @@ nameplates:
         let entries = HashMap::from([(
             42,
             Nameplate {
-                name: "Iris".into(),
+                name: "Fixture-Orbit-28".into(),
                 pronouns: vec!["she/her".into()],
                 bio: None,
             },
@@ -542,8 +544,10 @@ nameplates:
             fetched_at: Instant::now(),
         });
         assert_eq!(
-            service.resolve_display_name(42, "Iris (xe/it)").await,
-            "Iris (xe/it)"
+            service
+                .resolve_display_name(42, "Fixture-Orbit-28 (xe/it)")
+                .await,
+            "Fixture-Orbit-28 (xe/it)"
         );
         assert_eq!(
             service.resolve_display_name(42, "Alex (admin)").await,

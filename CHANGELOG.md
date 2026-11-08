@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.130.18]
+
+- Replace remaining recorded nameplate participant fixtures with invented values.
+
 ## [0.130.17]
 
 - Replace identifying nameplate and Bell test fixtures with invented values.
