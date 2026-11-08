@@ -1293,7 +1293,7 @@ mod tests {
         }
     }
     fn hit(id: &str, name: &str, distance: f64, match_type: &str) -> Value {
-        json!({"id": id, "name": name, "scope": "syne", "distance": distance, "match_type": match_type})
+        json!({"id": id, "name": name, "scope": "fixture-orbit-27", "distance": distance, "match_type": match_type})
     }
     fn envelope(results: Vec<Value>) -> Value {
         json!({"recall_id": "r_test", "results": results, "count": results.len()})
@@ -1303,7 +1303,10 @@ mod tests {
         options: &RecallOptions,
     ) -> (BellEvaluation, Arc<MockProvider>) {
         let mock = MockProvider::new(ConnectOutcome::Ready, response);
-        let providers = vec![(provider("syne"), mock.clone() as Arc<dyn Provider>)];
+        let providers = vec![(
+            provider("fixture-orbit-27"),
+            mock.clone() as Arc<dyn Provider>,
+        )];
         (
             evaluate_providers("query text", options, &providers).await,
             mock,
@@ -1325,7 +1328,7 @@ mod tests {
         let requests = mock.requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].query, "query text");
-        assert_eq!(requests[0].scope.as_str(), "syne");
+        assert_eq!(requests[0].scope.as_str(), "fixture-orbit-27");
         assert_eq!(requests[0].limit, 3);
     }
 
@@ -1480,7 +1483,10 @@ mod tests {
             );
             let bad = MockProvider::new(connect, response);
             let providers = vec![
-                (provider("syne"), good.clone() as Arc<dyn Provider>),
+                (
+                    provider("fixture-orbit-27"),
+                    good.clone() as Arc<dyn Provider>,
+                ),
                 (provider("other"), bad.clone() as Arc<dyn Provider>),
             ];
             let result = evaluate_providers(
@@ -1515,7 +1521,7 @@ mod tests {
             ];
             if successful {
                 providers.push((
-                    provider("syne"),
+                    provider("fixture-orbit-27"),
                     MockProvider::new(ConnectOutcome::Ready, Response::Value(envelope(vec![]))),
                 ));
             }
@@ -1555,9 +1561,9 @@ mod tests {
 
     #[tokio::test]
     async fn tied_provider_results_preserve_input_order_and_global_truncation() {
-        let mut first = provider("syne");
+        let mut first = provider("fixture-orbit-27");
         first.alias = Some("first".to_owned());
-        let mut second = provider("syne");
+        let mut second = provider("fixture-orbit-27");
         second.alias = Some("second".to_owned());
         let providers: Vec<(BellProviderConfig, Arc<dyn Provider>)> = vec![
             (
@@ -1597,7 +1603,7 @@ mod tests {
     #[tokio::test]
     async fn cache_reuses_endpoint_scope_retains_current_alias_and_evicts() {
         let registry = BellEvaluator::new();
-        let a = provider("syne");
+        let a = provider("fixture-orbit-27");
         let b = provider("other");
         let original = registry
             .providers_for(&[a.clone(), b.clone(), a.clone()])

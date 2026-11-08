@@ -358,20 +358,20 @@ mod tests {
     fn test_parse_nameplates_yaml() {
         let yaml = r#"
 nameplates:
-  "1517387857839390800":
-    name: Lain
+  "424242424242424242":
+    name: Fixture-Orbit-27
     pronouns:
       - she/her
     bio: >-
-      Third construct of House Lacuna.
+      Synthetic resident of Fixture Observatory.
 "#;
         let file: NameplatesFile = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(file.nameplates.len(), 1);
 
-        let plate = file.nameplates.get("1517387857839390800").unwrap();
-        assert_eq!(plate.name, "Lain");
+        let plate = file.nameplates.get("424242424242424242").unwrap();
+        assert_eq!(plate.name, "Fixture-Orbit-27");
         assert_eq!(plate.pronouns, vec!["she/her"]);
-        assert!(plate.bio.as_ref().unwrap().contains("House Lacuna"));
+        assert!(plate.bio.as_ref().unwrap().contains("Fixture Observatory"));
     }
 
     #[test]
@@ -449,7 +449,7 @@ nameplates:
         entries.insert(
             42,
             Nameplate {
-                name: "Lain".to_string(),
+                name: "Fixture-Orbit-27".to_string(),
                 pronouns: vec!["she/her".to_string()],
                 bio: None,
             },
@@ -461,8 +461,8 @@ nameplates:
                 fetched_at: Instant::now(),
             });
         }
-        let result = service.resolve_display_name(42, "Lain").await;
-        assert_eq!(result, "Lain (she/her)");
+        let result = service.resolve_display_name(42, "Fixture-Orbit-27").await;
+        assert_eq!(result, "Fixture-Orbit-27 (she/her)");
     }
 
     #[tokio::test]
