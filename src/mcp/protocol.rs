@@ -312,7 +312,7 @@ mod tests {
     use super::*;
 
     fn fetch_messages_schema() -> Value {
-        crate::discord::query_tools::definitions()
+        dione_discord_tool_contracts::query::definitions()
             .find(|tool| tool["name"] == "fetch_messages")
             .expect("fetch_messages must be in owner definitions")
     }
@@ -349,7 +349,7 @@ mod tests {
                         .iter()
                         .find(|t| t["name"] == "send_dm")
                         .unwrap();
-                    let reply = crate::discord::reply_tool::definition(enabled, version);
+                    let reply = dione_discord_tool_contracts::reply::definition(enabled, version);
                     for tool in [dm, &reply] {
                         for field in ["claim_handles", "citation_handles"] {
                             let property = &tool["inputSchema"]["properties"][field];

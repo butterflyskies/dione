@@ -1264,7 +1264,7 @@ pub mod test_helpers {
             dione_evidence::EvidenceMarkerVersion::V3,
         );
         response["tools"].as_array_mut().expect("tools array").push(
-            crate::discord::reply_tool::definition(
+            dione_discord_tool_contracts::reply::definition(
                 evidence,
                 dione_evidence::EvidenceMarkerVersion::V3,
             ),
@@ -1272,15 +1272,15 @@ pub mod test_helpers {
         response["tools"]
             .as_array_mut()
             .expect("tools array")
-            .extend(crate::discord::introspection_tools::definitions());
+            .extend(dione_discord_tool_contracts::metadata::definitions());
         response["tools"]
             .as_array_mut()
             .unwrap()
-            .extend(crate::discord::query_tools::definitions());
+            .extend(dione_discord_tool_contracts::query::definitions());
         response["tools"]
             .as_array_mut()
             .expect("tools array")
-            .extend(crate::discord::management_tools::definitions());
+            .extend(dione_discord_tool_contracts::management::definitions());
         response
     }
 

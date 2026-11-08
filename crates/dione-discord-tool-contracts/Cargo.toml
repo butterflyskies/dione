@@ -1,0 +1,28 @@
+[package]
+name = "dione-discord-tool-contracts"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Descriptive Discord tool catalogs and typed request decoding"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["discord", "mcp", "contracts"]
+categories = ["parsing"]
+
+[dependencies]
+dione-discord-tool-arguments.workspace = true
+dione-discord-introspection.workspace = true
+dione-discord-queries.workspace = true
+dione-discord-messaging-contracts.workspace = true
+dione-discord-identities.workspace = true
+dione-evidence.workspace = true
+dione-pre-send.workspace = true
+dione-mcp-tools.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+serenity.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

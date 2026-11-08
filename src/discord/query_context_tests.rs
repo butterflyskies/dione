@@ -194,7 +194,7 @@ async fn context_versions_reject_before_provider_io() {
 
 #[test]
 fn context_discovery_versions_only_the_two_read_tools() {
-    let tools: Vec<Value> = definitions().collect();
+    let tools: Vec<Value> = dione_discord_tool_contracts::query::definitions().collect();
     assert_eq!(tools.len(), 6);
     for definition in tools {
         let version = &definition["inputSchema"]["properties"]["response_version"];

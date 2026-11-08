@@ -1,4 +1,5 @@
 //! Authorized Discord message mutations and thread creation.
+use dione_discord_tool_contracts::management::{MessageAction, MessageCommand};
 
 use crate::discord::messaging::TargetPolicy;
 use crate::discord::messaging::verify_message_target;
@@ -24,20 +25,6 @@ pub(crate) struct ManagementCtx {
     pub(crate) state: State,
     pub(crate) config: Arc<LoadedConfig>,
     pub(crate) ingress_ledger: Arc<IngressLedger>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum MessageAction {
-    Pin,
-    Unpin,
-    Delete,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct MessageCommand {
-    pub(crate) channel: ChannelId,
-    pub(crate) message: MessageId,
-    pub(crate) action: MessageAction,
 }
 
 #[derive(Debug)]

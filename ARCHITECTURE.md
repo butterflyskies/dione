@@ -346,12 +346,11 @@ one-shot send path with an explicit expected bot identity, described in the
 [one-shot guide](docs/oneshot-send.md).
 
 [presence owner](crates/dione-discord-presence/src/lib.rs) owns typed requests, the shared presence
-authority, queue acceptance, and reconnect replay. [Discord introspection](crates/dione-discord-introspection/src/lib.rs) owns metadata, visibility and bounded audience observations with wire projection; resident admission and argument parsing remain at root. [Discord typing](crates/dione-discord-typing/src/lib.rs)
+authority, queue acceptance, and reconnect replay. [Discord introspection](crates/dione-discord-introspection/src/lib.rs) owns metadata, visibility and bounded audience observations with wire projection; resident admission remains at root; the tool catalog owns descriptive schemas and argument decoding. [Discord typing](crates/dione-discord-typing/src/lib.rs)
 authorizes and sends typing notifications. The public
 [`dione-discord-identities`](crates/dione-discord-identities/src/lib.rs) owner validates
 external Discord IDs through `dione_discord_identities::Snowflake`.
-Production gateway code uses the Discord owners directly. MCP retains argument
-parsing, schemas, and response envelopes. Application messaging remains at
+Production gateway code uses the Discord owners directly. The [Discord tool catalog](crates/dione-discord-tool-contracts/src/lib.rs) owns the twenty remaining root-adapted tool definitions and typed request decoding. Root MCP adapters retain current configuration, resident registration and execution; legacy protocol definitions remain in MCP. Application messaging remains at
 `discord::messaging`; the former MCP messaging and ID aliases were removed.
 The former
 `mcp::tools::bot_state` alias was removed in 0.53.0.
@@ -455,3 +454,5 @@ Discord message read, search, attachment and native observation ownership reside
 [Shared Discord tool arguments](crates/dione-discord-tool-arguments/src/lib.rs) own typed argument validation and evidence handle schema projection. Root tool registrations retain parsing order, current configuration, authorization and execution authority.
 
 [Discord messaging contracts](crates/dione-discord-messaging-contracts/src/lib.rs) own descriptive outcomes, error metadata and JSON projection. Root delivery, consent and ingress verification retain authority.
+
+[Discord tool contracts](crates/dione-discord-tool-contracts/src/lib.rs) own metadata, query, management and reply catalogs without access or execution authority. Root execution adapters use these requests directly.

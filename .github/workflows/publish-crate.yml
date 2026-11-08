@@ -86,6 +86,7 @@ jobs:
       discord-context-version: ${{ steps.package.outputs.discord-context-version }}
       discord-tool-arguments-version: ${{ steps.package.outputs.discord-tool-arguments-version }}
       discord-messaging-contracts-version: ${{ steps.package.outputs.discord-messaging-contracts-version }}
+      discord-tool-contracts-version: ${{ steps.package.outputs.discord-tool-contracts-version }}
       drop-ledger-version: ${{ steps.package.outputs.drop-ledger-version }}
       publish-discord-presence: ${{ steps.package.outputs.publish-discord-presence }}
       publish-discord-state: ${{ steps.package.outputs.publish-discord-state }}
@@ -105,6 +106,7 @@ jobs:
       publish-discord-context: ${{ steps.package.outputs.publish-discord-context }}
       publish-discord-tool-arguments: ${{ steps.package.outputs.publish-discord-tool-arguments }}
       publish-discord-messaging-contracts: ${{ steps.package.outputs.publish-discord-messaging-contracts }}
+      publish-discord-tool-contracts: ${{ steps.package.outputs.publish-discord-tool-contracts }}
       publish-drop-ledger: ${{ steps.package.outputs.publish-drop-ledger }}
       provider-delivery-version: ${{ steps.package.outputs.provider-delivery-version }}
       publish-provider-delivery: ${{ steps.package.outputs.publish-provider-delivery }}
@@ -359,6 +361,10 @@ jobs:
           discord_messaging_contracts_crate="target/package/dione-discord-messaging-contracts-${discord_messaging_contracts_version}.crate"
           sh scripts/package-preflight.sh dione-discord-messaging-contracts "${discord_messaging_contracts_version}" "${discord_messaging_contracts_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-discord-messaging-contracts butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "discord-messaging-contracts-version=${discord_messaging_contracts_version}" >> "${GITHUB_OUTPUT}"
+          discord_tool_contracts_version="$(scripts/workspace-package-version.sh dione-discord-tool-contracts)"
+          discord_tool_contracts_crate="target/package/dione-discord-tool-contracts-${discord_tool_contracts_version}.crate"
+          sh scripts/package-preflight.sh dione-discord-tool-contracts "${discord_tool_contracts_version}" "${discord_tool_contracts_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-discord-tool-contracts butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
+          echo "discord-tool-contracts-version=${discord_tool_contracts_version}" >> "${GITHUB_OUTPUT}"
 
 
 
@@ -4329,8 +4335,101 @@ jobs:
           discord_messaging_contracts_crate="target/package/dione-discord-messaging-contracts-${discord_messaging_contracts_version}.crate"
           sh scripts/package-preflight.sh dione-discord-messaging-contracts "${discord_messaging_contracts_version}" "${discord_messaging_contracts_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
+  publish-discord-tool-contracts:
+    needs: [verify-dione, reconcile-discord-identities, reconcile-discord-introspection, reconcile-discord-messaging-contracts, reconcile-discord-queries, reconcile-discord-tool-arguments, reconcile-evidence, reconcile-mcp-tools, reconcile-pre-send]
+    if: >-
+      needs.verify-dione.outputs.publish-discord-tool-contracts == 'true' &&
+      needs.reconcile-discord-identities.result == 'success' &&
+      needs.reconcile-discord-introspection.result == 'success' &&
+      needs.reconcile-discord-messaging-contracts.result == 'success' &&
+      needs.reconcile-discord-queries.result == 'success' &&
+      needs.reconcile-discord-tool-arguments.result == 'success' &&
+      needs.reconcile-evidence.result == 'success' &&
+      needs.reconcile-mcp-tools.result == 'success' &&
+      needs.reconcile-pre-send.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: "1.98.0"
+      - name: Recheck discord-tool-contracts package contents
+        id: preflight
+        run: |
+          set -euo pipefail
+
+          discord_tool_contracts_version="$(scripts/workspace-package-version.sh dione-discord-tool-contracts)"
+          test "${discord_tool_contracts_version}" = "${{ needs.verify-dione.outputs.discord-tool-contracts-version }}"
+          cargo package -p dione-discord-tool-contracts --locked --no-verify
+          discord_tool_contracts_crate="target/package/dione-discord-tool-contracts-${discord_tool_contracts_version}.crate"
+          sh scripts/package-preflight.sh dione-discord-tool-contracts "${discord_tool_contracts_version}" "${discord_tool_contracts_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
+      - name: Authenticate with crates.io
+        if: steps.preflight.outputs.upload == 'true'
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
+        id: auth
+      - name: Upload pre-verified discord-tool-contracts package
+        if: steps.preflight.outputs.upload == 'true'
+        continue-on-error: true
+        run: cargo publish -p dione-discord-tool-contracts --locked --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  reconcile-discord-tool-contracts:
+    needs: [verify-dione, reconcile-discord-identities, reconcile-discord-introspection, reconcile-discord-messaging-contracts, reconcile-discord-queries, reconcile-discord-tool-arguments, reconcile-evidence, reconcile-mcp-tools, reconcile-pre-send, publish-discord-tool-contracts]
+    if: >-
+      always() &&
+      needs.verify-dione.result == 'success' &&
+      needs.reconcile-discord-identities.result == 'success' &&
+      needs.reconcile-discord-introspection.result == 'success' &&
+      needs.reconcile-discord-messaging-contracts.result == 'success' &&
+      needs.reconcile-discord-queries.result == 'success' &&
+      needs.reconcile-discord-tool-arguments.result == 'success' &&
+      needs.reconcile-evidence.result == 'success' &&
+      needs.reconcile-mcp-tools.result == 'success' &&
+      needs.reconcile-pre-send.result == 'success' &&
+      (needs.publish-discord-tool-contracts.result == 'success' || needs.publish-discord-tool-contracts.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: "1.98.0"
+      - name: Reconcile discord-tool-contracts registry contents
+        run: |
+          set -euo pipefail
+
+          discord_tool_contracts_version="${{ needs.verify-dione.outputs.discord-tool-contracts-version }}"
+          for attempt in $(seq 1 20); do
+            if timeout 10s cargo info --registry crates-io "dione-discord-tool-contracts@${discord_tool_contracts_version}" > /dev/null 2>&1; then
+              break
+            fi
+            if [ "${attempt}" = 20 ]; then
+              echo "Cargo could not resolve dione-discord-tool-contracts ${discord_tool_contracts_version} after bounded retries" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          cargo package -p dione-discord-tool-contracts --locked
+          discord_tool_contracts_crate="target/package/dione-discord-tool-contracts-${discord_tool_contracts_version}.crate"
+          sh scripts/package-preflight.sh dione-discord-tool-contracts "${discord_tool_contracts_version}" "${discord_tool_contracts_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
+
   publish-crate:
-    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime, reconcile-discord-scheduling, reconcile-discord-typing, reconcile-discord-introspection, reconcile-discord-queries, reconcile-attention-admission, reconcile-discord-context, reconcile-discord-tool-arguments, reconcile-discord-messaging-contracts]
+    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime, reconcile-discord-scheduling, reconcile-discord-typing, reconcile-discord-introspection, reconcile-discord-queries, reconcile-attention-admission, reconcile-discord-context, reconcile-discord-tool-arguments, reconcile-discord-messaging-contracts, reconcile-discord-tool-contracts]
     if: needs.verify-dione.outputs.publish-dione == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -4368,7 +4467,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   reconcile-dione:
-    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime, reconcile-discord-scheduling, reconcile-discord-typing, reconcile-discord-introspection, reconcile-discord-queries, reconcile-attention-admission, reconcile-discord-context, reconcile-discord-tool-arguments, reconcile-discord-messaging-contracts, publish-crate]
+    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime, reconcile-discord-scheduling, reconcile-discord-typing, reconcile-discord-introspection, reconcile-discord-queries, reconcile-attention-admission, reconcile-discord-context, reconcile-discord-tool-arguments, reconcile-discord-messaging-contracts, reconcile-discord-tool-contracts, publish-crate]
     if: >-
       always() &&
       needs.verify-dione.result == 'success' &&
@@ -4422,6 +4521,7 @@ jobs:
       needs.reconcile-discord-context.result == 'success' &&
       needs.reconcile-discord-tool-arguments.result == 'success' &&
       needs.reconcile-discord-messaging-contracts.result == 'success' &&
+      needs.reconcile-discord-tool-contracts.result == 'success' &&
       (needs.publish-crate.result == 'success' || needs.publish-crate.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 20
