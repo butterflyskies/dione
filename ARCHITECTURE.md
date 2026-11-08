@@ -346,7 +346,7 @@ one-shot send path with an explicit expected bot identity, described in the
 [one-shot guide](docs/oneshot-send.md).
 
 [presence owner](crates/dione-discord-presence/src/lib.rs) owns typed requests, the shared presence
-authority, queue acceptance, and reconnect replay. [typing.rs](src/discord/typing.rs)
+authority, queue acceptance, and reconnect replay. [Discord typing](crates/dione-discord-typing/src/lib.rs)
 authorizes and sends typing notifications. The public
 [`dione-discord-identities`](crates/dione-discord-identities/src/lib.rs) owner validates
 external Discord IDs through `dione_discord_identities::Snowflake`.
@@ -388,7 +388,7 @@ Publishing a new snapshot does not reconstruct those captured values.
 
 | Integration | Implementing code and purpose |
 |-------------|-------------------------------|
-| Discord Gateway and REST | [Serenity client](src/discord/client.rs), [events](src/discord/events.rs), [messaging](src/discord/messaging.rs), [presence](crates/dione-discord-presence/src/lib.rs), [typing](src/discord/typing.rs), and the remaining [tools](src/mcp/tools) receive events and execute authorized operations. |
+| Discord Gateway and REST | [Serenity client](src/discord/client.rs), [events](src/discord/events.rs), [messaging](src/discord/messaging.rs), [presence](crates/dione-discord-presence/src/lib.rs), [typing](crates/dione-discord-typing/src/lib.rs), and the remaining [tools](src/mcp/tools) receive events and execute authorized operations. |
 | Codex app-server | [Delivery worker](crates/dione-codex/src/app_server.rs) addresses an exact local thread. |
 | PluralKit | [Identity resolver](src/pluralkit.rs) resolves supported proxy identity. |
 | Pronouns and nameplates | [Pronoun service](crates/dione-identity-display/src/pronouns.rs) and [nameplate service](crates/dione-identity-display/src/nameplates.rs) enrich display metadata when enabled. |

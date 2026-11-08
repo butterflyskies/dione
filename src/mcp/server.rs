@@ -12,7 +12,6 @@
 //! - Notification (no id) → `{"jsonrpc":"2.0","method":"...","params":{...}}`
 
 use crate::discord::messaging::MessagingCtx;
-use crate::discord::typing::TypingCtx;
 use crate::mcp::dispatch::call_tool;
 use crate::mcp::harness_wire::PRIVATE_CONTROL_TOOLS;
 use crate::mcp::harness_wire::RequestOrigin;
@@ -36,6 +35,7 @@ use dione_discord_events::MessageEvent;
 use dione_discord_events::NotificationEvent;
 use dione_discord_presence::PresenceCapability;
 use dione_discord_scheduling::DeliveryBuffer;
+use dione_discord_typing::TypingCtx;
 use dione_harness::AttentionPolicy;
 use dione_harness::HarnessConnection;
 use dione_harness::HarnessError;

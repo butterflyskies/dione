@@ -79,6 +79,7 @@ jobs:
       oneshot-version: ${{ steps.package.outputs.oneshot-version }}
       harness-runtime-version: ${{ steps.package.outputs.harness-runtime-version }}
       discord-scheduling-version: ${{ steps.package.outputs.discord-scheduling-version }}
+      discord-typing-version: ${{ steps.package.outputs.discord-typing-version }}
       drop-ledger-version: ${{ steps.package.outputs.drop-ledger-version }}
       publish-discord-presence: ${{ steps.package.outputs.publish-discord-presence }}
       publish-discord-state: ${{ steps.package.outputs.publish-discord-state }}
@@ -91,6 +92,7 @@ jobs:
       publish-oneshot: ${{ steps.package.outputs.publish-oneshot }}
       publish-harness-runtime: ${{ steps.package.outputs.publish-harness-runtime }}
       publish-discord-scheduling: ${{ steps.package.outputs.publish-discord-scheduling }}
+      publish-discord-typing: ${{ steps.package.outputs.publish-discord-typing }}
       publish-drop-ledger: ${{ steps.package.outputs.publish-drop-ledger }}
       provider-delivery-version: ${{ steps.package.outputs.provider-delivery-version }}
       publish-provider-delivery: ${{ steps.package.outputs.publish-provider-delivery }}
@@ -317,6 +319,10 @@ jobs:
           discord_scheduling_crate="target/package/dione-discord-scheduling-${discord_scheduling_version}.crate"
           sh scripts/package-preflight.sh dione-discord-scheduling "${discord_scheduling_version}" "${discord_scheduling_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-discord-scheduling butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "discord-scheduling-version=${discord_scheduling_version}" >> "${GITHUB_OUTPUT}"
+          discord_typing_version="$(scripts/workspace-package-version.sh dione-discord-typing)"
+          discord_typing_crate="target/package/dione-discord-typing-${discord_typing_version}.crate"
+          sh scripts/package-preflight.sh dione-discord-typing "${discord_typing_version}" "${discord_typing_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-discord-typing butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
+          echo "discord-typing-version=${discord_typing_version}" >> "${GITHUB_OUTPUT}"
 
 
 
@@ -3690,8 +3696,87 @@ jobs:
           discord_scheduling_crate="target/package/dione-discord-scheduling-${discord_scheduling_version}.crate"
           sh scripts/package-preflight.sh dione-discord-scheduling "${discord_scheduling_version}" "${discord_scheduling_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
+  publish-discord-typing:
+    needs: [verify-dione, reconcile-config, reconcile-discord-gate, reconcile-discord-state]
+    if: needs.verify-dione.outputs.publish-discord-typing == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: "1.98.0"
+      - name: Recheck discord-typing package contents
+        id: preflight
+        run: |
+          set -euo pipefail
+
+          discord_typing_version="$(scripts/workspace-package-version.sh dione-discord-typing)"
+          test "${discord_typing_version}" = "${{ needs.verify-dione.outputs.discord-typing-version }}"
+          cargo package -p dione-discord-typing --locked --no-verify
+          discord_typing_crate="target/package/dione-discord-typing-${discord_typing_version}.crate"
+          sh scripts/package-preflight.sh dione-discord-typing "${discord_typing_version}" "${discord_typing_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
+      - name: Authenticate with crates.io
+        if: steps.preflight.outputs.upload == 'true'
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
+        id: auth
+      - name: Upload pre-verified discord-typing package
+        if: steps.preflight.outputs.upload == 'true'
+        continue-on-error: true
+        run: cargo publish -p dione-discord-typing --locked --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  reconcile-discord-typing:
+    needs: [verify-dione, reconcile-config, reconcile-discord-gate, reconcile-discord-state, publish-discord-typing]
+    if: >-
+      always() &&
+      needs.verify-dione.result == 'success' &&
+      needs.reconcile-config.result == 'success' &&
+      needs.reconcile-discord-gate.result == 'success' &&
+      needs.reconcile-discord-state.result == 'success' &&
+      (needs.publish-discord-typing.result == 'success' || needs.publish-discord-typing.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: "1.98.0"
+      - name: Reconcile discord-typing registry contents
+        run: |
+          set -euo pipefail
+
+          discord_typing_version="${{ needs.verify-dione.outputs.discord-typing-version }}"
+          for attempt in $(seq 1 20); do
+            if timeout 10s cargo info --registry crates-io "dione-discord-typing@${discord_typing_version}" > /dev/null 2>&1; then
+              break
+            fi
+            if [ "${attempt}" = 20 ]; then
+              echo "Cargo could not resolve dione-discord-typing ${discord_typing_version} after bounded retries" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          cargo package -p dione-discord-typing --locked
+          discord_typing_crate="target/package/dione-discord-typing-${discord_typing_version}.crate"
+          sh scripts/package-preflight.sh dione-discord-typing "${discord_typing_version}" "${discord_typing_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
+
   publish-crate:
-    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime, reconcile-discord-scheduling]
+    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime, reconcile-discord-scheduling, reconcile-discord-typing]
     if: needs.verify-dione.outputs.publish-dione == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -3729,7 +3814,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   reconcile-dione:
-    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime, reconcile-discord-scheduling, publish-crate]
+    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime, reconcile-discord-scheduling, reconcile-discord-typing, publish-crate]
     if: >-
       always() &&
       needs.verify-dione.result == 'success' &&
@@ -3776,6 +3861,7 @@ jobs:
       needs.reconcile-oneshot.result == 'success' &&
       needs.reconcile-harness-runtime.result == 'success' &&
       needs.reconcile-discord-scheduling.result == 'success' &&
+      needs.reconcile-discord-typing.result == 'success' &&
       (needs.publish-crate.result == 'success' || needs.publish-crate.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 20

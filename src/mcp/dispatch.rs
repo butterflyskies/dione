@@ -12,7 +12,6 @@ use crate::discord::tool_arguments::parse_enabled_sentex_handles;
 use crate::discord::tool_arguments::parse_hook_overrides;
 use crate::discord::tool_arguments::parse_id;
 use crate::discord::tool_arguments::parse_optional_bool;
-use crate::discord::typing::send_typing;
 use crate::mcp::presence_wire;
 use crate::mcp::render_wire;
 use crate::mcp::server::DioneServer;
@@ -25,6 +24,7 @@ use crate::mcp::tools::no_rly::no_rly_vacuum;
 use dione_access_requests::wire as access_wire;
 use dione_config::ConfigStore;
 use dione_config::DiscordId;
+use dione_discord_typing::{send_typing, wire as typing_wire};
 use dione_mutes::MAX_TTL_MINUTES;
 use dione_outbound_consent::queue::HoldHandle;
 use dione_rendering as rendering;
@@ -363,7 +363,7 @@ pub(crate) async fn call_tool(
             "send_typing" => {
                 let ctx = server.typing_ctx(config.clone());
                 let channel_id = parse_id(&args, "channel_id")?.channel();
-                presence_wire::typing(send_typing(&ctx, channel_id).await)
+                typing_wire::typing(send_typing(&ctx, channel_id).await)
             }
             "get_presence" => presence_wire::get(server.presence.snapshot().await),
             "set_presence" => match presence_wire::parse_request(&args) {

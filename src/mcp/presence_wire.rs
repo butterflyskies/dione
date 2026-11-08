@@ -1,6 +1,5 @@
-//! MCP projection of typed Discord presence and typing results.
+//! MCP projection of typed Discord presence results.
 
-use crate::discord::typing::TypingError;
 use dione_discord_presence::{
     InvalidActivityType, InvalidOnlineStatus, PresenceAcknowledgement, PresenceActivity,
     PresenceRequest, PresenceSetError, PresenceSnapshot, PresenceUnavailable,
@@ -38,12 +37,6 @@ pub(super) fn get(result: Result<PresenceSnapshot, PresenceUnavailable>) -> Valu
         }),
     }
 }
-pub(super) fn typing(result: Result<(), TypingError>) -> Value {
-    match result {
-        Ok(()) => json!({"ok": true}),
-        Err(error) => json!({"error": error.to_string()}),
-    }
-}
 
 #[derive(Debug, Error)]
 pub(super) enum PresenceInputError {
@@ -77,18 +70,4 @@ pub(super) fn parse_request(args: &Value) -> Result<PresenceRequest, PresenceInp
         None => None,
     };
     Ok(PresenceRequest::new(status, activity))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn typing_projects_success_and_denial() {
-        assert_eq!(typing(Ok(())), json!({"ok": true}));
-        assert_eq!(
-            typing(Err(TypingError::Denied)),
-            json!({"error": "channel not in allowlist"})
-        );
-    }
 }

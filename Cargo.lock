@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.131.3"
+version = "0.132.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1014,6 +1014,7 @@ dependencies = [
  "trybuild",
  "url",
  "uuid",
+ "dione-discord-typing",
 ]
 
 [[package]]
@@ -1305,6 +1306,19 @@ dependencies = [
  "tokio",
  "tracing",
  "trybuild",
+]
+
+[[package]]
+name = "dione-discord-typing"
+version = "0.1.0"
+dependencies = [
+ "dione-config",
+ "dione-discord-gate",
+ "dione-discord-state",
+ "serde_json",
+ "serenity",
+ "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]

@@ -1,5 +1,9 @@
 //! Discord typing notifications with live channel authorization.
 
+#![warn(missing_docs)]
+
+pub mod wire;
+
 use dione_config::LoadedConfig;
 use dione_discord_gate::OutboundGate;
 use dione_discord_state::State;
