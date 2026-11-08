@@ -6,8 +6,12 @@ use crate::discord::messaging::verify_message_target;
 use crate::ingress_ledger::IngressLedger;
 use dione_config::LoadedConfig;
 use dione_discord_gate::OutboundGate;
+#[cfg(test)]
 use dione_discord_messaging_contracts::TargetError;
 use dione_discord_messaging_contracts::TargetOperation;
+use dione_discord_messaging_contracts::management::{
+    CreatedThread, ManagementError, ManagementErrorKind,
+};
 use dione_discord_state::State;
 use serenity::{
     builder::CreateThread,
@@ -18,37 +22,12 @@ use serenity::{
     },
 };
 use std::sync::Arc;
-use thiserror::Error;
 
 pub(crate) struct ManagementCtx {
     pub(crate) http: Arc<Http>,
     pub(crate) state: State,
     pub(crate) config: Arc<LoadedConfig>,
     pub(crate) ingress_ledger: Arc<IngressLedger>,
-}
-
-#[derive(Debug)]
-pub(crate) struct CreatedThread {
-    pub(crate) id: ChannelId,
-    pub(crate) name: String,
-}
-
-#[derive(Debug, Error)]
-#[error("management operation failed in channel {channel}")]
-pub(crate) struct ManagementError {
-    pub(crate) channel: ChannelId,
-    #[source]
-    pub(crate) kind: ManagementErrorKind,
-}
-
-#[derive(Debug, Error)]
-pub(crate) enum ManagementErrorKind {
-    #[error("channel not in allowlist")]
-    OutboundDenied,
-    #[error(transparent)]
-    Target(TargetError),
-    #[error(transparent)]
-    Discord(Box<serenity::Error>),
 }
 
 async fn check_outbound(ctx: &ManagementCtx, channel: ChannelId) -> Result<(), ManagementError> {
@@ -153,11 +132,11 @@ pub(crate) async fn create_thread(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discord::management_wire;
     use dione_access_requests::AccessQueue;
     use dione_config::ChannelConfig;
     use dione_config::Config;
     use dione_config::LoadedConfig;
+    use dione_discord_messaging_contracts::management::wire as management_wire;
     use dione_discord_state::new_state;
     use serde_json::{Value, json};
     use serenity::model::id::{ChannelId, UserId};

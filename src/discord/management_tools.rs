@@ -1,9 +1,9 @@
 //! Discord-owned message management registration and request boundary.
+use dione_discord_messaging_contracts::management::wire as management_wire;
 use dione_discord_tool_contracts::management::{ManagementRequest, ManagementTool};
 
 use super::{
     management::{ManagementCtx, create_thread, mutate_message},
-    management_wire,
     reply_tool::ReplyServices,
 };
 use dione_config::load_config;

@@ -3,7 +3,6 @@ pub mod events;
 pub(crate) mod introspection_tools;
 pub(crate) mod management;
 pub(crate) mod management_tools;
-pub(crate) mod management_wire;
 pub mod messaging;
 pub(crate) mod observation;
 pub(crate) mod rendering;

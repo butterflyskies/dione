@@ -1,9 +1,9 @@
 //! MCP result projection for Discord management operations.
 
-use crate::discord::management::CreatedThread;
-use crate::discord::management::ManagementError;
-use crate::discord::management::ManagementErrorKind;
-use dione_discord_messaging_contracts::wire as messaging_wire;
+use super::CreatedThread;
+use super::ManagementError;
+use super::ManagementErrorKind;
+use crate::wire as messaging_wire;
 use serde_json::{Value, json};
 
 fn error(error: ManagementError) -> Value {
@@ -14,14 +14,16 @@ fn error(error: ManagementError) -> Value {
     }
 }
 
-pub(crate) fn mutation(result: Result<(), ManagementError>) -> Value {
+/// Projects a completed message mutation or its original management failure.
+pub fn mutation(result: Result<(), ManagementError>) -> Value {
     match result {
         Ok(()) => json!({"ok":true}),
         Err(cause) => error(cause),
     }
 }
 
-pub(crate) fn thread(result: Result<CreatedThread, ManagementError>) -> Value {
+/// Projects returned thread metadata or its original management failure.
+pub fn thread(result: Result<CreatedThread, ManagementError>) -> Value {
     match result {
         Ok(thread) => json!({"ok":true,"thread_id":thread.id.to_string(),"name":thread.name}),
         Err(cause) => error(cause),

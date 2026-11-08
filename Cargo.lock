@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.144.0"
+version = "0.145.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1328,7 +1328,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-messaging-contracts"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "dione-contradictionary",
  "dione-discord-queries",
@@ -1426,7 +1426,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-tool-contracts"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "dione-discord-identities",
  "dione-discord-introspection",

@@ -318,8 +318,8 @@ parsing and leaves listing ungated.
 delete, and thread creation. A complete message command selects a mutation;
 thread creation returns its own typed result and registers the requested parent
 before returning. The narrow context contains HTTP, state, configuration, and
-the ingress ledger. The [Discord management adapter](src/discord/management_wire.rs)
-formats outcomes and errors. [Management contracts](crates/dione-discord-tool-contracts/src/management.rs)
+the ingress ledger. The [management result contract](crates/dione-discord-messaging-contracts/src/management/wire.rs)
+owns descriptive thread metadata, typed errors and their JSON projection. [Management contracts](crates/dione-discord-tool-contracts/src/management.rs)
 own argument parsing; [registered management tools](src/discord/management_tools.rs) keep registration and execution.
 
 [Discord introspection](crates/dione-discord-introspection/src/introspection.rs) owns guild, channel, user,

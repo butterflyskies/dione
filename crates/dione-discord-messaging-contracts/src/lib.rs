@@ -8,3 +8,6 @@ pub use types::{
     TargetError, TargetOperation,
 };
 pub mod wire;
+
+/// Management metadata, typed causes and result projection.
+pub mod management;
