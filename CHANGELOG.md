@@ -5,9 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.131.6]
+
+- Retain the remaining accepted nameplate fixture repair in access.
+
 ## [0.131.5]
 
 - Preserve accepted fixture privacy repairs in the access continuation.
+## [0.130.18]
+
+- Replace remaining recorded nameplate participant fixtures with invented values.
 
 ## [0.130.17]
 
