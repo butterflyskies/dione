@@ -260,6 +260,8 @@ pub(super) struct StoreState {
     pub review_batches: Vec<ReviewBatch>,
     pub active: BTreeMap<RecipientId, ArtifactDigest>,
     pub rollback: BTreeMap<RecipientId, Vec<ArtifactDigest>>,
+    #[serde(default)]
+    pub maintenance_highwater_ms: u64,
 }
 
 impl Default for StoreState {
@@ -276,6 +278,7 @@ impl Default for StoreState {
             review_batches: Vec::new(),
             active: BTreeMap::new(),
             rollback: BTreeMap::new(),
+            maintenance_highwater_ms: 0,
         }
     }
 }
@@ -299,6 +302,22 @@ impl AttentionStore {
 
     /// Opens a single-owner store with explicit retention and capacity bounds.
     pub fn open_with_limits(path: Utf8PathBuf, limits: StoreLimits) -> Result<Self, StoreError> {
+        Self::open_with_limits_at(path, limits, store_clock_ms()?)
+    }
+
+    #[cfg(test)]
+    pub(super) fn open_with_limits_for_test(
+        path: Utf8PathBuf,
+        limits: StoreLimits,
+    ) -> Result<Self, StoreError> {
+        Self::open_with_limits_at(path, limits, 0)
+    }
+
+    fn open_with_limits_at(
+        path: Utf8PathBuf,
+        limits: StoreLimits,
+        now_ms: u64,
+    ) -> Result<Self, StoreError> {
         let path = canonical_store_path(&path)?;
         let lock_file = lock_store(&path)?;
         validate_limits(limits)?;
@@ -306,7 +325,9 @@ impl AttentionStore {
         if state.schema_version != STORE_SCHEMA_VERSION {
             return Err(StoreError::UnsupportedSchema(state.schema_version));
         }
+        expire_opened_evaluations(&mut state, limits, now_ms);
         validate_loaded_bounds(&state, limits)?;
+        persist_state(&path, &state).map_err(PersistFailure::into_error)?;
 
         // Restart invalidates proof of current source existence/access. Keep the recipient's
         // explicit selection, but make it unenforceable until every membership source is known.
@@ -350,10 +371,32 @@ impl AttentionStore {
 
     /// Apply live configuration bounds after checking the retained document against them.
     pub fn update_limits(&mut self, limits: StoreLimits) -> Result<(), StoreError> {
-        validate_limits(limits)?;
-        validate_loaded_bounds(&self.state, limits)?;
-        self.limits = limits;
+        self.maintain(store_clock_ms()?, limits)?;
         Ok(())
+    }
+
+    /// Applies retention before pruning so a reduced bound takes effect in this operation.
+    pub fn maintain(
+        &mut self,
+        now_ms: u64,
+        limits: StoreLimits,
+    ) -> Result<PruneReport, StoreError> {
+        validate_limits(limits)?;
+        self.update(|state, _| {
+            for record in state.records.values_mut() {
+                let bound = record
+                    .created_at_ms
+                    .checked_add(limits.max_record_ttl_ms)
+                    .ok_or(StoreError::Invalid("record retention deadline overflow"))?;
+                record.expires_at_ms = record.expires_at_ms.min(bound);
+            }
+            let report = prune_state(state, limits, now_ms)?;
+            validate_loaded_bounds(state, limits)?;
+            Ok::<_, StoreError>(report)
+        })
+        .inspect(|_| {
+            self.limits = limits;
+        })
     }
 
     /// Looks up metadata only; callers must revalidate sources before exposing derived content.
@@ -736,21 +779,7 @@ impl AttentionStore {
                 })
                 .collect();
             let feedback_before = state.feedback.len();
-            state
-                .feedback
-                .retain(|feedback| !affected_ids.contains(&feedback.record_id));
-            let includes_affected_record = |batch: &ReviewBatch| {
-                batch
-                    .items
-                    .iter()
-                    .any(|item| affected_ids.contains(&item.record_id))
-            };
-            state
-                .review_batches
-                .retain(|batch| !includes_affected_record(batch));
-            state
-                .evaluation_samples
-                .retain(|_, batch| !includes_affected_record(batch));
+            withdraw_record_provenance(state, &affected_ids);
             for entry in &mut state.validations {
                 if matches(&entry.source) {
                     entry.status = ValidationStatus::Invalid;
@@ -770,81 +799,7 @@ impl AttentionStore {
     /// Remove expired decision evidence.  Artifacts with expired members cannot survive expiry,
     /// including an active artifact.
     pub fn prune(&mut self, now_ms: u64) -> Result<PruneReport, StoreError> {
-        self.update(|state, _| {
-            let expired_sources: Vec<SourceVersion> = state
-                .records
-                .values()
-                .filter(|record| record.expires_at_ms <= now_ms)
-                .flat_map(|record| record.sources.iter().cloned())
-                .collect();
-            let expired_ids: BTreeSet<RecordId> = state
-                .records
-                .iter()
-                .filter(|(_, record)| record.expires_at_ms <= now_ms)
-                .map(|(id, _)| id.clone())
-                .collect();
-            let matches = |source: &SourceVersion| {
-                expired_sources
-                    .iter()
-                    .any(|expired| same_source(expired, source))
-            };
-            // Mark opened holdouts while their record-to-source membership is still present.
-            // Removing records first would leave an apparently usable opened evaluation whose
-            // source evidence had expired.
-            let (mut withdrawn_artifacts, mut active_withdrawn) =
-                remove_affected_artifacts(state, &matches);
-            for id in &expired_ids {
-                state.records.remove(id);
-            }
-            let feedback_before = state.feedback.len();
-            state
-                .feedback
-                .retain(|feedback| !expired_ids.contains(&feedback.record_id));
-            let includes_expired_record = |batch: &ReviewBatch| {
-                batch
-                    .items
-                    .iter()
-                    .any(|item| expired_ids.contains(&item.record_id))
-            };
-            state
-                .review_batches
-                .retain(|batch| !includes_expired_record(batch));
-            state
-                .evaluation_samples
-                .retain(|_, batch| !includes_expired_record(batch));
-            state.validations.retain(|entry| {
-                !expired_sources
-                    .iter()
-                    .any(|source| same_source(source, &entry.source))
-            });
-
-            let expired_candidates: BTreeSet<ArtifactDigest> = state
-                .artifacts
-                .iter()
-                .filter(|(_, artifact)| !artifact.ever_promoted && artifact.expires_at_ms <= now_ms)
-                .map(|(digest, _)| digest.clone())
-                .collect();
-            if !expired_candidates.is_empty() {
-                for digest in &expired_candidates {
-                    state.artifacts.remove(digest);
-                    withdrawn_artifacts.push(digest.clone());
-                }
-                let active_before = state.active.len();
-                state
-                    .active
-                    .retain(|_, digest| !expired_candidates.contains(digest));
-                active_withdrawn |= active_before != state.active.len();
-                remove_artifact_references(state, &expired_candidates);
-            }
-            withdrawn_artifacts.sort();
-            withdrawn_artifacts.dedup();
-            Ok(PruneReport {
-                expired_records: expired_ids.len(),
-                removed_feedback: feedback_before - state.feedback.len(),
-                withdrawn_artifacts,
-                active_withdrawn,
-            })
-        })
+        self.update(|state, limits| prune_state(state, limits, now_ms))
     }
 
     /// Apply exactly the fact supplied by the resolver.  Unknown current state makes dependent
@@ -1010,9 +965,7 @@ fn apply_revalidation(
                 record.id.clone()
             })
             .collect();
-        state
-            .feedback
-            .retain(|feedback| !affected_ids.contains(&feedback.record_id));
+        withdraw_record_provenance(state, &affected_ids);
         let (affected_artifacts, active_withdrawn) =
             remove_affected_artifacts(state, &|source| same_source(source, &fact.source));
         return Ok(RevalidationReport {
@@ -1620,6 +1573,181 @@ fn deterministic_rank(seed: u64, value: &str) -> u64 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash
+}
+
+fn prune_state(
+    state: &mut StoreState,
+    limits: StoreLimits,
+    now_ms: u64,
+) -> Result<PruneReport, StoreError> {
+    let (expired_artifacts, expired_active) = expire_opened_evaluations(state, limits, now_ms);
+    let now_ms = state.maintenance_highwater_ms;
+    let expired_sources: Vec<SourceVersion> = state
+        .records
+        .values()
+        .filter(|record| record.expires_at_ms <= now_ms)
+        .flat_map(|record| record.sources.iter().cloned())
+        .collect();
+    let expired_ids: BTreeSet<RecordId> = state
+        .records
+        .iter()
+        .filter(|(_, record)| record.expires_at_ms <= now_ms)
+        .map(|(id, _)| id.clone())
+        .collect();
+    let matches = |source: &SourceVersion| {
+        expired_sources
+            .iter()
+            .any(|expired| same_source(expired, source))
+    };
+    // Mark opened holdouts while their record-to-source membership is still present.
+    // Removing records first would leave an apparently usable opened evaluation whose
+    // source evidence had expired.
+    let (mut withdrawn_artifacts, mut active_withdrawn) =
+        remove_affected_artifacts(state, &matches);
+    withdrawn_artifacts.extend(expired_artifacts);
+    active_withdrawn |= expired_active;
+    for id in &expired_ids {
+        state.records.remove(id);
+    }
+    let feedback_before = state.feedback.len();
+    state
+        .feedback
+        .retain(|feedback| !expired_ids.contains(&feedback.record_id));
+    let includes_expired_record = |batch: &ReviewBatch| {
+        batch
+            .items
+            .iter()
+            .any(|item| expired_ids.contains(&item.record_id))
+    };
+    state
+        .review_batches
+        .retain(|batch| !includes_expired_record(batch));
+    state
+        .evaluation_samples
+        .retain(|_, batch| !includes_expired_record(batch));
+    state.validations.retain(|entry| {
+        !expired_sources
+            .iter()
+            .any(|source| same_source(source, &entry.source))
+    });
+
+    let expired_candidates: BTreeSet<ArtifactDigest> = state
+        .artifacts
+        .iter()
+        .filter(|(_, artifact)| !artifact.ever_promoted && artifact.expires_at_ms <= now_ms)
+        .map(|(digest, _)| digest.clone())
+        .collect();
+    if !expired_candidates.is_empty() {
+        for digest in &expired_candidates {
+            state.artifacts.remove(digest);
+            withdrawn_artifacts.push(digest.clone());
+        }
+        let active_before = state.active.len();
+        state
+            .active
+            .retain(|_, digest| !expired_candidates.contains(digest));
+        active_withdrawn |= active_before != state.active.len();
+        remove_artifact_references(state, &expired_candidates);
+    }
+    withdrawn_artifacts.sort();
+    withdrawn_artifacts.dedup();
+    Ok(PruneReport {
+        expired_records: expired_ids.len(),
+        removed_feedback: feedback_before - state.feedback.len(),
+        withdrawn_artifacts,
+        active_withdrawn,
+    })
+}
+
+pub(super) fn store_clock_ms() -> Result<u64, StoreError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| StoreError::Invalid("system clock predates Unix epoch"))?
+        .as_millis()
+        .try_into()
+        .map_err(|_| StoreError::Invalid("system clock overflow"))
+}
+
+fn withdraw_record_provenance(state: &mut StoreState, affected: &BTreeSet<RecordId>) {
+    state
+        .feedback
+        .retain(|feedback| !affected.contains(&feedback.record_id));
+    let retained = |batch: &ReviewBatch| {
+        !batch
+            .items
+            .iter()
+            .any(|item| affected.contains(&item.record_id))
+    };
+    state.review_batches.retain(retained);
+    state.evaluation_samples.retain(|_, batch| retained(batch));
+}
+
+fn expire_opened_evaluations(
+    state: &mut StoreState,
+    limits: StoreLimits,
+    now_ms: u64,
+) -> (Vec<ArtifactDigest>, bool) {
+    let now_ms = now_ms.max(state.maintenance_highwater_ms);
+    state.maintenance_highwater_ms = now_ms;
+    let mut expired = BTreeSet::new();
+    for (id, opened) in &mut state.opened_evaluations {
+        let bound = opened
+            .opened_at_ms
+            .checked_add(limits.max_record_ttl_ms)
+            .unwrap_or(0);
+        // Legacy declarations acquire the existing bounded policy on first load.
+        opened.expires_at_ms = if opened.expires_at_ms == 0 {
+            bound
+        } else {
+            opened.expires_at_ms.min(bound)
+        };
+        if opened.opened_at_ms > now_ms || opened.expires_at_ms <= now_ms {
+            expired.insert(id.clone());
+        }
+    }
+    let expired_sources: Vec<_> = expired
+        .iter()
+        .filter_map(|id| state.opened_evaluations.get(id))
+        .flat_map(|opened| opened.record_ids.iter())
+        .filter_map(|id| state.records.get(id))
+        .flat_map(|record| record.sources.iter().cloned())
+        .collect();
+    let mut artifacts: BTreeSet<_> = state
+        .evaluations
+        .iter()
+        .filter(|(id, _)| expired.contains(*id))
+        .map(|(_, receipt)| receipt.artifact_digest.clone())
+        .collect();
+    artifacts.extend(
+        state
+            .artifacts
+            .iter()
+            .filter(|(_, artifact)| {
+                artifact.promotion_sources.iter().any(|source| {
+                    expired_sources
+                        .iter()
+                        .any(|expired| same_source(source, expired))
+                })
+            })
+            .map(|(digest, _)| digest.clone()),
+    );
+    state
+        .opened_evaluations
+        .retain(|id, _| !expired.contains(id));
+    state
+        .evaluation_samples
+        .retain(|id, _| !expired.contains(id));
+    state.evaluations.retain(|id, _| !expired.contains(id));
+    for digest in &artifacts {
+        state.artifacts.remove(digest);
+    }
+    let active_before = state.active.len();
+    state.active.retain(|_, digest| !artifacts.contains(digest));
+    remove_artifact_references(state, &artifacts);
+    (
+        artifacts.into_iter().collect(),
+        active_before != state.active.len(),
+    )
 }
 
 fn remove_affected_artifacts(

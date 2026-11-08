@@ -176,8 +176,11 @@ pub(crate) async fn call_tool(
                     .and_then(Value::as_str)
                     .ok_or_else(|| "missing content".to_string())?;
                 let no_rly_hooks = parse_hook_overrides(&args)?;
-                let sentex_handles =
-                    parse_enabled_sentex_handles(&args, config.delivery.evidence_markers_enabled)?;
+                let sentex_handles = parse_enabled_sentex_handles(
+                    &args,
+                    config.delivery.evidence_markers_enabled,
+                    config.delivery.evidence_marker_version,
+                )?;
                 messaging_wire::dm(
                     send_dm_with_evidence_and_hook_overrides(
                         &ctx,
@@ -564,6 +567,150 @@ mod tests {
     use dione_mutes::MuteStore;
     use dione_pre_send::HookName;
     use proptest::prelude::*;
+
+    #[tokio::test]
+    async fn config_mutation_errors_are_safe_in_authorized_tool_replies() {
+        const CHILD: &str = "DIONE_CONFIG_MUTATION_PRIVACY_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "mcp::dispatch::tests::config_mutation_errors_are_safe_in_authorized_tool_replies"])
+                .env(CHILD, "1").output().unwrap();
+            assert!(
+                output.status.success(),
+                "isolated actual MCP config mutation privacy case failed: {}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stdout)
+                    .contains("test result: ok. 1 passed; 0 failed;")
+            );
+            return;
+        }
+        #[derive(Clone)]
+        struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Capture {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let captured = Capture(Default::default());
+        let writer = captured.clone();
+        tracing::subscriber::set_global_default(
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .without_time()
+                .with_ansi(false)
+                .with_writer(move || writer.clone())
+                .finish(),
+        )
+        .unwrap();
+        let (_directory, server) = presence_test_server().await;
+        let canonical = server.state_dir().join("config.toml");
+        dione_config::set_config_path(canonical.clone());
+        let runtime = dione_config::ConfigRuntime::new(server.state_dir().clone());
+        let request = || json!({"jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{"name":"add_channel", "arguments":{"id":"42"}}});
+        std::fs::write(&canonical, "[access]\nadmin_only_mutations = true\n").unwrap();
+        assert!(runtime.reload().await.1.is_none());
+        let denied_before = dione_config::load_config(server.state_dir());
+        let denied_bytes = std::fs::read(&canonical).unwrap();
+        let denied = crate::mcp::server::test_helpers::dispatch_request(&server, request())
+            .await
+            .unwrap();
+        assert_eq!(
+            denied["error"]["message"],
+            "admin_only_mutations is enabled; config mutation tools are disabled"
+        );
+        assert_eq!(std::fs::read(&canonical).unwrap(), denied_bytes);
+        assert!(std::sync::Arc::ptr_eq(
+            &denied_before,
+            &dione_config::load_config(server.state_dir())
+        ));
+        let valid = "[access]\nadmin_only_mutations = false\n";
+        let canary = "SYNTHETIC_CONFIG_MUTATION_CANARY";
+        for (stage, invalid) in [
+            ("read", format!("token = \"{canary}\n")),
+            (
+                "validation",
+                format!("[delivery]\ntext_chunk_limit = \"{canary}\"\n"),
+            ),
+            (
+                "validation",
+                format!("[delivery]\nreply_to_mode = \"{canary}\"\n"),
+            ),
+        ] {
+            for retain_lkg in [true, false] {
+                std::fs::write(&canonical, valid).unwrap();
+                assert!(runtime.reload().await.1.is_none());
+                let lkg = dione_config::lkg_path(&canonical);
+                if !retain_lkg {
+                    std::fs::remove_file(&lkg).unwrap();
+                }
+                let lkg_before = std::fs::read(&lkg).ok();
+                let before = dione_config::load_config(server.state_dir());
+                let generation = before.generation();
+                std::fs::write(&canonical, &invalid).unwrap();
+                captured.0.lock().unwrap().clear();
+                tracing::warn!("config mutation diagnostic capture active");
+                let reply = crate::mcp::server::test_helpers::dispatch_request(&server, request())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    reply["result"]["isError"], true,
+                    "authorized mutation must return an MCP tool error"
+                );
+                assert!(
+                    !reply.to_string().contains(canary),
+                    "actual authorized MCP mutation reply must omit config credentials"
+                );
+                let payload: Value =
+                    serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap())
+                        .unwrap();
+                let error = payload["error"].as_str().unwrap();
+                assert!(error.starts_with(&format!(
+                    "config mutation {stage} error: TOML parse error at line "
+                )));
+                let logs = captured.0.lock().unwrap().clone();
+                let logs = String::from_utf8_lossy(&logs);
+                assert!(logs.contains("config mutation diagnostic capture active"));
+                assert!(
+                    !logs.contains(canary),
+                    "all mutation diagnostics must omit config credentials"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(&canonical).unwrap(),
+                    invalid,
+                    "failed transaction cannot persist its edit or repair the canonical"
+                );
+                assert_eq!(std::fs::read(&lkg).ok(), lkg_before);
+                let after = dione_config::load_config(server.state_dir());
+                assert_eq!(after.generation(), generation);
+                assert!(
+                    std::sync::Arc::ptr_eq(&before, &after),
+                    "failure preserves the exact cached configuration"
+                );
+            }
+        }
+        // The same authorized real tool still persists and publishes a valid edit.
+        std::fs::write(&canonical, valid).unwrap();
+        assert!(runtime.reload().await.1.is_none());
+        let before = dione_config::load_config(server.state_dir()).generation();
+        let success = crate::mcp::server::test_helpers::dispatch_request(&server, request())
+            .await
+            .unwrap();
+        assert!(success["result"].get("isError").is_none());
+        let payload: Value =
+            serde_json::from_str(success["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(payload["ok"], true);
+        assert!(dione_config::load_config(server.state_dir()).generation() > before);
+        let disk: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&canonical).unwrap()).unwrap();
+        assert_eq!(disk["channels"][0]["id"].as_str(), Some("42"));
+    }
 
     #[tokio::test]
     async fn mute_contract_preserves_admin_and_ttl_boundaries() {

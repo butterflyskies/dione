@@ -20,7 +20,6 @@ use dione_discord_gate::OutboundGate;
 use dione_discord_state::State;
 use dione_evidence::SentexHandles;
 use dione_evidence::SentexRole;
-use dione_evidence::SentexTransport;
 use dione_evidence::append_markers;
 use dione_evidence::has_terminal_sentex_syntax;
 use dione_evidence::locator_metadata;
@@ -587,6 +586,7 @@ async fn prepare_outbound(
     ctx: &MessagingCtx,
     draft: OutboundDraft<'_>,
 ) -> Result<PreparedOutbound, MessagingError> {
+    let version = ctx.config.delivery.evidence_marker_version;
     reject_raw_sentex_locators(draft.text)?;
     let disabled_handles = SentexHandles::empty();
     let sentex_handles = if ctx.config.delivery.evidence_markers_enabled {
@@ -630,7 +630,7 @@ async fn prepare_outbound(
     let Some((pipeline, no_rly)) = prepared_pipeline else {
         return Ok(PreparedOutbound {
             destination: draft.destination,
-            text: append_markers(text, sentex_handles),
+            text: append_markers(text, sentex_handles, version),
             reply_to: draft.reply_to,
             surface: draft.pre_send.surface,
             auto,
@@ -664,18 +664,16 @@ async fn prepare_outbound(
     .with_reply_to(draft.reply_to)
     .with_metadata("outbound_surface", draft.pre_send.surface.as_str());
     if !sentex_handles.is_empty() {
-        let claim_locators = locator_metadata(sentex_handles.claims(), SentexRole::Claim);
-        let citation_locators = locator_metadata(sentex_handles.citations(), SentexRole::Citation);
+        let claim_locators = locator_metadata(sentex_handles.claims(), SentexRole::Claim, version);
+        let citation_locators =
+            locator_metadata(sentex_handles.citations(), SentexRole::Citation, version);
         if !claim_locators.is_empty() {
             hook_context = hook_context.with_metadata("claim_locators", claim_locators);
         }
         if !citation_locators.is_empty() {
             hook_context = hook_context.with_metadata("citation_locators", citation_locators);
         }
-        hook_context = hook_context.with_metadata(
-            "sentex_transport",
-            SentexTransport::TerminalVisibleRoleSuffixV3AfterHooks.as_str(),
-        );
+        hook_context = hook_context.with_metadata("sentex_transport", version.transport());
     }
     let outcome =
         match tokio::task::spawn_blocking(move || pipeline.run(&hook_context, &no_rly)).await {
@@ -728,7 +726,7 @@ async fn prepare_outbound(
     reject_raw_sentex_locators(final_text)?;
     Ok(PreparedOutbound {
         destination,
-        text: append_markers(final_text, sentex_handles),
+        text: append_markers(final_text, sentex_handles, version),
         reply_to,
         surface: draft.pre_send.surface,
         auto,
@@ -1140,6 +1138,13 @@ async fn deliver_prepared_text(
         Err(error) => {
             let (cause, progress, diary) = error.into_parts();
             match progress {
+                DeliveryProgress::Unknown(sent) => {
+                    if let (Some(ref_id), Some(sent)) = (claimed, sent.as_ref()) {
+                        report_reply_done(ctx, channel_id, ref_id, sent.first()).await;
+                    }
+                    let confirmed = sent.map(|sent| sent.iter().collect()).unwrap_or_default();
+                    Err(MessagingErrorKind::DeliveryUnknown { cause, confirmed }.into())
+                }
                 DeliveryProgress::None => {
                     if let Some(ref_id) = claimed {
                         release_reply_claim(ctx, channel_id, ref_id).await;
@@ -1377,17 +1382,24 @@ async fn deliver_reply(
                 // remainder (so a retry resumes from there). When nothing has
                 // landed yet the remainder is left `None` — a retry re-sends
                 // the whole payload.
+                let unknown = dione_outbound_consent::delivery::post_completion_is_unknown(&e);
                 let cause = DeliveryCause::ChunkSend {
                     index: i,
                     source: e.into(),
                 };
                 let mut ids = sent_ids.into_iter();
-                return Err(match ids.next() {
-                    Some(first) => {
+                let posted = ids
+                    .next()
+                    .map(|first| PostedMessages::new(first, ids.collect()));
+                if unknown {
+                    return Err(DeliverError::unknown(cause, posted, pending_diary_records));
+                }
+                return Err(match posted {
+                    Some(sent) => {
                         request.set_fence_context(chunks[i].incoming_context().cloned());
                         DeliverError::partial(
                             cause,
-                            PostedMessages::new(first, ids.collect()),
+                            sent,
                             content[chunks[i].source.start..].to_owned(),
                             pending_diary_records,
                         )
@@ -1540,7 +1552,7 @@ pub async fn rephrase_held(
             })
         }
         Err(error) => Err(MessagingError {
-            kind: MessagingErrorKind::Handle(error),
+            kind: MessagingErrorKind::Handle(Box::new(error)),
             auto_rewrites: auto_rewrites.to_vec(),
         }),
     }
@@ -2006,6 +2018,68 @@ mod tests {
         io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
+
+    #[tokio::test]
+    async fn selected_evidence_versions_reach_no_hook_reply_and_dm_with_disabled_and_raw_guards() {
+        for (version, expected) in [
+            (
+                dione_evidence::EvidenceMarkerVersion::V2,
+                "text [🔍=v2:claim:AAAAAAAAAAw]",
+            ),
+            (
+                dione_evidence::EvidenceMarkerVersion::V3,
+                "text [🔍=v3:claim:DA]",
+            ),
+        ] {
+            let handles = dione_evidence::parse_tool_sentex_handles(
+                &json!({"claim_handles":["12"]}),
+                version,
+            )
+            .unwrap();
+            for enabled in [false, true] {
+                let mut raw = Config::default();
+                raw.delivery.evidence_markers_enabled = enabled;
+                raw.delivery.evidence_marker_version = version;
+                raw.channels.push(ChannelConfig {
+                    id: "42".into(),
+                    ..Default::default()
+                });
+                let ctx = messaging_ctx(
+                    LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
+                );
+                for surface in [OutboundSurface::Reply, OutboundSurface::SendDm] {
+                    let draft = OutboundDraft::channel(
+                        ChannelId::new(42),
+                        "text",
+                        None,
+                        PreSendOptions {
+                            surface,
+                            bypasses: &[],
+                        },
+                    )
+                    .with_sentex_handles(&handles);
+                    let prepared = prepare_outbound(&ctx, draft).await.unwrap();
+                    assert_eq!(prepared.text, if enabled { expected } else { "text" });
+                    for raw_tag in [
+                        "raw [🔍=v1:AAAAAAAAAAw]",
+                        "raw [🔍=v2:claim:AAAAAAAAAAw]",
+                        "raw [🔍=v3:claim:DA]",
+                    ] {
+                        let draft = OutboundDraft::channel(
+                            ChannelId::new(42),
+                            raw_tag,
+                            None,
+                            PreSendOptions {
+                                surface,
+                                bypasses: &[],
+                            },
+                        );
+                        assert!(prepare_outbound(&ctx, draft).await.is_err());
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn outbound_surface_strings_are_canonical() {
@@ -2883,6 +2957,7 @@ mod tests {
             // Each posted message gets its own id (9001, 9002, ...), so a
             // test can tell one chunk's id from another's.
             let mut next_post_id = 9001u64;
+            let mut rejected_known_once = false;
             loop {
                 let Ok((mut stream, _)) = listener.accept().await else {
                     return;
@@ -3040,6 +3115,26 @@ mod tests {
                     ("204 No Content", String::new())
                 } else if request_line.starts_with("POST ")
                     && path.ends_with("/messages")
+                    && body.contains("known-no-effect")
+                    && !rejected_known_once
+                {
+                    rejected_known_once = true;
+                    (
+                        "403 Forbidden",
+                        json!({"message":"Missing Permissions","code":50013}).to_string(),
+                    )
+                } else if request_line.starts_with("POST ")
+                    && path.ends_with("/messages")
+                    && body.contains("force-pending")
+                {
+                    std::future::pending::<(&str, String)>().await
+                } else if request_line.starts_with("POST ")
+                    && path.ends_with("/messages")
+                    && body.contains("force-uncertain")
+                {
+                    ("200 OK", "{\"id\":\"9999\"}".to_owned())
+                } else if request_line.starts_with("POST ")
+                    && path.ends_with("/messages")
                     && body.contains("force-delivery-failure")
                 {
                     (
@@ -3105,80 +3200,325 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn known_no_effect_actual_sdk_failure_retries_only_unsent_remainder() {
+        for rephrase in [false, true] {
+            for prefix in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let path = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
+                let mut raw = Config::default();
+                raw.channels.push(dione_config::ChannelConfig {
+                    id: "42".into(),
+                    ..Default::default()
+                });
+                raw.delivery.text_chunk_limit = 20;
+                let (http, requests, server) = fake_discord_http().await;
+                let gate = Arc::new(ConsentGate::new(&path));
+                let ctx = MessagingCtx::new(
+                    http,
+                    new_state(),
+                    Arc::new(LoadedConfig::try_from_raw(raw).unwrap()),
+                    path,
+                    gate.clone(),
+                    Arc::new(IngressLedger::new()),
+                );
+                let text = if prefix {
+                    "confirmed prefix\n\nknown-no-effect"
+                } else {
+                    "known-no-effect"
+                };
+                let reason =
+                    serde_json::from_value(json!({"matches":[{"pattern":"synthetic"}]})).unwrap();
+                let ticket = gate
+                    .bounce(
+                        ReplyRequest::new(ChannelId::new(42), text.into(), None, false, false),
+                        reason,
+                        std::time::Duration::from_secs(180),
+                        32,
+                        Instant::now(),
+                    )
+                    .await;
+                if rephrase {
+                    rephrase_held(&ctx, &ticket.handle, text).await.unwrap_err();
+                } else {
+                    release_held(&ctx, &ticket.handle).await.unwrap_err();
+                }
+                assert_eq!(
+                    gate.pending().await,
+                    1,
+                    "known no effect keeps retry authority"
+                );
+                let sent = release_held(&ctx, &ticket.handle).await.unwrap();
+                assert_eq!(sent.message_ids.len(), if prefix { 2 } else { 1 });
+                let posts = posted_contents(&requests);
+                assert_eq!(posts.len(), if prefix { 3 } else { 2 });
+                assert_eq!(
+                    posts
+                        .iter()
+                        .filter(|text| text.contains("confirmed prefix"))
+                        .count(),
+                    usize::from(prefix),
+                    "confirmed prefix is never resent"
+                );
+                assert_eq!(gate.pending().await, 0);
+                gate.journal().flush().await;
+                let records = gate.journal().load().unwrap().records;
+                assert_eq!(records.len(), 1);
+                assert!(
+                    matches!(&records[0], dione_outbound_consent::journal::JournalRecord::Bounce(record) if record.outcome == if rephrase { dione_outbound_consent::journal::Outcome::Rephrased } else { dione_outbound_consent::journal::Outcome::Released })
+                );
+                server.abort();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_observed_sdk_post_consumes_handle_without_replay() {
+        for rephrase in [false, true] {
+            for prefix in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let path = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
+                let mut raw = Config::default();
+                raw.channels.push(dione_config::ChannelConfig {
+                    id: "42".into(),
+                    ..Default::default()
+                });
+                raw.delivery.text_chunk_limit = 20;
+                let (http, requests, server) = fake_discord_http().await;
+                let gate = Arc::new(ConsentGate::new(&path));
+                let ctx = MessagingCtx::new(
+                    http,
+                    new_state(),
+                    Arc::new(LoadedConfig::try_from_raw(raw).unwrap()),
+                    path,
+                    gate.clone(),
+                    Arc::new(IngressLedger::new()),
+                );
+                let text = if prefix {
+                    "confirmed prefix\n\nforce-pending"
+                } else {
+                    "force-pending"
+                };
+                let reason =
+                    serde_json::from_value(json!({"matches":[{"pattern":"synthetic"}]})).unwrap();
+                let ticket = gate
+                    .bounce(
+                        ReplyRequest::new(ChannelId::new(42), text.into(), None, false, false),
+                        reason,
+                        std::time::Duration::from_secs(180),
+                        32,
+                        Instant::now(),
+                    )
+                    .await;
+                let ctx = Arc::new(ctx);
+                let worker_ctx = ctx.clone();
+                let handle = ticket.handle.clone();
+                let worker = tokio::spawn(async move {
+                    if rephrase {
+                        let _ = rephrase_held(&worker_ctx, &handle, text).await;
+                    } else {
+                        let _ = release_held(&worker_ctx, &handle).await;
+                    }
+                });
+                tokio::time::timeout(std::time::Duration::from_secs(120), async {
+                    while posted_contents(&requests).len() != if prefix { 2 } else { 1 } {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .expect("real HTTP fixture must observe complete POST before cancellation");
+                worker.abort();
+                let _ = worker.await;
+                tokio::time::timeout(std::time::Duration::from_secs(120), async {
+                    while gate.pending().await != 0 {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .expect("cancelled observed POST must terminally settle");
+                assert!(release_held(&ctx, &ticket.handle).await.is_err());
+                assert!(
+                    rephrase_held(&ctx, &ticket.handle, "another attempt")
+                        .await
+                        .is_err()
+                );
+                assert_eq!(
+                    posted_contents(&requests).len(),
+                    if prefix { 2 } else { 1 },
+                    "no replay after observed POST cancellation"
+                );
+                assert_eq!(
+                    gate.expire_due(Instant::now() + std::time::Duration::from_secs(1000))
+                        .await,
+                    0
+                );
+                assert_eq!(gate.drain_shutdown().await, 0);
+                gate.journal().flush().await;
+                let records = gate.journal().load().unwrap().records;
+                assert_eq!(records.len(), 1);
+                assert!(
+                    matches!(&records[0], dione_outbound_consent::journal::JournalRecord::Bounce(record) if record.outcome == dione_outbound_consent::journal::Outcome::Unknown)
+                );
+                server.abort();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn uncertain_actual_sdk_post_terminally_fences_release_and_rephrase_with_prefix() {
+        for rephrase in [false, true] {
+            for prefix in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let path = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
+                let mut raw = Config::default();
+                raw.channels.push(dione_config::ChannelConfig {
+                    id: "42".into(),
+                    ..Default::default()
+                });
+                raw.delivery.text_chunk_limit = 20;
+                let (http, requests, server) = fake_discord_http().await;
+                let gate = Arc::new(ConsentGate::new(&path));
+                let ctx = MessagingCtx::new(
+                    http,
+                    new_state(),
+                    Arc::new(LoadedConfig::try_from_raw(raw).unwrap()),
+                    path,
+                    gate.clone(),
+                    Arc::new(IngressLedger::new()),
+                );
+                let text = if prefix {
+                    "confirmed prefix\n\nforce-uncertain"
+                } else {
+                    "force-uncertain"
+                };
+                let reason =
+                    serde_json::from_value(json!({"matches":[{"pattern":"synthetic"}]})).unwrap();
+                let ticket = gate
+                    .bounce(
+                        ReplyRequest::new(ChannelId::new(42), text.into(), None, false, false),
+                        reason,
+                        std::time::Duration::from_secs(180),
+                        32,
+                        Instant::now(),
+                    )
+                    .await;
+                let response = if rephrase {
+                    crate::discord::messaging_wire::error(
+                        rephrase_held(&ctx, &ticket.handle, text).await.unwrap_err(),
+                    )
+                } else {
+                    crate::discord::messaging_wire::rejected_handle_json(
+                        release_held(&ctx, &ticket.handle).await.unwrap_err(),
+                    )
+                };
+                assert_eq!(response["delivery_ambiguous"], true);
+                assert_eq!(response["retryable"], false);
+                assert!(response.get("handle_still_live").is_none());
+                if prefix {
+                    assert_eq!(response["message_ids"], json!([9001]));
+                }
+                assert!(release_held(&ctx, &ticket.handle).await.is_err());
+                assert!(
+                    rephrase_held(&ctx, &ticket.handle, "new attempt")
+                        .await
+                        .is_err()
+                );
+                assert_eq!(posted_contents(&requests).len(), if prefix { 2 } else { 1 });
+                assert_eq!(gate.pending().await, 0);
+                assert_eq!(
+                    gate.expire_due(Instant::now() + std::time::Duration::from_secs(1000))
+                        .await,
+                    0
+                );
+                gate.journal().flush().await;
+                let records = gate.journal().load().unwrap().records;
+                assert_eq!(records.len(), 1);
+                assert!(
+                    matches!(&records[0], dione_outbound_consent::journal::JournalRecord::Bounce(record) if record.outcome == dione_outbound_consent::journal::Outcome::Unknown)
+                );
+                server.abort();
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn ordered_sentex_metadata_and_transport_reach_hooks_and_final_audit_context() {
-        let hook_context = Arc::new(std::sync::Mutex::new(None));
-        let audit_context = Arc::new(std::sync::Mutex::new(None));
-        let pipeline = PreSendPipeline::new(vec![Box::new(MetadataRewriteHook(Arc::clone(
-            &hook_context,
-        )))])
-        .unwrap()
-        .with_mode(PipelineMode::Enforce)
-        .with_sinks(
-            Box::new(QuietFeedbackSink),
-            Box::new(ContextAuditSink(Arc::clone(&audit_context))),
-            SinkFailurePolicy::FailClosed,
-        );
-        let mut raw = Config::default();
-        raw.delivery.evidence_markers_enabled = true;
-        raw.channels.push(ChannelConfig {
-            id: "42".into(),
-            ..Default::default()
-        });
-        let ctx = messaging_ctx(LoadedConfig::try_from_raw(raw).expect("valid test configuration"))
-            .with_pre_send_pipeline(Arc::new(pipeline));
-        let handles = dione_evidence::parse_tool_sentex_handles(&json!({
-            "claim_handles": ["34"],
-            "citation_handles": ["12"]
-        }))
-        .unwrap();
-
-        let prepared = prepare_outbound(
-            &ctx,
-            OutboundDraft::channel(
-                ChannelId::new(42),
-                "original",
-                None,
-                PreSendOptions {
-                    surface: OutboundSurface::Reply,
-                    bypasses: &[],
-                },
+        for (version, claim, citation, transport, suffix) in [
+            (
+                dione_evidence::EvidenceMarkerVersion::V2,
+                "v2:claim:AAAAAAAAACI",
+                "v2:citation:AAAAAAAAAAw",
+                "terminal-visible-role-suffix-v2-after-hooks",
+                "rewritten [🔍=v2:claim:AAAAAAAAACI] [🔍=v2:citation:AAAAAAAAAAw]",
+            ),
+            (
+                dione_evidence::EvidenceMarkerVersion::V3,
+                "v3:claim:Ig",
+                "v3:citation:DA",
+                "terminal-visible-role-suffix-v3-after-hooks",
+                "rewritten [🔍=v3:claim:Ig] [🔍=v3:citation:DA]",
+            ),
+        ] {
+            let hook_context = Arc::new(std::sync::Mutex::new(None));
+            let audit_context = Arc::new(std::sync::Mutex::new(None));
+            let pipeline = PreSendPipeline::new(vec![Box::new(MetadataRewriteHook(Arc::clone(
+                &hook_context,
+            )))])
+            .unwrap()
+            .with_mode(PipelineMode::Enforce)
+            .with_sinks(
+                Box::new(QuietFeedbackSink),
+                Box::new(ContextAuditSink(Arc::clone(&audit_context))),
+                SinkFailurePolicy::FailClosed,
+            );
+            let mut raw = Config::default();
+            raw.delivery.evidence_markers_enabled = true;
+            raw.delivery.evidence_marker_version = version;
+            raw.channels.push(ChannelConfig {
+                id: "42".into(),
+                ..Default::default()
+            });
+            let ctx =
+                messaging_ctx(LoadedConfig::try_from_raw(raw).expect("valid test configuration"))
+                    .with_pre_send_pipeline(Arc::new(pipeline));
+            let handles = dione_evidence::parse_tool_sentex_handles(
+                &json!({
+                    "claim_handles": ["34"],
+                    "citation_handles": ["12"]
+                }),
+                version,
             )
-            .with_sentex_handles(&handles),
-        )
-        .await
-        .map_err(crate::discord::messaging_wire::error)
-        .unwrap();
+            .unwrap();
 
-        let hook_context = hook_context.lock().unwrap().clone().unwrap();
-        assert_eq!(hook_context.text(), "original");
-        assert_eq!(hook_context.metadata("claim_locators"), Some("v3:claim:Ig"));
-        assert_eq!(
-            hook_context.metadata("citation_locators"),
-            Some("v3:citation:DA")
-        );
-        assert_eq!(
-            hook_context.metadata("sentex_transport"),
-            Some("terminal-visible-role-suffix-v3-after-hooks")
-        );
+            let prepared = prepare_outbound(
+                &ctx,
+                OutboundDraft::channel(
+                    ChannelId::new(42),
+                    "original",
+                    None,
+                    PreSendOptions {
+                        surface: OutboundSurface::Reply,
+                        bypasses: &[],
+                    },
+                )
+                .with_sentex_handles(&handles),
+            )
+            .await
+            .map_err(crate::discord::messaging_wire::error)
+            .unwrap();
 
-        let audit_context = audit_context.lock().unwrap().clone().unwrap();
-        assert_eq!(audit_context.text(), "rewritten");
-        assert_eq!(
-            audit_context.metadata("claim_locators"),
-            Some("v3:claim:Ig")
-        );
-        assert_eq!(
-            audit_context.metadata("citation_locators"),
-            Some("v3:citation:DA")
-        );
-        assert_eq!(
-            audit_context.metadata("sentex_transport"),
-            Some(SentexTransport::TerminalVisibleRoleSuffixV3AfterHooks.as_str())
-        );
-        assert_eq!(
-            prepared.text,
-            "rewritten [🔍=v3:claim:Ig] [🔍=v3:citation:DA]"
-        );
+            let hook_context = hook_context.lock().unwrap().clone().unwrap();
+            assert_eq!(hook_context.text(), "original");
+            assert_eq!(hook_context.metadata("claim_locators"), Some(claim));
+            assert_eq!(hook_context.metadata("citation_locators"), Some(citation));
+            assert_eq!(hook_context.metadata("sentex_transport"), Some(transport));
+
+            let audit_context = audit_context.lock().unwrap().clone().unwrap();
+            assert_eq!(audit_context.text(), "rewritten");
+            assert_eq!(audit_context.metadata("claim_locators"), Some(claim));
+            assert_eq!(audit_context.metadata("citation_locators"), Some(citation));
+            assert_eq!(audit_context.metadata("sentex_transport"), Some(transport));
+            assert_eq!(prepared.text, suffix);
+        }
     }
 
     #[tokio::test]
@@ -3354,9 +3694,11 @@ mod tests {
         });
         raw.delivery.text_chunk_limit = 8;
         let ctx = messaging_ctx(LoadedConfig::try_from_raw(raw).expect("valid test configuration"));
-        let handles =
-            dione_evidence::parse_tool_sentex_handles(&json!({ "claim_handles": ["12"] }))
-                .expect("valid sentex handle");
+        let handles = dione_evidence::parse_tool_sentex_handles(
+            &json!({ "claim_handles": ["12"] }),
+            dione_evidence::EvidenceMarkerVersion::V3,
+        )
+        .expect("valid sentex handle");
 
         let response = crate::discord::messaging_wire::reply(
             reply_with_evidence_and_hook_overrides(
@@ -3388,8 +3730,11 @@ mod tests {
             ..Default::default()
         });
         let ctx = messaging_ctx(LoadedConfig::try_from_raw(raw).expect("valid test configuration"));
-        let handles =
-            dione_evidence::parse_tool_sentex_handles(&json!({ "claim_handles": ["12"] })).unwrap();
+        let handles = dione_evidence::parse_tool_sentex_handles(
+            &json!({ "claim_handles": ["12"] }),
+            dione_evidence::EvidenceMarkerVersion::V3,
+        )
+        .unwrap();
 
         let prepared = prepare_outbound(
             &ctx,
@@ -3414,9 +3759,12 @@ mod tests {
     #[tokio::test]
     async fn sentex_bearing_reply_cannot_enter_held_lifecycle() {
         let ctx = messaging_ctx(blocking_test_config());
-        let handles = dione_evidence::parse_tool_sentex_handles(&json!({
-            "citation_handles": ["12"]
-        }))
+        let handles = dione_evidence::parse_tool_sentex_handles(
+            &json!({
+                "citation_handles": ["12"]
+            }),
+            dione_evidence::EvidenceMarkerVersion::V3,
+        )
         .expect("valid sentex handle");
 
         let response = crate::discord::messaging_wire::reply(
@@ -3769,41 +4117,58 @@ mod tests {
     /// never reaches inside one, and a sentex-bearing reply still sends.
     #[tokio::test]
     async fn auto_rewrite_leaves_evidence_markers_intact() {
-        let mut raw = auto_test_config();
-        raw.delivery.evidence_markers_enabled = true;
-        let (ctx, requests, server, _dir) = auto_test_ctx_with(raw).await;
-        let handles = dione_evidence::parse_tool_sentex_handles(&json!({
-            "claim_handles": ["34"]
-        }))
-        .unwrap();
-
-        let response = crate::discord::messaging_wire::reply(
-            reply_with_evidence_and_hook_overrides(
-                &ctx,
-                ChannelId::new(42),
-                "we utilize it",
-                None,
-                ReplyToolOptions {
-                    suppress_ping: ReplyPing::Allow,
-                    suppress_embeds: LinkPreviews::Allow,
-                    no_rly_hooks: &[],
-                    sentex_handles: &handles,
-                },
+        for (version, claim, citation, expected) in [
+            (
+                dione_evidence::EvidenceMarkerVersion::V2,
+                "v2:claim:AAAAAAAAACI",
+                "v2:citation:AAAAAAAAAAw",
+                "we use it [🔍=v2:claim:AAAAAAAAACI] [🔍=v2:citation:AAAAAAAAAAw]",
+            ),
+            (
+                dione_evidence::EvidenceMarkerVersion::V3,
+                "v3:claim:Ig",
+                "v3:citation:DA",
+                "we use it [🔍=v3:claim:Ig] [🔍=v3:citation:DA]",
+            ),
+        ] {
+            let mut raw = auto_test_config();
+            raw.delivery.evidence_markers_enabled = true;
+            raw.delivery.evidence_marker_version = version;
+            let (ctx, requests, server, _dir) = auto_test_ctx_with(raw).await;
+            let handles = dione_evidence::parse_tool_sentex_handles(
+                &json!({
+                    "claim_handles": ["34"], "citation_handles": ["12"]
+                }),
+                version,
             )
-            .await,
-        );
+            .unwrap();
 
-        assert_eq!(response["ok"], true, "{response}");
-        assert_eq!(
-            posted_contents(&requests),
-            vec![append_markers("we use it", &handles)]
-        );
-        assert_eq!(
-            response["auto_rewrites"],
-            json!(["auto: utilize \u{2192} use"])
-        );
-        assert!(response["claim_locators"].is_array(), "{response}");
-        server.abort();
+            let response = crate::discord::messaging_wire::reply(
+                reply_with_evidence_and_hook_overrides(
+                    &ctx,
+                    ChannelId::new(42),
+                    "we utilize it",
+                    None,
+                    ReplyToolOptions {
+                        suppress_ping: ReplyPing::Allow,
+                        suppress_embeds: LinkPreviews::Allow,
+                        no_rly_hooks: &[],
+                        sentex_handles: &handles,
+                    },
+                )
+                .await,
+            );
+
+            assert_eq!(response["ok"], true, "{response}");
+            assert_eq!(posted_contents(&requests), vec![expected]);
+            assert_eq!(
+                response["auto_rewrites"],
+                json!(["auto: utilize \u{2192} use"])
+            );
+            assert_eq!(response["claim_locators"], json!([claim]));
+            assert_eq!(response["citation_locators"], json!([citation]));
+            server.abort();
+        }
     }
 
     /// An `auto` pattern that names a marker's own token (`citation`) never
@@ -3821,9 +4186,12 @@ mod tests {
             reason: None,
         });
         let (ctx, requests, server, _dir) = auto_test_ctx_with(raw).await;
-        let handles = dione_evidence::parse_tool_sentex_handles(&json!({
-            "citation_handles": ["12"]
-        }))
+        let handles = dione_evidence::parse_tool_sentex_handles(
+            &json!({
+                "citation_handles": ["12"]
+            }),
+            dione_evidence::EvidenceMarkerVersion::V3,
+        )
         .unwrap();
 
         let response = crate::discord::messaging_wire::reply(
@@ -3933,8 +4301,11 @@ mod tests {
         raw.delivery.evidence_markers_enabled = true;
         raw.delivery.text_chunk_limit = 24;
         let (ctx, requests, server, _dir) = auto_test_ctx_with(raw).await;
-        let handles =
-            dione_evidence::parse_tool_sentex_handles(&json!({"claim_handles": ["12"]})).unwrap();
+        let handles = dione_evidence::parse_tool_sentex_handles(
+            &json!({"claim_handles": ["12"]}),
+            dione_evidence::EvidenceMarkerVersion::V3,
+        )
+        .unwrap();
         let preflight = crate::discord::messaging_wire::dm(
             send_dm_with_evidence_and_hook_overrides(
                 &ctx,
@@ -3991,7 +4362,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             &failure.kind,
-            MessagingErrorKind::Handle(RejectedHandle::Unknown(_))
+            MessagingErrorKind::Handle(error) if matches!(error.as_ref(), RejectedHandle::Unknown(_))
         ));
         let response = crate::discord::messaging_wire::error(failure);
         assert_eq!(
@@ -4220,60 +4591,84 @@ mod tests {
 
     #[tokio::test]
     async fn first_contact_dm_branch_preserves_role_separated_sentex_receipt() {
-        let (http, requests, server) = fake_discord_http().await;
-        let ctx = MessagingCtx::new(
-            http,
-            new_state(),
-            Arc::new(test_config()),
-            "/tmp".into(),
-            Arc::new(ConsentGate::new(camino::Utf8Path::new("/tmp"))),
-            Arc::new(crate::ingress_ledger::IngressLedger::new()),
-        );
-        let handles = dione_evidence::parse_tool_sentex_handles(&json!({
-            "claim_handles": ["34"],
-            "citation_handles": ["12"]
-        }))
-        .expect("valid sentex handles");
-
-        let result = crate::discord::messaging_wire::dm(
-            send_dm_with_evidence_and_hook_overrides(
-                &ctx,
-                UserId::new(77),
-                "grounded",
-                &[],
-                &handles,
-                LinkPreviews::Allow,
+        for (version, claim, citation, expected) in [
+            (
+                dione_evidence::EvidenceMarkerVersion::V2,
+                "v2:claim:AAAAAAAAACI",
+                "v2:citation:AAAAAAAAAAw",
+                "grounded [🔍=v2:claim:AAAAAAAAACI] [🔍=v2:citation:AAAAAAAAAAw]",
+            ),
+            (
+                dione_evidence::EvidenceMarkerVersion::V3,
+                "v3:claim:Ig",
+                "v3:citation:DA",
+                "grounded [🔍=v3:claim:Ig] [🔍=v3:citation:DA]",
+            ),
+        ] {
+            let (http, requests, server) = fake_discord_http().await;
+            let mut raw = Config::default();
+            raw.delivery.evidence_markers_enabled = true;
+            raw.delivery.evidence_marker_version = version;
+            let config = LoadedConfig::try_from_raw(raw).expect("valid test configuration");
+            let dir = tempfile::tempdir().unwrap();
+            let state_dir = camino::Utf8Path::from_path(dir.path()).unwrap();
+            let ctx = MessagingCtx::new(
+                http,
+                new_state(),
+                Arc::new(config),
+                state_dir.to_owned(),
+                Arc::new(ConsentGate::new(state_dir)),
+                Arc::new(crate::ingress_ledger::IngressLedger::new()),
+            );
+            let handles = dione_evidence::parse_tool_sentex_handles(
+                &json!({
+                    "claim_handles": ["34"],
+                    "citation_handles": ["12"]
+                }),
+                version,
             )
-            .await,
-        );
-        server.abort();
+            .expect("valid sentex handles");
 
-        assert_eq!(
-            result,
-            json!({
-                "ok": true,
-                "channel_id": "4242",
-                "message_ids": [9001],
-                "claim_locators": ["v3:claim:Ig"],
-                "citation_locators": ["v3:citation:DA"],
-            })
-        );
-        let requests = requests.lock().expect("request capture lock");
-        assert!(
-            requests
+            let result = crate::discord::messaging_wire::dm(
+                send_dm_with_evidence_and_hook_overrides(
+                    &ctx,
+                    UserId::new(77),
+                    "grounded",
+                    &[],
+                    &handles,
+                    LinkPreviews::Allow,
+                )
+                .await,
+            );
+            server.abort();
+
+            assert_eq!(
+                result,
+                json!({
+                    "ok": true,
+                    "channel_id": "4242",
+                    "message_ids": [9001],
+                    "claim_locators": [claim],
+                    "citation_locators": [citation],
+                })
+            );
+            let requests = requests.lock().expect("request capture lock");
+            assert!(
+                requests
+                    .iter()
+                    .any(|(path, _)| path.ends_with("/users/@me/channels")),
+                "the first-contact branch must create the DM channel"
+            );
+            let sent_body = requests
                 .iter()
-                .any(|(path, _)| path.ends_with("/users/@me/channels")),
-            "the first-contact branch must create the DM channel"
-        );
-        let sent_body = requests
-            .iter()
-            .find(|(path, _)| path.ends_with("/messages"))
-            .map(|(_, body)| body)
-            .expect("the first-contact branch must send the prepared message");
-        assert_eq!(
-            serde_json::from_str::<Value>(sent_body).unwrap()["content"],
-            "grounded [🔍=v3:claim:Ig] [🔍=v3:citation:DA]"
-        );
+                .find(|(path, _)| path.ends_with("/messages"))
+                .map(|(_, body)| body)
+                .expect("the first-contact branch must send the prepared message");
+            assert_eq!(
+                serde_json::from_str::<Value>(sent_body).unwrap()["content"],
+                expected
+            );
+        }
     }
 
     // ── Contradictionary self-react notifications ─────────────────────────
@@ -4654,6 +5049,7 @@ mod tests {
         .with_pre_send_pipeline(Arc::new(pipeline));
         let handles = dione_evidence::parse_tool_sentex_handles(
             &json!({"claim_handles":["34"],"citation_handles":["12"]}),
+            dione_evidence::EvidenceMarkerVersion::V3,
         )
         .unwrap();
         let result = send_dm_with_evidence_and_hook_overrides(
@@ -5680,6 +6076,53 @@ mod tests {
         .with_module_tools(Vec::new())
         .unwrap();
         let list = json!({"jsonrpc":"2.0","id":1,"method":"tools/list"});
+        // Exercise the live registry and registered reply against the same reloaded pin.
+        for (pin, marker, expected) in [
+            (
+                "v2",
+                "[🔍=v2:<role>:<token>]",
+                "pinned [🔍=v2:claim:AAAAAAAAAAE]",
+            ),
+            ("v3", "[🔍=v3:<role>:<token>]", "pinned [🔍=v3:claim:AQ]"),
+        ] {
+            std::fs::write(path.join("config.toml"), format!("[[channels]]\nid = \"42\"\nrequire_mention = false\n[delivery]\nevidence_markers_enabled = true\nevidence_marker_version = \"{pin}\"\n")).unwrap();
+            assert!(dione_config::reload_config(&path).await.1.is_none());
+            let listed = crate::mcp::server::test_helpers::dispatch_request(&server, list.clone())
+                .await
+                .unwrap();
+            for name in ["reply", "send_dm"] {
+                let tool = listed["result"]["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|tool| tool["name"] == name)
+                    .unwrap();
+                for field in ["claim_handles", "citation_handles"] {
+                    assert!(
+                        tool["inputSchema"]["properties"][field]["description"]
+                            .as_str()
+                            .unwrap()
+                            .contains(marker)
+                    );
+                }
+                assert!(
+                    tool["inputSchema"]["properties"]
+                        .get("evidence_marker_version")
+                        .is_none()
+                );
+            }
+            let result = crate::mcp::server::test_helpers::dispatch_request(&server, json!({"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"reply","arguments":{"channel_id":"42","content":"pinned","claim_handles":["1"]}}})).await.unwrap();
+            assert!(result["result"].get("isError").is_none(), "{result}");
+            let bodies = posted_contents(&requests);
+            assert_eq!(bodies.last().unwrap(), expected);
+        }
+        requests.lock().unwrap().clear();
+        std::fs::write(
+            path.join("config.toml"),
+            "[delivery]\nevidence_markers_enabled = false\n",
+        )
+        .unwrap();
+        assert!(dione_config::reload_config(&path).await.1.is_none());
         let initial = crate::mcp::server::test_helpers::dispatch_request(&server, list.clone())
             .await
             .unwrap();
@@ -5754,7 +6197,7 @@ mod tests {
         let accepted: Value =
             serde_json::from_str(accepted["result"]["content"][0]["text"].as_str().unwrap())
                 .unwrap();
-        assert_eq!(accepted["message_ids"], json!([9001]));
+        assert_eq!(accepted["message_ids"], json!([9003]));
         assert_eq!(accepted["ok"], true);
         assert_eq!(accepted["claim_locators"].as_array().unwrap().len(), 1);
         let sent: Vec<Value> = requests
@@ -5801,7 +6244,7 @@ mod tests {
                 .unwrap();
         assert_eq!(released["ok"], true);
         assert_eq!(released["released"], handle);
-        assert_eq!(released["message_ids"], json!([9002]));
+        assert_eq!(released["message_ids"], json!([9004]));
         let release_count = requests.lock().unwrap().len();
         let duplicate = crate::mcp::server::test_helpers::dispatch_request(&server, release)
             .await

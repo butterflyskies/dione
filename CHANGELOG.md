@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.131.3] - 2026-11-08
+
+### Changed
+
+- Reconcile complete access decisions with the reviewed configuration, privacy,
+  durability, and release-proof repairs. Preserve current dependency pins.
+
 ## [0.131.2] - 2026-11-07
 
 ### Changed
@@ -26,6 +33,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   decisions and wire projections, preserving private durability tests and
   actual MCP dispatch behavior.
 
+## [0.130.15]
+
+### Fixed
+
+- Reject invalid recovered rate-limit settings before recovery file effects,
+  and expose the configured evidence-marker version through the config API.
+
+## [0.130.14]
+
+### Security
+
+- Keep attachment capability URLs out of failed-download diagnostics while
+  preserving request authorization, byte limits, and partial success.
+
+### Fixed
+
+- Reject unsafe enabled rate-limit settings before config publication and
+  report unrepresentable runtime deadlines without consuming tokens or
+  terminating inbound delivery. Preserve disabled and zero-duration behavior.
+
+## [0.130.13]
+
+### Security
+
+- Keep mute receipts and outbound-consent audit files private on Unix across
+  creation, replay, and replacement; reject unsafe aliases and exposed legacy
+  files without changing consent or mute commit semantics.
+
+## [0.130.12]
+
+### Fixed
+
+- Keep configured nameplate request paths and queries out of send/read failure
+  diagnostics without changing actual requests or stale-cache recovery.
+- Replace the live pronoun failure test with hermetic real HTTP failure/cache,
+  positive-value and exclusion controls; keep production provider defaults.
+- Patch-version identity display and its exact normal dependency closure.
+
+## [0.130.11]
+
+### Fixed
+
+- Treat uncertain Discord POST completion, including successful-response decode
+  failures, as non-retryable ambiguity while preserving confirmed earlier IDs.
+- Terminally consume uncertain or cancelled held-send handles and journal an
+  honest `unknown` outcome; preserve known no-effect retries and prefix ordering.
+- Minor-version the outbound consent API for typed uncertainty; patch-version
+  oneshot and the root application in its exact normal dependency closure.
+
+## [0.130.10]
+
+### Fixed
+
+- Clean owned attachment download temporaries after pre-publication failures,
+  preserving primary errors and objects already published before directory sync.
+- Patch-version GAIE and its exact normal dependency closure.
+
+## [0.130.9]
+
+### Fixed
+
+- Reject unrepresentable subscribed coordination lease deadlines without panicking,
+  preserving claim write progress and no-waiter claim outcomes.
+- Preserve undelivered predecessor order before a newer immediate notification
+  after failed flushes, excluding completion-unknown events from retries.
+- Patch-version the coordination owner and exact normal dependency closure.
+
+## [0.130.8]
+
+### Fixed
+
+- Restore validated per-seat V2/V3 outbound evidence marker selection through
+  extracted codec, configuration and discovery owners and live reply/DM callers.
+  Preserve V3 defaults, inbound compatibility, disabled gates and hook ordering.
+- Version the shared typed public APIs and exact normal dependency closure.
+
+## [0.130.7]
+
+### Fixed
+
+- Bound attention holdout reservations and their proof references by the existing
+  retention horizon, preserving anti-reuse before expiry and rejecting future,
+  overflowing and backwards-time authority.
+- Withdraw review and sealed evaluation provenance after confirmed source loss
+  so the persisted store remains valid on restart; retain Unknown evidence.
+- Version the attention lifecycle API and exact normal dependency closure.
+
+## [0.130.6]
+
+### Security
+
+- Keep invalid configuration values out of reload warnings and watcher
+  error notifications while preserving last-valid configuration recovery.
+- Remove Bell endpoint query and fragment material from connection diagnostics,
+  including HTTP client errors, malformed JSON warnings, and reflected non-protocol
+  error bodies logged by the MCP transport. Preserve original
+  request URLs, authentication, transport behavior, and connection deadlines.
+- Patch affected member versions and consumers whose normalized manifests embed
+  the updated exact dependency versions.
+
+## [0.130.5]
+
+### Fixed
+
+- Keep verification scripts compatible with Python 3.9, test member release and
+  publication outputs independently, and share workspace privacy and registry
+  preflight procedures while retaining explicit release dependencies.
+- Correct fixture-aware test commands and extracted harness ownership guidance.
 
 ## [0.130.4]
 

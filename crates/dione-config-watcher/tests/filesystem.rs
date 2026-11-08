@@ -3,7 +3,10 @@ use dione_config::{
     ConfigRuntime, config_path, load_config, set_config_path, subscribe_generation,
 };
 use dione_discord_events::NotificationEvent;
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    sync::{Arc, Mutex},
+};
 use tokio::{
     sync::{Notify, mpsc, watch},
     time::{Duration, timeout},
@@ -15,7 +18,7 @@ use tracing::{
 };
 use tracing_subscriber::{Layer, layer::Context, prelude::*};
 
-struct ReadyLayer(Arc<Notify>);
+struct ReadyLayer(Arc<Notify>, Arc<Mutex<String>>);
 #[derive(Default)]
 struct Started(bool);
 impl Visit for Started {
@@ -27,6 +30,15 @@ impl Visit for Started {
 }
 impl<S: Subscriber> Layer<S> for ReadyLayer {
     fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+        struct Fields(String);
+        impl Visit for Fields {
+            fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+                self.0.push_str(&format!("{}={value:?}\n", field.name()));
+            }
+        }
+        let mut fields = Fields(String::new());
+        event.record(&mut fields);
+        self.1.lock().unwrap().push_str(&fields.0);
         let mut started = Started::default();
         event.record(&mut started);
         if started.0 {
@@ -94,8 +106,10 @@ async fn real_filesystem_publication_replacement_error_recovery_and_normal_cance
     assert_eq!(initial.raw.delivery.delivery_delay_ms, 11);
     let mut generation = subscribe_generation();
     let started = Arc::new(Notify::new());
-    let subscriber = tracing_subscriber::registry().with(ReadyLayer(started.clone()));
-    let _scoped_subscriber = tracing::subscriber::set_default(subscriber);
+    let diagnostics = Arc::new(Mutex::new(String::new()));
+    let subscriber =
+        tracing_subscriber::registry().with(ReadyLayer(started.clone(), diagnostics.clone()));
+    tracing::subscriber::set_global_default(subscriber).unwrap();
     let (events, mut errors) = mpsc::channel(16);
     let cancel = CancellationToken::new();
     let task = dione_config_watcher::spawn(state.clone(), events, cancel.clone());
@@ -157,16 +171,59 @@ async fn real_filesystem_publication_replacement_error_recovery_and_normal_cance
     tokio::fs::remove_file(dione_config::lkg_path(&canonical))
         .await
         .unwrap();
-    let before_no_lkg = load_config(&state).generation();
-    tokio::fs::write(&canonical, invalid).await.unwrap();
-    let retained = config_error(&mut errors).await;
-    assert!(!retained.contains("canonical restored from last-known-good"));
-    assert_eq!(load_config(&state).raw.delivery.delivery_delay_ms, 55);
-    assert_eq!(load_config(&state).generation(), before_no_lkg);
-    assert_eq!(
-        tokio::fs::read_to_string(&canonical).await.unwrap(),
-        invalid
-    );
+    let canary = "SYNTHETIC_CONFIG_DIAGNOSTIC_CANARY";
+    let invalid_cases = [
+        format!("token = \"{canary}\" trailing\n"),
+        format!("[delivery]\ntext_chunk_limit = \"{canary}\"\n"),
+        format!("[delivery]\nreply_to_mode = \"{canary}\"\n"),
+    ];
+    for invalid in invalid_cases {
+        let before_no_lkg = load_config(&state).generation();
+        diagnostics.lock().unwrap().clear();
+        tokio::fs::write(&canonical, &invalid).await.unwrap();
+        let retained = config_error(&mut errors).await;
+        assert!(!retained.contains("canonical restored from last-known-good"));
+        assert!(
+            !retained.contains(canary),
+            "forwarded ConfigError must omit source credentials"
+        );
+        assert!(
+            retained.contains("TOML parse error at line"),
+            "safe parse location remains"
+        );
+        let captured = diagnostics.lock().unwrap().clone();
+        assert!(captured.contains("continuing with last valid config"));
+        assert!(
+            !captured.contains(canary),
+            "every captured warning must omit source credentials"
+        );
+        // A directory at the LKG path forces a real restore read failure, not Missing.
+        tokio::fs::create_dir(dione_config::lkg_path(&canonical))
+            .await
+            .unwrap();
+        diagnostics.lock().unwrap().clear();
+        tokio::fs::write(&canonical, &invalid).await.unwrap();
+        let failed_restore = config_error(&mut errors).await;
+        assert!(
+            !failed_restore.contains(canary),
+            "failed-restore ConfigError must omit credentials"
+        );
+        let captured = diagnostics.lock().unwrap().clone();
+        assert!(captured.contains("failed to restore config from last-known-good"));
+        assert!(
+            !captured.contains(canary),
+            "failed-restore warnings must omit credentials"
+        );
+        tokio::fs::remove_dir(dione_config::lkg_path(&canonical))
+            .await
+            .unwrap();
+        assert_eq!(load_config(&state).raw.delivery.delivery_delay_ms, 55);
+        assert_eq!(load_config(&state).generation(), before_no_lkg);
+        assert_eq!(
+            tokio::fs::read_to_string(&canonical).await.unwrap(),
+            invalid
+        );
+    }
     tokio::fs::write(&canonical, text(66)).await.unwrap();
     published(&mut generation, &state, 66).await;
     quiet(&mut generation).await;

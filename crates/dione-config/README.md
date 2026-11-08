@@ -22,3 +22,7 @@ The configuration template ships in src/config_template.toml. Existing raw
 settings, string errors, and author-ID untagged serde are inherited behavior.
 The four settings enums are exhaustive. No runtime variants or wire spelling
 change in this extraction.
+
+The delivery marker pin reexports the evidence owner’s typed V2/V3 enum. It
+defaults to V3 independently of the enable switch and rejects unsupported pins
+before config publication, preserving last-known-good reload behavior.

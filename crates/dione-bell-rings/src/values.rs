@@ -172,6 +172,14 @@ impl BellProviderUrl {
         Ok(Self(parsed.to_string()))
     }
 
+    // Diagnostics expose only origin; paths can contain credentials too.
+    pub(crate) fn diagnostic_endpoint(&self) -> String {
+        reqwest::Url::parse(&self.0)
+            .expect("validated provider URL")
+            .origin()
+            .ascii_serialization()
+    }
+
     /// Borrows the validated value.
     pub fn as_str(&self) -> &str {
         &self.0

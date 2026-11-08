@@ -53,12 +53,13 @@ mod config_store;
 pub use config::{
     AccessConfig, AccessRequestsConfig, ArchiveConfig, BellChannelOverride, BellMode,
     BellRingsConfig, BellTrigger, ChannelConfig, ChannelPolicy, ChunkMode, Config,
-    ConfigDurability, ConfigError, ConfigGenerationError, ConfigMutationOutcome, ConfigRuntime,
-    ContradictionaryConfig, DeliveryConfig, DmPolicy, LoadedConfig, MAX_PREAMBLE_BYTES,
-    MentionConfig, NameplateConfig, NoLkgPolicy, PhantomCanaryConfig, PreSendConfig, PreambleMode,
-    PreambleTemplate, PronounConfig, RateLimitTomlConfig, ReadOnlyConfigError, ReplyToMode,
-    StartupConfigError, TeamsConfig, TrustedWebhookCreators, VoiceConfig, attention_effect_guard,
-    config_path, lkg_path, load_config, load_config_readonly, quarantine_path, reload_config,
-    resolve_token, set_config_path, state_dir, subscribe_generation,
+    ConfigCompositionError, ConfigDurability, ConfigError, ConfigGenerationError,
+    ConfigMutationOutcome, ConfigRuntime, ContradictionaryConfig, DeliveryConfig, DmPolicy,
+    EvidenceMarkerVersion, LoadedConfig, MAX_PREAMBLE_BYTES, MentionConfig, NameplateConfig,
+    NoLkgPolicy, PhantomCanaryConfig, PreSendConfig, PreambleMode, PreambleTemplate, PronounConfig,
+    RateLimitTomlConfig, ReadOnlyConfigError, ReplyToMode, StartupConfigError, TeamsConfig,
+    TrustedWebhookCreators, VoiceConfig, attention_effect_guard, config_path, lkg_path,
+    load_config, load_config_readonly, quarantine_path, reload_config, resolve_token,
+    set_config_path, state_dir, subscribe_generation,
 };
 pub use config_store::{BoxError, ConfigStore, DiscordId};

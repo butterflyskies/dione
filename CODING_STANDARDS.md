@@ -177,7 +177,10 @@ pub enum ConfigErrorKind {
 
 ### Runner
 
-Use `cargo nextest run` as the test runner. Not `cargo test`.
+Use `python3 scripts/run-tests.py --workspace --locked` as the Nextest runner.
+The wrapper discovers the exact current Teams and Codex fixture executables.
+For focused checks, add `-E 'test(name)'`; do not bypass fixture discovery.
+Use `cargo test --doc` only for documentation tests.
 
 ### Organization
 
@@ -470,12 +473,13 @@ After every code change, run these steps in order:
 
 1. `cargo xfmt` — format all code.
 2. `cargo clippy -- -W clippy::all` — fix all warnings.
-3. `cargo nextest run` — all tests must pass.
+3. `python3 scripts/run-tests.py --workspace --locked` — all tests must pass with current fixture artifacts.
 4. Build with `cargo build --profile review --workspace --bins --locked`, then
    launch `target/review/dione --version`.
 5. Commit and push.
 
-Use `sh scripts/pr-ready.sh <base-ref>` for the complete native Linux PR gate.
+Use `sh scripts/pr-ready.sh origin/main` for the complete native Linux PR gate.
+For a stacked PR, replace `origin/main` with its actual target branch.
 It defaults to `review`; pass `release` as its second argument when a full local
 release check is needed. Main CI and tagged distributions still build `release`.
 

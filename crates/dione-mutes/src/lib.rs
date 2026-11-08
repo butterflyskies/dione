@@ -246,7 +246,12 @@ impl MuteStore {
     async fn replay_log(
         receipt_path: &camino::Utf8Path,
     ) -> Result<MuteState, Box<dyn std::error::Error + Send + Sync>> {
-        let log_contents = match tokio::fs::read_to_string(receipt_path).await {
+        let path = receipt_path.to_owned();
+        let log_contents = match tokio::task::spawn_blocking(move || {
+            dione_durable::private_file::read_to_string(path.as_std_path())
+        })
+        .await?
+        {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 tracing::debug!("no receipt log found, starting with empty mute state");
@@ -639,11 +644,12 @@ impl MuteStore {
         let mut with_newline = line;
         with_newline.push('\n');
 
-        let mut file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.receipt_path)
-            .await?;
+        let path = self.receipt_path.clone();
+        let file = tokio::task::spawn_blocking(move || {
+            dione_durable::private_file::open_append_existing_parent(path.as_std_path())
+        })
+        .await??;
+        let mut file = tokio::fs::File::from_std(file);
         file.write_all(with_newline.as_bytes()).await?;
         file.flush().await?;
         file.sync_data().await?;
@@ -657,6 +663,74 @@ impl MuteStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn actual_mute_receipts_are_private_and_replay_under_child_umask_022() {
+        use std::os::unix::fs::PermissionsExt;
+        if let Some(directory) = std::env::var_os("SL024_MUTE_CHILD") {
+            let path = camino::Utf8PathBuf::from_path_buf(directory.into()).unwrap();
+            tokio::runtime::Runtime::new().unwrap().block_on(async {
+                let store = MuteStore::from_state(MuteState::default(), &path);
+                store
+                    .mute_guild(
+                        42,
+                        10,
+                        "synthetic".into(),
+                        Some("SYNTHETIC_PRIVATE_REASON".into()),
+                    )
+                    .await
+                    .unwrap();
+                let receipt = path.join("guild_mute_receipts.jsonl");
+                assert_eq!(
+                    std::fs::metadata(&receipt).unwrap().permissions().mode() & 0o777,
+                    0o600,
+                    "actual mute receipt must be0600 under child022"
+                );
+                assert!(MuteStore::load(&path).await.unwrap().is_guild_muted(42));
+                std::fs::set_permissions(&receipt, std::fs::Permissions::from_mode(0o644)).unwrap();
+                let before = std::fs::read(&receipt).unwrap();
+                assert!(
+                    MuteStore::load(&path).await.is_err(),
+                    "searchable parent must not admit legacy0644"
+                );
+                assert!(
+                    store
+                        .mute_guild(43, 10, "synthetic".into(), None)
+                        .await
+                        .is_err()
+                );
+                assert!(
+                    !store.is_guild_muted(43),
+                    "failed receipt must not publish projection"
+                );
+                assert_eq!(std::fs::read(&receipt).unwrap(), before);
+                assert_eq!(
+                    std::fs::metadata(&receipt).unwrap().permissions().mode() & 0o777,
+                    0o644
+                );
+            });
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let status = std::process::Command::new("sh")
+            .args(["-c", "umask 022; exec \"$@\"", "sl024-child"])
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests::actual_mute_receipts_are_private_and_replay_under_child_umask_022",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("SL024_MUTE_CHILD", directory.path())
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "actual mute child permission contract failed"
+        );
+    }
 
     /// Test clock that derives `DateTime<Utc>` from `tokio::time::Instant`.
     ///
@@ -699,7 +773,19 @@ mod tests {
             contents.push_str(&serde_json::to_string(r).unwrap());
             contents.push('\n');
         }
-        std::fs::write(path, contents).unwrap();
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).write(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        use std::io::Write;
+        options
+            .open(path)
+            .unwrap()
+            .write_all(contents.as_bytes())
+            .unwrap();
     }
 
     #[test]

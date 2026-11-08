@@ -45,6 +45,7 @@ fn registration(name: &str) -> RegisteredTool {
 fn context(enabled: bool) -> ToolDiscoveryContext {
     ToolDiscoveryContext {
         evidence_markers_enabled: enabled,
+        evidence_marker_version: dione_evidence::EvidenceMarkerVersion::V3,
     }
 }
 #[test]
@@ -212,4 +213,58 @@ fn default_handler_presents_exact_definition() {
         response,
         json!({"tools":[{"name":"default_tool", "description":"default description", "inputSchema":{"type":"object", "required":["message"]}}]})
     );
+}
+
+#[test]
+fn selected_version_and_enable_gate_are_forwarded_together() {
+    struct VersionEcho;
+    impl McpTool for VersionEcho {
+        fn present_definition(
+            &self,
+            definition: &ToolDefinition,
+            context: ToolDiscoveryContext,
+        ) -> Value {
+            let mut value = json!(definition);
+            value["transport"] = json!(context.evidence_marker_version.transport());
+            value["enabled"] = json!(context.evidence_markers_enabled);
+            value
+        }
+        fn call<'a>(
+            &'a self,
+            _arguments: &'a Value,
+        ) -> BoxFuture<'a, Result<Value, ToolCallError>> {
+            Box::pin(async { Ok(json!({})) })
+        }
+    }
+    let registry = ToolRegistry::new(
+        &BTreeSet::new(),
+        vec![RegisteredTool::new(
+            ToolDefinition::new(ToolName::new("version_probe").unwrap(), "probe", json!({})),
+            Arc::new(VersionEcho),
+        )],
+    )
+    .unwrap();
+    for (version, expected) in [
+        (
+            dione_evidence::EvidenceMarkerVersion::V2,
+            "terminal-visible-role-suffix-v2-after-hooks",
+        ),
+        (
+            dione_evidence::EvidenceMarkerVersion::V3,
+            "terminal-visible-role-suffix-v3-after-hooks",
+        ),
+    ] {
+        for enabled in [false, true] {
+            let mut response = json!({"tools": []});
+            registry.append_definitions(
+                &mut response,
+                ToolDiscoveryContext {
+                    evidence_markers_enabled: enabled,
+                    evidence_marker_version: version,
+                },
+            );
+            assert_eq!(response["tools"][0]["transport"], expected);
+            assert_eq!(response["tools"][0]["enabled"], enabled);
+        }
+    }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "dione-outbound-consent"
-version = "0.1.0"
+version = "0.2.4"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -11,6 +11,7 @@ keywords = ["consent", "delivery", "journal"]
 categories = ["asynchronous"]
 
 [dependencies]
+dione-durable.workspace = true
 camino.workspace = true
 chrono.workspace = true
 serde.workspace = true

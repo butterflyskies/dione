@@ -2,6 +2,7 @@
 #![warn(missing_docs)]
 
 mod backend;
+mod diagnostic_http;
 mod rendering;
 mod values;
 

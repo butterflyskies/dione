@@ -578,7 +578,7 @@ package verification does not prove those registry settings exist. This
 refactor does not publish packages or change registry ownership.
 
 Rook publishing waits for contracts and durable registry reconciliation. Dione
-publishing waits for all twenty-nine capabilities. Contradictionary publishing waits
+publishing waits for every prerequisite in the declared publication and reconciliation graph. Contradictionary publishing waits
 for evidence reconciliation. Presentation publishing waits for
 contracts, attention, evidence, messages, and identity-display reconciliation. Harness publishing waits for
 contracts and messages reconciliation. Messages publishing waits for

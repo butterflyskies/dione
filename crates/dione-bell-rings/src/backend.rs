@@ -1,10 +1,13 @@
+use crate::diagnostic_http::DiagnosticHttpClient;
 use crate::{BellProviderConfig, BellProviderUrl, BellScope, RecallOptions};
 use futures_util::future::join_all;
 use rmcp::{
     ServiceExt,
     model::{CallToolRequestParams, ClientInfo, RawContent},
     service::{RoleClient, RunningService},
-    transport::StreamableHttpClientTransport,
+    transport::{
+        StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig,
+    },
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -142,14 +145,14 @@ trait Provider: Send + Sync {
 }
 
 struct MemoryMcpProvider {
-    endpoint: String,
+    endpoint: BellProviderUrl,
     client: Mutex<Option<RunningService<RoleClient, ClientInfo>>>,
 }
 
 impl MemoryMcpProvider {
     fn new(endpoint: BellProviderUrl) -> Self {
         Self {
-            endpoint: endpoint.as_str().to_owned(),
+            endpoint,
             client: Mutex::new(None),
         }
     }
@@ -157,14 +160,23 @@ impl MemoryMcpProvider {
     async fn ensure_connected(&self) -> ConnectOutcome {
         let mut client = self.client.lock().await;
         if client.as_ref().is_none_or(RunningService::is_closed) {
-            let transport = StreamableHttpClientTransport::from_uri(self.endpoint.clone());
+            // Match rmcp's default HTTP client, including disabled idle pooling.
+            let http = reqwest_mcp::Client::builder()
+                .pool_max_idle_per_host(0)
+                .build()
+                .expect("failed to build default reqwest client");
+            let transport = StreamableHttpClientTransport::with_client(
+                DiagnosticHttpClient(http),
+                StreamableHttpClientTransportConfig::with_uri(self.endpoint.as_str().to_owned()),
+            );
             match ClientInfo::default().serve(transport).await {
                 Ok(connected) => {
                     *client = Some(connected);
                     ConnectOutcome::Ready
                 }
-                Err(e) => {
-                    tracing::warn!(endpoint = %self.endpoint, error = ?e, "bell provider cold-start failed");
+                Err(_) => {
+                    // Transport errors may embed the original credential-bearing URL.
+                    tracing::warn!(endpoint = self.endpoint.diagnostic_endpoint(), error = %BellProviderErrorKind::Transport, "bell provider cold-start failed");
                     ConnectOutcome::Error
                 }
             }
@@ -346,7 +358,7 @@ async fn evaluate_providers(
                     Ok(outcome) => (pc, outcome, p),
                     Err(_) => {
                         tracing::warn!(
-                            endpoint = pc.url.as_str(),
+                            endpoint = pc.url.diagnostic_endpoint(),
                             "bell provider connection timed out after {}s",
                             CONNECT_TIMEOUT.as_secs()
                         );
@@ -611,10 +623,621 @@ fn record_outcome(outcome: &BellOutcome) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reqwest_mcp::header::{HeaderName, HeaderValue};
+    use rmcp::transport::streamable_http_client::{
+        StreamableHttpClient, StreamableHttpError, StreamableHttpPostResponse,
+    };
+    use std::collections::HashMap;
     use std::sync::{
         Mutex as StdMutex,
         atomic::{AtomicUsize, Ordering},
     };
+
+    #[derive(Clone)]
+    struct DiagnosticBuffer(Arc<StdMutex<Vec<u8>>>);
+    impl std::io::Write for DiagnosticBuffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    fn capture_diagnostics() -> (tracing::subscriber::DefaultGuard, DiagnosticBuffer) {
+        let buffer = DiagnosticBuffer(Arc::new(StdMutex::new(Vec::new())));
+        let writer = buffer.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .without_time()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        (tracing::subscriber::set_default(subscriber), buffer)
+    }
+    fn assert_safe_diagnostics(buffer: &DiagnosticBuffer, category: &str) {
+        let bytes = buffer.0.lock().unwrap();
+        let output = String::from_utf8_lossy(&bytes);
+        assert!(
+            output.contains(category),
+            "expected diagnostic category must be captured"
+        );
+        assert!(
+            output.contains("127.0.0.1"),
+            "safe endpoint location remains"
+        );
+        assert!(
+            !output.contains("SYNTHETIC_PATH_CANARY"),
+            "all diagnostics must omit path credentials"
+        );
+        assert!(
+            !output.contains("SYNTHETIC_QUERY_CANARY"),
+            "all diagnostics must omit query credentials; targets: {:?}",
+            output
+                .lines()
+                .filter(|line| line.contains("SYNTHETIC_QUERY_CANARY"))
+                .map(|line| line.split_whitespace().nth(1).unwrap_or("unknown"))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !output.contains("SYNTHETIC_FRAGMENT_CANARY"),
+            "all diagnostics must omit fragment credentials"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn malformed_json_accepted_response_has_safe_diagnostics() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (_capture, diagnostics) = capture_diagnostics();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            loop {
+                let mut byte = [0];
+                socket.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+                if request.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+                assert!(request.len() < 16_384);
+            }
+            assert!(String::from_utf8(request).unwrap().starts_with(
+                "POST /SYNTHETIC_PATH_CANARY/mcp?token=SYNTHETIC_QUERY_CANARY HTTP/1.1\r\n"
+            ));
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1\r\nConnection: close\r\n\r\n{").await.unwrap();
+        });
+        let client = DiagnosticHttpClient(
+            reqwest_mcp::Client::builder()
+                .pool_max_idle_per_host(0)
+                .build()
+                .unwrap(),
+        );
+        let response = client
+            .post_message(
+                format!(
+                    "http://{address}/SYNTHETIC_PATH_CANARY/mcp?token=SYNTHETIC_QUERY_CANARY#SYNTHETIC_FRAGMENT_CANARY"
+                )
+                .into(),
+                serde_json::from_value(json!({"jsonrpc":"2.0", "id":1, "method":"ping"})).unwrap(),
+                None,
+                None,
+                HashMap::new(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(response, StreamableHttpPostResponse::Accepted),
+            "malformed JSON retains rmcp accepted-response behavior"
+        );
+        server.await.unwrap();
+        let bytes = diagnostics.0.lock().unwrap();
+        let output = String::from_utf8_lossy(&bytes);
+        assert!(output.contains("could not parse JSON response"));
+        assert!(
+            !output.contains("SYNTHETIC_QUERY_CANARY"),
+            "accepted malformed JSON diagnostics must omit query credentials"
+        );
+        assert!(
+            !output.contains("SYNTHETIC_FRAGMENT_CANARY"),
+            "accepted malformed JSON diagnostics must omit fragment credentials"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn diagnostic_client_preserves_wire_requests_and_error_categories() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for method in ["POST", "GET", "DELETE"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut byte = [0];
+                    socket.read_exact(&mut byte).await.unwrap();
+                    request.push(byte[0]);
+                    if request.ends_with(b"\r\n\r\n") {
+                        break;
+                    }
+                    assert!(request.len() < 16_384);
+                }
+                let request = String::from_utf8(request).unwrap();
+                assert!(
+                    request.starts_with(&format!(
+                        "{method} /SYNTHETIC_PATH_CANARY/mcp?token=SYNTHETIC_QUERY_CANARY HTTP/1.1\r\n"
+                    )),
+                    "original query reaches the actual HTTP request"
+                );
+                let headers = request.to_ascii_lowercase();
+                assert!(headers.contains("authorization: bearer synthetic-auth-control\r\n"));
+                assert!(headers.contains("mcp-session-id: synthetic-session-control\r\n"));
+                assert!(headers.contains("x-synthetic-control: retained\r\n"));
+                assert!(
+                    !request.contains("SYNTHETIC_FRAGMENT_CANARY"),
+                    "HTTP fragments are not transmitted"
+                );
+                socket.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+            });
+            let url = BellProviderUrl::parse(format!(
+                "http://{address}/SYNTHETIC_PATH_CANARY/mcp?token=SYNTHETIC_QUERY_CANARY#SYNTHETIC_FRAGMENT_CANARY"
+            ))
+            .unwrap();
+            assert_eq!(url.diagnostic_endpoint(), format!("http://{address}"));
+            assert!(
+                url.as_str()
+                    .ends_with("?token=SYNTHETIC_QUERY_CANARY#SYNTHETIC_FRAGMENT_CANARY")
+            );
+            let client = DiagnosticHttpClient(
+                reqwest_mcp::Client::builder()
+                    .pool_max_idle_per_host(0)
+                    .build()
+                    .unwrap(),
+            );
+            let uri: Arc<str> = url.as_str().into();
+            let session: Arc<str> = "synthetic-session-control".into();
+            let auth = Some("synthetic-auth-control".to_owned());
+            let headers = HashMap::from([(
+                HeaderName::from_static("x-synthetic-control"),
+                HeaderValue::from_static("retained"),
+            )]);
+            let error = match method {
+                "POST" => client
+                    .post_message(
+                        uri,
+                        serde_json::from_value(json!({"jsonrpc":"2.0", "id":1, "method":"ping"}))
+                            .unwrap(),
+                        Some(session),
+                        auth,
+                        headers,
+                    )
+                    .await
+                    .unwrap_err(),
+                "GET" => client
+                    .get_stream(
+                        uri,
+                        session,
+                        Some("event-control".to_owned()),
+                        auth,
+                        headers,
+                    )
+                    .await
+                    .err()
+                    .expect("server status error"),
+                _ => client
+                    .delete_session(uri, session, auth, headers)
+                    .await
+                    .unwrap_err(),
+            };
+            if method == "POST" {
+                // rmcp preserves non-JSON HTTP error bodies as this protocol variant.
+                let StreamableHttpError::UnexpectedServerResponse(message) = error else {
+                    panic!("POST protocol error variant must remain unchanged");
+                };
+                assert!(message.starts_with("HTTP 500"));
+            } else {
+                let StreamableHttpError::Client(error) = error else {
+                    panic!("client error variant must remain unchanged");
+                };
+                assert!(error.is_status());
+                assert_eq!(
+                    error.status(),
+                    Some(reqwest_mcp::StatusCode::INTERNAL_SERVER_ERROR)
+                );
+                assert!(
+                    error.url().is_none(),
+                    "request URL removed before worker diagnostics"
+                );
+                assert!(!format!("{error:?} {error}").contains("SYNTHETIC_QUERY_CANARY"));
+            }
+            server.await.unwrap();
+        }
+    }
+
+    async fn diagnostic_http_fixture(
+        response: String,
+    ) -> (BellProviderUrl, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server =
+            tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut byte = [0];
+                    socket.read_exact(&mut byte).await.unwrap();
+                    request.push(byte[0]);
+                    if request.ends_with(b"\r\n\r\n") {
+                        break;
+                    }
+                    assert!(request.len() < 16_384);
+                }
+                let headers = String::from_utf8(request).unwrap();
+                assert!(
+                    headers.lines().next().unwrap().contains(
+                        " /SYNTHETIC_PATH_CANARY/mcp?token=SYNTHETIC_QUERY_CANARY HTTP/1.1"
+                    ),
+                    "actual request query must be preserved"
+                );
+                assert!(!headers.contains("SYNTHETIC_FRAGMENT_CANARY"));
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|value| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                assert!(length < 16_384);
+                socket.read_exact(&mut vec![0; length]).await.unwrap();
+                socket.write_all(response.as_bytes()).await.unwrap();
+            });
+        (
+            BellProviderUrl::parse(format!(
+                "http://{address}/SYNTHETIC_PATH_CANARY/mcp?token=SYNTHETIC_QUERY_CANARY#SYNTHETIC_FRAGMENT_CANARY"
+            ))
+            .unwrap(),
+            server,
+        )
+    }
+
+    fn http_response(status: u16, content_type: &str, extra: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status} Fixture\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n{extra}\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn diagnostic_post_preserves_json_status_session_auth_and_sse_contracts() {
+        use futures_util::StreamExt;
+        let (_capture, diagnostics) = capture_diagnostics();
+        for (status, content_type, extra, body, expected) in [
+            (202, "text/plain", "", "", "accepted"),
+            (204, "text/plain", "", "", "accepted"),
+            (
+                200,
+                "application/json",
+                "Mcp-Session-Id: fixture-session\r\n",
+                r#"{"jsonrpc":"2.0","id":1,"result":{}}"#,
+                "json",
+            ),
+            (200, "application/json", "", "{", "accepted"),
+            (
+                400,
+                "application/json",
+                "",
+                r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"fixture protocol error"}}"#,
+                "protocol-error",
+            ),
+            (
+                500,
+                "text/plain",
+                "",
+                "SYNTHETIC_QUERY_CANARY reflected response",
+                "response-error",
+            ),
+            (500, "application/json", "", "{", "response-error"),
+            (
+                401,
+                "text/plain",
+                "WWW-Authenticate: Bearer realm=fixture\r\n",
+                "",
+                "auth",
+            ),
+            (
+                403,
+                "text/plain",
+                "WWW-Authenticate: Bearer scope=fixture:read\r\n",
+                "",
+                "scope",
+            ),
+            (404, "text/plain", "", "", "expired"),
+            (
+                200,
+                "text/event-stream",
+                "Mcp-Session-Id: fixture-session\r\n",
+                "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n",
+                "sse",
+            ),
+        ] {
+            let (url, server) =
+                diagnostic_http_fixture(http_response(status, content_type, extra, body)).await;
+            let client = DiagnosticHttpClient(
+                reqwest_mcp::Client::builder()
+                    .pool_max_idle_per_host(0)
+                    .build()
+                    .unwrap(),
+            );
+            let result = client
+                .post_message(
+                    url.as_str().into(),
+                    serde_json::from_value(json!({"jsonrpc":"2.0","id":1,"method":"ping"}))
+                        .unwrap(),
+                    Some("fixture-session".into()),
+                    Some("fixture-auth".to_owned()),
+                    HashMap::new(),
+                )
+                .await;
+            match (expected, result) {
+                ("accepted", Ok(StreamableHttpPostResponse::Accepted)) => {}
+                (
+                    "json",
+                    Ok(StreamableHttpPostResponse::Json(
+                        rmcp::model::ServerJsonRpcMessage::Response(_),
+                        session,
+                    )),
+                ) => assert_eq!(session.as_deref(), Some("fixture-session")),
+                (
+                    "protocol-error",
+                    Ok(StreamableHttpPostResponse::Json(
+                        rmcp::model::ServerJsonRpcMessage::Error(error),
+                        _,
+                    )),
+                ) => assert_eq!(error.error.message, "fixture protocol error"),
+                ("response-error", Err(StreamableHttpError::UnexpectedServerResponse(message))) => {
+                    assert!(message.starts_with("HTTP 500"));
+                    assert!(
+                        !message.contains("SYNTHETIC_QUERY_CANARY"),
+                        "reflected response error must not expose credentials"
+                    );
+                }
+                ("auth", Err(StreamableHttpError::AuthRequired(error))) => {
+                    assert_eq!(error.www_authenticate_header, "authentication required")
+                }
+                ("scope", Err(StreamableHttpError::InsufficientScope(error))) => {
+                    assert_eq!(error.required_scope.as_deref(), Some("required scope"))
+                }
+                ("expired", Err(StreamableHttpError::SessionExpired)) => {}
+                ("sse", Ok(StreamableHttpPostResponse::Sse(mut events, session))) => {
+                    assert_eq!(session.as_deref(), Some("fixture-session"));
+                    let event = events.next().await.unwrap().unwrap();
+                    assert_eq!(event.event.as_deref(), Some("message"));
+                    assert_eq!(
+                        event.data.as_deref(),
+                        Some(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#)
+                    );
+                    assert!(events.next().await.is_none());
+                }
+                _ => panic!(
+                    "response must retain the independently specified protocol variant for {expected}"
+                ),
+            }
+            server.await.unwrap();
+        }
+        let bytes = diagnostics.0.lock().unwrap();
+        let output = String::from_utf8_lossy(&bytes);
+        assert!(output.contains("could not parse JSON response"));
+        assert!(
+            !output.contains("SYNTHETIC_QUERY_CANARY"),
+            "all POST branch diagnostics must omit query credentials"
+        );
+        assert!(!output.contains("SYNTHETIC_FRAGMENT_CANARY"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn reflected_http_error_body_is_safe_before_worker_logging() {
+        let (_capture, diagnostics) = capture_diagnostics();
+        let (url, server) = diagnostic_http_fixture(http_response(
+            500,
+            "text/plain",
+            "",
+            "SYNTHETIC_QUERY_CANARY reflected response",
+        ))
+        .await;
+        let provider = MemoryMcpProvider::new(url);
+        assert_eq!(provider.ensure_connected().await, ConnectOutcome::Error);
+        server.await.unwrap();
+        assert_safe_diagnostics(&diagnostics, "bell provider cold-start failed");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sse_body_failures_preserve_typed_errors_without_request_urls() {
+        use futures_util::StreamExt;
+        let (_capture, diagnostics) = capture_diagnostics();
+        for method in ["POST", "GET"] {
+            let (url, server) = diagnostic_http_fixture("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 1000\r\nConnection: close\r\n\r\ndata: {}\n\n".to_owned()).await;
+            let client = DiagnosticHttpClient(
+                reqwest_mcp::Client::builder()
+                    .pool_max_idle_per_host(0)
+                    .build()
+                    .unwrap(),
+            );
+            let mut stream = if method == "POST" {
+                let response = client
+                    .post_message(
+                        url.as_str().into(),
+                        serde_json::from_value(json!({"jsonrpc":"2.0","id":1,"method":"ping"}))
+                            .unwrap(),
+                        None,
+                        None,
+                        HashMap::new(),
+                    )
+                    .await
+                    .unwrap();
+                let StreamableHttpPostResponse::Sse(stream, _) = response else {
+                    panic!("SSE response variant");
+                };
+                stream
+            } else {
+                client
+                    .get_stream(
+                        url.as_str().into(),
+                        "fixture-session".into(),
+                        None,
+                        None,
+                        HashMap::new(),
+                    )
+                    .await
+                    .unwrap()
+            };
+            let mut failure = None;
+            while let Some(event) = stream.next().await {
+                if let Err(error) = event {
+                    failure = Some(error);
+                    break;
+                }
+            }
+            let error = failure.expect("truncated real HTTP body must fail");
+            tracing::warn!(error = ?error, "synthetic SSE body failure");
+            let sse_stream::Error::Body(error) = error else {
+                panic!("SSE body error variant must remain");
+            };
+            let client_error = error
+                .downcast_ref::<reqwest_mcp::Error>()
+                .expect("original reqwest body cause remains");
+            assert!(
+                client_error.url().is_none(),
+                "SSE error must omit request URL before logging"
+            );
+            server.await.unwrap();
+        }
+        let bytes = diagnostics.0.lock().unwrap();
+        let output = String::from_utf8_lossy(&bytes);
+        assert!(output.contains("synthetic SSE body failure"));
+        assert!(
+            !output.contains("SYNTHETIC_QUERY_CANARY"),
+            "all SSE body diagnostics must omit query credentials"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn reflected_response_headers_are_safe_in_errors_and_worker_logs() {
+        let (_capture, diagnostics) = capture_diagnostics();
+        for (status, content_type, extra, expected, scope_present) in [
+            (
+                200,
+                "text/plain; reflected=SYNTHETIC_QUERY_CANARY",
+                "",
+                "content-type",
+                false,
+            ),
+            (
+                401,
+                "text/plain",
+                "WWW-Authenticate: Bearer realm=SYNTHETIC_QUERY_CANARY\r\n",
+                "auth",
+                false,
+            ),
+            (
+                403,
+                "text/plain",
+                "WWW-Authenticate: Bearer scope=SYNTHETIC_QUERY_CANARY\r\n",
+                "scope",
+                true,
+            ),
+            (
+                403,
+                "text/plain",
+                "WWW-Authenticate: Bearer realm=SYNTHETIC_QUERY_CANARY\r\n",
+                "scope",
+                false,
+            ),
+        ] {
+            let response = http_response(
+                status,
+                content_type,
+                extra,
+                "SYNTHETIC_QUERY_CANARY response body",
+            );
+            let (url, server) = diagnostic_http_fixture(response.clone()).await;
+            assert_eq!(
+                MemoryMcpProvider::new(url).ensure_connected().await,
+                ConnectOutcome::Error
+            );
+            server.await.unwrap();
+            assert_safe_diagnostics(&diagnostics, "bell provider cold-start failed");
+            let (url, server) = diagnostic_http_fixture(response).await;
+            let client = DiagnosticHttpClient(
+                reqwest_mcp::Client::builder()
+                    .pool_max_idle_per_host(0)
+                    .build()
+                    .unwrap(),
+            );
+            let error = client
+                .post_message(
+                    url.as_str().into(),
+                    serde_json::from_value(json!({"jsonrpc":"2.0","id":1,"method":"ping"}))
+                        .unwrap(),
+                    Some("fixture-session".into()),
+                    None,
+                    HashMap::new(),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                !format!("{error:?} {error}").contains("SYNTHETIC_QUERY_CANARY"),
+                "returned diagnostic error must omit reflected headers"
+            );
+            match (expected, error) {
+                ("content-type", StreamableHttpError::UnexpectedContentType(value)) => {
+                    assert!(value.is_some())
+                }
+                ("auth", StreamableHttpError::AuthRequired(value)) => {
+                    assert!(!value.www_authenticate_header.is_empty())
+                }
+                ("scope", StreamableHttpError::InsufficientScope(value)) => {
+                    assert_eq!(value.required_scope.is_some(), scope_present)
+                }
+                _ => panic!("response diagnostic must preserve protocol variant and hint presence"),
+            }
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn delegated_get_content_type_error_is_safe() {
+        let (_capture, diagnostics) = capture_diagnostics();
+        let response = http_response(200, "text/SYNTHETIC_QUERY_CANARY", "", "");
+        let (url, server) = diagnostic_http_fixture(response).await;
+        let client = DiagnosticHttpClient(
+            reqwest_mcp::Client::builder()
+                .pool_max_idle_per_host(0)
+                .build()
+                .unwrap(),
+        );
+        let error = client
+            .get_stream(
+                url.as_str().into(),
+                "fixture-session".into(),
+                None,
+                None,
+                HashMap::new(),
+            )
+            .await
+            .err()
+            .expect("GET must reject unexpected content type");
+        assert!(matches!(
+            &error,
+            StreamableHttpError::UnexpectedContentType(Some(_))
+        ));
+        assert!(!format!("{error:?} {error}").contains("SYNTHETIC_QUERY_CANARY"));
+        tracing::warn!(endpoint = %url.diagnostic_endpoint(), error = ?error, "delegated GET rejected");
+        assert_safe_diagnostics(&diagnostics, "delegated GET rejected");
+        server.await.unwrap();
+    }
 
     enum Response {
         Value(Value),
@@ -993,8 +1616,9 @@ mod tests {
         assert_eq!(registry.providers.lock().await.len(), 1);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn multi_provider_hanging_connect_is_bounded() {
+        let (_capture, diagnostics) = capture_diagnostics();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let hanging = tokio::spawn(async move {
@@ -1006,7 +1630,10 @@ mod tests {
 
         let registry = BellEvaluator::default();
         let configs = vec![BellProviderConfig {
-            url: BellProviderUrl::parse(format!("http://{addr}/mcp")).unwrap(),
+            url: BellProviderUrl::parse(format!(
+                "http://{addr}/SYNTHETIC_PATH_CANARY/mcp?token=SYNTHETIC_QUERY_CANARY#SYNTHETIC_FRAGMENT_CANARY"
+            ))
+            .unwrap(),
             scope: BellScope::parse("test").unwrap(),
             alias: None,
         }];
@@ -1016,6 +1643,7 @@ mod tests {
             .await
             .unwrap();
         let elapsed = start.elapsed();
+        assert_safe_diagnostics(&diagnostics, "bell provider connection timed out");
         hanging.abort();
         assert!(hanging.await.unwrap_err().is_cancelled());
 
@@ -1034,11 +1662,18 @@ mod tests {
             "hanging provider (timeout, not error) should produce Timeout, got {status:?}"
         );
     }
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn multi_provider_connect_error_reports_error_not_timeout() {
+        let (_capture, diagnostics) = capture_diagnostics();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
         let registry = BellEvaluator::default();
         let configs = vec![BellProviderConfig {
-            url: BellProviderUrl::parse("http://127.0.0.1:1/mcp").unwrap(),
+            url: BellProviderUrl::parse(format!(
+                "http://{addr}/SYNTHETIC_PATH_CANARY/mcp?token=SYNTHETIC_QUERY_CANARY#SYNTHETIC_FRAGMENT_CANARY"
+            ))
+            .unwrap(),
             scope: BellScope::parse("test").unwrap(),
             alias: None,
         }];
@@ -1047,6 +1682,7 @@ mod tests {
             .await
             .unwrap();
 
+        assert_safe_diagnostics(&diagnostics, "bell provider cold-start failed");
         assert!(bells.is_empty(), "no bells from a refused connection");
         assert_eq!(
             status,

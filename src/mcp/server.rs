@@ -119,7 +119,7 @@ pub struct DioneServer {
 }
 
 pub(crate) fn reserved_tool_names(harness: &HarnessConnection) -> BTreeSet<String> {
-    let definitions = tools_list(harness, true);
+    let definitions = tools_list(harness, true, dione_evidence::EvidenceMarkerVersion::V3);
     let mut reserved: BTreeSet<String> = dione_codex::TOOL_NAMES
         .iter()
         .map(|name| (*name).to_owned())
@@ -556,6 +556,10 @@ async fn run_with_input(
                                     remaining,
                                     "rate limiter: message allowed"
                                 );
+                            }
+                            RateLimitDecision::Unavailable { reason } => {
+                                tracing::warn!(%reason, "rate limiter unavailable, dropping message");
+                                continue;
                             }
                             RateLimitDecision::Denied { retry_after, overflow: _ } => {
                                 // All denied messages are dropped for now.
@@ -1002,12 +1006,16 @@ async fn dispatch(
         }
         "tools/list" => {
             let config = dione_config::load_config(server.state_dir());
-            let mut response =
-                tools_list(&server.harness, config.delivery.evidence_markers_enabled);
+            let mut response = tools_list(
+                &server.harness,
+                config.delivery.evidence_markers_enabled,
+                config.delivery.evidence_marker_version,
+            );
             server.module_tools.append_definitions(
                 &mut response,
                 dione_mcp_tools::ToolDiscoveryContext {
                     evidence_markers_enabled: config.delivery.evidence_markers_enabled,
+                    evidence_marker_version: config.delivery.evidence_marker_version,
                 },
             );
             Ok(response)
@@ -1250,11 +1258,17 @@ pub mod test_helpers {
     }
 
     fn complete_tools_list(harness: &HarnessConnection, evidence: bool) -> Value {
-        let mut response = crate::mcp::protocol::tools_list(harness, evidence);
-        response["tools"]
-            .as_array_mut()
-            .expect("tools array")
-            .push(crate::discord::reply_tool::definition(evidence));
+        let mut response = crate::mcp::protocol::tools_list(
+            harness,
+            evidence,
+            dione_evidence::EvidenceMarkerVersion::V3,
+        );
+        response["tools"].as_array_mut().expect("tools array").push(
+            crate::discord::reply_tool::definition(
+                evidence,
+                dione_evidence::EvidenceMarkerVersion::V3,
+            ),
+        );
         response["tools"]
             .as_array_mut()
             .expect("tools array")
@@ -1666,6 +1680,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ordinary_failed_predecessor_flush_keeps_tail_before_current() {
+        for unknown in [false, true] {
+            let mut raw = Config::default();
+            raw.delivery.evidence_markers_enabled = true;
+            raw.channels.push(ChannelConfig {
+                id: "42".to_owned(),
+                delivery_delay_ms: Some(500),
+                ..Default::default()
+            });
+            let config = LoadedConfig::try_from_raw(raw).unwrap();
+            let module = ModuleInstanceId::new(
+                ProviderId::new("discord").unwrap(),
+                ModuleSlotId::new("primary").unwrap(),
+            );
+            let mut buffer = DeliveryBuffer::new(module.clone());
+            buffer.requeue(vec![evidence_message_event(0), evidence_message_event(1)]);
+            let (writer, reader) = tokio::io::duplex(4096);
+            drop(reader);
+            let output = dione_harness::ProtocolOutput::new(writer);
+            if !unknown {
+                // The first failed frame is conservatively unknown. Once poisoned,
+                // later frames are rejected before any new write starts.
+                assert!(
+                    output
+                        .write(&serde_json::json!({"probe":true}))
+                        .await
+                        .unwrap_err()
+                        .completion_is_unknown()
+                );
+            }
+            let sink = dione_claude::connect(output, dione_codex::TOOL_NAMES);
+            let error = forward_ordinary(
+                evidence_message_event(2),
+                &config,
+                &mut buffer,
+                &Arc::new(BellEvaluator::new()),
+                &sink,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.completion_is_unknown(), unknown);
+            let retained = buffer.flush_all();
+            let ids: Vec<_> = retained
+                .iter()
+                .map(|event| match event {
+                    NotificationEvent::Message(message) => message.message_id.get(),
+                    _ => panic!("message retained"),
+                })
+                .collect();
+            let expected = if unknown {
+                vec![101, 102]
+            } else {
+                vec![100, 101, 102]
+            };
+            assert_eq!(ids, expected);
+            let (writer, reader) = tokio::io::duplex(8192);
+            let recovered = dione_claude::connect(
+                dione_harness::ProtocolOutput::new(writer),
+                dione_codex::TOOL_NAMES,
+            );
+            let mut lines = tokio::io::AsyncBufReadExt::lines(tokio::io::BufReader::new(reader));
+            let outcome = deliver_flushed(&recovered, &module, retained, None, true).await;
+            assert!(outcome.error.is_none());
+            assert!(outcome.undelivered.is_empty());
+            for id in expected {
+                let delivered: Value =
+                    serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+                assert_eq!(delivered["params"]["meta"]["message_id"], id.to_string());
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn unknown_admission_does_not_requeue_ambiguous_event_but_retains_tail() {
         let mut owner = crate::codex_test_process::OwnerProcess::start().await;
         let module = ModuleInstanceId::new(
@@ -1886,6 +1973,71 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn rejected_rate_limit_reload_keeps_next_admitted_message_on_previous_budget() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let state = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let path = state.join("config.toml");
+        let runtime = dione_config::ConfigRuntime::new(state.clone());
+        std::fs::write(
+            &path,
+            "[rate_limit]\nenabled = true\nmax_tokens = 2\nwindow_secs = 60\ncooldown_secs = 30\n",
+        )
+        .unwrap();
+        assert!(runtime.reload().await.1.is_none());
+        let before = dione_config::load_config(&state);
+        let lkg_before = std::fs::read(dione_config::lkg_path(&path)).unwrap();
+        let mut limiter = RateLimiter::new(before.rate_limit_runtime().clone());
+        let event = message_event(42);
+        let key =
+            message_rate_limit_key(&event).expect("admitted message retains effective identity");
+        let now = Instant::now();
+        assert!(matches!(
+            limiter.check_message(&key.participant, &key.channel, &[], now),
+            RateLimitDecision::Allowed { remaining: 1, .. }
+        ));
+        let mut invalid_settings = vec!["max_tokens = 0"];
+        if now
+            .checked_add(Duration::from_secs(i64::MAX as u64))
+            .is_none()
+        {
+            invalid_settings.extend([
+                "window_secs = 9223372036854775807",
+                "cooldown_secs = 9223372036854775807",
+            ]);
+        }
+        for setting in invalid_settings {
+            let invalid = format!("[rate_limit]\nenabled = true\n{setting}\n");
+            std::fs::write(&path, &invalid).unwrap();
+            assert!(runtime.reload().await.1.unwrap().starts_with("rate_limit."));
+            let current = dione_config::load_config(&state);
+            assert!(std::sync::Arc::ptr_eq(&before, &current));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), invalid);
+            assert_eq!(
+                std::fs::read(dione_config::lkg_path(&path)).unwrap(),
+                lkg_before
+            );
+            if current.rate_limit_runtime() != limiter.config_ref() {
+                limiter.update_config(current.rate_limit_runtime().clone());
+            }
+        }
+        assert!(matches!(
+            limiter.check_message(&key.participant, &key.channel, &[], now),
+            RateLimitDecision::Allowed { remaining: 0, .. }
+        ));
+        assert!(matches!(
+            limiter.check_message(&key.participant, &key.channel, &[], now),
+            RateLimitDecision::Denied { .. }
+        ));
+        let mut manual_invalid = before.rate_limit_runtime().clone();
+        manual_invalid.default.max_tokens = 0;
+        limiter.update_config(manual_invalid);
+        assert!(matches!(
+            limiter.check_message(&key.participant, &key.channel, &[], now),
+            RateLimitDecision::Unavailable { .. }
+        ));
+    }
+
     #[test]
     fn direct_and_represented_same_human_share_the_actual_rate_limit_bucket() {
         let mut limiter = RateLimiter::new(RateLimitConfig {
@@ -2036,11 +2188,15 @@ async fn forward_ordinary(
         }
         BufferResult::FlushThenImmediate { preceding, event } => {
             let outcome = deliver_flushed(sink, buffer.module(), preceding, cfg.tz, evidence).await;
-            buffer.requeue(outcome.undelivered);
             if let Some(error) = outcome.error {
-                buffer.requeue(vec![*event]);
+                // Requeue is a prepend: keep retained predecessors before the
+                // new event, excluding any completion-unknown predecessor.
+                let mut retained = outcome.undelivered;
+                retained.push(*event);
+                buffer.requeue(retained);
                 return Err(error);
             }
+            buffer.requeue(outcome.undelivered);
             let delivery = match dione_discord_events::single(
                 buffer.module(),
                 (*event).clone(),

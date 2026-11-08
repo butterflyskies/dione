@@ -15,13 +15,16 @@ sends uncached Discord IDs to PronounDB, and caches failures as absence.
 Explicit suffix handling does not bypass lookup; cache hits can avoid HTTP.
 
 The nameplate body limit is checked after buffering when Content-Length is
-absent. Existing URL, redirect, deadline, user-agent, and logging behavior stays
-unchanged. Nameplate names and biographies do not replace the supplied display
+absent. Existing request URL, redirect, deadline and user-agent behavior stays
+unchanged. Send and body-read failures retain debug diagnostics with fixed safe
+categories instead of formatting request errors that can carry private URLs. Nameplate names and biographies do not replace the supplied display
 name. HTTP client constructors panic if client construction fails.
 
-All four formatter tests and twelve tests per client move with the source.
-One existing pronoun test calls the real API with its original 100 ms deadline;
-the suite is not entirely hermetic. The crate includes its HTTP dependencies
-and has no messages, attention, or platform-crate dependency.
+Formatter and client assertions are retained. Provider-failure tests use private
+unit-test-only local HTTP endpoints, with actual request-count checks for cached
+absence, literal successful values, exclusions and stale nameplate recovery.
+Ordinary tests do not call PronounDB. The test endpoint seam is absent from
+production builds and adds no public override API. The crate includes its HTTP
+dependencies and has no messages, attention, or platform-crate dependency.
 
 This package uses Rust 1.98 or newer and the MIT OR Apache-2.0 license.

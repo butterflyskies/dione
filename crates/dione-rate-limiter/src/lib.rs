@@ -183,9 +183,57 @@ pub struct TokenBucket {
     delivered_this_window: u32,
 }
 
+/// A rate-limit setting cannot be applied safely at the supplied monotonic time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RateLimitConfigurationError {
+    /// An enabled bucket requires a positive budget.
+    ZeroTokens,
+    /// The window deadline is not representable on this platform at this time.
+    WindowDeadline,
+    /// The cooldown deadline is not representable on this platform at this time.
+    CooldownDeadline,
+}
+
+impl std::fmt::Display for RateLimitConfigurationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::ZeroTokens => "rate_limit.max_tokens must be positive when enabled",
+            Self::WindowDeadline => "rate_limit.window_secs deadline is not representable",
+            Self::CooldownDeadline => "rate_limit.cooldown_secs deadline is not representable",
+        })
+    }
+}
+impl std::error::Error for RateLimitConfigurationError {}
+
+impl ScopeConfig {
+    /// Check the enabled scope without consuming tokens or changing state.
+    /// Zero durations remain supported; no duration is clamped.
+    pub fn validate_at(&self, now: Instant) -> Result<(), RateLimitConfigurationError> {
+        self.deadlines(now).map(|_| ())
+    }
+
+    fn deadlines(&self, now: Instant) -> Result<(Instant, Instant), RateLimitConfigurationError> {
+        if self.max_tokens == 0 {
+            return Err(RateLimitConfigurationError::ZeroTokens);
+        }
+        let window = now
+            .checked_add(self.window)
+            .ok_or(RateLimitConfigurationError::WindowDeadline)?;
+        let cooldown = now
+            .checked_add(self.cooldown)
+            .ok_or(RateLimitConfigurationError::CooldownDeadline)?;
+        Ok((window, cooldown))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Result of checking one message against the selected bucket.
 pub enum RateLimitDecision {
+    /// Configuration cannot safely form a deadline; no token or bucket state changed.
+    Unavailable {
+        /// A fixed field/category diagnostic, without configuration source text.
+        reason: RateLimitConfigurationError,
+    },
     /// The message may proceed.
     Allowed {
         /// Tokens left after this check, or `u32::MAX` when disabled.
@@ -224,6 +272,10 @@ impl TokenBucket {
     /// Time-driven transitions (window expiry, cooldown expiry) are evaluated lazily here
     /// rather than on a separate tick — the real system doesn't have a global clock.
     pub fn check(&mut self, now: Instant) -> RateLimitDecision {
+        let (window_deadline, cooldown_deadline) = match self.config.deadlines(now) {
+            Ok(deadlines) => deadlines,
+            Err(reason) => return RateLimitDecision::Unavailable { reason },
+        };
         // Lazily apply time-driven transitions before evaluating the message.
         self.advance_time(now);
 
@@ -231,12 +283,12 @@ impl TokenBucket {
             BucketState::Idle => {
                 self.remaining -= 1;
                 self.delivered_this_window = 1;
-                let window_expires = now + self.config.window;
+                let window_expires = window_deadline;
                 let new_state = if self.remaining > 0 {
                     BucketState::Active { window_expires }
                 } else {
                     BucketState::Exhausted {
-                        cooldown_expires: now + self.config.cooldown,
+                        cooldown_expires: cooldown_deadline,
                     }
                 };
                 self.state = new_state;
@@ -253,7 +305,7 @@ impl TokenBucket {
                     // Stay Active
                 } else {
                     self.state = BucketState::Exhausted {
-                        cooldown_expires: now + self.config.cooldown,
+                        cooldown_expires: cooldown_deadline,
                     };
                 }
                 RateLimitDecision::Allowed {
@@ -355,10 +407,8 @@ impl RateLimiter {
     /// replaces the existing bucket before checking. Disabled checks allow the
     /// message without creating or consuming a bucket.
     ///
-    /// # Panics
-    ///
-    /// Panics if an enabled check resolves a configuration with zero `max_tokens`
-    /// when constructing or replacing its bucket.
+    /// Invalid enabled budgets or unrepresentable deadlines return
+    /// [`RateLimitDecision::Unavailable`] before bucket creation or replacement.
     pub fn check_message(
         &mut self,
         sender: &ParticipantId,
@@ -374,6 +424,9 @@ impl RateLimiter {
         }
 
         let resolved = self.config.resolve(sender, channel, classes);
+        if let Err(reason) = resolved.validate_at(now) {
+            return RateLimitDecision::Unavailable { reason };
+        }
         let key = (sender.clone(), channel.clone());
         let bucket = self
             .buckets
@@ -466,6 +519,128 @@ mod tests {
     }
 
     // ── Unit tests ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn later_unrepresentable_clock_preserves_an_already_active_bucket() {
+        let now = Instant::now();
+        let (mut low, mut high) = (0u64, u64::MAX);
+        while low < high {
+            let middle = low + (high - low) / 2 + 1;
+            if now.checked_add(Duration::from_secs(middle)).is_some() {
+                low = middle;
+            } else {
+                high = middle - 1;
+            }
+        }
+        assert!(
+            low > 3600 && low < u64::MAX,
+            "host has a finite monotonic deadline horizon"
+        );
+        let half_range = Duration::from_secs(low / 2 + 1);
+        let later = now
+            .checked_add(half_range)
+            .expect("host admits initial half-range deadline");
+        assert!(
+            later.checked_add(half_range).is_none(),
+            "host evidence requires later overflow"
+        );
+        for cooldown in [false, true] {
+            let mut scope = default_scope(2);
+            if cooldown {
+                scope.cooldown = half_range;
+            } else {
+                scope.window = half_range;
+            }
+            assert!(scope.validate_at(now).is_ok());
+            let mut bucket = TokenBucket::new(scope);
+            assert!(matches!(
+                bucket.check(now),
+                RateLimitDecision::Allowed { remaining: 1, .. }
+            ));
+            let before = bucket.state.clone();
+            assert!(matches!(
+                bucket.check(later),
+                RateLimitDecision::Unavailable { .. }
+            ));
+            assert_eq!(bucket.remaining, 1);
+            assert_eq!(bucket.delivered_this_window, 1);
+            assert_eq!(
+                bucket.state, before,
+                "rejected clock must not advance or reset existing state"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_initial_or_replacement_config_is_unavailable_without_bucket_mutation() {
+        let now = Instant::now();
+        let sender = sender("fixture");
+        let channel = channel("fixture");
+        for setting in 0..3 {
+            let mut invalid = default_config(0);
+            if setting > 0 {
+                invalid.default.max_tokens = 2;
+                if setting == 1 {
+                    invalid.default.window = Duration::MAX;
+                } else {
+                    invalid.default.cooldown = Duration::MAX;
+                }
+            }
+            let mut limiter = RateLimiter::new(invalid.clone());
+            assert!(matches!(
+                limiter.check_message(&sender, &channel, &[], now),
+                RateLimitDecision::Unavailable { .. }
+            ));
+            assert_eq!(limiter.bucket_count(), 0);
+            limiter.update_config(default_config(2));
+            assert!(matches!(
+                limiter.check_message(&sender, &channel, &[], now),
+                RateLimitDecision::Allowed { remaining: 1, .. }
+            ));
+            limiter.update_config(invalid);
+            assert!(matches!(
+                limiter.check_message(&sender, &channel, &[], now),
+                RateLimitDecision::Unavailable { .. }
+            ));
+            assert_eq!(limiter.bucket_count(), 1);
+            limiter.update_config(default_config(2));
+            assert!(matches!(
+                limiter.check_message(&sender, &channel, &[], now),
+                RateLimitDecision::Allowed { remaining: 0, .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn rate_limit_boundary_extreme_deadlines_do_not_panic_or_consume() {
+        let now = Instant::now();
+        let extreme = Duration::MAX;
+        assert!(
+            now.checked_add(extreme).is_none(),
+            "host evidence requires an actually unrepresentable deadline"
+        );
+        for cooldown in [false, true] {
+            let mut scope = default_scope(1);
+            if cooldown {
+                scope.cooldown = extreme;
+            } else {
+                scope.window = extreme;
+            }
+            let mut bucket = TokenBucket::new(scope);
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| bucket.check(now)));
+            assert!(result.is_ok(), "unrepresentable deadline must not panic");
+            assert!(matches!(
+                result.unwrap(),
+                RateLimitDecision::Unavailable { .. }
+            ));
+            assert_eq!(
+                bucket.remaining, 1,
+                "unavailable check cannot consume token"
+            );
+            assert_eq!(bucket.state, BucketState::Idle);
+        }
+    }
 
     #[test]
     #[should_panic(expected = "max_tokens must be > 0")]

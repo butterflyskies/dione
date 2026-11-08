@@ -63,8 +63,18 @@ pub(crate) fn rejected_handle_json(error: RejectedHandle) -> Value {
             match progress {
                 DeliveryProgress::None => {}
                 DeliveryProgress::Partial(sent) => add_partial_receipt(&mut value, sent),
+                DeliveryProgress::Unknown(sent) => {
+                    value["delivery_ambiguous"] = json!(true);
+                    value["retryable"] = json!(false);
+                    if let Some(sent) = sent {
+                        add_partial_receipt(&mut value, sent);
+                    }
+                }
             }
             value
+        }
+        RejectedHandle::DeliveryUnknown { ref confirmed, .. } => {
+            json!({"error":error.to_string(), "delivery_ambiguous":true, "retryable":false, "message_ids":confirmed.iter().map(|id|id.get()).collect::<Vec<_>>() })
         }
         RejectedHandle::Unknown(_) | RejectedHandle::Expired { .. } => {
             json!({ "error": error.to_string() })
@@ -99,7 +109,10 @@ fn receipt(delivery: DeliveryReceipt) -> Value {
 pub(crate) fn error(error: MessagingError) -> Value {
     let mut value = match error.kind {
         MessagingErrorKind::Target(target) => target_error(target),
-        MessagingErrorKind::Handle(handle) => rejected_handle_json(handle),
+        MessagingErrorKind::DeliveryUnknown { cause, confirmed } => {
+            json!({"error":format!("delivery completion unknown: {cause}; reconcile before resending"), "delivery_ambiguous":true,"retryable":false,"message_ids":confirmed.iter().map(|id|id.get()).collect::<Vec<_>>() })
+        }
+        MessagingErrorKind::Handle(handle) => rejected_handle_json(*handle),
         MessagingErrorKind::HookHalted { reason, feedback } => {
             json!({"error": reason, "pre_send_feedback": feedback})
         }
@@ -424,7 +437,10 @@ mod tests {
                     expires_in: Duration::from_secs(30),
                 };
                 let projected = if rephrased {
-                    rephrase(&handle, Err(MessagingErrorKind::Handle(failure).into()))
+                    rephrase(
+                        &handle,
+                        Err(MessagingErrorKind::Handle(Box::new(failure)).into()),
+                    )
                 } else {
                     release(&handle, Err(failure))
                 };

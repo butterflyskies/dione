@@ -53,7 +53,9 @@ impl ConfigStore {
             Err(error) => return Err(error.into()),
         };
         Ok(Self {
-            doc: contents.parse()?,
+            doc: contents
+                .parse::<DocumentMut>()
+                .map_err(|error| crate::config::ConfigMutationDiagnostic::read(&error))?,
         })
     }
 

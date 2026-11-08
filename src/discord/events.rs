@@ -4441,6 +4441,81 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn actual_enrichment_routing_excludes_bots_and_keeps_human_lookup_separate() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/plates", listener.local_addr().unwrap());
+        let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let captured = requests.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let mut buffer = [0_u8; 2048];
+                while !bytes.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let count = stream.read(&mut buffer).await.unwrap();
+                    if count == 0 {
+                        break;
+                    }
+                    bytes.extend_from_slice(&buffer[..count]);
+                }
+                captured.fetch_add(1, Ordering::SeqCst);
+                let body = "nameplates:\n  \"42\":\n    name: Iris\n    pronouns: [she/her]\n";
+                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        });
+        let mut fixture = observation_fixture(1);
+        fixture.handler.nameplate_service = Some(Arc::new(
+            dione_identity_display::nameplates::NameplateService::new(
+                &endpoint,
+                5000,
+                std::time::Duration::from_secs(300),
+                &[77],
+            ),
+        ));
+        assert_eq!(
+            fixture
+                .handler
+                .resolve_identity_enrichment(77, true, "Excluded")
+                .await,
+            "Excluded"
+        );
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            0,
+            "excluded bot must not invoke nameplate HTTP"
+        );
+        assert_eq!(
+            fixture
+                .handler
+                .resolve_identity_enrichment(42, false, "Human")
+                .await,
+            "Human"
+        );
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            0,
+            "human must not invoke bot nameplate provider"
+        );
+        assert_eq!(
+            fixture
+                .handler
+                .resolve_identity_enrichment(42, true, "Iris")
+                .await,
+            "Iris (she/her)"
+        );
+        assert_eq!(
+            fixture
+                .handler
+                .resolve_identity_enrichment(42, true, "Iris (xe/it)")
+                .await,
+            "Iris (xe/it)"
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        server.abort();
+    }
+
     #[tokio::test(start_paused = true)]
     async fn enabled_observation_and_actual_legacy_continuation_share_only_legacy_authority() {
         let mut fixture = observation_fixture(1);

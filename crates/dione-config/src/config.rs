@@ -2,6 +2,7 @@ use arc_swap::ArcSwap;
 use camino::{Utf8Path, Utf8PathBuf};
 use dione_bell_rings::{BellProviderConfig, RecallOptions};
 use dione_coordination::{CoordinationConfig, Coordinator};
+pub use dione_evidence::EvidenceMarkerVersion;
 use dione_gaie::{DEFAULT_ARCHIVE_MAX_ATTACHMENT_BYTES, DEFAULT_ARCHIVE_MAX_RUN_DOWNLOAD_BYTES};
 use dione_pluralkit_identities::{PLURALKIT_APPLICATION_ID, PkUuid};
 use dione_pre_send::ConstructId;
@@ -101,6 +102,17 @@ pub enum ConfigError {
 /// The process-wide generation allocator has exhausted its range.
 pub struct ConfigGenerationError;
 
+/// Candidate composition failed before generation allocation or publication.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ConfigCompositionError {
+    /// The process-wide generation allocator is exhausted.
+    #[error(transparent)]
+    Generation(#[from] ConfigGenerationError),
+    /// An enabled rate-limit setting cannot safely be used by the runtime.
+    #[error(transparent)]
+    RateLimit(#[from] dione_rate_limiter::RateLimitConfigurationError),
+}
+
 /// What startup does when the on-disk config is invalid and there is no
 /// last-known-good to restore from.
 ///
@@ -126,6 +138,9 @@ pub enum NoLkgPolicy {
 /// Typed startup-time config failure.
 #[derive(Debug, Error)]
 pub enum StartupConfigError {
+    /// Parsed settings are semantically invalid; disk and cached policy are untouched.
+    #[error(transparent)]
+    InvalidRateLimit(#[from] dione_rate_limiter::RateLimitConfigurationError),
     /// Invalid main config at boot with no last-known-good to restore from,
     /// under [`NoLkgPolicy::FailStartup`].
     #[error(
@@ -948,6 +963,8 @@ pub struct DeliveryConfig {
     ///
     /// Default-off while the tracer bullet is being validated in production.
     pub evidence_markers_enabled: bool,
+    /// Per-seat outbound grammar pin; omission is concretely V3, independent of inbound readers.
+    pub evidence_marker_version: EvidenceMarkerVersion,
     /// When to prepend the preamble to delivered events.
     ///
     /// - `always` (default): every event gets the preamble.
@@ -971,6 +988,7 @@ impl Default for DeliveryConfig {
             chunk_mode: ChunkMode::Paragraph,
             delivery_delay_ms: 0,
             evidence_markers_enabled: false,
+            evidence_marker_version: EvidenceMarkerVersion::default(),
             preamble_mode: PreambleMode::Always,
             preamble_template: PreambleTemplate::default(),
         }
@@ -1053,7 +1071,22 @@ pub struct RateLimitTomlConfig {
 }
 
 impl RateLimitTomlConfig {
-    /// Convert to the runtime rate limit config.
+    /// Validate enabled settings before composition or publication.
+    pub fn validate(&self) -> Result<(), dione_rate_limiter::RateLimitConfigurationError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        dione_rate_limiter::ScopeConfig {
+            max_tokens: self.max_tokens.unwrap_or(20),
+            window: std::time::Duration::from_secs(self.window_secs.unwrap_or(3600)),
+            cooldown: std::time::Duration::from_secs(self.cooldown_secs.unwrap_or(3600)),
+            overflow: dione_rate_limiter::OverflowPolicy::Drop { notify: true },
+        }
+        .validate_at(std::time::Instant::now())
+    }
+
+    /// Convert settings without publication. Config composition validates enabled settings first;
+    /// direct consumers must handle the runtime limiter's typed unavailable decision.
     pub fn into_runtime(self) -> dione_rate_limiter::RateLimitConfig {
         use dione_rate_limiter::{OverflowPolicy, RateLimitConfig, ScopeConfig};
         use std::time::Duration;
@@ -1192,15 +1225,16 @@ impl std::ops::Deref for LoadedConfig {
 }
 
 impl LoadedConfig {
-    /// Build from raw Config, parsing IDs and compiling regexes.
-    pub fn try_from_raw(raw: Config) -> Result<Self, ConfigGenerationError> {
+    /// Validate enabled rate-limit settings, then allocate a generation, parse IDs, and compile regexes.
+    pub fn try_from_raw(raw: Config) -> Result<Self, ConfigCompositionError> {
         Self::try_from_raw_with_counter(raw, &NEXT_CONFIG_GENERATION)
     }
 
     pub(crate) fn try_from_raw_with_counter(
         raw: Config,
         counter: &AtomicU64,
-    ) -> Result<Self, ConfigGenerationError> {
+    ) -> Result<Self, ConfigCompositionError> {
+        raw.rate_limit.validate()?;
         let generation = allocate_generation(counter)?;
         Ok(Self::from_raw_with_generation(raw, generation))
     }
@@ -1600,7 +1634,7 @@ fn build_and_store_raw_config(
     raw: Config,
     counter: &AtomicU64,
     cache: &ArcSwap<LoadedConfig>,
-) -> Result<LoadedConfig, ConfigGenerationError> {
+) -> Result<LoadedConfig, ConfigCompositionError> {
     let loaded = compose_candidate(raw, Vec::new(), counter)?;
     cache.store(Arc::new(loaded.clone()));
     Ok(loaded)
@@ -1726,26 +1760,50 @@ fn sweep_temp_siblings(config_path: &Utf8Path) -> usize {
     swept
 }
 
-/// One-line, snippet-free rendering of a TOML parse error for surfaces that
-/// may be stored or forwarded (startup errors, recovery notes): the error
-/// type and location line, plus the parser's first message line — never the
-/// quoted source line, which for `config.toml` can carry the Discord token.
-///
-/// Deliberately local: the general parse-error-snippet class across the
-/// codebase is #371's lane (central redaction), not this function's.
+/// Credential-safe rendering for startup, reload and recovery diagnostics.
+/// Only a fixed category and numeric parser location may cross these surfaces:
+/// even serde's first error-message line can quote a credential-bearing value.
 fn sanitize_toml_error(error: &toml::de::Error) -> String {
-    let display = error.to_string();
+    safe_parse_diagnostic(&error.to_string(), error.span())
+}
+
+fn safe_parse_diagnostic(display: &str, span: Option<std::ops::Range<usize>>) -> String {
     let location = display
         .lines()
         .next()
-        .unwrap_or("TOML parse error")
-        .trim()
-        .to_owned();
-    let message = error.message().lines().next().unwrap_or("").trim();
-    if message.is_empty() || location.contains(message) {
-        location
-    } else {
-        format!("{location}: {message}")
+        .and_then(|line| line.strip_prefix("TOML parse error at line "))
+        .and_then(|location| location.split_once(", column "))
+        .and_then(|(line, column)| {
+            Some((line.parse::<usize>().ok()?, column.parse::<usize>().ok()?))
+        });
+    match (span, location) {
+        (Some(_), Some((line, column))) if line > 0 && column > 0 => {
+            format!("TOML parse error at line {line}, column {column}")
+        }
+        (Some(span), _) => format!("TOML parse error at byte {}", span.start),
+        (None, _) => "TOML parse error".to_owned(),
+    }
+}
+
+/// Mutation parser diagnostics never retain the source-bearing parser cause.
+#[derive(Debug, thiserror::Error)]
+#[error("config mutation {stage} error: {diagnostic}")]
+pub(crate) struct ConfigMutationDiagnostic {
+    stage: &'static str,
+    diagnostic: String,
+}
+impl ConfigMutationDiagnostic {
+    pub(crate) fn read(error: &toml_edit::TomlError) -> Self {
+        Self {
+            stage: "read",
+            diagnostic: safe_parse_diagnostic(&error.to_string(), error.span()),
+        }
+    }
+    fn validation(error: &toml::de::Error) -> Self {
+        Self {
+            stage: "validation",
+            diagnostic: sanitize_toml_error(error),
+        }
     }
 }
 
@@ -1886,7 +1944,8 @@ fn quarantine_canonical(config_path: &Utf8Path) -> std::io::Result<bool> {
 /// (good.tmp → config.toml) → fsync(parent dir). Every boundary retains a
 /// usable config on disk.
 ///
-/// Returns `Ok(false)` when no LKG exists (nothing to restore from).
+/// Returns `Missing` when no LKG exists. Invalid bytes are not restored;
+/// semantic rate-limit rejection remains typed for startup and runtime callers.
 ///
 /// The restored canonical carries the LKG's permission mode, copied from the
 /// SAME opened handle the bytes are read from: `File::create` alone would
@@ -1894,6 +1953,7 @@ fn quarantine_canonical(config_path: &Utf8Path) -> std::io::Result<bool> {
 /// token-bearing config on every recovery.
 enum RestoreOutcome {
     Missing,
+    RejectedRateLimit(dione_rate_limiter::RateLimitConfigurationError),
     Applied {
         durability_error: Option<std::io::Error>,
     },
@@ -1910,6 +1970,24 @@ fn restore_from_lkg(config_path: &Utf8Path) -> std::io::Result<RestoreOutcome> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(RestoreOutcome::Missing),
         Err(e) => return Err(e),
     };
+    // Validate the exact bytes read from the retained LKG descriptor before any
+    // staging, quarantine, or canonical rename. A pre-upgrade LKG is not authority
+    // to publish settings that current composition must reject.
+    let text = std::str::from_utf8(&bytes).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "last-known-good config is not valid UTF-8",
+        )
+    })?;
+    let raw: Config = toml::from_str(text).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "last-known-good config is not valid TOML",
+        )
+    })?;
+    if let Err(error) = raw.rate_limit.validate() {
+        return Ok(RestoreOutcome::RejectedRateLimit(error));
+    }
     let good_tmp = unique_sibling(config_path, "good.tmp");
     let result = (|| -> std::io::Result<()> {
         {
@@ -2153,13 +2231,19 @@ impl ConfigRuntime {
                 }
             },
             Err(ConfigError::Parse(e)) => match self.recover_and_finish(&config_path, &e) {
-                Some(result) => result,
-                None => {
-                    let error_msg = format!("config parse error: {e}");
+                Ok(Some(result)) => result,
+                Err(error) => {
+                    let cached = (**LAST_VALID_CONFIG.load()).clone();
+                    tracing::warn!(%error, "last-known-good configuration candidate rejected");
+                    (cached, Some(error.to_string()))
+                }
+                Ok(None) => {
+                    let safe_error = sanitize_toml_error(&e);
+                    let error_msg = format!("config parse error: {safe_error}");
                     let cached = (**LAST_VALID_CONFIG.load()).clone();
                     tracing::warn!(
                         path = %config_path,
-                        error = %e,
+                        error = %safe_error,
                         "config parse error and no last-known-good to restore, continuing with last valid config"
                     );
                     (cached, Some(error_msg))
@@ -2176,6 +2260,8 @@ impl ConfigRuntime {
     /// Startup-time load with boot-brick-proof recovery.
     ///
     /// - Valid config → normal pipeline (and LKG maintenance).
+    /// - Parsed but invalid rate-limit settings → typed error, without disk/LKG/cache changes.
+    ///   The syntax recovery policy below is unchanged.
     /// - Missing file → today's first-boot path: write the default template
     ///   and proceed. This is NOT open decision #1.
     /// - Invalid config + LKG present → quarantine + restore + boot from the
@@ -2205,7 +2291,10 @@ impl ConfigRuntime {
             );
         }
         match try_load_config(&config_path) {
-            Ok((raw, snapshot)) => Ok(self.finish(&config_path, raw, None, Some(snapshot))),
+            Ok((raw, snapshot)) => {
+                raw.rate_limit.validate()?;
+                Ok(self.finish(&config_path, raw, None, Some(snapshot)))
+            }
             Err(ConfigError::NotFound { .. }) => match write_default_config(&config_path) {
                 Ok(applied) => {
                     let warning = default_durability_warning(&config_path, applied);
@@ -2222,7 +2311,7 @@ impl ConfigRuntime {
                 }
             },
             Err(ConfigError::Parse(e)) => {
-                if let Some(result) = self.recover_and_finish(&config_path, &e) {
+                if let Some(result) = self.recover_and_finish(&config_path, &e)? {
                     return Ok(result);
                 }
                 match no_lkg_policy {
@@ -2310,7 +2399,7 @@ impl ConfigRuntime {
             Ok(loaded) => loaded,
             Err(error) => {
                 let cached = (**LAST_VALID_CONFIG.load()).clone();
-                tracing::error!(%error, "failed to allocate configuration generation");
+                tracing::error!(%error, "configuration candidate rejected");
                 return (cached, Some(error.to_string()));
             }
         };
@@ -2328,23 +2417,28 @@ impl ConfigRuntime {
 
     /// Runtime disk repair: quarantine the invalid canonical, restore it
     /// from the LKG, and rerun the pipeline over the restored file. Returns
-    /// `None` when there is no LKG (or recovery itself failed) so the caller
-    /// falls back to its no-LKG behavior.
+    /// `Ok(None)` when there is no usable LKG (or recovery itself failed), so
+    /// syntax recovery follows the existing no-LKG policy. Semantic rate-limit
+    /// rejection is typed and occurs before recovery disk effects.
     fn recover_and_finish(
         &self,
         config_path: &Utf8Path,
         parse_error: &toml::de::Error,
-    ) -> Option<(LoadedConfig, Option<String>)> {
+    ) -> Result<
+        Option<(LoadedConfig, Option<String>)>,
+        dione_rate_limiter::RateLimitConfigurationError,
+    > {
         let durability_error = match restore_from_lkg(config_path) {
             Ok(RestoreOutcome::Applied { durability_error }) => durability_error,
-            Ok(RestoreOutcome::Missing) => return None,
+            Ok(RestoreOutcome::Missing) => return Ok(None),
+            Ok(RestoreOutcome::RejectedRateLimit(error)) => return Err(error),
             Err(e) => {
                 tracing::warn!(
                     path = %config_path,
                     error = %e,
                     "failed to restore config from last-known-good"
                 );
-                return None;
+                return Ok(None);
             }
         };
         tracing::warn!(
@@ -2360,7 +2454,7 @@ impl ConfigRuntime {
                     error = %e,
                     "restored last-known-good failed to load"
                 );
-                return None;
+                return Ok(None);
             }
         };
         // Sanitized one-liner: the recovery note is returned to callers
@@ -2381,7 +2475,12 @@ impl ConfigRuntime {
                 "; the restore rename applied but parent-directory durability is unknown: {error}"
             ));
         }
-        Some(self.finish(config_path, raw, Some(note), Some(snapshot)))
+        Ok(Some(self.finish(
+            config_path,
+            raw,
+            Some(note),
+            Some(snapshot),
+        )))
     }
 
     /// Applies one serialized tool mutation to the config: load the latest
@@ -2419,7 +2518,8 @@ impl ConfigRuntime {
 
                 // Validate and compose before touching disk. The sidecar is
                 // merged at the same boundary as reload.
-                let raw: Config = toml::from_str(&serialized)?;
+                let raw: Config = toml::from_str(&serialized)
+                    .map_err(|error| ConfigMutationDiagnostic::validation(&error))?;
                 let sidecar_entries = load_sidecar_for(&config_path, &raw)?;
                 let loaded = compose_candidate(raw, sidecar_entries, &NEXT_CONFIG_GENERATION)?;
                 let persisted = persist_canonical(&config_path, serialized.as_bytes())?;
@@ -2476,6 +2576,9 @@ pub async fn reload_config(state_dir: &Utf8Path) -> (LoadedConfig, Option<String
 /// Why a read-only config load failed. See [`load_config_readonly`].
 #[derive(Debug, Error)]
 pub enum ReadOnlyConfigError {
+    /// Parsed settings cannot safely be used by the runtime.
+    #[error(transparent)]
+    RateLimit(#[from] dione_rate_limiter::RateLimitConfigurationError),
     #[error(transparent)]
     /// The canonical configuration could not be loaded.
     Config(#[from] ConfigError),
@@ -2485,6 +2588,15 @@ pub enum ReadOnlyConfigError {
     #[error(transparent)]
     /// A fresh configuration generation could not be allocated.
     Generation(#[from] ConfigGenerationError),
+}
+
+impl From<ConfigCompositionError> for ReadOnlyConfigError {
+    fn from(error: ConfigCompositionError) -> Self {
+        match error {
+            ConfigCompositionError::Generation(error) => Self::Generation(error),
+            ConfigCompositionError::RateLimit(error) => Self::RateLimit(error),
+        }
+    }
 }
 
 /// Parses `config_path` (and its contradictionary sidecar) into a
@@ -2710,6 +2822,302 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn startup_rejects_semantically_invalid_lkg_before_recovery_disk_effects() {
+        let _cache = config_cache_guard();
+        for policy in [NoLkgPolicy::FailStartup, NoLkgPolicy::RegenerateDefaults] {
+            let (_dir, state) = temp_state_dir();
+            let path = state.join("config.toml");
+            fs::write(&path, "[rate_limit]\nenabled = true\nmax_tokens = 2\n").unwrap();
+            let runtime = ConfigRuntime::new(state.clone());
+            assert!(reload_now(&runtime).1.is_none());
+            let invalid_lkg = "[rate_limit]\nenabled = true\nmax_tokens = 0\n";
+            fs::write(lkg_path(&path), invalid_lkg).unwrap();
+            let malformed = "synthetic malformed {{{";
+            replace_file(&path, malformed.as_bytes());
+            let before = load_config(&state);
+            let counter = NEXT_CONFIG_GENERATION.load(Ordering::Relaxed);
+            assert!(
+                matches!(
+                    startup_load_now(&runtime, policy),
+                    Err(StartupConfigError::InvalidRateLimit(_))
+                ),
+                "semantic-invalid recovery candidate must be a typed startup error"
+            );
+            assert_eq!(
+                fs::read_to_string(&path).unwrap(),
+                malformed,
+                "invalid LKG must not replace canonical"
+            );
+            assert_eq!(fs::read_to_string(lkg_path(&path)).unwrap(), invalid_lkg);
+            assert!(!quarantine_path(&path).exists());
+            assert!(Arc::ptr_eq(&before, &load_config(&state)));
+            assert_eq!(NEXT_CONFIG_GENERATION.load(Ordering::Relaxed), counter);
+            let (_, warning) = reload_now(&runtime);
+            assert!(warning.unwrap().starts_with("rate_limit."));
+            assert_eq!(fs::read_to_string(&path).unwrap(), malformed);
+            assert_eq!(fs::read_to_string(lkg_path(&path)).unwrap(), invalid_lkg);
+            assert!(!quarantine_path(&path).exists());
+            assert!(Arc::ptr_eq(&before, &load_config(&state)));
+            assert_eq!(NEXT_CONFIG_GENERATION.load(Ordering::Relaxed), counter);
+        }
+    }
+
+    #[test]
+    fn rate_limit_invalid_semantics_preserve_disk_lkg_cache_and_next_budget() {
+        use dione_rate_limiter::{ChannelRef, ParticipantId, RateLimitDecision, RateLimiter};
+        let _cache = config_cache_guard();
+        let extreme = i64::MAX;
+        let mut invalid_settings = vec!["max_tokens = 0".to_owned()];
+        if std::time::Instant::now()
+            .checked_add(std::time::Duration::from_secs(extreme as u64))
+            .is_none()
+        {
+            invalid_settings.extend([
+                format!("window_secs = {extreme}"),
+                format!("cooldown_secs = {extreme}"),
+            ]);
+        } else {
+            // A huge but representable duration is valid, rather than an arbitrary policy limit.
+            for field in ["window_secs", "cooldown_secs"] {
+                let raw: Config = toml::from_str(&format!(
+                    "[rate_limit]\nenabled = true\n{field} = {extreme}\n"
+                ))
+                .unwrap();
+                assert!(LoadedConfig::try_from_raw(raw).is_ok());
+            }
+        }
+        for keep_lkg in [false, true] {
+            for setting in &invalid_settings {
+                let (_dir, state) = temp_state_dir();
+                let path = state.join("config.toml");
+                let valid = "[rate_limit]\nenabled = true\nmax_tokens = 2\nwindow_secs = 60\ncooldown_secs = 30\n";
+                fs::write(&path, valid).unwrap();
+                let runtime = ConfigRuntime::new(state.clone());
+                assert!(reload_now(&runtime).1.is_none());
+                if !keep_lkg {
+                    fs::remove_file(lkg_path(&path)).unwrap();
+                }
+                let lkg_before = fs::read(lkg_path(&path)).ok();
+                let before = load_config(&state);
+                let generation_before = NEXT_CONFIG_GENERATION.load(Ordering::Relaxed);
+                let mut subscription = subscribe_generation();
+                subscription.borrow_and_update();
+                let invalid = format!("[rate_limit]\nenabled = true\n{setting}\n");
+                replace_file(&path, invalid.as_bytes());
+                let (_, warning) = reload_now(&runtime);
+                assert!(warning.unwrap().starts_with("rate_limit."));
+                assert!(Arc::ptr_eq(&before, &load_config(&state)));
+                assert_eq!(
+                    NEXT_CONFIG_GENERATION.load(Ordering::Relaxed),
+                    generation_before
+                );
+                assert!(!subscription.has_changed().unwrap());
+                assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
+                assert_eq!(fs::read(lkg_path(&path)).ok(), lkg_before);
+                assert!(!quarantine_path(&path).exists());
+                assert!(matches!(
+                    startup_load_now(&runtime, NoLkgPolicy::FailStartup),
+                    Err(StartupConfigError::InvalidRateLimit(_))
+                ));
+                assert!(matches!(
+                    load_config_readonly(&path),
+                    Err(ReadOnlyConfigError::RateLimit(_))
+                ));
+                let mutation = single_thread_rt()
+                    .block_on(runtime.mutate(|editor| editor.add_to_allow_from("424242")));
+                assert!(mutation.is_err());
+                assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
+                assert_eq!(fs::read(lkg_path(&path)).ok(), lkg_before);
+                assert!(Arc::ptr_eq(&before, &load_config(&state)));
+                assert_eq!(
+                    NEXT_CONFIG_GENERATION.load(Ordering::Relaxed),
+                    generation_before
+                );
+                let mut limiter =
+                    RateLimiter::new(load_config(&state).rate_limit_runtime().clone());
+                assert!(matches!(
+                    limiter.check_message(
+                        &ParticipantId::new("fixture"),
+                        &ChannelRef::new("fixture"),
+                        &[],
+                        std::time::Instant::now()
+                    ),
+                    RateLimitDecision::Allowed { remaining: 1, .. }
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn rate_limit_disabled_and_zero_duration_semantics_are_preserved() {
+        for enabled in [false, true] {
+            let raw: Config = toml::from_str(&format!("[rate_limit]\nenabled = {enabled}\nmax_tokens = 1\nwindow_secs = 0\ncooldown_secs = 0\n")).unwrap();
+            assert!(LoadedConfig::try_from_raw(raw).is_ok());
+        }
+        let raw: Config = toml::from_str("[rate_limit]\nenabled = false\nmax_tokens = 0\nwindow_secs = 9223372036854775807\ncooldown_secs = 9223372036854775807\n").unwrap();
+        assert!(LoadedConfig::try_from_raw(raw).is_ok());
+    }
+
+    #[test]
+    fn rate_limit_boundary_rejects_enabled_zero_before_generation() {
+        let counter = AtomicU64::new(17);
+        let raw: Config = toml::from_str("[rate_limit]\nenabled = true\nmax_tokens = 0\n").unwrap();
+        assert!(
+            LoadedConfig::try_from_raw_with_counter(raw, &counter).is_err(),
+            "enabled zero-token config must be rejected before publication"
+        );
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            17,
+            "invalid candidate cannot consume generation"
+        );
+    }
+
+    #[test]
+    fn invalid_evidence_marker_version_fails_fresh_startup_without_lkg() {
+        let _cache = config_cache_guard();
+        let (_dir, state_dir) = temp_state_dir();
+        fs::write(
+            state_dir.join("config.toml"),
+            "[delivery]\nevidence_marker_version = \"v4\"\n",
+        )
+        .unwrap();
+        let error =
+            startup_load_now(&ConfigRuntime::new(state_dir), NoLkgPolicy::FailStartup).unwrap_err();
+        let StartupConfigError::InvalidConfigNoLkg { parse_error, .. } = error else {
+            panic!("expected syntax failure")
+        };
+        assert!(parse_error.starts_with("TOML parse error"));
+    }
+
+    #[test]
+    fn evidence_marker_version_reload_preserves_snapshots_and_recovers_invalid_pin() {
+        let _cache = config_cache_guard();
+        let (_dir, state_dir) = temp_state_dir();
+        let path = state_dir.join("config.toml");
+        let runtime = ConfigRuntime::new(state_dir.clone());
+        let mut snapshots = Vec::new();
+        for (name, expected) in [
+            ("v2", EvidenceMarkerVersion::V2),
+            ("v3", EvidenceMarkerVersion::V3),
+            ("v2", EvidenceMarkerVersion::V2),
+        ] {
+            fs::write(&path, format!("[delivery]\nevidence_markers_enabled = true\nevidence_marker_version = {name:?}\n")).unwrap();
+            let (snapshot, error) = reload_now(&runtime);
+            assert!(error.is_none(), "{error:?}");
+            assert_eq!(snapshot.delivery.evidence_marker_version, expected);
+            snapshots.push(snapshot);
+        }
+        assert_eq!(
+            snapshots[0].delivery.evidence_marker_version,
+            EvidenceMarkerVersion::V2
+        );
+        assert_eq!(
+            snapshots[1].delivery.evidence_marker_version,
+            EvidenceMarkerVersion::V3
+        );
+        fs::write(&path, "[delivery]\nevidence_marker_version = \"v4\"\n").unwrap();
+        let (recovered, error) = reload_now(&runtime);
+        assert!(error.is_some());
+        assert_eq!(
+            recovered.delivery.evidence_marker_version,
+            EvidenceMarkerVersion::V2
+        );
+        assert_eq!(
+            try_load_config(&path)
+                .unwrap()
+                .0
+                .delivery
+                .evidence_marker_version,
+            EvidenceMarkerVersion::V2
+        );
+        let fresh_runtime = ConfigRuntime::new(state_dir);
+        assert_eq!(
+            reload_now(&fresh_runtime)
+                .0
+                .delivery
+                .evidence_marker_version,
+            EvidenceMarkerVersion::V2
+        );
+    }
+
+    #[test]
+    fn evidence_marker_version_is_a_concrete_validated_pin() {
+        assert_eq!(
+            Config::default().delivery.evidence_marker_version,
+            EvidenceMarkerVersion::V3
+        );
+        assert_eq!(
+            toml::from_str::<Config>("[delivery]")
+                .unwrap()
+                .delivery
+                .evidence_marker_version,
+            EvidenceMarkerVersion::V3
+        );
+        for enabled in [false, true] {
+            for (name, expected) in [
+                ("v2", EvidenceMarkerVersion::V2),
+                ("v3", EvidenceMarkerVersion::V3),
+            ] {
+                let text = format!(
+                    "[delivery]\nevidence_markers_enabled = {enabled}\nevidence_marker_version = {name:?}\n"
+                );
+                let config: Config = toml::from_str(&text).unwrap();
+                assert_eq!(config.delivery.evidence_marker_version, expected);
+                assert_eq!(config.delivery.evidence_markers_enabled, enabled);
+                assert_eq!(
+                    LoadedConfig::from_raw(config)
+                        .delivery
+                        .evidence_marker_version,
+                    expected
+                );
+            }
+        }
+        for invalid in [
+            "\"v1\"",
+            "\"v4\"",
+            "\"current\"",
+            "\"latest\"",
+            "\"V3\"",
+            "4",
+            "true",
+            "[]",
+        ] {
+            let error = toml::from_str::<Config>(&format!("[delivery]\nevidence_markers_enabled = false\nevidence_marker_version = {invalid}\n")).unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains("evidence_marker_version"), "{message}");
+            assert!(
+                message.contains("v2") && message.contains("v3"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn fresh_default_config_omits_operator_marker_pin_but_loads_v3_disabled() {
+        let _cache = config_cache_guard();
+        let (_dir, state_dir) = temp_state_dir();
+        let path = state_dir.join("config.toml");
+        assert!(!path.exists());
+
+        write_default_config(&path).unwrap();
+
+        let written = fs::read_to_string(&path).unwrap();
+        let raw: toml::Value = toml::from_str(&written).unwrap();
+        let delivery = raw["delivery"].as_table().unwrap();
+        assert!(
+            !delivery.contains_key("evidence_marker_version"),
+            "a generated default must not masquerade as an operator-selected format pin"
+        );
+        let (loaded, _) = try_load_config(&path).unwrap();
+        assert_eq!(
+            loaded.delivery.evidence_marker_version,
+            EvidenceMarkerVersion::V3
+        );
+        assert!(!loaded.delivery.evidence_markers_enabled);
+    }
+
+    #[test]
     fn config_max_pending_defaults_and_parses() {
         let defaults = ContradictionaryConfig::default();
         assert_eq!(defaults.max_pending, 32);
@@ -2719,10 +3127,98 @@ mod tests {
         assert_eq!(parsed.max_pending, 4);
     }
 
+    #[test]
+    fn unsupported_evidence_marker_pin_is_rejected_even_when_disabled() {
+        for pin in [
+            "v1",
+            "v4",
+            "current",
+            "latest",
+            "V3",
+            "SYNTHETIC_INVALID_PIN_CANARY",
+        ] {
+            let text = format!(
+                "[delivery]\nevidence_markers_enabled = false\nevidence_marker_version = {pin:?}\n"
+            );
+            assert!(
+                toml::from_str::<Config>(&text).is_err(),
+                "unsupported outbound marker pin must not be ignored"
+            );
+        }
+    }
+
     fn temp_state_dir() -> (TempDir, Utf8PathBuf) {
         let dir = TempDir::new().unwrap();
         let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         (dir, path)
+    }
+
+    #[test]
+    fn sanitizer_excludes_semantic_values_and_untrusted_custom_messages() {
+        let canary = "SYNTHETIC_CONFIG_DIAGNOSTIC_CANARY";
+        for key in ["text_chunk_limit", "reply_to_mode"] {
+            let error = toml::from_str::<Config>(&format!("[delivery]\n{key} = \"{canary}\"\n"))
+                .unwrap_err();
+            assert!(
+                error.message().contains(canary),
+                "real serde failure must exercise the credential-bearing message"
+            );
+            let safe = sanitize_toml_error(&error);
+            assert!(safe.starts_with("TOML parse error at line 2, column "));
+            assert!(
+                !safe.contains(canary),
+                "semantic diagnostic must omit the unexpected value"
+            );
+        }
+        let forged: toml::de::Error =
+            serde::de::Error::custom(format!("TOML parse error at line {canary}, column 1"));
+        assert_eq!(sanitize_toml_error(&forged), "TOML parse error");
+    }
+
+    #[test]
+    fn semantic_diagnostics_omit_values_across_startup_and_recovery() {
+        let _cache = config_cache_guard();
+        let canary = "SYNTHETIC_CONFIG_DIAGNOSTIC_CANARY";
+        for key in ["text_chunk_limit", "reply_to_mode"] {
+            let invalid = format!("[delivery]\n{key} = \"{canary}\"\n");
+            for regenerate in [false, true] {
+                let (_directory, state) = temp_state_dir();
+                fs::write(state.join("config.toml"), &invalid).unwrap();
+                let runtime = ConfigRuntime::new(state);
+                let diagnostic = if regenerate {
+                    startup_load_now(&runtime, NoLkgPolicy::RegenerateDefaults)
+                        .unwrap()
+                        .1
+                        .unwrap()
+                } else {
+                    let StartupConfigError::InvalidConfigNoLkg { parse_error, .. } =
+                        startup_load_now(&runtime, NoLkgPolicy::FailStartup).unwrap_err()
+                    else {
+                        panic!("expected syntax failure")
+                    };
+                    parse_error
+                };
+                assert!(diagnostic.contains("line 2, column "));
+                assert!(
+                    !diagnostic.contains(canary),
+                    "startup semantic diagnostic must omit values"
+                );
+            }
+            let (_directory, state) = temp_state_dir();
+            let path = state.join("config.toml");
+            fs::write(&path, VALID_DROP).unwrap();
+            let runtime = ConfigRuntime::new(state);
+            assert!(reload_now(&runtime).1.is_none());
+            replace_file(&path, invalid.as_bytes());
+            let note = reload_now(&runtime).1.unwrap();
+            assert!(note.contains("canonical restored from last-known-good"));
+            assert!(note.contains("line 2, column "));
+            assert!(
+                !note.contains(canary),
+                "recovery semantic diagnostic must omit values"
+            );
+            assert_eq!(fs::read_to_string(path).unwrap(), VALID_DROP);
+        }
     }
 
     #[test]
@@ -2743,7 +3239,7 @@ mod tests {
 
         assert!(matches!(
             build_and_store_raw_config(Config::default(), &counter, &cache),
-            Err(ConfigGenerationError)
+            Err(ConfigCompositionError::Generation(ConfigGenerationError))
         ));
         let after = cache.load_full();
         assert!(Arc::ptr_eq(&before, &after));
@@ -4350,7 +4846,9 @@ mod tests {
             NoLkgPolicy::FailStartup,
         )
         .expect_err("bad main + no LKG must fail startup");
-        let StartupConfigError::InvalidConfigNoLkg { parse_error, .. } = error;
+        let StartupConfigError::InvalidConfigNoLkg { parse_error, .. } = error else {
+            panic!("expected syntax failure")
+        };
         assert!(
             !parse_error.contains('\n'),
             "parse_error must be one line, got: {parse_error:?}"

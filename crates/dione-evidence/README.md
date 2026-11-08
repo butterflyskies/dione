@@ -25,3 +25,7 @@ unchanged. The member declares native TLS explicitly so standalone builds retain
 Dione's OpenSSL configuration.
 
 This package uses Rust 1.98 or newer and the MIT OR Apache-2.0 license.
+
+Public outbound parser, formatter and metadata APIs require the shared typed
+`EvidenceMarkerVersion` (V2 or V3). Its default is V3; inbound decoding remains
+independent and preserves the version actually received.

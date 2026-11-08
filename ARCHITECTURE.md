@@ -63,8 +63,10 @@ existing nameplate/PronounDB clients. Dione keeps service construction, settings
 bot/human routing, and current exclusion decisions. The clients share the formatter
 directly and have no messages or attention dependency.
 The public `dione-harness` package owns one-adapter delivery/protocol facets and
-bounded shared JSON-line output. Dione retains provider factories, adapters,
-sessions, request-origin authorization, and private-control registration.
+bounded shared JSON-line output. The `dione-harness-runtime` package owns provider
+selection and session lifecycle, constructing adapters from `dione-omp`,
+`dione-codex`, and `dione-claude`. Dione composes startup, native request-origin
+authority, and private-control registration around those owners.
 The public `dione-presentation` package owns retained delivery projection and
 compact batch formatting. Dione retains provider envelopes, legacy scope validation,
 and native event conversion. Projection checks no current authorization.
@@ -345,11 +347,12 @@ one-shot send path with an explicit expected bot identity, described in the
 
 [presence owner](crates/dione-discord-presence/src/lib.rs) owns typed requests, the shared presence
 authority, queue acceptance, and reconnect replay. [typing.rs](src/discord/typing.rs)
-authorizes and sends typing notifications. [ids.rs](src/discord/ids.rs) validates
-external Discord IDs.
-Production gateway code uses these Discord modules directly. MCP retains
-argument parsing, schemas, and response envelopes. The public Rust paths are
-`discord::{ids, messaging}`; the former MCP messaging and ID aliases were removed.
+authorizes and sends typing notifications. The public
+[`dione-discord-identities`](crates/dione-discord-identities/src/lib.rs) owner validates
+external Discord IDs through `dione_discord_identities::Snowflake`.
+Production gateway code uses the Discord owners directly. MCP retains argument
+parsing, schemas, and response envelopes. Application messaging remains at
+`discord::messaging`; the former MCP messaging and ID aliases were removed.
 The former
 `mcp::tools::bot_state` alias was removed in 0.53.0.
 

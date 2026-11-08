@@ -110,6 +110,8 @@ enum ToolExposure {
 pub struct ToolDiscoveryContext {
     /// Whether the current caller enables evidence-marker presentation.
     pub evidence_markers_enabled: bool,
+    /// Concrete outbound evidence grammar supplied from the same config snapshot.
+    pub evidence_marker_version: dione_evidence::EvidenceMarkerVersion,
 }
 
 /// Owner-provided discovery presentation and borrowed asynchronous execution.

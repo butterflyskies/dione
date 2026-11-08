@@ -31,7 +31,7 @@ pub async fn no_rly_stats(
             Some(o) => Some(o),
             None => {
                 return json!({
-                    "error": format!("invalid outcome: {s}; must be one of: released, rephrased, expired")
+                    "error": format!("invalid outcome: {s}; must be one of: released, rephrased, expired, unknown")
                 });
             }
         },

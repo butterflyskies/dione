@@ -134,6 +134,7 @@ impl DiscordPublicationProvider {
                 | MessagingErrorKind::CoordinationUnavailable(_)
                 | MessagingErrorKind::CoordinationBusy { .. }
                 | MessagingErrorKind::Delivery(_)
+                | MessagingErrorKind::DeliveryUnknown { .. }
                 | MessagingErrorKind::EmptyRephrase
                 | MessagingErrorKind::Handle(_)
                 | MessagingErrorKind::Discord(_)

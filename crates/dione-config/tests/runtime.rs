@@ -158,3 +158,23 @@ fn settings_are_exhaustive_and_identity_intent_remains_read_only() {
     assert!(policy.raw_had_identity_entries());
     assert!(policy.has_identity_filter());
 }
+
+#[test]
+fn marker_version_can_be_named_from_public_config_root() {
+    use dione_config::EvidenceMarkerVersion;
+    assert_eq!(
+        Config::default().delivery.evidence_marker_version,
+        EvidenceMarkerVersion::V3
+    );
+    for (literal, version) in [
+        ("v2", EvidenceMarkerVersion::V2),
+        ("v3", EvidenceMarkerVersion::V3),
+    ] {
+        let _: dione_evidence::EvidenceMarkerVersion = version;
+        let parsed: Config = toml::from_str(&format!(
+            "[delivery]\nevidence_marker_version = {literal:?}\n"
+        ))
+        .unwrap();
+        assert_eq!(parsed.delivery.evidence_marker_version, version);
+    }
+}

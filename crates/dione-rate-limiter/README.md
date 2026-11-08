@@ -17,3 +17,12 @@ state and remaining-token fields remain public.
 
 This crate is part of the Dione workspace and uses the same MIT OR Apache-2.0
 license. Its existing unit and property tests move with the implementation.
+
+Enabled scope validation returns a typed error for zero tokens or a deadline
+that is not representable at the supplied monotonic time. `check_message` and
+`TokenBucket::check` report `Unavailable` before changing bucket state; callers
+must fail closed for that decision. Disabled checks remain unrestricted and
+zero window/cooldown durations keep their immediate-transition behavior. No
+duration is clamped. Direct `TokenBucket::new` retains its documented panic for
+a zero token budget. A duration accepted earlier is checked again at each check,
+since representability depends on the platform and supplied time.
