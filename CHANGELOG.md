@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.130.19]
+
+- Allow bounded introspection fixture exchanges under CI load without changing production deadlines or assertions.
+
 ## [0.130.18]
 
 - Replace remaining recorded nameplate participant fixtures with invented values.
