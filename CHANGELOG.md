@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.132.1] - 2026-11-08
+
+### Fixed
+
+- Keep release verification's literal archive count and tokenless job boundaries
+  aligned with the new typing owner.
+
 ## [0.132.0] - 2026-11-08
 
 ### Changed

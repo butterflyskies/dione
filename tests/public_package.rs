@@ -890,13 +890,17 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         .split_once("\n  reconcile-discord-scheduling:")
         .unwrap();
     let (reconcile_discord_scheduling, remaining) =
-        remaining.split_once("\n  publish-crate:").unwrap();
+        remaining.split_once("\n  publish-discord-typing:").unwrap();
+    let (_, remaining) = remaining
+        .split_once("\n  reconcile-discord-typing:")
+        .unwrap();
+    let (reconcile_discord_typing, remaining) = remaining.split_once("\n  publish-crate:").unwrap();
     let (publish_dione, reconcile_dione) = remaining.split_once("\n  reconcile-dione:").unwrap();
 
     assert_eq!(
         workflow.matches("scripts/package-preflight.sh").count(),
         workflow.matches("cargo package -p").count()
-            + 44 * workflow.matches("cargo package --workspace").count(),
+            + 45 * workflow.matches("cargo package --workspace").count(),
         "every workspace archive must cross the privacy verifier"
     );
     for job in [
@@ -944,6 +948,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         reconcile_oneshot,
         reconcile_harness_runtime,
         reconcile_discord_scheduling,
+        reconcile_discord_typing,
         reconcile_dione,
     ] {
         assert!(!job.contains("CARGO_REGISTRY_TOKEN"));
