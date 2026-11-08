@@ -1303,7 +1303,10 @@ mod tests {
         options: &RecallOptions,
     ) -> (BellEvaluation, Arc<MockProvider>) {
         let mock = MockProvider::new(ConnectOutcome::Ready, response);
-        let providers = vec![(provider("fixture-orbit-27"), mock.clone() as Arc<dyn Provider>)];
+        let providers = vec![(
+            provider("fixture-orbit-27"),
+            mock.clone() as Arc<dyn Provider>,
+        )];
         (
             evaluate_providers("query text", options, &providers).await,
             mock,
@@ -1480,7 +1483,10 @@ mod tests {
             );
             let bad = MockProvider::new(connect, response);
             let providers = vec![
-                (provider("fixture-orbit-27"), good.clone() as Arc<dyn Provider>),
+                (
+                    provider("fixture-orbit-27"),
+                    good.clone() as Arc<dyn Provider>,
+                ),
                 (provider("other"), bad.clone() as Arc<dyn Provider>),
             ];
             let result = evaluate_providers(
