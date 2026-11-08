@@ -41,9 +41,11 @@ async fn lifecycle_backoff_and_literal_status_shape() {
 async fn disabled_notices_consume_events_and_cooldown_coalesces_recovery() {
     let dir = tempfile::tempdir().unwrap();
     let health = controller(&dir, AttentionHealth::default());
-    let mut config = AttentionConfig::default();
-    config.notices = NoticeMode::Off;
-    config.notice_cooldown_ms = 100;
+    let mut config = AttentionConfig {
+        notices: NoticeMode::Off,
+        notice_cooldown_ms: 100,
+        ..AttentionConfig::default()
+    };
     health.failed("fixture outage".into(), 20);
     assert_eq!(health.propose_notice(&config).unwrap(), None);
     config.notices = NoticeMode::FailuresAndRecovery;
