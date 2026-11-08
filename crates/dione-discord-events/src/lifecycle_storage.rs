@@ -3,9 +3,16 @@
 //! Callers retain their private lineage and current policy checks inside a single
 //! borrowed storage transaction. This module never compares or constructs lineage.
 
-use serenity::model::{Timestamp, id::{ChannelId, MessageId, UserId}};
+use serenity::model::{
+    Timestamp,
+    id::{ChannelId, MessageId, UserId},
+};
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, sync::Mutex, time::{Duration, Instant}};
+use std::{
+    collections::HashMap,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 /// Default active-record retention.
 pub const ACTIVE_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
@@ -22,8 +29,12 @@ pub struct StorageLimits {
 }
 impl Default for StorageLimits {
     fn default() -> Self {
-        Self { active_retention: ACTIVE_RETENTION, tombstone_retention: TOMBSTONE_RETENTION,
-            max_active: 16_384, max_tombstones: 16_384 }
+        Self {
+            active_retention: ACTIVE_RETENTION,
+            tombstone_retention: TOMBSTONE_RETENTION,
+            max_active: 16_384,
+            max_tombstones: 16_384,
+        }
     }
 }
 impl StorageLimits {
@@ -43,9 +54,13 @@ pub struct StorageError {
     kind: StorageErrorKind,
 }
 impl StorageError {
-    fn new(kind: StorageErrorKind) -> Self { Self { kind } }
+    fn new(kind: StorageErrorKind) -> Self {
+        Self { kind }
+    }
     /// Borrows the failure category without exposing mutable error state.
-    pub fn kind(&self) -> &StorageErrorKind { &self.kind }
+    pub fn kind(&self) -> &StorageErrorKind {
+        &self.kind
+    }
 }
 /// Storage failure category, independent of application permission decisions.
 #[derive(Debug, thiserror::Error)]
@@ -59,8 +74,10 @@ pub enum StorageErrorKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ContentHash([u8;32]);
-fn hash_content(content: &str) -> ContentHash { ContentHash(Sha256::digest(content.as_bytes()).into()) }
+struct ContentHash([u8; 32]);
+fn hash_content(content: &str) -> ContentHash {
+    ContentHash(Sha256::digest(content.as_bytes()).into())
+}
 
 struct Record<C, P> {
     channel_id: ChannelId,
@@ -86,61 +103,108 @@ impl<C: Copy + Eq> Tombstone<C> {
     }
 }
 struct State<C, P> {
-    active: HashMap<MessageId, Record<C,P>>,
+    active: HashMap<MessageId, Record<C, P>>,
     tombstones: HashMap<MessageId, Tombstone<C>>,
     next_admission_order: u64,
 }
-impl<C, P> Default for State<C,P> {
-    fn default() -> Self { Self { active: HashMap::new(), tombstones: HashMap::new(), next_admission_order: 1 } }
+impl<C, P> Default for State<C, P> {
+    fn default() -> Self {
+        Self {
+            active: HashMap::new(),
+            tombstones: HashMap::new(),
+            next_admission_order: 1,
+        }
+    }
 }
 
 /// Serialized bounded storage with opaque caller-owned context and lineage.
 ///
 /// No equality, clone or policy strategy is required for the lineage payload.
 pub struct LifecycleStorage<C, P> {
-    state: Mutex<State<C,P>>,
+    state: Mutex<State<C, P>>,
     limits: StorageLimits,
 }
-impl<C: Copy + Eq, P> LifecycleStorage<C,P> {
+impl<C: Copy + Eq, P> LifecycleStorage<C, P> {
     /// Starts empty storage without reading a clock or constructing application proof.
     pub fn new(limits: StorageLimits) -> Self {
-        Self { state: Mutex::new(State::default()), limits }
+        Self {
+            state: Mutex::new(State::default()),
+            limits,
+        }
     }
     /// Runs a synchronous storage operation under the sole state mutex.
     ///
     /// The fixed result type cannot borrow a record or guard from this operation.
-    pub fn with_locked<R>(&self,
-        operation: impl for<'a> FnOnce(&mut LockedLedger<'a,C,P>) -> R,
-    ) -> Result<R,StorageError> {
-        let mut state = self.state.lock().map_err(|_| StorageError::new(StorageErrorKind::LockPoisoned))?;
-        let mut locked = LockedLedger { state: &mut state, limits: &self.limits };
+    pub fn with_locked<R>(
+        &self,
+        operation: impl for<'a> FnOnce(&mut LockedLedger<'a, C, P>) -> R,
+    ) -> Result<R, StorageError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| StorageError::new(StorageErrorKind::LockPoisoned))?;
+        let mut locked = LockedLedger {
+            state: &mut state,
+            limits: &self.limits,
+        };
         Ok(operation(&mut locked))
     }
 }
 
 /// Borrowed storage operations while the sole mutex remains held.
-pub struct LockedLedger<'a,C,P> { state: &'a mut State<C,P>, limits: &'a StorageLimits }
-impl<C: Copy + Eq, P> LockedLedger<'_,C,P> {
+pub struct LockedLedger<'a, C, P> {
+    state: &'a mut State<C, P>,
+    limits: &'a StorageLimits,
+}
+impl<C: Copy + Eq, P> LockedLedger<'_, C, P> {
     /// Sweeps expired metadata once using the caller's correctly positioned clock sample.
-    pub fn transitions(&mut self, now: Instant) -> Transition<'_,C,P> {
-        cleanup(self.state,self.limits,now);
-        Transition { state: self.state, limits: self.limits, now }
+    pub fn transitions(&mut self, now: Instant) -> Transition<'_, C, P> {
+        cleanup(self.state, self.limits, now);
+        Transition {
+            state: self.state,
+            limits: self.limits,
+            now,
+        }
     }
     /// Inspects retained metadata without cleanup or any claim of current authority.
-    pub fn inspect_retained(&self, id: MessageId) -> Option<RecordView<'_,C,P>> {
-        self.state.active.get(&id).map(|record| RecordView { record })
+    pub fn inspect_retained(&self, id: MessageId) -> Option<RecordView<'_, C, P>> {
+        self.state
+            .active
+            .get(&id)
+            .map(|record| RecordView { record })
     }
     /// Applies only the requested record's legacy expiry check, without a global sweep.
-    pub fn verify_target(&mut self, now: Instant, id: MessageId, claimed_channel: ChannelId) -> Verification {
-        if self.state.active.get(&id).is_some_and(|record| record.expires_at <= now) {
+    pub fn verify_target(
+        &mut self,
+        now: Instant,
+        id: MessageId,
+        claimed_channel: ChannelId,
+    ) -> Verification {
+        if self
+            .state
+            .active
+            .get(&id)
+            .is_some_and(|record| record.expires_at <= now)
+        {
             if let Some(record) = self.state.active.remove(&id) {
-                insert_tombstone(self.state,self.limits,id,record.channel_id,record.context,true,record.expires_at,now);
+                insert_tombstone(
+                    self.state,
+                    self.limits,
+                    id,
+                    record.channel_id,
+                    record.context,
+                    true,
+                    record.expires_at,
+                    now,
+                );
             }
             Verification::Expired
         } else {
             match self.state.active.get(&id) {
                 None => Verification::Unknown,
-                Some(record) if record.channel_id == claimed_channel => Verification::Found(record.channel_id),
+                Some(record) if record.channel_id == claimed_channel => {
+                    Verification::Found(record.channel_id)
+                }
                 Some(record) => Verification::ChannelMismatch(record.channel_id),
             }
         }
@@ -161,109 +225,232 @@ pub enum Verification {
 }
 
 /// Transition operations after cleanup, borrowing the same held storage mutex.
-pub struct Transition<'a,C,P> { state: &'a mut State<C,P>, limits: &'a StorageLimits, now: Instant }
-impl<C: Copy + Eq, P> Transition<'_,C,P> {
+pub struct Transition<'a, C, P> {
+    state: &'a mut State<C, P>,
+    limits: &'a StorageLimits,
+    now: Instant,
+}
+impl<C: Copy + Eq, P> Transition<'_, C, P> {
     /// Resolves the existing tombstone and record before a possible insertion.
-    pub fn create_entry(&mut self,id:MessageId,channel:ChannelId,context:C,content:&str,version:Timestamp) -> CreateEntry<'_,C,P> {
-        if let Some(tombstone)=self.state.tombstones.get(&id) {
-            if tombstone.binding_matches(channel,context) || tombstone.lineage_confirmed { return CreateEntry::Blocked; }
+    pub fn create_entry(
+        &mut self,
+        id: MessageId,
+        channel: ChannelId,
+        context: C,
+        content: &str,
+        version: Timestamp,
+    ) -> CreateEntry<'_, C, P> {
+        if let Some(tombstone) = self.state.tombstones.get(&id) {
+            if tombstone.binding_matches(channel, context) || tombstone.lineage_confirmed {
+                return CreateEntry::Blocked;
+            }
             self.state.tombstones.remove(&id);
         }
-        let content_hash=hash_content(content);
+        let content_hash = hash_content(content);
         if self.state.active.contains_key(&id) {
             // This map is private and the mutex is held; the entry cannot disappear.
-            let record=&self.state.active[&id];
-            return CreateEntry::Existing { record: RecordView { record },
-                content_and_version_match: record.content_hash==content_hash && record.last_version==version };
+            let record = &self.state.active[&id];
+            return CreateEntry::Existing {
+                record: RecordView { record },
+                content_and_version_match: record.content_hash == content_hash
+                    && record.last_version == version,
+            };
         }
-        CreateEntry::Vacant(VacantCreate { state:self.state,limits:self.limits,now:self.now,id,channel,context,content_hash,version })
+        CreateEntry::Vacant(VacantCreate {
+            state: self.state,
+            limits: self.limits,
+            now: self.now,
+            id,
+            channel,
+            context,
+            content_hash,
+            version,
+        })
     }
     /// Borrows the real record for caller-private binding and policy checks before applying an edit.
-    pub fn edit_entry(&mut self,id:MessageId) -> Option<EditEntry<'_,C,P>> {
-        self.state.active.get_mut(&id).map(|record| EditEntry { record })
+    pub fn edit_entry(&mut self, id: MessageId) -> Option<EditEntry<'_, C, P>> {
+        self.state
+            .active
+            .get_mut(&id)
+            .map(|record| EditEntry { record })
     }
     /// Removes one exact-bound record or records an unknown deletion tombstone.
-    pub fn delete(&mut self,id:MessageId,channel:ChannelId,context:C) -> DeleteOutcome<C,P> {
-        let Some(record)=self.state.active.get(&id) else {
-            if let Some(tombstone)=self.state.tombstones.get(&id) {
-                return if tombstone.binding_matches(channel,context) { DeleteOutcome::Duplicate } else { DeleteOutcome::Rejected };
+    pub fn delete(&mut self, id: MessageId, channel: ChannelId, context: C) -> DeleteOutcome<C, P> {
+        let Some(record) = self.state.active.get(&id) else {
+            if let Some(tombstone) = self.state.tombstones.get(&id) {
+                return if tombstone.binding_matches(channel, context) {
+                    DeleteOutcome::Duplicate
+                } else {
+                    DeleteOutcome::Rejected
+                };
             }
-            insert_tombstone(self.state,self.limits,id,channel,context,false,self.now,self.now);
+            insert_tombstone(
+                self.state,
+                self.limits,
+                id,
+                channel,
+                context,
+                false,
+                self.now,
+                self.now,
+            );
             return DeleteOutcome::Rejected;
         };
-        if record.channel_id!=channel || record.context!=context { return DeleteOutcome::Rejected; }
+        if record.channel_id != channel || record.context != context {
+            return DeleteOutcome::Rejected;
+        }
         match self.state.active.remove(&id) {
             Some(record) => {
-                insert_tombstone(self.state,self.limits,id,record.channel_id,record.context,true,self.now,self.now);
+                insert_tombstone(
+                    self.state,
+                    self.limits,
+                    id,
+                    record.channel_id,
+                    record.context,
+                    true,
+                    self.now,
+                    self.now,
+                );
                 DeleteOutcome::Removed(RemovedRecord { record })
             }
             None => DeleteOutcome::Unavailable,
         }
     }
     /// Looks up cleaned metadata, retaining the distinction between terminal and unknown.
-    pub fn lookup(&self,id:MessageId) -> Lookup<'_,C,P> {
-        if self.state.tombstones.contains_key(&id) { Lookup::Terminal }
-        else { self.state.active.get(&id).map_or(Lookup::Missing,|record| Lookup::Active(RecordView { record })) }
+    pub fn lookup(&self, id: MessageId) -> Lookup<'_, C, P> {
+        if self.state.tombstones.contains_key(&id) {
+            Lookup::Terminal
+        } else {
+            self.state
+                .active
+                .get(&id)
+                .map_or(Lookup::Missing, |record| {
+                    Lookup::Active(RecordView { record })
+                })
+        }
     }
 }
 
 /// Existing metadata or a private insertion slot. No variant grants admission authority.
-pub enum CreateEntry<'a,C,P> {
+pub enum CreateEntry<'a, C, P> {
     /// A tombstone blocks the proposed create.
     Blocked,
     /// The caller must compare its own binding and opaque lineage.
     Existing {
         /// The actual retained record under the held mutex.
-        record: RecordView<'a,C,P>,
+        record: RecordView<'a, C, P>,
         /// Exact content hash and timestamp comparison only.
         content_and_version_match: bool,
     },
     /// A slot that alone can allocate order and perform capacity eviction/insertion.
-    Vacant(VacantCreate<'a,C,P>),
+    Vacant(VacantCreate<'a, C, P>),
 }
 /// A private-state insertion opportunity under the original transaction borrow.
-pub struct VacantCreate<'a,C,P> {
-    state:&'a mut State<C,P>,limits:&'a StorageLimits,now:Instant,id:MessageId,
-    channel:ChannelId,context:C,content_hash:ContentHash,version:Timestamp,
+pub struct VacantCreate<'a, C, P> {
+    state: &'a mut State<C, P>,
+    limits: &'a StorageLimits,
+    now: Instant,
+    id: MessageId,
+    channel: ChannelId,
+    context: C,
+    content_hash: ContentHash,
+    version: Timestamp,
 }
-impl<'a,C:Copy+Eq,P> VacantCreate<'a,C,P> {
+impl<'a, C: Copy + Eq, P> VacantCreate<'a, C, P> {
     /// Checks sequence exhaustion before eviction, then inserts ordinary metadata.
-    pub fn insert(self,actor:UserId,parent:Option<ChannelId>,payload:P) -> Result<RecordView<'a,C,P>,StorageError> {
-        let next=self.state.next_admission_order.checked_add(1)
-            .ok_or_else(||StorageError::new(StorageErrorKind::SequenceExhausted))?;
-        let admission_order=self.state.next_admission_order;
-        self.state.next_admission_order=next;
-        if self.state.active.len()>=self.limits.max_active
-            && let Some(oldest)=self.state.active.iter().min_by_key(|(_,r)|r.admission_order).map(|(id,_)|*id)
-            && let Some(record)=self.state.active.remove(&oldest) {
-                insert_tombstone(self.state,self.limits,oldest,record.channel_id,record.context,true,self.now,self.now);
+    pub fn insert(
+        self,
+        actor: UserId,
+        parent: Option<ChannelId>,
+        payload: P,
+    ) -> Result<RecordView<'a, C, P>, StorageError> {
+        let next = self
+            .state
+            .next_admission_order
+            .checked_add(1)
+            .ok_or_else(|| StorageError::new(StorageErrorKind::SequenceExhausted))?;
+        let admission_order = self.state.next_admission_order;
+        self.state.next_admission_order = next;
+        if self.state.active.len() >= self.limits.max_active
+            && let Some(oldest) = self
+                .state
+                .active
+                .iter()
+                .min_by_key(|(_, r)| r.admission_order)
+                .map(|(id, _)| *id)
+            && let Some(record) = self.state.active.remove(&oldest)
+        {
+            insert_tombstone(
+                self.state,
+                self.limits,
+                oldest,
+                record.channel_id,
+                record.context,
+                true,
+                self.now,
+                self.now,
+            );
         }
-        self.state.active.insert(self.id,Record { channel_id:self.channel,context:self.context,actor_id:actor,
-            thread_parent_id:parent,content_hash:self.content_hash,last_version:self.version,
-            admission_order,expires_at:self.now+self.limits.active_retention,payload });
-        Ok(RecordView { record:&self.state.active[&self.id] })
+        self.state.active.insert(
+            self.id,
+            Record {
+                channel_id: self.channel,
+                context: self.context,
+                actor_id: actor,
+                thread_parent_id: parent,
+                content_hash: self.content_hash,
+                last_version: self.version,
+                admission_order,
+                expires_at: self.now + self.limits.active_retention,
+                payload,
+            },
+        );
+        Ok(RecordView {
+            record: &self.state.active[&self.id],
+        })
     }
 }
 /// A borrowed record that keeps caller validation and edit mutation in one critical section.
-pub struct EditEntry<'a,C,P> { record:&'a mut Record<C,P> }
-impl<'a,C:Copy+Eq,P> EditEntry<'a,C,P> {
+pub struct EditEntry<'a, C, P> {
+    record: &'a mut Record<C, P>,
+}
+impl<'a, C: Copy + Eq, P> EditEntry<'a, C, P> {
     /// Borrows immutable metadata for the caller's private policy predicate.
-    pub fn record(&self) -> RecordView<'_,C,P> { RecordView { record:self.record } }
-    /// Applies the original timestamp/hash ordering; duplicate content never replaces payload.
-    pub fn apply(self,content:&str,version:Timestamp,payload:PayloadChange<P>) -> EditOutcome<'a,C,P> {
-        let content_hash=hash_content(content);
-        if version<self.record.last_version { return EditOutcome::Rejected; }
-        if version==self.record.last_version {
-            return if content_hash==self.record.content_hash { EditOutcome::Duplicate } else { EditOutcome::Rejected };
+    pub fn record(&self) -> RecordView<'_, C, P> {
+        RecordView {
+            record: self.record,
         }
-        if content_hash==self.record.content_hash {
-            self.record.last_version=version;
+    }
+    /// Applies the original timestamp/hash ordering; duplicate content never replaces payload.
+    pub fn apply(
+        self,
+        content: &str,
+        version: Timestamp,
+        payload: PayloadChange<P>,
+    ) -> EditOutcome<'a, C, P> {
+        let content_hash = hash_content(content);
+        if version < self.record.last_version {
+            return EditOutcome::Rejected;
+        }
+        if version == self.record.last_version {
+            return if content_hash == self.record.content_hash {
+                EditOutcome::Duplicate
+            } else {
+                EditOutcome::Rejected
+            };
+        }
+        if content_hash == self.record.content_hash {
+            self.record.last_version = version;
             return EditOutcome::Duplicate;
         }
-        self.record.last_version=version;
-        self.record.content_hash=content_hash;
-        if let PayloadChange::Replace(payload)=payload { self.record.payload=payload; }
-        EditOutcome::Changed(RecordView { record:self.record })
+        self.record.last_version = version;
+        self.record.content_hash = content_hash;
+        if let PayloadChange::Replace(payload) = payload {
+            self.record.payload = payload;
+        }
+        EditOutcome::Changed(RecordView {
+            record: self.record,
+        })
     }
 }
 /// Describes ordinary payload bookkeeping after caller-private validation.
@@ -274,16 +461,16 @@ pub enum PayloadChange<P> {
     Replace(P),
 }
 /// Storage edit result, not an application admission verdict.
-pub enum EditOutcome<'a,C,P> {
+pub enum EditOutcome<'a, C, P> {
     /// Timestamp/content conflict rejected the edit.
     Rejected,
     /// No new content was accepted.
     Duplicate,
     /// Content metadata changed under the held borrow.
-    Changed(RecordView<'a,C,P>),
+    Changed(RecordView<'a, C, P>),
 }
 /// Storage deletion result, not a delivery proof.
-pub enum DeleteOutcome<C,P> {
+pub enum DeleteOutcome<C, P> {
     /// Binding or absence prevented removal.
     Rejected,
     /// The same deletion was already observed.
@@ -291,61 +478,328 @@ pub enum DeleteOutcome<C,P> {
     /// The expected record unexpectedly disappeared.
     Unavailable,
     /// The actual removed record, without cloning its payload.
-    Removed(RemovedRecord<C,P>),
+    Removed(RemovedRecord<C, P>),
 }
 /// Cleaned metadata lookup result.
-pub enum Lookup<'a,C,P> {
+pub enum Lookup<'a, C, P> {
     /// No active record or tombstone exists.
     Missing,
     /// A terminal tombstone exists.
     Terminal,
     /// The actual retained record remains borrowed under the mutex.
-    Active(RecordView<'a,C,P>),
+    Active(RecordView<'a, C, P>),
 }
 /// The actual record moved out by a successful deletion.
-pub struct RemovedRecord<C,P> { record:Record<C,P> }
-impl<C:Copy+Eq,P> RemovedRecord<C,P> {
+pub struct RemovedRecord<C, P> {
+    record: Record<C, P>,
+}
+impl<C: Copy + Eq, P> RemovedRecord<C, P> {
     /// Borrows removed metadata without constructing application proof.
-    pub fn view(&self) -> RecordView<'_,C,P> { RecordView { record:&self.record } }
+    pub fn view(&self) -> RecordView<'_, C, P> {
+        RecordView {
+            record: &self.record,
+        }
+    }
 }
 /// Immutable borrowed storage metadata, with no authority or freshness guarantee.
-pub struct RecordView<'a,C,P> { record:&'a Record<C,P> }
-impl<C:Copy+Eq,P> RecordView<'_,C,P> {
+pub struct RecordView<'a, C, P> {
+    record: &'a Record<C, P>,
+}
+impl<C: Copy + Eq, P> RecordView<'_, C, P> {
     /// Returns the stored channel.
-    pub fn channel_id(&self) -> ChannelId { self.record.channel_id }
+    pub fn channel_id(&self) -> ChannelId {
+        self.record.channel_id
+    }
     /// Returns ordinary caller context metadata.
-    pub fn context(&self) -> C { self.record.context }
+    pub fn context(&self) -> C {
+        self.record.context
+    }
     /// Returns the observed actor identifier.
-    pub fn actor_id(&self) -> UserId { self.record.actor_id }
+    pub fn actor_id(&self) -> UserId {
+        self.record.actor_id
+    }
     /// Returns the retained thread parent coordinate.
-    pub fn thread_parent_id(&self) -> Option<ChannelId> { self.record.thread_parent_id }
+    pub fn thread_parent_id(&self) -> Option<ChannelId> {
+        self.record.thread_parent_id
+    }
     /// Borrows opaque caller-owned lineage without comparison or cloning.
-    pub fn payload(&self) -> &P { &self.record.payload }
+    pub fn payload(&self) -> &P {
+        &self.record.payload
+    }
     /// Compares exact lowercase SHA256 spelling; this is not a permission check.
-    pub fn matches_hash_hex(&self,expected:&str) -> bool {
-        const HEX:&[u8;16]=b"0123456789abcdef";
-        expected.len()==64 && self.record.content_hash.0.iter().zip(expected.as_bytes().as_chunks::<2>().0)
-            .all(|(byte,pair)|pair[0]==HEX[(byte>>4) as usize] && pair[1]==HEX[(byte&15) as usize])
+    pub fn matches_hash_hex(&self, expected: &str) -> bool {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        expected.len() == 64
+            && self
+                .record
+                .content_hash
+                .0
+                .iter()
+                .zip(expected.as_bytes().as_chunks::<2>().0)
+                .all(|(byte, pair)| {
+                    pair[0] == HEX[(byte >> 4) as usize] && pair[1] == HEX[(byte & 15) as usize]
+                })
     }
 }
 
-fn cleanup<C:Copy+Eq,P>(state:&mut State<C,P>,limits:&StorageLimits,now:Instant) {
-    let expired:Vec<_>=state.active.iter().filter_map(|(id,record)|
-        (record.expires_at<=now).then_some((*id,record.channel_id,record.context,record.expires_at))).collect();
-    for (id,channel,context,terminal_at) in expired {
+fn cleanup<C: Copy + Eq, P>(state: &mut State<C, P>, limits: &StorageLimits, now: Instant) {
+    let expired: Vec<_> = state
+        .active
+        .iter()
+        .filter_map(|(id, record)| {
+            (record.expires_at <= now).then_some((
+                *id,
+                record.channel_id,
+                record.context,
+                record.expires_at,
+            ))
+        })
+        .collect();
+    for (id, channel, context, terminal_at) in expired {
         state.active.remove(&id);
-        insert_tombstone(state,limits,id,channel,context,true,terminal_at,now);
+        insert_tombstone(state, limits, id, channel, context, true, terminal_at, now);
     }
-    state.tombstones.retain(|_,t|t.expires_at>now);
+    state.tombstones.retain(|_, t| t.expires_at > now);
 }
-#[expect(clippy::too_many_arguments,reason="tombstones retain exact terminal binding and timing")]
-fn insert_tombstone<C:Copy+Eq,P>(state:&mut State<C,P>,limits:&StorageLimits,id:MessageId,
-    channel:ChannelId,context:C,lineage_confirmed:bool,terminal_at:Instant,now:Instant) {
-    let expires_at=terminal_at+limits.tombstone_retention;
-    if expires_at<=now { return; }
-    if state.tombstones.len()>=limits.max_tombstones
-        && let Some(oldest)=state.tombstones.iter().min_by_key(|(_,t)|t.terminal_at).map(|(id,_)|*id) {
-            state.tombstones.remove(&oldest);
+#[expect(
+    clippy::too_many_arguments,
+    reason = "tombstones retain exact terminal binding and timing"
+)]
+fn insert_tombstone<C: Copy + Eq, P>(
+    state: &mut State<C, P>,
+    limits: &StorageLimits,
+    id: MessageId,
+    channel: ChannelId,
+    context: C,
+    lineage_confirmed: bool,
+    terminal_at: Instant,
+    now: Instant,
+) {
+    let expires_at = terminal_at + limits.tombstone_retention;
+    if expires_at <= now {
+        return;
     }
-    state.tombstones.insert(id,Tombstone { channel_id:channel,context,lineage_confirmed,terminal_at,expires_at });
+    if state.tombstones.len() >= limits.max_tombstones
+        && let Some(oldest) = state
+            .tombstones
+            .iter()
+            .min_by_key(|(_, t)| t.terminal_at)
+            .map(|(id, _)| *id)
+    {
+        state.tombstones.remove(&oldest);
+    }
+    state.tombstones.insert(
+        id,
+        Tombstone {
+            channel_id: channel,
+            context,
+            lineage_confirmed,
+            terminal_at,
+            expires_at,
+        },
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn insert(
+        storage: &LifecycleStorage<bool, ()>,
+        now: Instant,
+        id: u64,
+        channel: u64,
+        context: bool,
+        content: &str,
+        version: i64,
+    ) {
+        storage
+            .with_locked(|locked| {
+                let mut transaction = locked.transitions(now);
+                if let CreateEntry::Vacant(slot) = transaction.create_entry(
+                    MessageId::new(id),
+                    ChannelId::new(channel),
+                    context,
+                    content,
+                    Timestamp::from_unix_timestamp(version).unwrap(),
+                ) {
+                    slot.insert(UserId::new(300), None, ()).unwrap();
+                }
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn admission_order_exhaustion_fails_without_evicting_existing_lineage() {
+        let storage = LifecycleStorage::new(StorageLimits::default().with_capacity(1, 2));
+        let now = Instant::now();
+        insert(&storage, now, 10, 100, false, "a", 10);
+        storage.state.lock().unwrap().next_admission_order = u64::MAX;
+        storage
+            .with_locked(|locked| {
+                let mut transaction = locked.transitions(now);
+                let CreateEntry::Vacant(slot) = transaction.create_entry(
+                    MessageId::new(11),
+                    ChannelId::new(100),
+                    false,
+                    "b",
+                    Timestamp::from_unix_timestamp(11).unwrap(),
+                ) else {
+                    panic!("new id has a vacant slot")
+                };
+                let error = match slot.insert(UserId::new(300), None, ()) {
+                    Err(error) => error,
+                    Ok(_) => panic!("exhaustion must reject"),
+                };
+                assert!(matches!(error.kind(), StorageErrorKind::SequenceExhausted));
+                assert!(matches!(
+                    transaction.lookup(MessageId::new(10)),
+                    Lookup::Active(_)
+                ));
+                assert!(matches!(
+                    transaction.lookup(MessageId::new(11)),
+                    Lookup::Missing
+                ));
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn mismatched_unconfirmed_tombstone_is_removed_before_exhaustion() {
+        let storage =
+            LifecycleStorage::<bool, ()>::new(StorageLimits::default().with_capacity(1, 2));
+        let now = Instant::now();
+        storage
+            .with_locked(|locked| {
+                let mut transaction = locked.transitions(now);
+                assert!(matches!(
+                    transaction.delete(MessageId::new(11), ChannelId::new(101), true),
+                    DeleteOutcome::Rejected
+                ));
+            })
+            .unwrap();
+        storage.state.lock().unwrap().next_admission_order = u64::MAX;
+        storage
+            .with_locked(|locked| {
+                let mut transaction = locked.transitions(now);
+                let CreateEntry::Vacant(slot) = transaction.create_entry(
+                    MessageId::new(11),
+                    ChannelId::new(100),
+                    false,
+                    "b",
+                    Timestamp::from_unix_timestamp(11).unwrap(),
+                ) else {
+                    panic!("mismatched unconfirmed binding must clear")
+                };
+                assert!(slot.insert(UserId::new(300), None, ()).is_err());
+            })
+            .unwrap();
+        assert!(
+            !storage
+                .state
+                .lock()
+                .unwrap()
+                .tombstones
+                .contains_key(&MessageId::new(11))
+        );
+    }
+
+    #[test]
+    fn verify_expires_only_requested_target_and_preserves_original_terminal_time() {
+        let storage = LifecycleStorage::new(StorageLimits::default());
+        let now = Instant::now();
+        insert(&storage, now, 10, 100, false, "a", 10);
+        insert(&storage, now, 11, 100, false, "b", 11);
+        let later = now + ACTIVE_RETENTION + Duration::from_secs(1);
+        storage
+            .with_locked(|locked| {
+                assert_eq!(
+                    locked.verify_target(later, MessageId::new(10), ChannelId::new(100)),
+                    Verification::Expired
+                );
+            })
+            .unwrap();
+        let state = storage.state.lock().unwrap();
+        assert!(state.active.contains_key(&MessageId::new(11)));
+        assert_eq!(
+            state.tombstones[&MessageId::new(10)].terminal_at,
+            now + ACTIVE_RETENTION
+        );
+    }
+
+    #[test]
+    fn newer_equal_content_does_not_replace_opaque_payload() {
+        struct Opaque(&'static str);
+        let storage = LifecycleStorage::new(StorageLimits::default());
+        let now = Instant::now();
+        storage
+            .with_locked(|locked| {
+                let mut transaction = locked.transitions(now);
+                let CreateEntry::Vacant(slot) = transaction.create_entry(
+                    MessageId::new(10),
+                    ChannelId::new(100),
+                    false,
+                    "content",
+                    Timestamp::from_unix_timestamp(10).unwrap(),
+                ) else {
+                    panic!("new record")
+                };
+                slot.insert(UserId::new(300), None, Opaque("original"))
+                    .unwrap();
+                let entry = transaction.edit_entry(MessageId::new(10)).unwrap();
+                assert!(matches!(
+                    entry.apply(
+                        "content",
+                        Timestamp::from_unix_timestamp(11).unwrap(),
+                        PayloadChange::Replace(Opaque("replacement"))
+                    ),
+                    EditOutcome::Duplicate
+                ));
+                let Lookup::Active(record) = transaction.lookup(MessageId::new(10)) else {
+                    panic!("retained record")
+                };
+                assert_eq!(record.payload().0, "original");
+            })
+            .unwrap();
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+        #[test]
+        fn arbitrary_lifecycle_sequences_keep_storage_bounds_and_disjointness(
+            operations in proptest::collection::vec(
+                (0u8..5, 1u64..8, any::<bool>(), any::<bool>(), 1i64..40, any::<bool>()),
+                1..100,
+            )
+        ) {
+            let storage = LifecycleStorage::new(StorageLimits::default().with_capacity(3, 2));
+            let mut now = Instant::now();
+            for (kind, id, alternate_channel, dm, version, alternate_content) in operations {
+                let channel = ChannelId::new(if alternate_channel {101} else {100});
+                let content = if alternate_content { "alternate" } else { "content" };
+                match kind {
+                    0 => insert(&storage, now, id, channel.get(), dm, content, version),
+                    1 | 2 => { storage.with_locked(|locked| {
+                        let mut transaction = locked.transitions(now);
+                        if let Some(entry) = transaction.edit_entry(MessageId::new(id)) {
+                            let record = entry.record();
+                            if record.channel_id() == channel && record.context() == dm && record.actor_id() == UserId::new(300) {
+                                let _ = entry.apply(content, Timestamp::from_unix_timestamp(version).unwrap(), PayloadChange::Keep);
+                            }
+                        }
+                    }).unwrap(); },
+                    3 => { storage.with_locked(|locked| { let _ = locked.transitions(now).delete(MessageId::new(id), channel, dm); }).unwrap(); },
+                    _ => {
+                        now += if alternate_content { ACTIVE_RETENTION + TOMBSTONE_RETENTION } else { Duration::from_secs(5 * 60 + 1) };
+                        storage.with_locked(|locked| { let _ = locked.transitions(now); }).unwrap();
+                    }
+                }
+                let state = storage.state.lock().unwrap();
+                prop_assert!(state.active.len() <= 3);
+                prop_assert!(state.tombstones.len() <= 2);
+                prop_assert!(state.active.keys().all(|id| !state.tombstones.contains_key(id)));
+            }
+        }
+    }
 }

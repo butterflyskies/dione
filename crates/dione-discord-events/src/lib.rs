@@ -9,6 +9,8 @@ use dione_messages::timestamp::Timestamp;
 use serenity::model::id::{ChannelId, MessageId, UserId};
 
 pub mod delivery;
+/// Bounded ordinary lifecycle metadata storage with opaque caller-owned lineage.
+pub mod lifecycle_storage;
 pub use delivery::{DeliveryConversionError, DeliveryConversionErrorKind, batch, message, single};
 
 /// Typed evidence that a guild message was directed to the construct.
@@ -186,6 +188,3 @@ impl NotificationEvent {
         }
     }
 }
-
-/// Bounded ordinary lifecycle metadata storage with opaque caller-owned lineage.
-pub mod lifecycle_storage;

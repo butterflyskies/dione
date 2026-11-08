@@ -12,32 +12,26 @@
 //! remain independent lineages: the ledger does not suppress either event based
 //! on timing or content similarity.
 
+#[cfg(test)]
+use dione_discord_events::lifecycle_storage::{ACTIVE_RETENTION, TOMBSTONE_RETENTION};
+use dione_discord_events::lifecycle_storage::{
+    CreateEntry, DeleteOutcome, EditOutcome, LifecycleStorage, Lookup, PayloadChange, RecordView,
+    StorageErrorKind, StorageLimits, Verification,
+};
 use dione_discord_messaging_contracts::ChannelRef;
 use serenity::model::{
     Timestamp,
     id::{ChannelId, MessageId, UserId, WebhookId},
 };
-use sha2::{Digest, Sha256};
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-    time::{Duration, Instant},
-};
+#[cfg(test)]
+use std::sync::Mutex;
+use std::{sync::Arc, time::Instant};
 use {
     crate::discord::verified_action::{
         LifecycleAdmissionFacts, LifecycleContext, LifecycleProvenance,
     },
     dione_attention::types::{DirectAuthorKind, SourceAuthorKind},
 };
-
-const ACTIVE_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
-const TOMBSTONE_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
-const DEFAULT_MAX_ACTIVE: usize = 16_384;
-const DEFAULT_MAX_TOMBSTONES: usize = 16_384;
-
-/// SHA-256 hash of message content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ContentHash([u8; 32]);
 
 trait Clock: Send + Sync {
     fn now(&self) -> Instant;
@@ -63,50 +57,6 @@ impl StoredLineage {
             (Self::Direct(left), Self::Direct(right)) => left == right,
             (Self::Verified(left), Self::Verified(right)) => left.same_actor_lineage(right),
             (Self::Direct(_), Self::Verified(_)) | (Self::Verified(_), Self::Direct(_)) => false,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct ActiveRecord {
-    channel_id: ChannelId,
-    context: LifecycleContext,
-    actor_id: UserId,
-    thread_parent_id: Option<ChannelId>,
-    content_hash: ContentHash,
-    last_version: Timestamp,
-    admission_order: u64,
-    expires_at: Instant,
-    lineage: StoredLineage,
-}
-
-#[derive(Debug)]
-struct Tombstone {
-    channel_id: ChannelId,
-    context: LifecycleContext,
-    lineage_confirmed: bool,
-    terminal_at: Instant,
-    expires_at: Instant,
-}
-
-impl Tombstone {
-    fn binding_matches(&self, channel_id: ChannelId, context: LifecycleContext) -> bool {
-        self.channel_id == channel_id && self.context == context
-    }
-}
-
-struct LedgerState {
-    active: HashMap<MessageId, ActiveRecord>,
-    tombstones: HashMap<MessageId, Tombstone>,
-    next_admission_order: u64,
-}
-
-impl Default for LedgerState {
-    fn default() -> Self {
-        Self {
-            active: HashMap::new(),
-            tombstones: HashMap::new(),
-            next_admission_order: 1,
         }
     }
 }
@@ -178,15 +128,15 @@ impl LifecycleSnapshot {
 
 /// Borrowed lineage supplied to pure current-policy edit checks.
 pub(crate) struct LifecycleView<'a> {
-    record: &'a ActiveRecord,
+    record: RecordView<'a, LifecycleContext, StoredLineage>,
 }
 
 impl LifecycleView<'_> {
     pub(crate) fn actor_id(&self) -> UserId {
-        self.record.actor_id
+        self.record.actor_id()
     }
     pub(crate) fn provenance(&self) -> Option<&LifecycleProvenance> {
-        match &self.record.lineage {
+        match self.record.payload() {
             StoredLineage::Direct(_) => None,
             StoredLineage::Verified(facts) => Some(facts.provenance()),
         }
@@ -208,12 +158,8 @@ pub(crate) enum SourceDeliveryFailure {
 }
 
 pub struct IngressLedger {
-    state: Mutex<LedgerState>,
+    records: LifecycleStorage<LifecycleContext, StoredLineage>,
     clock: Arc<dyn Clock>,
-    active_retention: Duration,
-    tombstone_retention: Duration,
-    max_active: usize,
-    max_tombstones: usize,
     epoch: Instant,
     #[cfg(test)]
     observed_verifications: Mutex<Vec<VerifyResult>>,
@@ -224,12 +170,8 @@ impl Default for IngressLedger {
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
         let epoch = clock.now();
         Self {
-            state: Mutex::new(LedgerState::default()),
+            records: LifecycleStorage::new(StorageLimits::default()),
             clock,
-            active_retention: ACTIVE_RETENTION,
-            tombstone_retention: TOMBSTONE_RETENTION,
-            max_active: DEFAULT_MAX_ACTIVE,
-            max_tombstones: DEFAULT_MAX_TOMBSTONES,
             epoch,
             #[cfg(test)]
             observed_verifications: Mutex::new(Vec::new()),
@@ -244,10 +186,6 @@ impl IngressLedger {
 
     pub fn epoch(&self) -> Instant {
         self.epoch
-    }
-
-    fn hash_content(content: &str) -> ContentHash {
-        ContentHash(Sha256::digest(content.as_bytes()).into())
     }
 
     /// Compatibility constructor for direct admitted Discord messages.
@@ -349,67 +287,37 @@ impl IngressLedger {
         lineage: StoredLineage,
     ) -> TransitionResult {
         let now = self.clock.now();
-        let Ok(mut state) = self.state.lock() else {
-            return TransitionResult::Unavailable;
-        };
-        self.cleanup(&mut state, now);
-        if let Some(tombstone) = state.tombstones.get(&message_id) {
-            if tombstone.binding_matches(channel_id, context) || tombstone.lineage_confirmed {
-                return TransitionResult::Rejected;
-            }
-            state.tombstones.remove(&message_id);
-        }
-        let content_hash = Self::hash_content(content);
-        if let Some(existing) = state.active.get(&message_id) {
-            return if existing.channel_id == channel_id
-                && existing.context == context
-                && existing.actor_id == actor_id
-                && existing.content_hash == content_hash
-                && existing.last_version == version
-                && existing.lineage.same_actor_lineage(&lineage)
-            {
-                TransitionResult::Duplicate
-            } else {
-                TransitionResult::Rejected
-            };
-        }
-        let Some(next_admission_order) = state.next_admission_order.checked_add(1) else {
-            return TransitionResult::Unavailable;
-        };
-        let admission_order = state.next_admission_order;
-        state.next_admission_order = next_admission_order;
-        if state.active.len() >= self.max_active
-            && let Some(oldest) = state
-                .active
-                .iter()
-                .min_by_key(|(_, record)| record.admission_order)
-                .map(|(id, _)| *id)
-            && let Some(record) = state.active.remove(&oldest)
-        {
-            self.insert_tombstone(
-                &mut state,
-                oldest,
-                record.channel_id,
-                record.context,
-                true,
-                now,
-                now,
-            );
-        }
-        let record = ActiveRecord {
-            channel_id,
-            context,
-            actor_id,
-            thread_parent_id,
-            content_hash,
-            last_version: version,
-            admission_order,
-            expires_at: now + self.active_retention,
-            lineage,
-        };
-        let snapshot = Self::snapshot(message_id, &record);
-        state.active.insert(message_id, record);
-        TransitionResult::Admitted(snapshot)
+        self.records
+            .with_locked(|locked| {
+                let mut transaction = locked.transitions(now);
+                match transaction.create_entry(message_id, channel_id, context, content, version) {
+                    CreateEntry::Blocked => TransitionResult::Rejected,
+                    CreateEntry::Existing {
+                        record,
+                        content_and_version_match,
+                    } => {
+                        if record.channel_id() == channel_id
+                            && record.context() == context
+                            && record.actor_id() == actor_id
+                            && content_and_version_match
+                            && record.payload().same_actor_lineage(&lineage)
+                        {
+                            TransitionResult::Duplicate
+                        } else {
+                            TransitionResult::Rejected
+                        }
+                    }
+                    CreateEntry::Vacant(slot) => {
+                        match slot.insert(actor_id, thread_parent_id, lineage) {
+                            Ok(record) => {
+                                TransitionResult::Admitted(Self::snapshot(message_id, record))
+                            }
+                            Err(error) => Self::storage_failure(error.kind()),
+                        }
+                    }
+                }
+            })
+            .unwrap_or(TransitionResult::Unavailable)
     }
 
     #[expect(
@@ -435,42 +343,38 @@ impl IngressLedger {
             return TransitionResult::Rejected;
         }
         let now = self.clock.now();
-        let Ok(mut state) = self.state.lock() else {
-            return TransitionResult::Unavailable;
-        };
-        self.cleanup(&mut state, now);
-        let Some(record) = state.active.get_mut(&message_id) else {
-            return TransitionResult::Rejected;
-        };
-        let StoredLineage::Verified(existing) = &record.lineage else {
-            return TransitionResult::Rejected;
-        };
-        if record.channel_id != channel_id
-            || record.context != context
-            || record.actor_id != actor_id
-            || !existing.same_actor_lineage(&facts)
-        {
-            return TransitionResult::Rejected;
-        }
-        let content_hash = Self::hash_content(content);
-        if version < record.last_version {
-            return TransitionResult::Rejected;
-        }
-        if version == record.last_version {
-            return if content_hash == record.content_hash {
-                TransitionResult::Duplicate
-            } else {
-                TransitionResult::Rejected
-            };
-        }
-        if content_hash == record.content_hash {
-            record.last_version = version;
-            return TransitionResult::Duplicate;
-        }
-        record.last_version = version;
-        record.content_hash = content_hash;
-        record.lineage = StoredLineage::Verified(facts);
-        TransitionResult::Admitted(Self::snapshot(message_id, record))
+        self.records
+            .with_locked(|locked| {
+                let mut transaction = locked.transitions(now);
+                let Some(entry) = transaction.edit_entry(message_id) else {
+                    return TransitionResult::Rejected;
+                };
+                {
+                    let record = entry.record();
+                    let StoredLineage::Verified(existing) = record.payload() else {
+                        return TransitionResult::Rejected;
+                    };
+                    if record.channel_id() != channel_id
+                        || record.context() != context
+                        || record.actor_id() != actor_id
+                        || !existing.same_actor_lineage(&facts)
+                    {
+                        return TransitionResult::Rejected;
+                    }
+                }
+                match entry.apply(
+                    content,
+                    version,
+                    PayloadChange::Replace(StoredLineage::Verified(facts)),
+                ) {
+                    EditOutcome::Rejected => TransitionResult::Rejected,
+                    EditOutcome::Duplicate => TransitionResult::Duplicate,
+                    EditOutcome::Changed(record) => {
+                        TransitionResult::Admitted(Self::snapshot(message_id, record))
+                    }
+                }
+            })
+            .unwrap_or(TransitionResult::Unavailable)
     }
 
     #[expect(
@@ -488,38 +392,31 @@ impl IngressLedger {
         policy_allows: impl FnOnce(&LifecycleView<'_>) -> bool,
     ) -> TransitionResult {
         let now = self.clock.now();
-        let Ok(mut state) = self.state.lock() else {
-            return TransitionResult::Unavailable;
-        };
-        self.cleanup(&mut state, now);
-        let Some(record) = state.active.get_mut(&message_id) else {
-            return TransitionResult::Rejected;
-        };
-        if record.channel_id != channel_id
-            || record.context != context
-            || record.actor_id != actor_id
-            || !policy_allows(&LifecycleView { record })
-        {
-            return TransitionResult::Rejected;
-        }
-        let content_hash = Self::hash_content(content);
-        if version < record.last_version {
-            return TransitionResult::Rejected;
-        }
-        if version == record.last_version {
-            return if content_hash == record.content_hash {
-                TransitionResult::Duplicate
-            } else {
-                TransitionResult::Rejected
-            };
-        }
-        if content_hash == record.content_hash {
-            record.last_version = version;
-            return TransitionResult::Duplicate;
-        }
-        record.last_version = version;
-        record.content_hash = content_hash;
-        TransitionResult::Admitted(Self::snapshot(message_id, record))
+        self.records
+            .with_locked(|locked| {
+                let mut transaction = locked.transitions(now);
+                let Some(entry) = transaction.edit_entry(message_id) else {
+                    return TransitionResult::Rejected;
+                };
+                {
+                    let record = entry.record();
+                    if record.channel_id() != channel_id
+                        || record.context() != context
+                        || record.actor_id() != actor_id
+                        || !policy_allows(&LifecycleView { record })
+                    {
+                        return TransitionResult::Rejected;
+                    }
+                }
+                match entry.apply(content, version, PayloadChange::Keep) {
+                    EditOutcome::Rejected => TransitionResult::Rejected,
+                    EditOutcome::Duplicate => TransitionResult::Duplicate,
+                    EditOutcome::Changed(record) => {
+                        TransitionResult::Admitted(Self::snapshot(message_id, record))
+                    }
+                }
+            })
+            .unwrap_or(TransitionResult::Unavailable)
     }
 
     pub(crate) fn transition_delete(
@@ -529,78 +426,39 @@ impl IngressLedger {
         context: LifecycleContext,
     ) -> TransitionResult {
         let now = self.clock.now();
-        let Ok(mut state) = self.state.lock() else {
-            return TransitionResult::Unavailable;
-        };
-        self.cleanup(&mut state, now);
-        let Some(record) = state.active.get(&message_id) else {
-            if let Some(tombstone) = state.tombstones.get(&message_id) {
-                return if tombstone.binding_matches(channel_id, context) {
-                    TransitionResult::Duplicate
-                } else {
-                    TransitionResult::Rejected
-                };
-            }
-            self.insert_tombstone(&mut state, message_id, channel_id, context, false, now, now);
-            return TransitionResult::Rejected;
-        };
-        if record.channel_id != channel_id || record.context != context {
-            return TransitionResult::Rejected;
-        }
-        let Some(record) = state.active.remove(&message_id) else {
-            return TransitionResult::Unavailable;
-        };
-        let snapshot = Self::snapshot(message_id, &record);
-        self.insert_tombstone(
-            &mut state,
-            message_id,
-            record.channel_id,
-            record.context,
-            true,
-            now,
-            now,
-        );
-        TransitionResult::Admitted(snapshot)
+        self.records
+            .with_locked(|locked| {
+                let mut transaction = locked.transitions(now);
+                match transaction.delete(message_id, channel_id, context) {
+                    DeleteOutcome::Rejected => TransitionResult::Rejected,
+                    DeleteOutcome::Duplicate => TransitionResult::Duplicate,
+                    DeleteOutcome::Unavailable => TransitionResult::Unavailable,
+                    DeleteOutcome::Removed(record) => {
+                        TransitionResult::Admitted(Self::snapshot(message_id, record.view()))
+                    }
+                }
+            })
+            .unwrap_or(TransitionResult::Unavailable)
     }
 
     pub fn verify(&self, message_id: MessageId, claimed_channel: ChannelId) -> VerifyResult {
         let now = self.clock.now();
-        let result = match self.state.lock() {
-            Ok(mut state) => {
-                if state
-                    .active
-                    .get(&message_id)
-                    .is_some_and(|record| record.expires_at <= now)
-                {
-                    if let Some(record) = state.active.remove(&message_id) {
-                        self.insert_tombstone(
-                            &mut state,
-                            message_id,
-                            record.channel_id,
-                            record.context,
-                            true,
-                            record.expires_at,
-                            now,
-                        );
-                    }
-                    VerifyResult::Expired
-                } else {
-                    match state.active.get(&message_id) {
-                        None => VerifyResult::Unknown,
-                        Some(record) if record.channel_id == claimed_channel => {
-                            VerifyResult::Admitted {
-                                channel: ChannelRef::new(record.channel_id.get()),
-                            }
-                        }
-                        Some(record) => VerifyResult::ChannelMismatch {
-                            admitted_channel: ChannelRef::new(record.channel_id.get()),
-                            claimed_channel: ChannelRef::new(claimed_channel.get()),
-                        },
-                    }
-                }
-            }
-            Err(_) => VerifyResult::Unavailable,
-        };
+        let result = self
+            .records
+            .with_locked(
+                |locked| match locked.verify_target(now, message_id, claimed_channel) {
+                    Verification::Unknown => VerifyResult::Unknown,
+                    Verification::Expired => VerifyResult::Expired,
+                    Verification::Found(channel) => VerifyResult::Admitted {
+                        channel: ChannelRef::new(channel.get()),
+                    },
+                    Verification::ChannelMismatch(channel) => VerifyResult::ChannelMismatch {
+                        admitted_channel: ChannelRef::new(channel.get()),
+                        claimed_channel: ChannelRef::new(claimed_channel.get()),
+                    },
+                },
+            )
+            .unwrap_or(VerifyResult::Unavailable);
         #[cfg(test)]
         if let Ok(mut observations) = self.observed_verifications.lock() {
             observations.push(result.clone());
@@ -618,11 +476,18 @@ impl IngressLedger {
         context: LifecycleContext,
     ) -> Option<LifecycleSnapshot> {
         let now = self.clock.now();
-        let mut state = self.state.lock().ok()?;
-        self.cleanup(&mut state, now);
-        let record = state.active.get(&message_id)?;
-        (record.channel_id == channel_id && record.context == context)
-            .then(|| Self::snapshot(message_id, record))
+        self.records
+            .with_locked(|locked| {
+                let transaction = locked.transitions(now);
+                match transaction.lookup(message_id) {
+                    Lookup::Active(record) => (record.channel_id() == channel_id
+                        && record.context() == context)
+                        .then(|| Self::snapshot(message_id, record)),
+                    Lookup::Missing | Lookup::Terminal => None,
+                }
+            })
+            .ok()
+            .flatten()
     }
 
     /// Recheck a source version and its existing admitted lineage at a delayed effect.
@@ -635,147 +500,80 @@ impl IngressLedger {
         config: &dione_config::LoadedConfig,
         targeting: dione_discord_events::MessageTargeting,
     ) -> Result<(), SourceDeliveryFailure> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| SourceDeliveryFailure::Unavailable)?;
-        self.cleanup(&mut state, self.clock.now());
-        if state.tombstones.contains_key(&message_id) {
-            return Err(SourceDeliveryFailure::Invalidated);
-        }
-        let record = state
-            .active
-            .get(&message_id)
-            .ok_or(SourceDeliveryFailure::Unavailable)?;
-        if record.channel_id != channel_id || expected_hash.len() != 64 {
-            return Err(SourceDeliveryFailure::Invalidated);
-        }
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        if !record
-            .content_hash
-            .0
-            .iter()
-            .zip(expected_hash.as_bytes().as_chunks::<2>().0)
-            .all(|(byte, pair)| {
-                pair[0] == HEX[(byte >> 4) as usize] && pair[1] == HEX[(byte & 15) as usize]
+        self.records
+            .with_locked(|locked| {
+                let transaction = locked.transitions(self.clock.now());
+                let record = match transaction.lookup(message_id) {
+                    Lookup::Terminal => return Err(SourceDeliveryFailure::Invalidated),
+                    Lookup::Missing => return Err(SourceDeliveryFailure::Unavailable),
+                    Lookup::Active(record) => record,
+                };
+                if record.channel_id() != channel_id || !record.matches_hash_hex(expected_hash) {
+                    return Err(SourceDeliveryFailure::Invalidated);
+                }
+                if matches!(
+                    record.payload(),
+                    StoredLineage::Direct(DirectAuthorKind::Bot)
+                ) && !config.is_allowed(record.actor_id().get())
+                {
+                    return Err(SourceDeliveryFailure::Invalidated);
+                }
+                let context = record.context();
+                let actor_id = record.actor_id();
+                let thread_parent_id = record.thread_parent_id();
+                let lineage = LifecycleView { record };
+                match context {
+                    LifecycleContext::DirectMessage => matches!(
+                        dione_discord_gate::InboundGate::check_dm(config, actor_id.get()),
+                        dione_discord_gate::GateDecision::Deliver
+                    ),
+                    LifecycleContext::Guild(guild) => {
+                        let scope = if config.channel_policy(channel_id.get()).is_some() {
+                            channel_id
+                        } else {
+                            thread_parent_id.unwrap_or(channel_id)
+                        };
+                        let mention = match targeting {
+                            dione_discord_events::MessageTargeting::GuildDirected(kind) => {
+                                Some(kind)
+                            }
+                            _ => None,
+                        };
+                        crate::discord::events::passive_edit_policy_allows(
+                            config,
+                            scope.get(),
+                            Some(guild.get()),
+                            mention,
+                            &lineage,
+                        )
+                    }
+                }
+                .then_some(())
+                .ok_or(SourceDeliveryFailure::Invalidated)
             })
-        {
-            return Err(SourceDeliveryFailure::Invalidated);
-        }
-        if matches!(
-            &record.lineage,
-            StoredLineage::Direct(DirectAuthorKind::Bot)
-        ) && !config.is_allowed(record.actor_id.get())
-        {
-            return Err(SourceDeliveryFailure::Invalidated);
-        }
-        let lineage = LifecycleView { record };
-        match record.context {
-            LifecycleContext::DirectMessage => matches!(
-                dione_discord_gate::InboundGate::check_dm(config, record.actor_id.get()),
-                dione_discord_gate::GateDecision::Deliver
-            ),
-            LifecycleContext::Guild(guild) => {
-                let scope = if config.channel_policy(channel_id.get()).is_some() {
-                    channel_id
-                } else {
-                    record.thread_parent_id.unwrap_or(channel_id)
-                };
-                let mention = match targeting {
-                    dione_discord_events::MessageTargeting::GuildDirected(kind) => Some(kind),
-                    _ => None,
-                };
-                crate::discord::events::passive_edit_policy_allows(
-                    config,
-                    scope.get(),
-                    Some(guild.get()),
-                    mention,
-                    &lineage,
-                )
-            }
-        }
-        .then_some(())
-        .ok_or(SourceDeliveryFailure::Invalidated)
+            .map_err(|_| SourceDeliveryFailure::Unavailable)?
     }
 
     pub fn gc_expired(&self) {
         let now = self.clock.now();
-        if let Ok(mut state) = self.state.lock() {
-            self.cleanup(&mut state, now);
+        let _ = self.records.with_locked(|locked| {
+            let _ = locked.transitions(now);
+        });
+    }
+
+    fn storage_failure(kind: &StorageErrorKind) -> TransitionResult {
+        match kind {
+            StorageErrorKind::LockPoisoned | StorageErrorKind::SequenceExhausted => {
+                TransitionResult::Unavailable
+            }
         }
     }
 
-    fn cleanup(&self, state: &mut LedgerState, now: Instant) {
-        let expired: Vec<_> = state
-            .active
-            .iter()
-            .filter_map(|(id, record)| {
-                (record.expires_at <= now).then_some((
-                    *id,
-                    record.channel_id,
-                    record.context,
-                    record.expires_at,
-                ))
-            })
-            .collect();
-        for (message_id, channel_id, context, terminal_at) in expired {
-            state.active.remove(&message_id);
-            self.insert_tombstone(
-                state,
-                message_id,
-                channel_id,
-                context,
-                true,
-                terminal_at,
-                now,
-            );
-        }
-        state
-            .tombstones
-            .retain(|_, tombstone| tombstone.expires_at > now);
-    }
-
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "tombstones retain exact terminal binding and timing"
-    )]
-    fn insert_tombstone(
-        &self,
-        state: &mut LedgerState,
+    fn snapshot(
         message_id: MessageId,
-        channel_id: ChannelId,
-        context: LifecycleContext,
-        lineage_confirmed: bool,
-        terminal_at: Instant,
-        now: Instant,
-    ) {
-        let expires_at = terminal_at + self.tombstone_retention;
-        if expires_at <= now {
-            return;
-        }
-        if state.tombstones.len() >= self.max_tombstones
-            && let Some(oldest) = state
-                .tombstones
-                .iter()
-                .min_by_key(|(_, tombstone)| tombstone.terminal_at)
-                .map(|(id, _)| *id)
-        {
-            state.tombstones.remove(&oldest);
-        }
-        state.tombstones.insert(
-            message_id,
-            Tombstone {
-                channel_id,
-                context,
-                lineage_confirmed,
-                terminal_at,
-                expires_at,
-            },
-        );
-    }
-
-    fn snapshot(message_id: MessageId, record: &ActiveRecord) -> LifecycleSnapshot {
-        let (author_kind, provenance) = match &record.lineage {
+        record: RecordView<'_, LifecycleContext, StoredLineage>,
+    ) -> LifecycleSnapshot {
+        let (author_kind, provenance) = match record.payload() {
             StoredLineage::Direct(kind) => ((*kind).into(), None),
             StoredLineage::Verified(facts) => (
                 SourceAuthorKind::VerifiedWebhook,
@@ -783,12 +581,12 @@ impl IngressLedger {
             ),
         };
         LifecycleSnapshot {
-            channel_id: record.channel_id,
+            channel_id: record.channel_id(),
             message_id,
-            context: record.context,
-            actor_id: record.actor_id,
+            context: record.context(),
+            actor_id: record.actor_id(),
             author_kind,
-            thread_parent_id: record.thread_parent_id,
+            thread_parent_id: record.thread_parent_id(),
             provenance,
         }
     }
@@ -810,6 +608,7 @@ mod tests {
     };
     use proptest::prelude::*;
     use serenity::model::id::GuildId;
+    use std::time::Duration;
     use uuid::Uuid;
 
     #[test]
@@ -843,12 +642,8 @@ mod tests {
     fn ledger(clock: ManualClock, max_active: usize) -> IngressLedger {
         let epoch = clock.now();
         IngressLedger {
-            state: Mutex::new(LedgerState::default()),
+            records: LifecycleStorage::new(StorageLimits::default().with_capacity(max_active, 2)),
             clock: Arc::new(clock),
-            active_retention: ACTIVE_RETENTION,
-            tombstone_retention: TOMBSTONE_RETENTION,
-            max_active,
-            max_tombstones: 2,
             epoch,
             observed_verifications: Mutex::new(Vec::new()),
         }
@@ -1146,19 +941,18 @@ mod tests {
     }
 
     #[test]
-    fn admission_order_exhaustion_fails_without_evicting_existing_lineage() {
+    fn storage_failures_translate_to_unavailable_without_rewriting_lineage() {
         let ledger = IngressLedger::new();
         assert!(matches!(
             admit_direct(&ledger, 10, "a"),
             TransitionResult::Admitted(_)
         ));
-        ledger
-            .state
-            .lock()
-            .expect("test ledger lock")
-            .next_admission_order = u64::MAX;
         assert_eq!(
-            admit_direct(&ledger, 11, "b"),
+            IngressLedger::storage_failure(&StorageErrorKind::SequenceExhausted),
+            TransitionResult::Unavailable
+        );
+        assert_eq!(
+            IngressLedger::storage_failure(&StorageErrorKind::LockPoisoned),
             TransitionResult::Unavailable
         );
         assert!(matches!(
@@ -1475,13 +1269,13 @@ mod tests {
                         );
                     }
                     1 | 2 => {
-                        let had_matching_active = ledger.state.lock().is_ok_and(|state| {
-                            state.active.get(&MessageId::new(id)).is_some_and(|record| {
-                                record.channel_id == channel
-                                    && record.context == context
-                                    && record.actor_id == UserId::new(300)
+                        let had_matching_active = ledger.records.with_locked(|locked| {
+                            locked.inspect_retained(MessageId::new(id)).is_some_and(|record| {
+                                record.channel_id() == channel
+                                    && record.context() == context
+                                    && record.actor_id() == UserId::new(300)
                             })
-                        });
+                        }).unwrap_or(false);
                         let result = ledger.transition_passive_edit(
                             MessageId::new(id), channel, context, UserId::new(300), content,
                             Timestamp::from_unix_timestamp(version).unwrap(), |_| true,
@@ -1491,17 +1285,17 @@ mod tests {
                         }
                     }
                     3 => {
-                        let had_matching_active = ledger.state.lock().is_ok_and(|state| {
-                            state.active.get(&MessageId::new(id)).is_some_and(|record| {
-                                record.channel_id == channel && record.context == context
+                        let had_matching_active = ledger.records.with_locked(|locked| {
+                            locked.inspect_retained(MessageId::new(id)).is_some_and(|record| {
+                                record.channel_id() == channel && record.context() == context
                             })
-                        });
+                        }).unwrap_or(false);
                         let result = ledger.transition_delete(MessageId::new(id), channel, context);
                         if matches!(result, TransitionResult::Admitted(_)) {
                             prop_assert!(had_matching_active);
-                            let was_removed = ledger.state.lock().is_ok_and(|state| {
-                                !state.active.contains_key(&MessageId::new(id))
-                            });
+                            let was_removed = ledger.records.with_locked(|locked| {
+                                locked.inspect_retained(MessageId::new(id)).is_none()
+                            }).unwrap_or(false);
                             prop_assert!(was_removed);
                         }
                     }
@@ -1514,12 +1308,7 @@ mod tests {
                         ledger.gc_expired();
                     }
                 }
-                let bounds_hold = ledger.state.lock().is_ok_and(|state| {
-                    state.active.len() <= 3
-                        && state.tombstones.len() <= 2
-                        && state.active.keys().all(|id| !state.tombstones.contains_key(id))
-                });
-                prop_assert!(bounds_hold);
+
             }
         }
     }

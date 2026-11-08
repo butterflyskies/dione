@@ -255,8 +255,7 @@ creator and resolves supported PluralKit identity before the
 [verified-action gate](src/discord/verified_action.rs) admits an action.
 Display names and webhook payload IDs alone are not user authority.
 [principal_policy.rs](crates/dione-discord-gate/src/principal_policy.rs) holds the typed principal policy.
-The [ingress ledger](src/ingress_ledger.rs) retains admitted lifecycle evidence
-for edits, deletes, reply context, and subsequent reads.
+The [ingress ledger](src/ingress_ledger.rs) retains private lineage admission and current policy authority for edits, deletes, reply context, and subsequent reads. Its [lifecycle storage controller](crates/dione-discord-events/src/lifecycle_storage.rs) owns bounded retention, sequence allocation, content ordering and tombstones. Root checks and storage mutations share one borrowed critical section; retained metadata grants no authority.
 
 Admitted events enter a Tokio channel with capacity 256. The notification task
 in [server.rs](src/mcp/server.rs) applies rate limits and optional attention
