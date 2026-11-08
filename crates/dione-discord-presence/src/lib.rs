@@ -2,6 +2,9 @@
 
 #![warn(missing_docs)]
 
+/// MCP input decoding and honest requested-state result projection.
+pub mod wire;
+
 use chrono::{DateTime, Utc};
 use std::{fmt, str::FromStr, sync::Arc};
 use thiserror::Error;

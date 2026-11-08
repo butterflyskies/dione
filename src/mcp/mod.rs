@@ -1,7 +1,6 @@
 //! MCP transport, request dispatch, and owner-provided tool registrations.
 
 pub mod dispatch;
-pub(crate) mod presence_wire;
 #[cfg(test)]
 mod protocol_tests;
 pub(crate) mod render_wire;
