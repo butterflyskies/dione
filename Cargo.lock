@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.137.0"
+version = "0.138.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -956,6 +956,7 @@ dependencies = [
  "dione-discord-gate",
  "dione-discord-identities",
  "dione-discord-introspection",
+ "dione-discord-messaging-contracts",
  "dione-discord-presence",
  "dione-discord-queries",
  "dione-discord-scheduling",
@@ -1320,6 +1321,22 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "dione-discord-messaging-contracts"
+version = "0.1.0"
+dependencies = [
+ "dione-contradictionary",
+ "dione-discord-queries",
+ "dione-evidence",
+ "dione-outbound-consent",
+ "dione-pre-send",
+ "insta",
+ "serde_json",
+ "serenity",
+ "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]

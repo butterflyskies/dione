@@ -453,3 +453,5 @@ Discord message read, search, attachment and native observation ownership reside
 [Discord Rook context reads](crates/dione-discord-context/src/lib.rs) own the context provider and bounded native metadata projection. The trusted embedding supplies fresh read-only QueryCtx values; the root retains sealed live observation capture. This extraction adds no production registration.
 
 [Shared Discord tool arguments](crates/dione-discord-tool-arguments/src/lib.rs) own typed argument validation and evidence handle schema projection. Root tool registrations retain parsing order, current configuration, authorization and execution authority.
+
+[Discord messaging contracts](crates/dione-discord-messaging-contracts/src/lib.rs) own descriptive outcomes, error metadata and JSON projection. Root delivery, consent and ingress verification retain authority.

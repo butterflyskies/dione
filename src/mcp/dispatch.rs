@@ -1,12 +1,10 @@
 //! Tool dispatch: routes `tools/call` requests to the correct handler.
-use crate::discord::messaging::LinkPreviews;
 use crate::discord::messaging::edit_message_with_embed_control;
 use crate::discord::messaging::react as discord_react;
 use crate::discord::messaging::release_held;
 use crate::discord::messaging::rephrase_held;
 use crate::discord::messaging::send_dm_with_evidence_and_hook_overrides;
 use crate::discord::messaging::send_file_with_hook_overrides;
-use crate::discord::messaging_wire;
 use crate::discord::rendering::render_to_channel;
 use crate::mcp::presence_wire;
 use crate::mcp::render_wire;
@@ -20,6 +18,8 @@ use crate::mcp::tools::no_rly::no_rly_vacuum;
 use dione_access_requests::wire as access_wire;
 use dione_config::ConfigStore;
 use dione_config::DiscordId;
+use dione_discord_messaging_contracts::LinkPreviews;
+use dione_discord_messaging_contracts::wire as messaging_wire;
 use dione_discord_tool_arguments::parse_enabled_sentex_handles;
 use dione_discord_tool_arguments::parse_hook_overrides;
 use dione_discord_tool_arguments::parse_id;

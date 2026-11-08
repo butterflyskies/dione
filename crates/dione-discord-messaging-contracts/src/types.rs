@@ -13,6 +13,28 @@ use {
     },
 };
 
+/// Transport-agnostic channel/destination identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ChannelRef(u64);
+
+impl ChannelRef {
+    /// Creates a channel reference from its transport-independent identifier.
+    pub const fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    /// Returns the transport-independent channel identifier.
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl fmt::Display for ChannelRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 /// Delivery-stage outcome and the rewrites applied before that stage.
 #[derive(Debug)]
 pub struct Report<T> {
@@ -24,10 +46,23 @@ pub struct Report<T> {
 /// A completed logical publication, including an empty publication.
 #[derive(Debug)]
 pub struct DeliveryReceipt {
-    pub(crate) message_ids: Vec<MessageId>,
-    pub(crate) locators: Vec<SentexLocator>,
+    message_ids: Vec<MessageId>,
+    locators: Vec<SentexLocator>,
 }
 impl DeliveryReceipt {
+    /// Describes publication metadata already established by the caller.
+    /// This value neither performs a send nor grants delivery or ingress authority.
+    pub fn new(message_ids: Vec<MessageId>, locators: Vec<SentexLocator>) -> Self {
+        Self {
+            message_ids,
+            locators,
+        }
+    }
+    /// Borrows role-bearing locator metadata in the original publication order.
+    pub fn locators(&self) -> &[SentexLocator] {
+        &self.locators
+    }
+
     /// Published message IDs in order.
     pub fn message_ids(&self) -> &[MessageId] {
         &self.message_ids
@@ -75,7 +110,8 @@ pub enum DmOutcome {
     PartiallyDelivered(PartialReceipt),
 }
 impl Report<ReplyOutcome> {
-    pub(crate) fn dm(self, route: DmDeliveryRoute) -> Report<DmOutcome> {
+    /// Projects the same operation outcome onto its already-selected DM route.
+    pub fn dm(self, route: DmDeliveryRoute) -> Report<DmOutcome> {
         Report {
             auto_rewrites: self.auto_rewrites,
             outcome: match self.outcome {
@@ -261,7 +297,8 @@ pub enum TargetOperation {
     CreateThread,
 }
 impl TargetOperation {
-    pub(crate) const fn as_str(self) -> &'static str {
+    /// Returns the existing protocol spelling of this mutation.
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::ReplyTo => "reply_to",
             Self::React => "react",
@@ -314,9 +351,9 @@ pub enum TargetError {
         /// The requested message.
         message: MessageId,
         /// The channel recorded by ingress.
-        admitted: crate::ingress_ledger::ChannelRef,
+        admitted: ChannelRef,
         /// The channel claimed by the caller.
-        claimed: crate::ingress_ledger::ChannelRef,
+        claimed: ChannelRef,
         /// The blocked mutation.
         operation: TargetOperation,
     },
@@ -339,7 +376,8 @@ impl ReplyPing {
             Self::Allow
         }
     }
-    pub(crate) const fn suppressed(self) -> bool {
+    /// Returns whether this descriptive flag suppresses its associated Discord behavior.
+    pub const fn suppressed(self) -> bool {
         matches!(self, Self::Suppress)
     }
 }
@@ -360,7 +398,8 @@ impl LinkPreviews {
             Self::Allow
         }
     }
-    pub(crate) const fn suppressed(self) -> bool {
+    /// Returns whether this descriptive flag suppresses its associated Discord behavior.
+    pub const fn suppressed(self) -> bool {
         matches!(self, Self::Suppress)
     }
 }

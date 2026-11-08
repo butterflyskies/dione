@@ -2,7 +2,6 @@
 
 /// Discord message reads and attachment downloads.
 mod rook_publication;
-mod types;
 use crate::ingress_ledger::IngressLedger;
 use crate::ingress_ledger::VerifyResult;
 use camino::Utf8PathBuf;
@@ -15,6 +14,11 @@ use dione_contradictionary::AutoRewritten;
 use dione_coordination::{ClaimOutcome, Coordinator};
 use dione_discord_events::NotificationEvent;
 use dione_discord_gate::OutboundGate;
+use dione_discord_messaging_contracts::{
+    DeliveryReceipt, DmDeliveryRoute, DmOutcome, LinkPreviews, MessagingError, MessagingErrorKind,
+    PartialReceipt, RedirectRestrictedSurface, ReplyOutcome, ReplyPing, Report, TargetError,
+    TargetOperation,
+};
 use dione_discord_state::State;
 use dione_evidence::SentexHandles;
 use dione_evidence::SentexRole;
@@ -59,11 +63,6 @@ use serenity::{
 };
 use std::{sync::Arc, time::Instant};
 use tokio::sync::mpsc;
-pub use types::{
-    DeliveryReceipt, DmDeliveryRoute, DmOutcome, LinkPreviews, MessagingError, MessagingErrorKind,
-    PartialReceipt, RedirectRestrictedSurface, ReplyOutcome, ReplyPing, Report, TargetError,
-    TargetOperation,
-};
 
 /// Preserve wire bits that the installed SDK's typed message flags would truncate.
 #[derive(Deserialize)]
@@ -1128,10 +1127,9 @@ async fn deliver_prepared_text(
             } else {
                 Vec::new()
             };
-            Ok(ReplyOutcome::Delivered(DeliveryReceipt {
-                message_ids: sent_ids,
-                locators,
-            }))
+            Ok(ReplyOutcome::Delivered(DeliveryReceipt::new(
+                sent_ids, locators,
+            )))
         }
         Err(error) => {
             let (cause, progress, diary) = error.into_parts();
@@ -2278,7 +2276,7 @@ mod tests {
             false,
             |channel, content| alerts.push((channel, content)),
         )
-        .map_err(crate::discord::messaging_wire::target_error)
+        .map_err(dione_discord_messaging_contracts::wire::target_error)
         .expect_err("a channel mismatch must be blocked");
 
         assert_eq!(mismatch["reason"], "channel_mismatch");
@@ -2306,7 +2304,7 @@ mod tests {
             false,
             |channel, content| alerts.push((channel, content)),
         )
-        .map_err(crate::discord::messaging_wire::target_error)
+        .map_err(dione_discord_messaging_contracts::wire::target_error)
         .expect_err("an unknown target must be blocked");
 
         assert_eq!(unknown["reason"], "target_not_found");
@@ -2335,7 +2333,7 @@ mod tests {
             true, // authenticated own-send
             |channel, content| alerts.push((channel, content)),
         )
-        .map_err(crate::discord::messaging_wire::target_error)
+        .map_err(dione_discord_messaging_contracts::wire::target_error)
         .expect("an own-authored target must be exempt from the phantom canary");
         assert!(
             alerts.is_empty(),
@@ -2356,7 +2354,7 @@ mod tests {
             false, // no authenticated own-send record
             |channel, content| alerts.push((channel, content)),
         )
-        .map_err(crate::discord::messaging_wire::target_error)
+        .map_err(dione_discord_messaging_contracts::wire::target_error)
         .expect_err("a target with no authenticated own-send record must be blocked");
         assert_eq!(spoof["reason"], "target_not_found");
         assert_eq!(alerts.len(), 1, "the spoof case must page exactly once");
@@ -2381,7 +2379,7 @@ mod tests {
             true,
             |channel, content| alerts.push((channel, content)),
         )
-        .map_err(crate::discord::messaging_wire::target_error)
+        .map_err(dione_discord_messaging_contracts::wire::target_error)
         .expect_err("own_send must not exempt a channel mismatch");
         assert_eq!(mismatch["reason"], "channel_mismatch");
         assert_eq!(
@@ -2403,7 +2401,7 @@ mod tests {
             Arc::new(IngressLedger::new()),
         );
 
-        let result = crate::discord::messaging_wire::reply(
+        let result = dione_discord_messaging_contracts::wire::reply(
             reply(
                 &ctx,
                 ChannelId::new(42),
@@ -2441,7 +2439,7 @@ mod tests {
     async fn react_to_canonical_message_outside_ingress_window() {
         let (http, requests, server) = fake_discord_http().await;
         let ctx = messaging_ctx_with_http(configured_ingress_test_config(), http);
-        let result = crate::discord::messaging_wire::unit(
+        let result = dione_discord_messaging_contracts::wire::unit(
             react(&ctx, ChannelId::new(42), MessageId::new(9001), "✅").await,
         );
         assert_eq!(
@@ -2473,7 +2471,7 @@ mod tests {
             LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
             http,
         );
-        let result = crate::discord::messaging_wire::reply(
+        let result = dione_discord_messaging_contracts::wire::reply(
             reply(
                 &ctx,
                 ChannelId::new(42),
@@ -2504,7 +2502,7 @@ mod tests {
             TargetPolicy::IngressOrOwnSend(false),
         )
         .await
-        .map_err(crate::discord::messaging_wire::target_error)
+        .map_err(dione_discord_messaging_contracts::wire::target_error)
         .expect_err("unledgered management must block");
         assert_eq!(result["reason"], "ingress_required");
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
@@ -2541,7 +2539,7 @@ mod tests {
             http,
         );
 
-        let result = crate::discord::messaging_wire::reply(
+        let result = dione_discord_messaging_contracts::wire::reply(
             reply(
                 &ctx,
                 ChannelId::new(42),
@@ -2559,7 +2557,7 @@ mod tests {
             assert!(seen[0].0.ends_with("/channels/42/messages/9001"));
         }
 
-        let missing = crate::discord::messaging_wire::unit(
+        let missing = dione_discord_messaging_contracts::wire::unit(
             react(&ctx, ChannelId::new(42), MessageId::new(8), "✅").await,
         );
         assert_eq!(missing["reason"], "target_not_found");
@@ -2580,7 +2578,7 @@ mod tests {
             LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
             http,
         );
-        let result = crate::discord::messaging_wire::reply(
+        let result = dione_discord_messaging_contracts::wire::reply(
             reply(
                 &ctx,
                 ChannelId::new(42),
@@ -2605,7 +2603,7 @@ mod tests {
         let channel = ChannelId::new(42);
         dione_drop_ledger::global().record(channel, MessageId::new(9006));
         for id in [9004, 9006, 9007] {
-            let result = crate::discord::messaging_wire::reply(
+            let result = dione_discord_messaging_contracts::wire::reply(
                 reply(
                     &ctx,
                     channel,
@@ -2663,7 +2661,7 @@ mod tests {
                 TargetPolicy::CanonicalReplyOrReact(false),
             )
             .await
-            .map_err(crate::discord::messaging_wire::target_error)
+            .map_err(dione_discord_messaging_contracts::wire::target_error)
             .expect_err("muted guild must not admit a canonical target");
             assert_eq!(
                 result["reason"], "canonical_requires_ingress",
@@ -2730,7 +2728,7 @@ mod tests {
 
         let (http, requests, server) = fake_discord_http().await;
         let ctx = messaging_ctx_with_http(configured_ingress_test_config(), http);
-        let replied = crate::discord::messaging_wire::reply(
+        let replied = dione_discord_messaging_contracts::wire::reply(
             reply(
                 &ctx,
                 ChannelId::new(42),
@@ -2741,7 +2739,7 @@ mod tests {
             .await,
         );
         assert_eq!(replied["reason"], "canonical_requires_ingress");
-        let reacted = crate::discord::messaging_wire::unit(
+        let reacted = dione_discord_messaging_contracts::wire::unit(
             react(&ctx, ChannelId::new(42), MessageId::new(9008), "✅").await,
         );
         assert_eq!(reacted["reason"], "canonical_requires_ingress");
@@ -2771,7 +2769,7 @@ mod tests {
         let (http, requests, server) = fake_discord_http().await;
         let ctx = messaging_ctx_with_http(configured_ingress_test_config(), http);
 
-        let result = crate::discord::messaging_wire::reply(
+        let result = dione_discord_messaging_contracts::wire::reply(
             reply(
                 &ctx,
                 ChannelId::new(42),
@@ -2813,13 +2811,13 @@ mod tests {
             ledger,
         );
 
-        let mismatch = crate::discord::messaging_wire::unit(
+        let mismatch = dione_discord_messaging_contracts::wire::unit(
             react(&ctx, ChannelId::new(42), MessageId::new(7), "✅").await,
         );
-        let unknown = crate::discord::messaging_wire::unit(
+        let unknown = dione_discord_messaging_contracts::wire::unit(
             react(&ctx, ChannelId::new(42), MessageId::new(8), "✅").await,
         );
-        let mismatched_reply = crate::discord::messaging_wire::reply(
+        let mismatched_reply = dione_discord_messaging_contracts::wire::reply(
             reply(
                 &ctx,
                 ChannelId::new(42),
@@ -2829,7 +2827,7 @@ mod tests {
             )
             .await,
         );
-        let unknown_reply = crate::discord::messaging_wire::reply(
+        let unknown_reply = dione_discord_messaging_contracts::wire::reply(
             reply(
                 &ctx,
                 ChannelId::new(42),
@@ -2839,7 +2837,7 @@ mod tests {
             )
             .await,
         );
-        let disallowed_reply = crate::discord::messaging_wire::reply(
+        let disallowed_reply = dione_discord_messaging_contracts::wire::reply(
             reply(
                 &ctx,
                 ChannelId::new(43),
@@ -2895,14 +2893,14 @@ mod tests {
         );
 
         // Non-own target: blocked by the canary before any Discord mutation.
-        let blocked = crate::discord::messaging_wire::unit(
+        let blocked = dione_discord_messaging_contracts::wire::unit(
             react(&ctx, ChannelId::new(42), MessageId::new(8), "✅").await,
         );
         assert_eq!(blocked["reason"], "target_not_found");
 
         // Own send recorded via note_sent: exempt, reaction reaches Discord.
         ctx.state.write().await.note_sent(500);
-        let exempt = crate::discord::messaging_wire::unit(
+        let exempt = dione_discord_messaging_contracts::wire::unit(
             react(&ctx, ChannelId::new(42), MessageId::new(500), "✅").await,
         );
         assert_ne!(exempt["reason"], "target_not_found");
@@ -3400,11 +3398,11 @@ mod tests {
                     )
                     .await;
                 let response = if rephrase {
-                    crate::discord::messaging_wire::error(
+                    dione_discord_messaging_contracts::wire::error(
                         rephrase_held(&ctx, &ticket.handle, text).await.unwrap_err(),
                     )
                 } else {
-                    crate::discord::messaging_wire::rejected_handle_json(
+                    dione_discord_messaging_contracts::wire::rejected_handle_json(
                         release_held(&ctx, &ticket.handle).await.unwrap_err(),
                     )
                 };
@@ -3501,7 +3499,7 @@ mod tests {
                 .with_sentex_handles(&handles),
             )
             .await
-            .map_err(crate::discord::messaging_wire::error)
+            .map_err(dione_discord_messaging_contracts::wire::error)
             .unwrap();
 
             let hook_context = hook_context.lock().unwrap().clone().unwrap();
@@ -3561,7 +3559,7 @@ mod tests {
                     ),
                 )
                 .await
-                .map_err(crate::discord::messaging_wire::error)
+                .map_err(dione_discord_messaging_contracts::wire::error)
                 .unwrap_err();
                 assert_eq!(
                     error["error"],
@@ -3597,7 +3595,7 @@ mod tests {
             ),
         )
         .await
-        .map_err(crate::discord::messaging_wire::error)
+        .map_err(dione_discord_messaging_contracts::wire::error)
         .unwrap_err();
 
         assert_eq!(
@@ -3625,7 +3623,7 @@ mod tests {
             ),
         )
         .await
-        .map_err(crate::discord::messaging_wire::error)
+        .map_err(dione_discord_messaging_contracts::wire::error)
         .expect("mid-message sentex prose is not a terminal locator");
 
         assert_eq!(prepared.text, content);
@@ -3672,7 +3670,7 @@ mod tests {
                 ),
             )
             .await
-            .map_err(crate::discord::messaging_wire::error)
+            .map_err(dione_discord_messaging_contracts::wire::error)
             .unwrap_err();
 
             assert_eq!(
@@ -3698,7 +3696,7 @@ mod tests {
         )
         .expect("valid sentex handle");
 
-        let response = crate::discord::messaging_wire::reply(
+        let response = dione_discord_messaging_contracts::wire::reply(
             reply_with_evidence_and_hook_overrides(
                 &ctx,
                 ChannelId::new(42),
@@ -3748,7 +3746,7 @@ mod tests {
             .with_sentex_handles(&handles),
         )
         .await
-        .map_err(crate::discord::messaging_wire::error)
+        .map_err(dione_discord_messaging_contracts::wire::error)
         .unwrap();
 
         assert_eq!(prepared.text, "byte exact");
@@ -3765,7 +3763,7 @@ mod tests {
         )
         .expect("valid sentex handle");
 
-        let response = crate::discord::messaging_wire::reply(
+        let response = dione_discord_messaging_contracts::wire::reply(
             reply_with_evidence_and_hook_overrides(
                 &ctx,
                 ChannelId::new(42),
@@ -3792,7 +3790,7 @@ mod tests {
     async fn sentex_bearing_rephrase_is_refused_without_consuming_handle() {
         for enabled in [false, true] {
             let ctx = messaging_ctx(blocking_test_config_with_evidence_markers(enabled));
-            let bounce = crate::discord::messaging_wire::reply(
+            let bounce = dione_discord_messaging_contracts::wire::reply(
                 reply(
                     &ctx,
                     ChannelId::new(42),
@@ -3818,7 +3816,7 @@ mod tests {
                     "[🔍=v2:claim:AAAAAAAAAAU]"
                 ),
             ] {
-                let response = crate::discord::messaging_wire::rephrase(
+                let response = dione_discord_messaging_contracts::wire::rephrase(
                     &HoldHandle::new(handle),
                     rephrase_held(
                         &ctx,
@@ -3902,7 +3900,7 @@ mod tests {
         let (ctx, requests, server, _dir) = auto_test_ctx_with(raw).await;
         for suppress_embeds in [false, true] {
             let content = "https://example.com/ ".repeat(5);
-            let response = crate::discord::messaging_wire::reply(
+            let response = dione_discord_messaging_contracts::wire::reply(
                 reply_with_evidence_and_hook_overrides(
                     &ctx,
                     ChannelId::new(42),
@@ -3931,7 +3929,7 @@ mod tests {
             captured.clear();
         }
         for rephrase in [false, true] {
-            let bounce = crate::discord::messaging_wire::reply(
+            let bounce = dione_discord_messaging_contracts::wire::reply(
                 reply_with_evidence_and_hook_overrides(
                     &ctx,
                     ChannelId::new(42),
@@ -3949,12 +3947,12 @@ mod tests {
             let handle = bounce["held"]["handle"].as_str().expect("held");
             assert!(posted_contents(&requests).is_empty());
             let sent = if rephrase {
-                crate::discord::messaging_wire::rephrase(
+                dione_discord_messaging_contracts::wire::rephrase(
                     &HoldHandle::new(handle),
                     rephrase_held(&ctx, &HoldHandle::new(handle), "https://example.com/").await,
                 )
             } else {
-                crate::discord::messaging_wire::release(
+                dione_discord_messaging_contracts::wire::release(
                     &HoldHandle::new(handle),
                     release_held(&ctx, &HoldHandle::new(handle)).await,
                 )
@@ -3977,7 +3975,7 @@ mod tests {
     async fn suppress_embeds_dm_and_edit_wire_semantics() {
         let (ctx, requests, server, _dir) = auto_test_ctx().await;
         for suppress in [false, true] {
-            let result = crate::discord::messaging_wire::dm(
+            let result = dione_discord_messaging_contracts::wire::dm(
                 send_dm_with_evidence_and_hook_overrides(
                     &ctx,
                     UserId::new(77),
@@ -3999,7 +3997,7 @@ mod tests {
             captured.clear();
         }
         for suppress in [None, Some(true), Some(false)] {
-            let result = crate::discord::messaging_wire::message(
+            let result = dione_discord_messaging_contracts::wire::message(
                 edit_message_with_embed_control(
                     &ctx,
                     ChannelId::new(42),
@@ -4045,7 +4043,7 @@ mod tests {
     async fn suppress_embeds_edit_fetch_errors_never_patch() {
         let (ctx, requests, server, _dir) = auto_test_ctx().await;
         for message_id in [9003, 9016] {
-            let result = crate::discord::messaging_wire::message(
+            let result = dione_discord_messaging_contracts::wire::message(
                 edit_message_with_embed_control(
                     &ctx,
                     ChannelId::new(42),
@@ -4092,7 +4090,7 @@ mod tests {
                 .with_mode(PipelineMode::Enforce),
         ));
 
-        let response = crate::discord::messaging_wire::reply(
+        let response = dione_discord_messaging_contracts::wire::reply(
             reply(
                 &ctx,
                 ChannelId::new(42),
@@ -4141,7 +4139,7 @@ mod tests {
             )
             .unwrap();
 
-            let response = crate::discord::messaging_wire::reply(
+            let response = dione_discord_messaging_contracts::wire::reply(
                 reply_with_evidence_and_hook_overrides(
                     &ctx,
                     ChannelId::new(42),
@@ -4192,7 +4190,7 @@ mod tests {
         )
         .unwrap();
 
-        let response = crate::discord::messaging_wire::reply(
+        let response = dione_discord_messaging_contracts::wire::reply(
             reply_with_evidence_and_hook_overrides(
                 &ctx,
                 ChannelId::new(42),
@@ -4249,7 +4247,7 @@ mod tests {
                 &result.as_ref().unwrap().outcome,
                 ReplyOutcome::Delivered(_)
             ));
-            crate::discord::messaging_wire::reply(result)
+            dione_discord_messaging_contracts::wire::reply(result)
         };
 
         assert_eq!(response["ok"], true, "a clean auto hit sends: {response}");
@@ -4279,7 +4277,7 @@ mod tests {
     async fn send_dm_sends_auto_rewrite_and_reports_it() {
         let (ctx, requests, server, dir) = auto_test_ctx().await;
 
-        let response = crate::discord::messaging_wire::dm(
+        let response = dione_discord_messaging_contracts::wire::dm(
             send_dm(&ctx, UserId::new(77), "we utilize the cache").await,
         );
 
@@ -4304,7 +4302,7 @@ mod tests {
             dione_evidence::EvidenceMarkerVersion::V3,
         )
         .unwrap();
-        let preflight = crate::discord::messaging_wire::dm(
+        let preflight = dione_discord_messaging_contracts::wire::dm(
             send_dm_with_evidence_and_hook_overrides(
                 &ctx,
                 UserId::new(77),
@@ -4325,7 +4323,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(&failure.kind, MessagingErrorKind::CreateDm(_)));
-        let response = crate::discord::messaging_wire::error(failure);
+        let response = dione_discord_messaging_contracts::wire::error(failure);
         assert!(
             response["error"]
                 .as_str()
@@ -4349,7 +4347,7 @@ mod tests {
                 "raw terminal sentex locators are not accepted in content; use structured handles on reply or send_dm",
             ),
         ] {
-            let response = crate::discord::messaging_wire::rephrase(
+            let response = dione_discord_messaging_contracts::wire::rephrase(
                 &handle,
                 rephrase_held(&ctx, &handle, content).await,
             );
@@ -4362,7 +4360,7 @@ mod tests {
             &failure.kind,
             MessagingErrorKind::Handle(error) if matches!(error.as_ref(), RejectedHandle::Unknown(_))
         ));
-        let response = crate::discord::messaging_wire::error(failure);
+        let response = dione_discord_messaging_contracts::wire::error(failure);
         assert_eq!(
             response["auto_rewrites"],
             json!(["auto: utilize \u{2192} use"])
@@ -4385,7 +4383,7 @@ mod tests {
                     &result.as_ref().unwrap().outcome,
                     ReplyOutcome::Held(_)
                 ));
-                crate::discord::messaging_wire::reply(result)
+                dione_discord_messaging_contracts::wire::reply(result)
             };
 
             let handle = response["held"]["handle"].as_str().expect("held");
@@ -4396,7 +4394,7 @@ mod tests {
             assert_eq!(records[0]["action"], "block");
             assert_eq!(records[0]["message"], content);
 
-            let released = crate::discord::messaging_wire::release(
+            let released = dione_discord_messaging_contracts::wire::release(
                 &HoldHandle::new(handle),
                 release_held(&ctx, &HoldHandle::new(handle)).await,
             );
@@ -4410,7 +4408,7 @@ mod tests {
     #[tokio::test]
     async fn rephrase_sends_auto_rewrite_reports_and_records_it() {
         let (ctx, requests, server, dir) = auto_test_ctx().await;
-        let bounce = crate::discord::messaging_wire::reply(
+        let bounce = dione_discord_messaging_contracts::wire::reply(
             reply(
                 &ctx,
                 ChannelId::new(42),
@@ -4422,7 +4420,7 @@ mod tests {
         );
         let handle = bounce["held"]["handle"].as_str().expect("held");
 
-        let response = crate::discord::messaging_wire::rephrase(
+        let response = dione_discord_messaging_contracts::wire::rephrase(
             &HoldHandle::new(handle),
             rephrase_held(&ctx, &HoldHandle::new(handle), "we utilize the cache").await,
         );
@@ -4470,7 +4468,7 @@ mod tests {
                 &result.as_ref().unwrap().outcome,
                 ReplyOutcome::PartiallyDelivered(_)
             ));
-            crate::discord::messaging_wire::reply(result)
+            dione_discord_messaging_contracts::wire::reply(result)
         };
 
         assert!(response["error"].is_string(), "{response}");
@@ -4523,7 +4521,7 @@ mod tests {
                 &result.as_ref().unwrap_err().kind,
                 MessagingErrorKind::Delivery(DeliveryCause::ChunkSend { index: 0, .. })
             ));
-            crate::discord::messaging_wire::reply(result)
+            dione_discord_messaging_contracts::wire::reply(result)
         };
 
         assert!(response["error"].is_string(), "{response}");
@@ -4544,7 +4542,7 @@ mod tests {
     #[tokio::test]
     async fn failed_rephrase_holds_the_replacement_as_written() {
         let (ctx, requests, server, dir) = auto_test_ctx().await;
-        let bounce = crate::discord::messaging_wire::reply(
+        let bounce = dione_discord_messaging_contracts::wire::reply(
             reply(
                 &ctx,
                 ChannelId::new(42),
@@ -4556,7 +4554,7 @@ mod tests {
         );
         let handle = bounce["held"]["handle"].as_str().expect("held");
 
-        let response = crate::discord::messaging_wire::rephrase(
+        let response = dione_discord_messaging_contracts::wire::rephrase(
             &HoldHandle::new(handle),
             rephrase_held(
                 &ctx,
@@ -4567,7 +4565,7 @@ mod tests {
         );
         assert_eq!(response["handle_still_live"], handle, "{response}");
 
-        let released = crate::discord::messaging_wire::release(
+        let released = dione_discord_messaging_contracts::wire::release(
             &HoldHandle::new(handle),
             release_held(&ctx, &HoldHandle::new(handle)).await,
         );
@@ -4627,7 +4625,7 @@ mod tests {
             )
             .expect("valid sentex handles");
 
-            let result = crate::discord::messaging_wire::dm(
+            let result = dione_discord_messaging_contracts::wire::dm(
                 send_dm_with_evidence_and_hook_overrides(
                     &ctx,
                     UserId::new(77),
@@ -4735,7 +4733,7 @@ mod tests {
         );
         ctx.event_tx = Some(tx);
 
-        let result = crate::discord::messaging_wire::unit(
+        let result = dione_discord_messaging_contracts::wire::unit(
             react(&ctx, ChannelId::new(42), MessageId::new(9001), "👍").await,
         );
         assert_eq!(result["ok"], true);
@@ -4771,7 +4769,7 @@ mod tests {
             ),
         )
         .await
-        .map_err(crate::discord::messaging_wire::error)
+        .map_err(dione_discord_messaging_contracts::wire::error)
         .unwrap_err();
 
         assert!(
@@ -4827,7 +4825,7 @@ mod tests {
             LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
         );
 
-        let result = crate::discord::messaging_wire::reply(
+        let result = dione_discord_messaging_contracts::wire::reply(
             reply(&ctx, ChannelId::new(42), "text", None, ReplyPing::Allow).await,
         );
 
@@ -4863,7 +4861,7 @@ mod tests {
         ctx.ingress_ledger = Arc::clone(&ledger);
 
         // Admitted reply (msg 7 in ch 42) → reaches halt hook.
-        let admitted = crate::discord::messaging_wire::reply(
+        let admitted = dione_discord_messaging_contracts::wire::reply(
             reply_with_hook_overrides(
                 &ctx,
                 ChannelId::new(42),
@@ -4877,7 +4875,7 @@ mod tests {
         assert_eq!(admitted["error"], "blocked by test hook");
 
         // Unknown reply (msg 9003 not in ledger; REST 403) → blocked before halt hook.
-        let unknown = crate::discord::messaging_wire::reply(
+        let unknown = dione_discord_messaging_contracts::wire::reply(
             reply_with_hook_overrides(
                 &ctx,
                 ChannelId::new(42),
@@ -4894,7 +4892,7 @@ mod tests {
         );
 
         // Mismatch reply (msg 8 admitted in ch 41, claimed ch 42) → blocked before halt hook.
-        let mismatch = crate::discord::messaging_wire::reply(
+        let mismatch = dione_discord_messaging_contracts::wire::reply(
             reply_with_hook_overrides(
                 &ctx,
                 ChannelId::new(42),
@@ -4914,12 +4912,12 @@ mod tests {
             ledger.take_observed_verifications(),
             vec![
                 crate::ingress_ledger::VerifyResult::Admitted {
-                    channel: crate::ingress_ledger::ChannelRef::new(42),
+                    channel: dione_discord_messaging_contracts::ChannelRef::new(42),
                 },
                 crate::ingress_ledger::VerifyResult::Unknown,
                 crate::ingress_ledger::VerifyResult::ChannelMismatch {
-                    admitted_channel: crate::ingress_ledger::ChannelRef::new(41),
-                    claimed_channel: crate::ingress_ledger::ChannelRef::new(42),
+                    admitted_channel: dione_discord_messaging_contracts::ChannelRef::new(41),
+                    claimed_channel: dione_discord_messaging_contracts::ChannelRef::new(42),
                 },
             ]
         );
@@ -4944,7 +4942,7 @@ mod tests {
             LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
         );
 
-        let result = crate::discord::messaging_wire::message(
+        let result = dione_discord_messaging_contracts::wire::message(
             edit_message(&ctx, ChannelId::new(42), MessageId::new(7), "text").await,
         );
 
@@ -4967,7 +4965,7 @@ mod tests {
         );
         let attachment = CreateAttachment::bytes(b"body".as_slice(), "test.txt");
 
-        let result = crate::discord::messaging_wire::message(
+        let result = dione_discord_messaging_contracts::wire::message(
             send_attachment_with_hook_overrides(
                 &ctx,
                 ChannelId::new(42),
@@ -4992,8 +4990,9 @@ mod tests {
             LoadedConfig::try_from_raw(Config::default()).expect("valid test configuration"),
         );
 
-        let result =
-            crate::discord::messaging_wire::dm(send_dm(&ctx, UserId::new(77), "text").await);
+        let result = dione_discord_messaging_contracts::wire::dm(
+            send_dm(&ctx, UserId::new(77), "text").await,
+        );
 
         assert_eq!(result["error"], "blocked by test hook");
         assert_eq!(*surfaces.lock().expect("surface lock"), vec!["send-dm"]);
@@ -5008,8 +5007,9 @@ mod tests {
                 .with_mode(PipelineMode::Enforce);
         let ctx = messaging_ctx(test_config()).with_pre_send_pipeline(Arc::new(pipeline));
 
-        let result =
-            crate::discord::messaging_wire::dm(send_dm(&ctx, UserId::new(77), "text").await);
+        let result = dione_discord_messaging_contracts::wire::dm(
+            send_dm(&ctx, UserId::new(77), "text").await,
+        );
 
         assert_eq!(result["error"], "captured");
         let context = captured.lock().unwrap().clone().unwrap();
@@ -5067,7 +5067,7 @@ mod tests {
             }
         ));
         assert_eq!(
-            crate::discord::messaging_wire::dm(result),
+            dione_discord_messaging_contracts::wire::dm(result),
             json!({"ok":true,"message_ids":[9001],"claim_locators":["v3:claim:Ig"],"citation_locators":["v3:citation:DA"]})
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -5086,7 +5086,7 @@ mod tests {
         let ctx = messaging_ctx(test_config());
         let hook = HookName::parse("surface-halt").unwrap();
 
-        let result = crate::discord::messaging_wire::message(
+        let result = dione_discord_messaging_contracts::wire::message(
             send_file_with_hook_overrides(
                 &ctx,
                 ChannelId::new(42),
@@ -5116,7 +5116,7 @@ mod tests {
 
         let result = prepare_voice_text(&ctx, ChannelId::new(42), "speech", &[])
             .await
-            .map_err(crate::discord::messaging_wire::error);
+            .map_err(dione_discord_messaging_contracts::wire::error);
 
         assert_eq!(
             result.expect_err("halt should stop TTS")["error"],
@@ -5151,7 +5151,7 @@ mod tests {
 
         let error = prepare_voice_text(&ctx, ChannelId::new(42), "speech", &[])
             .await
-            .map_err(crate::discord::messaging_wire::error)
+            .map_err(dione_discord_messaging_contracts::wire::error)
             .unwrap_err();
 
         assert_eq!(
@@ -5178,7 +5178,7 @@ mod tests {
         let ctx = messaging_ctx(LoadedConfig::try_from_raw(raw).expect("valid test configuration"))
             .with_pre_send_pipeline(Arc::new(pipeline));
 
-        let result = crate::discord::messaging_wire::reply(
+        let result = dione_discord_messaging_contracts::wire::reply(
             reply(&ctx, ChannelId::new(42), "text", None, ReplyPing::Allow).await,
         );
 
@@ -5558,7 +5558,7 @@ mod tests {
             .with_pre_send_pipeline(Arc::new(pipeline));
         let ctx_b = messaging_ctx_with_http(coordinated_config(&addr, 222), http);
 
-        let refused = crate::discord::messaging_wire::reply(
+        let refused = dione_discord_messaging_contracts::wire::reply(
             reply(
                 &ctx_a,
                 ChannelId::new(42),
@@ -5607,7 +5607,7 @@ mod tests {
                 &result.as_ref().unwrap_err().kind,
                 MessagingErrorKind::Delivery(DeliveryCause::ChunkSend { index: 0, .. })
             ));
-            crate::discord::messaging_wire::reply(result)
+            dione_discord_messaging_contracts::wire::reply(result)
         };
         assert!(
             failed.get("error").is_some(),
@@ -5658,7 +5658,7 @@ mod tests {
                 &result.as_ref().unwrap().outcome,
                 ReplyOutcome::PartiallyDelivered(_)
             ));
-            crate::discord::messaging_wire::reply(result)
+            dione_discord_messaging_contracts::wire::reply(result)
         };
         assert!(
             partial.get("error").is_some(),
@@ -5784,7 +5784,7 @@ mod tests {
         let (addr, log) = fake_claim_server_silent_on_claim().await;
         let (http, _requests, server) = fake_discord_http().await;
         let ctx = messaging_ctx_with_http(coordinated_config(&addr, 111), http);
-        let sent = crate::discord::messaging_wire::reply(
+        let sent = dione_discord_messaging_contracts::wire::reply(
             reply(
                 &ctx,
                 ChannelId::new(42),
@@ -5814,7 +5814,7 @@ mod tests {
         let (addr, log) = fake_claim_server_silent_on_claim().await;
         let (http, _requests, server) = fake_discord_http().await;
         let ctx = messaging_ctx_with_http(coordinated_config(&addr, 111), Arc::clone(&http));
-        let failed = crate::discord::messaging_wire::reply(
+        let failed = dione_discord_messaging_contracts::wire::reply(
             reply(
                 &ctx,
                 ChannelId::new(42),
@@ -5921,7 +5921,7 @@ mod tests {
                 &result.as_ref().unwrap().outcome,
                 ReplyOutcome::Delivered(_)
             ));
-            crate::discord::messaging_wire::reply(result)
+            dione_discord_messaging_contracts::wire::reply(result)
         };
         assert_eq!(sent["ok"], true, "{sent}");
         assert!(
@@ -6032,7 +6032,7 @@ mod tests {
         };
         assert_eq!(delivery.message_ids(), [MessageId::new(9001)]);
         assert_eq!(
-            crate::discord::messaging_wire::reply(result),
+            dione_discord_messaging_contracts::wire::reply(result),
             json!({"ok": true, "message_ids": [9001]})
         );
         assert_eq!(posted_contents(&requests), [""]);

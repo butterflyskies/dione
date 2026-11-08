@@ -13,7 +13,6 @@ pub(crate) mod verified_action_runtime;
 #[cfg(test)]
 mod visibility_contract_tests;
 
-pub(crate) mod messaging_wire;
 pub(crate) mod reply_tool;
 
 pub(crate) mod query_tools;

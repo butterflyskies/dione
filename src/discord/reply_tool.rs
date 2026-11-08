@@ -1,15 +1,14 @@
 //! Discord-owned reply tool registration, parsing, and publication.
-use super::{
-    messaging::{
-        LinkPreviews, MessagingCtx, ReplyPing, ReplyToolOptions,
-        reply_with_evidence_and_hook_overrides,
-    },
-    messaging_wire,
-};
+use super::messaging::MessagingCtx;
+use super::messaging::ReplyToolOptions;
+use super::messaging::reply_with_evidence_and_hook_overrides;
 use crate::ingress_ledger::IngressLedger;
 use camino::Utf8PathBuf;
 use dione_config::load_config;
 use dione_discord_events::NotificationEvent;
+use dione_discord_messaging_contracts::LinkPreviews;
+use dione_discord_messaging_contracts::ReplyPing;
+use dione_discord_messaging_contracts::wire as messaging_wire;
 use dione_discord_state::State;
 use dione_discord_tool_arguments::{
     ArgumentError, ArgumentErrorKind, parse_enabled_sentex_handles, parse_hook_overrides, parse_id,

@@ -321,19 +321,19 @@ impl AttentionRuntime {
                             channel,
                             &text,
                             None,
-                            crate::discord::messaging::ReplyPing::from_suppressed(true),
+                            dione_discord_messaging_contracts::ReplyPing::from_suppressed(true),
                         ),
                     )
                     .await
                     {
-                        Ok(Ok(messaging::Report {
-                            outcome: messaging::ReplyOutcome::Delivered(_),
+                        Ok(Ok(dione_discord_messaging_contracts::Report {
+                            outcome: dione_discord_messaging_contracts::ReplyOutcome::Delivered(_),
                             ..
                         })) => Ok(()),
-                        Ok(Ok(messaging::Report {
+                        Ok(Ok(dione_discord_messaging_contracts::Report {
                             outcome:
-                                messaging::ReplyOutcome::Held(_)
-                                | messaging::ReplyOutcome::PartiallyDelivered(_),
+                                dione_discord_messaging_contracts::ReplyOutcome::Held(_)
+                                | dione_discord_messaging_contracts::ReplyOutcome::PartiallyDelivered(_),
                             ..
                         }))
                         | Ok(Err(_))

@@ -1,5 +1,5 @@
 ---
-source: src/discord/messaging_wire.rs
+source: crates/dione-discord-messaging-contracts/src/wire.rs
 expression: bounce_json(&ticket)
 ---
 {

@@ -1,9 +1,9 @@
 //! MCP result projection for Discord management operations.
 
-use crate::discord::{
-    management::{CreatedThread, ManagementError, ManagementErrorKind},
-    messaging_wire,
-};
+use crate::discord::management::CreatedThread;
+use crate::discord::management::ManagementError;
+use crate::discord::management::ManagementErrorKind;
+use dione_discord_messaging_contracts::wire as messaging_wire;
 use serde_json::{Value, json};
 
 fn error(error: ManagementError) -> Value {

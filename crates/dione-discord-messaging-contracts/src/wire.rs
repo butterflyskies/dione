@@ -2,7 +2,7 @@
 use serde_json::{Value, json};
 use serenity::model::id::MessageId;
 use {
-    crate::discord::messaging::{
+    crate::{
         DeliveryReceipt, DmDeliveryRoute, DmOutcome, MessagingError, MessagingErrorKind,
         ReplyOutcome, Report, TargetError,
     },
@@ -25,7 +25,8 @@ fn add_auto_rewrite_lines(response: &mut Value, rewrites: &[AutoRewrite]) {
 
 /// The construct-facing shape of a bounce: the error names the reason, and
 /// the `held` block carries the handle plus the three verbs.
-pub(crate) fn bounce_json(ticket: &BounceTicket) -> Value {
+/// Projects a consent hold without executing any handle action.
+pub fn bounce_json(ticket: &BounceTicket) -> Value {
     let mut held = json!({
         "handle": ticket.handle,
         // Canonical structured reason: the same `{ "matches": [...] }` shape
@@ -47,7 +48,8 @@ pub(crate) fn bounce_json(ticket: &BounceTicket) -> Value {
 /// Map a handle rejection to the construct-facing error shape. A still-live
 /// handle (failed send) says so explicitly, so the construct knows a retry
 /// is possible.
-pub(crate) fn rejected_handle_json(error: RejectedHandle) -> Value {
+/// Projects a handle refusal with its existing retry and confirmed-prefix metadata.
+pub fn rejected_handle_json(error: RejectedHandle) -> Value {
     match error {
         RejectedHandle::SendFailed {
             ref handle,
@@ -88,13 +90,13 @@ fn add_partial_receipt(value: &mut Value, sent: &PostedMessages) {
 }
 
 fn receipt(delivery: DeliveryReceipt) -> Value {
-    let mut value = json!({"ok": true, "message_ids": delivery.message_ids.iter().map(|id| id.get()).collect::<Vec<_>>()});
+    let mut value = json!({"ok": true, "message_ids": delivery.message_ids().iter().map(|id| id.get()).collect::<Vec<_>>()});
     for (role, key) in [
         (SentexRole::Claim, "claim_locators"),
         (SentexRole::Citation, "citation_locators"),
     ] {
         let locators = delivery
-            .locators
+            .locators()
             .iter()
             .filter(|locator| locator.role() == role)
             .map(dione_evidence::SentexLocator::as_str)
@@ -106,7 +108,8 @@ fn receipt(delivery: DeliveryReceipt) -> Value {
     value
 }
 
-pub(crate) fn error(error: MessagingError) -> Value {
+/// Projects a typed failure without discarding its existing rewrite metadata.
+pub fn error(error: MessagingError) -> Value {
     let mut value = match error.kind {
         MessagingErrorKind::Target(target) => target_error(target),
         MessagingErrorKind::DeliveryUnknown { cause, confirmed } => {
@@ -148,7 +151,8 @@ pub(crate) fn error(error: MessagingError) -> Value {
     value
 }
 
-pub(crate) fn target_error(error: TargetError) -> Value {
+/// Projects descriptive target refusal fields without granting target permission.
+pub fn target_error(error: TargetError) -> Value {
     let mut value = json!({"error": error.to_string()});
     value["reason"] = json!(match error {
         TargetError::IngressRequired => "ingress_required",
@@ -173,7 +177,8 @@ pub(crate) fn target_error(error: TargetError) -> Value {
     value
 }
 
-pub(crate) fn reply(result: Result<Report<ReplyOutcome>, MessagingError>) -> Value {
+/// Projects a channel reply result into its existing MCP JSON contract.
+pub fn reply(result: Result<Report<ReplyOutcome>, MessagingError>) -> Value {
     match result {
         Ok(report) => {
             let mut value = match report.outcome {
@@ -192,7 +197,8 @@ pub(crate) fn reply(result: Result<Report<ReplyOutcome>, MessagingError>) -> Val
     }
 }
 
-pub(crate) fn dm(result: Result<Report<DmOutcome>, MessagingError>) -> Value {
+/// Projects a DM result and its already-selected route.
+pub fn dm(result: Result<Report<DmOutcome>, MessagingError>) -> Value {
     match result {
         Ok(report) => {
             let mut value = match report.outcome {
@@ -220,7 +226,8 @@ pub(crate) fn dm(result: Result<Report<DmOutcome>, MessagingError>) -> Value {
     }
 }
 
-pub(crate) fn release(handle: &HoldHandle, result: Result<Released, RejectedHandle>) -> Value {
+/// Projects a release result without executing or retrying the release.
+pub fn release(handle: &HoldHandle, result: Result<Released, RejectedHandle>) -> Value {
     match result {
         Ok(released) => {
             json!({"ok": true, "message_ids": released.message_ids.iter().map(|id| id.get()).collect::<Vec<_>>(), "released": handle, "latency_ms": released.latency_ms})
@@ -228,10 +235,8 @@ pub(crate) fn release(handle: &HoldHandle, result: Result<Released, RejectedHand
         Err(cause) => rejected_handle_json(cause),
     }
 }
-pub(crate) fn rephrase(
-    handle: &HoldHandle,
-    result: Result<Report<Rephrased>, MessagingError>,
-) -> Value {
+/// Projects a replacement result without executing or retrying publication.
+pub fn rephrase(handle: &HoldHandle, result: Result<Report<Rephrased>, MessagingError>) -> Value {
     match result {
         Ok(report) => {
             let mut value = match report.outcome {
@@ -247,13 +252,15 @@ pub(crate) fn rephrase(
     }
 }
 
-pub(crate) fn message(result: Result<MessageId, MessagingError>) -> Value {
+/// Projects an operation returning one message identifier.
+pub fn message(result: Result<MessageId, MessagingError>) -> Value {
     match result {
         Ok(id) => json!({"ok": true, "message_id": id.to_string()}),
         Err(cause) => error(cause),
     }
 }
-pub(crate) fn unit(result: Result<(), MessagingError>) -> Value {
+/// Projects an operation with no returned identifier.
+pub fn unit(result: Result<(), MessagingError>) -> Value {
     match result {
         Ok(()) => json!({"ok": true}),
         Err(cause) => error(cause),
@@ -263,7 +270,7 @@ pub(crate) fn unit(result: Result<(), MessagingError>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discord::messaging::PartialReceipt;
+    use crate::PartialReceipt;
     use dione_outbound_consent::{
         delivery::{DeliveryCause, DeliveryProgress, PostedMessages},
         judge::{ReasonEntry, RejectReason},
@@ -346,17 +353,14 @@ mod tests {
         ] {
             let result = Ok(Report {
                 outcome: DmOutcome::Delivered {
-                    delivery: DeliveryReceipt {
-                        message_ids: vec![MessageId::new(101)],
-                        locators: Vec::new(),
-                    },
+                    delivery: DeliveryReceipt::new(vec![MessageId::new(101)], Vec::new()),
                     route,
                 },
                 auto_rewrites: Vec::new(),
             });
             assert_eq!(dm(result), expected);
         }
-        let partial = crate::discord::messaging::PartialReceipt {
+        let partial = crate::PartialReceipt {
             sent: dione_outbound_consent::delivery::PostedMessages::new(
                 MessageId::new(101),
                 vec![],
@@ -458,10 +462,10 @@ mod tests {
     fn reply_complete_held_and_rejected_do_not_claim_partial_delivery() {
         assert_eq!(
             reply(Ok(Report {
-                outcome: ReplyOutcome::Delivered(DeliveryReceipt {
-                    message_ids: vec![MessageId::new(101)],
-                    locators: vec![],
-                }),
+                outcome: ReplyOutcome::Delivered(DeliveryReceipt::new(
+                    vec![MessageId::new(101)],
+                    vec![]
+                )),
                 auto_rewrites: vec![],
             })),
             json!({"ok":true,"message_ids":[101]})
@@ -515,7 +519,7 @@ mod tests {
 
     #[test]
     fn target_operation_spellings_and_mismatch_fields_are_literal() {
-        use crate::{discord::messaging::TargetOperation, ingress_ledger::ChannelRef};
+        use crate::{ChannelRef, TargetOperation};
         for (operation, spelling) in [
             (TargetOperation::ReplyTo, "reply_to"),
             (TargetOperation::React, "react"),

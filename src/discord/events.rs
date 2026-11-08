@@ -3466,7 +3466,9 @@ mod tests {
         assert_eq!(
             ledger.verify(delivered.message_id, delivered.chat_id),
             crate::ingress_ledger::VerifyResult::Admitted {
-                channel: crate::ingress_ledger::ChannelRef::new(delivered.chat_id.get()),
+                channel: dione_discord_messaging_contracts::ChannelRef::new(
+                    delivered.chat_id.get()
+                ),
             }
         );
         assert_eq!(delivered.content, "gateway payload");

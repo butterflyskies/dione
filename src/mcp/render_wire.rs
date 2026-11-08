@@ -1,9 +1,8 @@
 //! MCP projections of rendered files and Discord rendering outcomes.
 
-use crate::discord::{
-    messaging_wire,
-    rendering::{RenderToChannelError, RenderToChannelErrorKind},
-};
+use crate::discord::rendering::RenderToChannelError;
+use crate::discord::rendering::RenderToChannelErrorKind;
+use dione_discord_messaging_contracts::wire as messaging_wire;
 use dione_rendering::{
     FileRenderError, FileRenderErrorKind, PersistedImage, RenderError, RenderErrorKind,
 };

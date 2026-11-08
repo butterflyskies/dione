@@ -1,14 +1,23 @@
 //! A single Discord message POST for the durable Rook publication owner.
 
-use super::{
-    MessagingCtx, MessagingErrorKind, OutboundDraft, OutboundSurface, PreSendOptions, TargetError,
-    TargetOperation, TargetPolicy, auto_send_records, channel_coordinator, check_outbound,
-    prepare_outbound, send_side_records, verify_message_target,
-};
+use super::MessagingCtx;
+use super::OutboundDraft;
+use super::OutboundSurface;
+use super::PreSendOptions;
+use super::TargetPolicy;
+use super::auto_send_records;
+use super::channel_coordinator;
+use super::check_outbound;
+use super::prepare_outbound;
+use super::send_side_records;
+use super::verify_message_target;
 use dione_contracts::{
     ConversationId, ConversationRef, MessageRef, ModuleInstanceId, ModuleSlotId, ProviderId,
 };
 use dione_coordination::{ClaimOutcome, ClaimProgress, Coordinator};
+use dione_discord_messaging_contracts::MessagingErrorKind;
+use dione_discord_messaging_contracts::TargetError;
+use dione_discord_messaging_contracts::TargetOperation;
 use dione_rook::{
     CanonicalPublication, DispatchOutcome, MentionPolicy, MessageKey, PreparedPublication,
     PublicationCapabilities, PublicationDispatch, PublicationProvider, PublicationReceipt,

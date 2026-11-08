@@ -1,6 +1,9 @@
 //! Authorized rendering and delivery of a math attachment.
 
-use crate::discord::messaging::{self, MessagingCtx, MessagingError, OutboundSurface};
+use crate::discord::messaging;
+use crate::discord::messaging::MessagingCtx;
+use crate::discord::messaging::OutboundSurface;
+use dione_discord_messaging_contracts::MessagingError;
 use dione_pre_send::HookName;
 use dione_rendering::{self as rendering, RenderError};
 use serenity::{

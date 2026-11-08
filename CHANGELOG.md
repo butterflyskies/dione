@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.138.0]
+
+- Extract complete Discord messaging outcomes and wire contracts, keeping actual publication, consent and sealed ingress authority at root.
+
 ## [0.137.0]
 
 - Extract the complete shared Discord tool argument contract, preserving parsing shapes, literal failures and root execution authority.

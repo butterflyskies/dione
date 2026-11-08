@@ -12,6 +12,7 @@
 //! remain independent lineages: the ledger does not suppress either event based
 //! on timing or content similarity.
 
+use dione_discord_messaging_contracts::ChannelRef;
 use serenity::model::{
     Timestamp,
     id::{ChannelId, MessageId, UserId, WebhookId},
@@ -19,7 +20,6 @@ use serenity::model::{
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    fmt,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -34,28 +34,6 @@ const ACTIVE_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const TOMBSTONE_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 const DEFAULT_MAX_ACTIVE: usize = 16_384;
 const DEFAULT_MAX_TOMBSTONES: usize = 16_384;
-
-/// Transport-agnostic channel/destination identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ChannelRef(u64);
-
-impl ChannelRef {
-    /// Creates a channel reference from its transport-independent identifier.
-    pub const fn new(id: u64) -> Self {
-        Self(id)
-    }
-
-    /// Returns the transport-independent channel identifier.
-    pub fn get(self) -> u64 {
-        self.0
-    }
-}
-
-impl fmt::Display for ChannelRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
 
 /// SHA-256 hash of message content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
