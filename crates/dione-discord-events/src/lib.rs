@@ -186,3 +186,6 @@ impl NotificationEvent {
         }
     }
 }
+
+/// Bounded ordinary lifecycle metadata storage with opaque caller-owned lineage.
+pub mod lifecycle_storage;
