@@ -320,12 +320,12 @@ before returning. The narrow context contains HTTP, state, configuration, and
 the ingress ledger. The [Discord management adapter](src/discord/management_wire.rs)
 formats outcomes and errors; [registered management tools](src/discord/management_tools.rs) own argument parsing.
 
-[Discord introspection](src/discord/introspection.rs) owns guild, channel, user,
+[Discord introspection](crates/dione-discord-introspection/src/introspection.rs) owns guild, channel, user,
 member, role, and emoji reads. It returns typed observations and failures,
 resolves private-channel names through the SDK, and localizes member join times
 using the configuration selected at call entry. These reads use the bot HTTP
 client's authority and have no local allowlist or ingress checks. The
-[Discord introspection adapter](src/discord/introspection_wire.rs) formats results and
+[Discord introspection adapter](crates/dione-discord-introspection/src/wire.rs) formats results and
 original SDK error text; [registered introspection tools](src/discord/introspection_tools.rs) own argument parsing.
 
 [Consent delivery types](crates/dione-outbound-consent/src/delivery.rs) distinguish total failure from
