@@ -1,4 +1,5 @@
 //! Process startup, offline commands, and ordered shutdown.
+use dione_attention::control::AttentionCommand;
 use dione_codex::CodexSessionOptions;
 use dione_discord_events::NotificationEvent;
 use dione_harness_runtime::{HarnessSelection, HarnessSession, HarnessSessionError};
@@ -32,9 +33,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{EnvFilter, prelude::*, reload};
 use {
-    crate::{
-        attention::control::AttentionCommand, discord::events::Handler, mcp::server::DioneServer,
-    },
+    crate::{discord::events::Handler, mcp::server::DioneServer},
     dione_harness::AttentionPolicy,
 };
 

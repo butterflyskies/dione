@@ -6,7 +6,6 @@ mod boundary_acceptance;
 mod lifecycle_acceptance;
 
 use super::*;
-use crate::attention::control::AttentionCommand;
 use crate::attention::control::execute;
 use crate::attention::runtime::AttentionRuntime;
 use crate::attention::source::SourceResolver;
@@ -17,6 +16,7 @@ use dione_attention::config::AttentionConfig;
 use dione_attention::config::AttentionMode;
 use dione_attention::config::NoticeMode;
 use dione_attention::config::RoomAttention;
+use dione_attention::control::AttentionCommand;
 use dione_attention::provider::TypeSafeProvider;
 use dione_attention::types::Admission;
 use dione_attention::types::ArtifactDigest;

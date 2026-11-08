@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.141.0] - 2026-11-08
+
+- Move the complete Attention command decoder, schema and mutation classification into the existing Attention library while retaining root execution authority.
+
 ## [0.140.0] - 2026-11-08
 
 - Extract the complete bounded PluralKit fact resolver and cache, retaining sealed event binding, lifecycle admission and policy at root.

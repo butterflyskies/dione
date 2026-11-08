@@ -42,7 +42,7 @@ pub(crate) fn tools_list(
 ) -> Value {
     let mut response = json!({
         "tools": [
-            tool("attention", "Recipient-local attention controls: status/configure, authorized source review/retrieval and feedback, offline replay/fitting, held-out evaluation and explicit digest promotion/rollback. Configure replaces settings from status. No command is accepted from Discord message text; this authenticated seat supplies recipient identity.", crate::attention::control::schema()),
+            tool("attention", "Recipient-local attention controls: status/configure, authorized source review/retrieval and feedback, offline replay/fitting, held-out evaluation and explicit digest promotion/rollback. Configure replaces settings from status. No command is accepted from Discord message text; this authenticated seat supplies recipient identity.", dione_attention::control::schema()),
             tool("no_rly", "Release a message held by the contradictionary: sends the byte-identical held text with its original addressing. Handles are single-use — they die on release, rephrase, or expiry (default 3 minutes) and cannot be replayed; only a failed send leaves the handle live for a retry. Ordering: the message lands when released, not at its original position in the conversation.", json!({
                 "type": "object",
                 "required": ["handle"],

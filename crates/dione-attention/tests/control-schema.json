@@ -1,0 +1,109 @@
+{
+  "type": "object",
+  "required": [
+    "operation"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "operation": {
+      "type": "string",
+      "enum": [
+        "status",
+        "configure",
+        "retrieve",
+        "review",
+        "feedback",
+        "partitions",
+        "replay",
+        "fit",
+        "open_evaluation",
+        "evaluate",
+        "promote",
+        "rollback"
+      ]
+    },
+    "settings": {
+      "type": "object",
+      "description": "Complete attention settings from status. Replacement preserves no omitted values; recipient cannot change."
+    },
+    "record_id": {
+      "type": "string"
+    },
+    "record_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "requested": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 128
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "label": {
+      "type": "string",
+      "enum": [
+        "wanted_promptly",
+        "wanted_later",
+        "not_needed",
+        "unsure"
+      ]
+    },
+    "spec": {
+      "type": "object",
+      "required": [
+        "training_end_ms",
+        "validation_end_ms"
+      ],
+      "properties": {
+        "training_end_ms": {
+          "type": "integer"
+        },
+        "validation_end_ms": {
+          "type": "integer"
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "required": [
+        "wanted",
+        "prompt",
+        "participation",
+        "change"
+      ],
+      "properties": {
+        "wanted": {
+          "type": "number"
+        },
+        "prompt": {
+          "type": "number"
+        },
+        "participation": {
+          "type": "number"
+        },
+        "change": {
+          "type": "number"
+        }
+      }
+    },
+    "options": {
+      "type": "object",
+      "description": "Explicit FitOptions: minimum_labels, minimum_wanted, minimum_not_needed, minimum_promptly, minimum_later, regularization, iterations, learning_rate, seed, environment, wanted_threshold, timely_threshold, candidate_ttl_ms."
+    },
+    "plan": {
+      "type": "object",
+      "description": "EvaluationPlan: id, record_ids, fixed_baseline, predeclared limits, opened_at_ms (server replaces time)."
+    },
+    "evaluation_id": {
+      "type": "string"
+    },
+    "digest": {
+      "type": "string"
+    }
+  }
+}

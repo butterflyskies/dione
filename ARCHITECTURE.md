@@ -461,3 +461,5 @@ Discord message read, search, attachment and native observation ownership reside
 [Discord tool contracts](crates/dione-discord-tool-contracts/src/lib.rs) own metadata, query, management and reply catalogs without access or execution authority. Root execution adapters use these requests directly.
 
 [PluralKit fact resolution](crates/dione-pluralkit-resolver/src/lib.rs) owns provider HTTP, response-coordinate checks, retry bounds and the facts-only cache. The [root sealed adapter](src/discord/verified_action_runtime.rs) projects verified event coordinates into an ordinary lookup and consumes returned facts through the existing private action transition. The provider library grants no lifecycle or policy authority.
+
+[Attention control commands](crates/dione-attention/src/control.rs) own the twelve-operation decoder, descriptive mutation classification and MCP schema in the existing Attention library. The [root executor](src/attention/control.rs) retains authentication-derived recipient context, current configuration and source checks, lifecycle state and durable effect admission. A decoded command is not permission to execute it.

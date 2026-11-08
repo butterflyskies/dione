@@ -1,78 +1,18 @@
 //! Typed commands on the authenticated recipient's local control connection.
 //! Discord content is never parsed as one of these commands.
 
+use dione_attention::control::AttentionCommand;
 use dione_config::ConfigDurability;
 use dione_config::ConfigRuntime;
 use dione_config::attention_effect_guard;
 use dione_config::load_config;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use {
     super::{runtime::AttentionRuntime, source::now_ms},
-    dione_attention::{
-        config::AttentionConfig,
-        learning::{EvaluationPlan, FitOptions, FixedThresholdPolicy, TemporalPartitionSpec},
-        types::{ArtifactDigest, DecisionRecord, EvaluationId, Feedback, FeedbackLabel, RecordId},
-    },
+    dione_attention::types::{ArtifactDigest, DecisionRecord, EvaluationId, Feedback, RecordId},
 };
-
-/// Typed operations accepted only through the authenticated local control surface.
-#[derive(Debug, Deserialize)]
-#[cfg_attr(test, derive(Serialize))]
-#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
-pub enum AttentionCommand {
-    Status,
-    Configure {
-        settings: AttentionConfig,
-    },
-    Retrieve {
-        record_id: RecordId,
-    },
-    Review {
-        requested: usize,
-        seed: u64,
-    },
-    Feedback {
-        record_id: RecordId,
-        label: FeedbackLabel,
-    },
-    Partitions {
-        spec: TemporalPartitionSpec,
-    },
-    Replay {
-        record_ids: Vec<RecordId>,
-        policy: FixedThresholdPolicy,
-    },
-    Fit {
-        record_ids: Vec<RecordId>,
-        options: FitOptions,
-    },
-    OpenEvaluation {
-        plan: EvaluationPlan,
-    },
-    Evaluate {
-        evaluation_id: EvaluationId,
-        digest: ArtifactDigest,
-    },
-    Promote {
-        evaluation_id: EvaluationId,
-        digest: ArtifactDigest,
-    },
-    Rollback {
-        digest: ArtifactDigest,
-    },
-}
-
-impl AttentionCommand {
-    /// Identifies commands requiring mutation authority, including durable review selection.
-    pub fn is_mutating(&self) -> bool {
-        !matches!(
-            self,
-            Self::Status | Self::Retrieve { .. } | Self::Partitions { .. } | Self::Replay { .. }
-        )
-    }
-}
 
 fn encoded<T: Serialize>(value: T) -> Result<Value, String> {
     serde_json::to_value(value).map_err(|_| "attention result serialization failed".to_owned())
@@ -408,23 +348,4 @@ pub async fn execute(
             .await
         }
     }
-}
-
-/// Describes the same closed command surface advertised by the MCP attention tool.
-pub fn schema() -> Value {
-    json!({"type": "object", "required": ["operation"], "additionalProperties": false,
-    "properties": {
-        "operation": {"type": "string", "enum": ["status", "configure", "retrieve", "review", "feedback", "partitions", "replay", "fit", "open_evaluation", "evaluate", "promote", "rollback"]},
-        "settings": {"type": "object", "description": "Complete attention settings from status. Replacement preserves no omitted values; recipient cannot change."},
-        "record_id": {"type": "string"}, "record_ids": {"type": "array", "items": {"type": "string"}},
-        "requested": {"type": "integer", "minimum": 1, "maximum": 128}, "seed": {"type": "integer", "minimum": 0},
-        "label": {"type": "string", "enum": ["wanted_promptly", "wanted_later", "not_needed", "unsure"]},
-        "spec": {"type": "object", "required": ["training_end_ms", "validation_end_ms"], "properties": {
-            "training_end_ms": {"type": "integer"}, "validation_end_ms": {"type": "integer"}}},
-        "policy": {"type": "object", "required": ["wanted", "prompt", "participation", "change"], "properties": {
-            "wanted": {"type": "number"}, "prompt": {"type": "number"}, "participation": {"type": "number"}, "change": {"type": "number"}}},
-        "options": {"type": "object", "description": "Explicit FitOptions: minimum_labels, minimum_wanted, minimum_not_needed, minimum_promptly, minimum_later, regularization, iterations, learning_rate, seed, environment, wanted_threshold, timely_threshold, candidate_ttl_ms."},
-        "plan": {"type": "object", "description": "EvaluationPlan: id, record_ids, fixed_baseline, predeclared limits, opened_at_ms (server replaces time)."},
-        "evaluation_id": {"type": "string"}, "digest": {"type": "string"}
-    }})
 }

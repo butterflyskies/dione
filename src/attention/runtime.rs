@@ -1717,7 +1717,8 @@ mod tests {
     #[test]
     fn notice_destination_requires_independent_recipient_authority() {
         scenario(|| async {
-            use crate::attention::control::{AttentionCommand, execute};
+            use crate::attention::control::execute;
+            use dione_attention::control::AttentionCommand;
 
             let fixture = NoticeFixture::new(AttentionMode::Log, NoticeMode::Failures, 200).await;
             let current = load_config(&fixture.path);

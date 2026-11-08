@@ -36,3 +36,5 @@ dependent active/rollback authority. Invalidated reservations remain until that
 boundary; new evidence after expiry must satisfy the ordinary source, temporal
 partition and fitting constraints. Confirmed source loss removes review and
 sealed-evaluation provenance together; unavailable sources remain Unknown.
+
+`control::AttentionCommand` and `control::schema` describe the complete authenticated control surface. Commands retain closed decoding and descriptive mutation classification; they do not grant execution permission. The application rechecks current recipient, source and mutation authority at its effect boundaries. The existing default-off `test-support` feature also enables command serialization for hermetic application fixtures.

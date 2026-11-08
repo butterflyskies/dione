@@ -242,7 +242,7 @@ pub(crate) async fn call_tool(
             }
             "get_access_config" => ConfigStore::get_access(server.state_dir()),
             "attention" => {
-                let command: crate::attention::control::AttentionCommand =
+                let command: dione_attention::control::AttentionCommand =
                     serde_json::from_value(args.clone())
                         .map_err(|error| format!("invalid attention command: {error}"))?;
                 crate::attention::control::execute(
