@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.139.0"
+version = "0.140.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -979,6 +979,7 @@ dependencies = [
  "dione-outbound-consent",
  "dione-permissions",
  "dione-pluralkit-identities",
+ "dione-pluralkit-resolver",
  "dione-pre-send",
  "dione-presentation",
  "dione-provider-delivery",
@@ -1701,6 +1702,20 @@ name = "dione-pluralkit-identities"
 version = "0.1.0"
 dependencies = [
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "dione-pluralkit-resolver"
+version = "0.1.0"
+dependencies = [
+ "native-tls",
+ "proptest",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serenity",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

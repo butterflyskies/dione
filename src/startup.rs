@@ -224,7 +224,9 @@ pub async fn run() -> Result<(), StartupError> {
     let ingress_ledger = std::sync::Arc::new(crate::ingress_ledger::IngressLedger::new());
 
     let pk_resolver = Some(std::sync::Arc::new(
-        crate::pluralkit::PkResolver::with_defaults(),
+        crate::discord::verified_action_runtime::BoundPkResolver::new(
+            dione_pluralkit_resolver::PkResolver::with_defaults(),
+        ),
     ));
 
     let (shared_presence, server_presence) = dione_discord_presence::wire_shared_presence();

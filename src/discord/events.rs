@@ -88,7 +88,7 @@ pub struct Handler {
     /// Ingress ledger — records messages admitted by the gateway for egress verification.
     pub ingress_ledger: Arc<crate::ingress_ledger::IngressLedger>,
     /// PluralKit identity resolver for proxy webhook messages.
-    pub pk_resolver: Option<Arc<crate::pluralkit::PkResolver>>,
+    pub(crate) pk_resolver: Option<Arc<super::verified_action_runtime::BoundPkResolver>>,
     pub(crate) observation: super::observation::ObservationIngress,
 }
 
@@ -2702,8 +2702,8 @@ mod tests {
         Arc::new(LoadedConfig::try_from_raw(raw).expect("valid test configuration"))
     }
 
-    fn represented_test_facts(user_id: u64) -> crate::pluralkit::VerifiedPkFacts {
-        crate::pluralkit::VerifiedPkFacts::Represented {
+    fn represented_test_facts(user_id: u64) -> dione_pluralkit_resolver::VerifiedPkFacts {
+        dione_pluralkit_resolver::VerifiedPkFacts::Represented {
             discord_user_id: UserId::new(user_id),
             system_id: None,
             member_id: None,
@@ -2776,7 +2776,10 @@ mod tests {
         async fn admitted(
             id: u64,
             config: Arc<LoadedConfig>,
-            facts: Result<crate::pluralkit::VerifiedPkFacts, crate::pluralkit::PkResolveError>,
+            facts: Result<
+                dione_pluralkit_resolver::VerifiedPkFacts,
+                dione_pluralkit_resolver::PkResolveError,
+            >,
         ) -> bool {
             let msg = verified_message(id, "ambient", Some(60));
             let action = crate::discord::verified_action_runtime::resolve_test_create_with_sources(
@@ -2818,7 +2821,7 @@ mod tests {
             admitted(
                 112,
                 handler_policy_config(20, &[], false, &[]),
-                Err(crate::pluralkit::PkResolveError::Timeout),
+                Err(dione_pluralkit_resolver::PkResolveError::Timeout),
             )
             .await
         );
@@ -2826,7 +2829,7 @@ mod tests {
             !admitted(
                 113,
                 handler_policy_config(20, &[42], false, &[]),
-                Err(crate::pluralkit::PkResolveError::Timeout),
+                Err(dione_pluralkit_resolver::PkResolveError::Timeout),
             )
             .await
         );

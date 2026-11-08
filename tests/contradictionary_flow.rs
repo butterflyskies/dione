@@ -9,10 +9,6 @@
 use camino::Utf8PathBuf;
 use dione::discord::messaging;
 use dione::discord::messaging::MessagingCtx;
-use dione::discord::messaging::MessagingError;
-use dione::discord::messaging::MessagingErrorKind;
-use dione::discord::messaging::ReplyOutcome;
-use dione::discord::messaging::Report;
 use dione_config::ChannelConfig;
 use dione_config::Config;
 use dione_config::LoadedConfig;
@@ -21,6 +17,10 @@ use dione_contradictionary::Action;
 use dione_contradictionary::Contradictionary;
 use dione_contradictionary::Entry;
 use dione_contradictionary::MatchMode;
+use dione_discord_messaging_contracts::MessagingError;
+use dione_discord_messaging_contracts::MessagingErrorKind;
+use dione_discord_messaging_contracts::ReplyOutcome;
+use dione_discord_messaging_contracts::Report;
 use dione_discord_state::new_state;
 use dione_outbound_consent::consent::BounceTicket;
 use dione_outbound_consent::consent::ConsentGate;
@@ -174,7 +174,7 @@ async fn reply_block_holds_message_with_handle() {
         ChannelId::new(42),
         "this is a straightforward implementation",
         None,
-        dione::discord::messaging::ReplyPing::from_suppressed(false),
+        dione_discord_messaging_contracts::ReplyPing::from_suppressed(false),
     )
     .await;
 
@@ -204,7 +204,7 @@ async fn reply_block_reports_all_blocked_patterns() {
         ChannelId::new(42),
         "this is a straightforward and trivial change",
         None,
-        dione::discord::messaging::ReplyPing::from_suppressed(false),
+        dione_discord_messaging_contracts::ReplyPing::from_suppressed(false),
     )
     .await;
 
@@ -231,7 +231,7 @@ async fn reply_log_and_celebrate_do_not_block() {
         ChannelId::new(42),
         "I find myself honestly appreciating the load-bearing work here",
         None,
-        dione::discord::messaging::ReplyPing::from_suppressed(false),
+        dione_discord_messaging_contracts::ReplyPing::from_suppressed(false),
     )
     .await;
 
@@ -257,7 +257,7 @@ async fn reply_gate_rejects_unknown_channel_without_holding() {
         ChannelId::new(999), // not in config
         "straightforward message to wrong channel",
         None,
-        dione::discord::messaging::ReplyPing::from_suppressed(false),
+        dione_discord_messaging_contracts::ReplyPing::from_suppressed(false),
     )
     .await;
 
@@ -289,7 +289,7 @@ async fn release_send_failure_keeps_handle_alive() {
         ChannelId::new(42),
         "a straightforward take",
         None,
-        dione::discord::messaging::ReplyPing::from_suppressed(false),
+        dione_discord_messaging_contracts::ReplyPing::from_suppressed(false),
     )
     .await;
     let handle = held_handle(&bounce).clone();
@@ -330,7 +330,7 @@ async fn rephrase_rebounce_chains_and_journals() {
         ChannelId::new(42),
         "this is a straightforward implementation",
         None,
-        dione::discord::messaging::ReplyPing::from_suppressed(false),
+        dione_discord_messaging_contracts::ReplyPing::from_suppressed(false),
     )
     .await;
     let old_handle = held_handle(&bounce).clone();
@@ -411,7 +411,7 @@ async fn release_into_a_revoked_channel_is_refused_and_keeps_the_handle() {
         ChannelId::new(42),
         "a straightforward take",
         None,
-        dione::discord::messaging::ReplyPing::from_suppressed(false),
+        dione_discord_messaging_contracts::ReplyPing::from_suppressed(false),
     )
     .await;
     let handle = held_handle(&bounce).clone();
@@ -742,7 +742,7 @@ async fn reply_log_hit_appends_diary_without_blocking() {
         ChannelId::new(42),
         "I find myself with nothing else to say",
         None,
-        dione::discord::messaging::ReplyPing::from_suppressed(false),
+        dione_discord_messaging_contracts::ReplyPing::from_suppressed(false),
     )
     .await;
 
@@ -772,7 +772,7 @@ async fn reply_celebrate_hit_appends_diary() {
         ChannelId::new(42),
         "prejection is the word for it",
         None,
-        dione::discord::messaging::ReplyPing::from_suppressed(false),
+        dione_discord_messaging_contracts::ReplyPing::from_suppressed(false),
     )
     .await;
 
@@ -797,7 +797,7 @@ async fn reply_held_block_appends_diary() {
         ChannelId::new(42),
         "this is straightforward",
         None,
-        dione::discord::messaging::ReplyPing::from_suppressed(false),
+        dione_discord_messaging_contracts::ReplyPing::from_suppressed(false),
     )
     .await;
 

@@ -392,7 +392,7 @@ Publishing a new snapshot does not reconstruct those captured values.
 |-------------|-------------------------------|
 | Discord Gateway and REST | [Serenity client](src/discord/client.rs), [events](src/discord/events.rs), [messaging](src/discord/messaging.rs), [presence](crates/dione-discord-presence/src/lib.rs), [typing](crates/dione-discord-typing/src/lib.rs), and the remaining [tools](src/mcp/tools) receive events and execute authorized operations. |
 | Codex app-server | [Delivery worker](crates/dione-codex/src/app_server.rs) addresses an exact local thread. |
-| PluralKit | [Identity resolver](src/pluralkit.rs) resolves supported proxy identity. |
+| PluralKit | [Identity resolver](crates/dione-pluralkit-resolver/src/lib.rs) resolves supported proxy identity. |
 | Pronouns and nameplates | [Pronoun service](crates/dione-identity-display/src/pronouns.rs) and [nameplate service](crates/dione-identity-display/src/nameplates.rs) enrich display metadata when enabled. |
 | Memory MCP providers | [Bell evaluator](crates/dione-discord-bells/src/lib.rs) uses `rmcp` Streamable HTTP clients for configured recall providers. This is separate from Dione's stdio MCP server. |
 | TypeSafe System One | [Attention provider](crates/dione-attention/src/provider.rs) scores eligible ambient text with bounded requests. It does not replace the agent host's generative inference. |
@@ -459,3 +459,5 @@ Discord message read, search, attachment and native observation ownership reside
 [Discord messaging contracts](crates/dione-discord-messaging-contracts/src/lib.rs) own descriptive outcomes, error metadata and JSON projection. Root delivery, consent and ingress verification retain authority.
 
 [Discord tool contracts](crates/dione-discord-tool-contracts/src/lib.rs) own metadata, query, management and reply catalogs without access or execution authority. Root execution adapters use these requests directly.
+
+[PluralKit fact resolution](crates/dione-pluralkit-resolver/src/lib.rs) owns provider HTTP, response-coordinate checks, retry bounds and the facts-only cache. The [root sealed adapter](src/discord/verified_action_runtime.rs) projects verified event coordinates into an ordinary lookup and consumes returned facts through the existing private action transition. The provider library grants no lifecycle or policy authority.

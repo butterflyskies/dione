@@ -5,6 +5,9 @@
 //! the PluralKit API to resolve the actual sender's identity: their Discord
 //! user ID, PK system UUID, and PK member UUID.
 //!
+//! Returned facts are descriptive. The embedding retains transport verification,
+//! lifecycle admission and policy decisions.
+//!
 //! # Design
 //!
 //! - **Cache resolved identity facts** (sender, system UUID, member UUID),
@@ -17,7 +20,8 @@
 //! - **Data minimization**: cache only the authorization projection (IDs),
 //!   not names, pronouns, or avatars.
 
-use crate::discord::verified_action::{EventBinding as VerifiedEventBinding, EventContext};
+#![warn(missing_docs)]
+
 use serenity::model::id::{ChannelId, GuildId, MessageId, UserId};
 use std::{
     collections::{HashMap, VecDeque},
@@ -43,8 +47,11 @@ pub enum PkResolveError {
     Timeout,
     /// Event binding mismatch — a specific coordinate doesn't match.
     BindingMismatch {
+        /// Mismatched coordinate name.
         dimension: &'static str,
+        /// Requested coordinate.
         expected: u64,
+        /// Observed provider coordinate.
         actual: u64,
     },
     /// Resolver concurrency semaphore was closed (shutdown in progress).
@@ -153,20 +160,16 @@ impl Default for PkResolverConfig {
 /// These are provider facts only: they contain no transport proof, policy
 /// decision, or independently supplied event coordinates.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum VerifiedPkFacts {
+pub enum VerifiedPkFacts {
     /// The official application acted as itself and represented no principal.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the accepted boundary reserves AppOnly, but PK currently has no authoritative successful app-only response"
-        )
-    )]
     AppOnly,
     /// The official application represented a Discord principal.
     Represented {
+        /// Provider-reported Discord principal.
         discord_user_id: UserId,
+        /// Provider-reported system UUID, if supplied.
         system_id: Option<Uuid>,
+        /// Provider-reported member UUID, if supplied.
         member_id: Option<Uuid>,
     },
 }
@@ -176,32 +179,41 @@ struct VerifiedLookupKey {
     message_id: MessageId,
 }
 
+/// Coordinates used to match a provider response. Construction grants no authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VerifiedBindingContext {
+pub struct MessageBinding {
+    /// Discord message requested from the provider.
+    pub message_id: MessageId,
+    /// Expected Discord channel.
+    pub channel_id: ChannelId,
+    /// Expected guild or direct-message context.
+    pub context: LookupContext,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Expected response context, without an authorization or transport proof.
+pub enum LookupContext {
+    /// Expected guild identifier.
     Guild(GuildId),
+    /// The provider must report a zero guild for a direct message.
     DirectMessage,
 }
 
 trait VerifiedBindingView {
     fn message_id(&self) -> MessageId;
     fn channel_id(&self) -> ChannelId;
-    fn context(&self) -> VerifiedBindingContext;
+    fn context(&self) -> LookupContext;
 }
 
-impl VerifiedBindingView for VerifiedEventBinding {
+impl VerifiedBindingView for MessageBinding {
     fn message_id(&self) -> MessageId {
-        self.message_id()
+        self.message_id
     }
-
     fn channel_id(&self) -> ChannelId {
-        self.channel_id()
+        self.channel_id
     }
-
-    fn context(&self) -> VerifiedBindingContext {
-        match self.context() {
-            EventContext::Guild(guild_id) => VerifiedBindingContext::Guild(*guild_id),
-            EventContext::DirectMessage => VerifiedBindingContext::DirectMessage,
-        }
+    fn context(&self) -> LookupContext {
+        self.context
     }
 }
 
@@ -299,8 +311,6 @@ pub struct PkResolver {
     semaphore: Arc<Semaphore>,
     /// Facts-only cache used exclusively by the verified-action boundary.
     verified_facts_cache: RwLock<VerifiedFactsCache>,
-    #[cfg(test)]
-    verified_fact_resolution_attempts: std::sync::atomic::AtomicUsize,
 }
 
 impl Default for PkResolver {
@@ -360,20 +370,20 @@ fn verified_facts_from_response(
     }
 
     let response_context = match binding.context() {
-        VerifiedBindingContext::Guild(guild_id) if response.guild == guild_id.get() => {
+        LookupContext::Guild(guild_id) if response.guild == guild_id.get() => {
             VerifiedResponseContext::Guild(guild_id)
         }
-        VerifiedBindingContext::DirectMessage if response.guild == 0 => {
+        LookupContext::DirectMessage if response.guild == 0 => {
             VerifiedResponseContext::DirectMessage
         }
-        VerifiedBindingContext::Guild(guild_id) => {
+        LookupContext::Guild(guild_id) => {
             return Err(PkResolveError::BindingMismatch {
                 dimension: "guild_id",
                 expected: guild_id.get(),
                 actual: response.guild,
             });
         }
-        VerifiedBindingContext::DirectMessage => {
+        LookupContext::DirectMessage => {
             return Err(PkResolveError::BindingMismatch {
                 dimension: "guild_id",
                 expected: 0,
@@ -423,27 +433,27 @@ fn verify_response_binding(
         });
     }
     match (binding.context(), &response_binding.context) {
-        (VerifiedBindingContext::Guild(expected), VerifiedResponseContext::Guild(actual))
+        (LookupContext::Guild(expected), VerifiedResponseContext::Guild(actual))
             if expected == *actual =>
         {
             Ok(())
         }
-        (VerifiedBindingContext::DirectMessage, VerifiedResponseContext::DirectMessage) => Ok(()),
-        (VerifiedBindingContext::Guild(expected), VerifiedResponseContext::Guild(actual)) => {
+        (LookupContext::DirectMessage, VerifiedResponseContext::DirectMessage) => Ok(()),
+        (LookupContext::Guild(expected), VerifiedResponseContext::Guild(actual)) => {
             Err(PkResolveError::BindingMismatch {
                 dimension: "guild_id",
                 expected: expected.get(),
                 actual: actual.get(),
             })
         }
-        (VerifiedBindingContext::Guild(expected), VerifiedResponseContext::DirectMessage) => {
+        (LookupContext::Guild(expected), VerifiedResponseContext::DirectMessage) => {
             Err(PkResolveError::BindingMismatch {
                 dimension: "guild_id",
                 expected: expected.get(),
                 actual: 0,
             })
         }
-        (VerifiedBindingContext::DirectMessage, VerifiedResponseContext::Guild(actual)) => {
+        (LookupContext::DirectMessage, VerifiedResponseContext::Guild(actual)) => {
             Err(PkResolveError::BindingMismatch {
                 dimension: "guild_id",
                 expected: 0,
@@ -489,8 +499,6 @@ impl PkResolver {
             config,
             semaphore,
             verified_facts_cache: RwLock::new(VerifiedFactsCache::new(CACHE_CAP)),
-            #[cfg(test)]
-            verified_fact_resolution_attempts: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
@@ -499,26 +507,15 @@ impl PkResolver {
         Self::new(PkResolverConfig::default()).expect("default PkResolverConfig is valid")
     }
 
-    /// Resolve provider facts for an already verified, immutably bound action.
+    /// Resolves provider facts bound to ordinary lookup coordinates.
     ///
-    /// One outer timeout covers cache access, semaphore acquisition, every
-    /// retry and backoff, response-body reads, and JSON parsing. Identical
-    /// concurrent cache misses may issue duplicate requests, bounded by the
-    /// resolver semaphore; only complete validated facts are published.
-    pub(crate) async fn resolve_verified_facts(
+    /// Coordinates and returned facts carry no transport verification or policy authority.
+    /// One timeout covers cache access, semaphore acquisition, retries, body reads and parsing.
+    pub async fn resolve(
         &self,
-        binding: &VerifiedEventBinding,
+        binding: &MessageBinding,
     ) -> Result<VerifiedPkFacts, PkResolveError> {
-        #[cfg(test)]
-        self.verified_fact_resolution_attempts
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.resolve_verified_facts_for(binding).await
-    }
-
-    #[cfg(test)]
-    pub(crate) fn verified_fact_resolution_attempts(&self) -> usize {
-        self.verified_fact_resolution_attempts
-            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     async fn resolve_verified_facts_for(
@@ -687,7 +684,7 @@ mod tests {
     struct TestVerifiedBinding {
         message_id: MessageId,
         channel_id: ChannelId,
-        context: VerifiedBindingContext,
+        context: LookupContext,
     }
 
     impl VerifiedBindingView for TestVerifiedBinding {
@@ -699,7 +696,7 @@ mod tests {
             self.channel_id
         }
 
-        fn context(&self) -> VerifiedBindingContext {
+        fn context(&self) -> LookupContext {
             self.context
         }
     }
@@ -708,7 +705,7 @@ mod tests {
         TestVerifiedBinding {
             message_id: MessageId::new(message_id),
             channel_id: ChannelId::new(500),
-            context: VerifiedBindingContext::Guild(GuildId::new(1)),
+            context: LookupContext::Guild(GuildId::new(1)),
         }
     }
 
@@ -724,8 +721,8 @@ mod tests {
         VerifiedResponseBinding {
             channel_id: binding.channel_id,
             context: match binding.context {
-                VerifiedBindingContext::Guild(guild_id) => VerifiedResponseContext::Guild(guild_id),
-                VerifiedBindingContext::DirectMessage => VerifiedResponseContext::DirectMessage,
+                LookupContext::Guild(guild_id) => VerifiedResponseContext::Guild(guild_id),
+                LookupContext::DirectMessage => VerifiedResponseContext::DirectMessage,
             },
         }
     }
@@ -871,7 +868,7 @@ mod tests {
         let direct_message = TestVerifiedBinding {
             message_id: MessageId::new(5102),
             channel_id: ChannelId::new(500),
-            context: VerifiedBindingContext::DirectMessage,
+            context: LookupContext::DirectMessage,
         };
         let response = PkMessageResponse {
             id: 5102,
@@ -998,15 +995,7 @@ mod tests {
     }
 
     #[test]
-    fn verified_cache_expiry_is_physical_and_does_not_erase_lifecycle_admission() {
-        use crate::{
-            discord::verified_action::{
-                LifecycleContext, LifecycleProvenance, test_lifecycle_facts,
-            },
-            ingress_ledger::{IngressLedger, TransitionResult},
-        };
-        use serenity::model::{Timestamp, id::WebhookId};
-
+    fn verified_cache_expiry_is_physical() {
         let mut cache = VerifiedFactsCache::new(2);
         let now = Instant::now();
         let first = guild_binding(5200);
@@ -1037,33 +1026,6 @@ mod tests {
             message_id: second.message_id,
         }));
 
-        let ledger = IngressLedger::new();
-        let lifecycle_facts = test_lifecycle_facts(
-            first.message_id,
-            first.channel_id,
-            GuildId::new(1),
-            WebhookId::new(900),
-            LifecycleProvenance::Represented {
-                discord_user_id: UserId::new(42),
-                system_id: Some(Uuid::from_u128(1)),
-                member_id: Some(Uuid::from_u128(2)),
-            },
-        );
-        assert!(matches!(
-            ledger.admit_verified_create(
-                lifecycle_facts,
-                first.message_id,
-                first.channel_id,
-                LifecycleContext::Guild(GuildId::new(1)),
-                WebhookId::new(900),
-                UserId::new(901),
-                None,
-                "original",
-                Timestamp::from_unix_timestamp(1).unwrap(),
-            ),
-            TransitionResult::Admitted(_)
-        ));
-
         cache.remove_expired(Duration::from_secs(1), now + Duration::from_secs(2));
         assert!(cache.entries.is_empty());
         assert!(cache.order.is_empty());
@@ -1080,19 +1042,6 @@ mod tests {
                 .expect("cache lookup")
                 .is_none()
         );
-
-        assert!(matches!(
-            ledger.transition_passive_edit(
-                first.message_id,
-                first.channel_id,
-                LifecycleContext::Guild(GuildId::new(1)),
-                UserId::new(901),
-                "edited after identity cache expiry",
-                Timestamp::from_unix_timestamp(2).unwrap(),
-                |_| true,
-            ),
-            TransitionResult::Admitted(_)
-        ));
     }
 
     #[tokio::test]

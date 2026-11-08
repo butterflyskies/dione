@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.140.0] - 2026-11-08
+
+- Extract the complete bounded PluralKit fact resolver and cache, retaining sealed event binding, lifecycle admission and policy at root.
+
 ## [0.139.0]
 
 - Extract the complete twenty-tool Discord descriptive catalog and typed request contracts while retaining current registration and execution authority in root adapters.

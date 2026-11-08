@@ -8,13 +8,13 @@ use super::verified_action::{
     RepresentedPrincipal, ResolutionFailure, ResolutionFailureClass, TransportProvider, Unresolved,
     VerifiedAppAction,
 };
-use crate::pluralkit::PkResolveError;
-use crate::pluralkit::PkResolver;
-use crate::pluralkit::VerifiedPkFacts;
 use chrono::Utc;
 use dione_config::TrustedWebhookCreators;
 use dione_discord_state::State;
 use dione_discord_state::observe_webhook_creator;
+use dione_pluralkit_resolver::PkResolver;
+use dione_pluralkit_resolver::VerifiedPkFacts;
+use dione_pluralkit_resolver::{LookupContext, MessageBinding, PkResolveError};
 use serenity::{
     http::Http,
     model::{channel::Message, event::MessageUpdateEvent},
@@ -294,15 +294,55 @@ fn policy_fingerprint(
     digest.finalize().into()
 }
 
+/// Root-only bridge from a sealed event to ordinary provider lookup coordinates.
+/// Provider facts never construct a transport proof or action outside this module.
+pub(crate) struct BoundPkResolver {
+    resolver: PkResolver,
+    #[cfg(test)]
+    verified_fact_resolution_attempts: std::sync::atomic::AtomicUsize,
+}
+impl BoundPkResolver {
+    pub(crate) fn new(resolver: PkResolver) -> Self {
+        Self {
+            resolver,
+            #[cfg(test)]
+            verified_fact_resolution_attempts: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+    async fn resolve_verified_facts(
+        &self,
+        binding: &EventBinding,
+    ) -> Result<VerifiedPkFacts, PkResolveError> {
+        #[cfg(test)]
+        self.verified_fact_resolution_attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.resolver
+            .resolve(&MessageBinding {
+                message_id: binding.message_id(),
+                channel_id: binding.channel_id(),
+                context: match binding.context() {
+                    EventContext::Guild(id) => LookupContext::Guild(*id),
+                    EventContext::DirectMessage => LookupContext::DirectMessage,
+                },
+            })
+            .await
+    }
+    #[cfg(test)]
+    fn verified_fact_resolution_attempts(&self) -> usize {
+        self.verified_fact_resolution_attempts
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
 /// Runtime owner of the fixed PluralKit fact source and typestate transition.
 pub(crate) struct BoundPrincipalResolver<'a> {
     transition: PrincipalResolver,
-    pluralkit: &'a PkResolver,
+    pluralkit: &'a BoundPkResolver,
 }
 
 impl<'a> BoundPrincipalResolver<'a> {
     /// Binds the transition authority to one configured fact source.
-    pub(crate) fn new(pluralkit: &'a PkResolver) -> Self {
+    pub(crate) fn new(pluralkit: &'a BoundPkResolver) -> Self {
         Self {
             transition: PrincipalResolver::new(),
             pluralkit,
@@ -340,7 +380,7 @@ fn resolve_generic_action(
 /// still require one and stay dropped (`None`) when it is absent, so a
 /// missing resolver can never widen what a proxy message is allowed to do.
 pub(crate) async fn resolve_webhook_action(
-    pluralkit: Option<&PkResolver>,
+    pluralkit: Option<&BoundPkResolver>,
     action: VerifiedAppAction<Unresolved>,
 ) -> Option<super::verified_action::VerifiedAppAction<super::verified_action::Resolved>> {
     match (action.provider(), pluralkit) {
@@ -516,7 +556,7 @@ mod tests {
                 .expect("non-PK creator mints a generic webhook action")
         };
 
-        let pluralkit = PkResolver::with_defaults();
+        let pluralkit = BoundPkResolver::new(PkResolver::with_defaults());
         let unrestricted = mint(10);
         assert_eq!(unrestricted.provider(), TransportProvider::GenericWebhook);
         let resolved = resolve_webhook_action(Some(&pluralkit), unrestricted)
@@ -566,6 +606,46 @@ mod tests {
             classify_pk_error(PkResolveError::InvalidResponse("bad".to_string())),
             ResolutionFailureClass::InvalidResponse
         );
+        use super::super::verified_action::{VerifiedActionGate, VerifiedGateVerdict};
+        for (id, error, expected) in [
+            (
+                71,
+                PkResolveError::NotFound,
+                ResolutionFailureClass::Provider,
+            ),
+            (
+                72,
+                PkResolveError::Timeout,
+                ResolutionFailureClass::Deadline,
+            ),
+            (
+                73,
+                PkResolveError::InvalidResponse("bad".to_string()),
+                ResolutionFailureClass::InvalidResponse,
+            ),
+        ] {
+            let action = DiscordTransportVerifier::new()
+                .mint_verified(
+                    message(id, 20, Some(30), Some(40)),
+                    TransportProvider::PluralKit,
+                )
+                .expect("fixture webhook binding");
+            let transition = PrincipalResolver::new();
+            let resolved = resolve_from_facts(&transition, transition.begin(action), Err(error));
+            let VerifiedGateVerdict::Allow(permit) =
+                VerifiedActionGate::evaluate(resolved, app_only_policy(false))
+            else {
+                panic!("unrestricted fixture retains unavailable provenance");
+            };
+            assert!(!permit.provenance().is_app_only());
+            assert_eq!(
+                permit
+                    .provenance()
+                    .unavailable()
+                    .map(|failure| failure.class()),
+                Some(expected)
+            );
+        }
     }
 
     #[test]
@@ -879,5 +959,60 @@ mod tests {
         let second = fresh_policy_snapshot(&second_config, 20).expect("policy");
         assert_eq!(first.fingerprint_bytes(), second.fingerprint_bytes());
         assert!(second_config.generation() > first_config.generation());
+    }
+    #[test]
+    fn lifecycle_admission_does_not_require_cached_provider_facts() {
+        use super::super::verified_action::{
+            LifecycleContext, LifecycleProvenance, test_lifecycle_facts,
+        };
+        use crate::ingress_ledger::{IngressLedger, TransitionResult};
+        use serenity::model::{
+            Timestamp,
+            id::{ChannelId, GuildId, MessageId, UserId, WebhookId},
+        };
+        let first = MessageBinding {
+            message_id: MessageId::new(5200),
+            channel_id: ChannelId::new(500),
+            context: LookupContext::Guild(GuildId::new(1)),
+        };
+        let ledger = IngressLedger::new();
+        let lifecycle_facts = test_lifecycle_facts(
+            first.message_id,
+            first.channel_id,
+            GuildId::new(1),
+            WebhookId::new(900),
+            LifecycleProvenance::Represented {
+                discord_user_id: UserId::new(42),
+                system_id: Some(Uuid::from_u128(1)),
+                member_id: Some(Uuid::from_u128(2)),
+            },
+        );
+        assert!(matches!(
+            ledger.admit_verified_create(
+                lifecycle_facts,
+                first.message_id,
+                first.channel_id,
+                LifecycleContext::Guild(GuildId::new(1)),
+                WebhookId::new(900),
+                UserId::new(901),
+                None,
+                "original",
+                Timestamp::from_unix_timestamp(1).unwrap(),
+            ),
+            TransitionResult::Admitted(_)
+        ));
+
+        assert!(matches!(
+            ledger.transition_passive_edit(
+                first.message_id,
+                first.channel_id,
+                LifecycleContext::Guild(GuildId::new(1)),
+                UserId::new(901),
+                "edited after identity cache expiry",
+                Timestamp::from_unix_timestamp(2).unwrap(),
+                |_| true,
+            ),
+            TransitionResult::Admitted(_)
+        ));
     }
 }
