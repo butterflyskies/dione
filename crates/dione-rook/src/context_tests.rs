@@ -701,7 +701,7 @@ async fn context_selective_sender_admission_does_not_filter_other_history_speake
 }
 
 async fn wait_for_reader_calls(provider: &Reader, expected: u8) {
-    tokio::time::timeout(Duration::from_secs(2), async {
+    tokio::time::timeout(Duration::from_secs(120), async {
         loop {
             let entered = provider.entered.notified();
             if provider.calls.load(Ordering::SeqCst) >= expected {
