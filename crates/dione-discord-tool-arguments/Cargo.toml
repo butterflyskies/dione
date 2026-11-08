@@ -1,0 +1,19 @@
+[package]
+name = "dione-discord-tool-arguments"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Shared typed Discord tool argument and evidence schema contract"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["discord", "tools", "arguments"]
+categories = ["parsing"]
+
+[dependencies]
+dione-discord-identities.workspace = true
+dione-discord-introspection.workspace = true
+dione-evidence.workspace = true
+dione-pre-send.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

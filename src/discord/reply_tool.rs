@@ -5,16 +5,16 @@ use super::{
         reply_with_evidence_and_hook_overrides,
     },
     messaging_wire,
-    tool_arguments::{
-        ArgumentError, ArgumentErrorKind, parse_enabled_sentex_handles, parse_hook_overrides,
-        parse_id, parse_optional_bool, parse_optional_id, sentex_handles_schema,
-    },
 };
 use crate::ingress_ledger::IngressLedger;
 use camino::Utf8PathBuf;
 use dione_config::load_config;
 use dione_discord_events::NotificationEvent;
 use dione_discord_state::State;
+use dione_discord_tool_arguments::{
+    ArgumentError, ArgumentErrorKind, parse_enabled_sentex_handles, parse_hook_overrides, parse_id,
+    parse_optional_bool, parse_optional_id, sentex_handles_schema,
+};
 use dione_evidence::SentexHandles;
 use dione_mcp_tools::McpTool;
 use dione_mcp_tools::RegisteredTool;

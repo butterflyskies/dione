@@ -1,14 +1,12 @@
 //! Discord-owned history, attachment, and search tool boundary.
-use super::{
-    reply_tool::ReplyServices,
-    tool_arguments::{ArgumentError, parse_id},
-};
+use super::reply_tool::ReplyServices;
 use dione_discord_queries::{
     queries,
     search::{self, SearchPreparationError, SearchRequest},
     search_wire::{self, SearchInputErrorKind},
     wire as query_wire,
 };
+use dione_discord_tool_arguments::{ArgumentError, parse_id};
 
 use crate::mcp::protocol::tool;
 use dione_config::load_config;

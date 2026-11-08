@@ -8,10 +8,6 @@ use crate::discord::messaging::send_dm_with_evidence_and_hook_overrides;
 use crate::discord::messaging::send_file_with_hook_overrides;
 use crate::discord::messaging_wire;
 use crate::discord::rendering::render_to_channel;
-use crate::discord::tool_arguments::parse_enabled_sentex_handles;
-use crate::discord::tool_arguments::parse_hook_overrides;
-use crate::discord::tool_arguments::parse_id;
-use crate::discord::tool_arguments::parse_optional_bool;
 use crate::mcp::presence_wire;
 use crate::mcp::render_wire;
 use crate::mcp::server::DioneServer;
@@ -24,6 +20,10 @@ use crate::mcp::tools::no_rly::no_rly_vacuum;
 use dione_access_requests::wire as access_wire;
 use dione_config::ConfigStore;
 use dione_config::DiscordId;
+use dione_discord_tool_arguments::parse_enabled_sentex_handles;
+use dione_discord_tool_arguments::parse_hook_overrides;
+use dione_discord_tool_arguments::parse_id;
+use dione_discord_tool_arguments::parse_optional_bool;
 use dione_discord_typing::{send_typing, wire as typing_wire};
 use dione_mutes::MAX_TTL_MINUTES;
 use dione_outbound_consent::queue::HoldHandle;
@@ -562,8 +562,8 @@ fn parse_string_array(args: &Value, key: &str) -> Option<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discord::tool_arguments::parse_optional_id;
     use dione_access_requests::AccessQueue;
+    use dione_discord_tool_arguments::parse_optional_id;
     use dione_mutes::MuteStore;
     use dione_pre_send::HookName;
     use proptest::prelude::*;

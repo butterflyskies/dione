@@ -15,7 +15,6 @@ mod visibility_contract_tests;
 
 pub(crate) mod messaging_wire;
 pub(crate) mod reply_tool;
-pub(crate) mod tool_arguments;
 
 pub(crate) mod query_tools;
 

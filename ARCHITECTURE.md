@@ -451,3 +451,5 @@ the only singleton and callers retain verified-action authority.
 Discord message read, search, attachment and native observation ownership resides in [dione-discord-queries](crates/dione-discord-queries/src/lib.rs). Root query registrations retain resident admission, argument parsing and call-entry configuration. QueryCtx carries read dependencies only; typed native observations do not confer sealed ingress or delivery authority.
 
 [Discord Rook context reads](crates/dione-discord-context/src/lib.rs) own the context provider and bounded native metadata projection. The trusted embedding supplies fresh read-only QueryCtx values; the root retains sealed live observation capture. This extraction adds no production registration.
+
+[Shared Discord tool arguments](crates/dione-discord-tool-arguments/src/lib.rs) own typed argument validation and evidence handle schema projection. Root tool registrations retain parsing order, current configuration, authorization and execution authority.

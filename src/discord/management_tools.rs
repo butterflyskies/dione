@@ -1,10 +1,10 @@
 //! Discord-owned message management registration and request boundary.
+use dione_discord_tool_arguments::{ArgumentError, ArgumentErrorKind, parse_id, parse_optional_id};
 
 use super::{
     management::{ManagementCtx, MessageAction, MessageCommand, create_thread, mutate_message},
     management_wire,
     reply_tool::ReplyServices,
-    tool_arguments::{ArgumentError, ArgumentErrorKind, parse_id, parse_optional_id},
 };
 use dione_config::load_config;
 use dione_discord_identities::Snowflake;

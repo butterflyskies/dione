@@ -1,4 +1,5 @@
 //! Shared Discord tool argument parsing at the MCP boundary.
+#![warn(missing_docs)]
 use dione_pre_send::{HookName, PipelineError};
 use serde_json::{Value, json};
 use std::num::ParseIntError;
@@ -8,44 +9,62 @@ use {
     dione_evidence::{SentexError, SentexHandles, parse_tool_sentex_handles},
 };
 
+/// A typed argument refusal preserving its displayed message and original source.
 #[derive(Debug, Error)]
 #[error("{kind}")]
-pub(crate) struct ArgumentError {
+pub struct ArgumentError {
     #[source]
-    pub(crate) kind: ArgumentErrorKind,
+    kind: ArgumentErrorKind,
 }
+/// Exact argument failure categories shared by Discord tool consumers.
 #[derive(Debug, Error)]
-pub(crate) enum ArgumentErrorKind {
+pub enum ArgumentErrorKind {
+    /// A required field is absent.
     #[error("missing {0}")]
     Missing(&'static str),
+    /// A decimal string does not fit an unsigned64-bit identifier.
     #[error("invalid {field}: not a valid u64")]
     InvalidId {
+        /// The rejected argument field.
         field: &'static str,
         #[source]
+        /// The original numeric parse failure.
         source: ParseIntError,
     },
+    /// The required identifier has an unsupported JSON shape.
     #[error("invalid {0}: expected a numeric or string ID")]
     IdType(&'static str),
+    /// Discord identifiers must be nonzero.
     #[error("invalid {0}: must be a nonzero Discord snowflake")]
     ZeroId(&'static str),
+    /// A present optional boolean has an unsupported shape.
     #[error("{0} must be a boolean")]
     Boolean(&'static str),
+    /// Hook overrides must be an array.
     #[error("no_rly_hooks must be an array of hook-name strings")]
     HookArray,
+    /// Every hook override must be a string.
     #[error("no_rly_hooks must contain only strings")]
     HookItem,
+    /// Visibility user IDs must be an array.
     #[error("invalid user_ids: expected an array of IDs")]
     UserIdsArray,
+    /// A visibility user ID has an unsupported shape.
     #[error("invalid user_ids: each ID must be a numeric or string u64")]
     UserIdItem,
+    /// A visibility user ID is zero.
     #[error("invalid user_ids: must be nonzero Discord snowflakes")]
     UserIdZero,
+    /// The visibility request violates the existing bounded contract.
     #[error(transparent)]
     VisibilityRequest(#[from] dione_discord_introspection::visibility::VisibilityRequestError),
+    /// A hook name violates the existing pipeline contract.
     #[error("{0}")]
     Hook(#[from] PipelineError),
+    /// Evidence handle fields are present while markers are disabled.
     #[error("claim_handles and citation_handles require evidence_markers_enabled")]
     EvidenceDisabled,
+    /// The evidence owner rejected the handle arguments.
     #[error("{0}")]
     Evidence(#[source] SentexError),
 }
@@ -60,7 +79,11 @@ impl From<ArgumentError> for String {
     }
 }
 
-pub(crate) fn parse_enabled_sentex_handles(
+/// Parse evidence role handles with the selected grammar and independent enabled switch.
+///
+/// # Errors
+/// Returns the original typed argument failure without changing its source or display.
+pub fn parse_enabled_sentex_handles(
     args: &Value,
     evidence_markers_enabled: bool,
     version: dione_evidence::EvidenceMarkerVersion,
@@ -86,7 +109,11 @@ fn decimal_id(value: &str, field: &'static str) -> Result<Snowflake, ArgumentErr
         field,
     )
 }
-pub(crate) fn parse_id(args: &Value, key: &'static str) -> Result<Snowflake, ArgumentError> {
+/// Parse a required nonzero Discord identifier from a number or decimal string.
+///
+/// # Errors
+/// Returns the original typed argument failure without changing its source or display.
+pub fn parse_id(args: &Value, key: &'static str) -> Result<Snowflake, ArgumentError> {
     if let Some(id) = args.get(key).and_then(Value::as_u64) {
         return snowflake(id, key);
     }
@@ -100,7 +127,11 @@ pub(crate) fn parse_id(args: &Value, key: &'static str) -> Result<Snowflake, Arg
     }
     .into())
 }
-pub(crate) fn parse_optional_id(
+/// Parse an optional identifier, preserving historical absent and unsupported-shape handling.
+///
+/// # Errors
+/// Returns the original typed argument failure without changing its source or display.
+pub fn parse_optional_id(
     args: &Value,
     key: &'static str,
 ) -> Result<Option<Snowflake>, ArgumentError> {
@@ -115,7 +146,11 @@ pub(crate) fn parse_optional_id(
     }
     Ok(None)
 }
-pub(crate) fn parse_optional_bool(
+/// Parse an optional boolean, rejecting every other present JSON shape.
+///
+/// # Errors
+/// Returns the original typed argument failure without changing its source or display.
+pub fn parse_optional_bool(
     args: &Value,
     name: &'static str,
 ) -> Result<Option<bool>, ArgumentError> {
@@ -127,7 +162,11 @@ pub(crate) fn parse_optional_bool(
         })
         .transpose()
 }
-pub(crate) fn parse_hook_overrides(args: &Value) -> Result<Vec<HookName>, ArgumentError> {
+/// Parse canonical hook names in caller order.
+///
+/// # Errors
+/// Returns the original typed argument failure without changing its source or display.
+pub fn parse_hook_overrides(args: &Value) -> Result<Vec<HookName>, ArgumentError> {
     let Some(value) = args.get("no_rly_hooks") else {
         return Ok(Vec::new());
     };
@@ -141,7 +180,8 @@ pub(crate) fn parse_hook_overrides(args: &Value) -> Result<Vec<HookName>, Argume
         .collect()
 }
 
-pub(crate) fn sentex_handles_schema(
+/// Describe the existing evidence role-handle array contract for the selected marker grammar.
+pub fn sentex_handles_schema(
     role_description: &str,
     version: dione_evidence::EvidenceMarkerVersion,
 ) -> Value {
@@ -160,4 +200,11 @@ pub(crate) fn sentex_handles_schema(
             dione_evidence::MAX_SENTEX_MARKER_BYTES,
         )
     })
+}
+
+impl ArgumentError {
+    /// Borrows the exact typed refusal without discarding its source chain.
+    pub fn kind(&self) -> &ArgumentErrorKind {
+        &self.kind
+    }
 }

@@ -1,9 +1,7 @@
 //! Discord-owned metadata tool definitions, parsing, and execution.
+use dione_discord_tool_arguments::{ArgumentError, ArgumentErrorKind, parse_id};
 
-use super::{
-    reply_tool::ReplyServices,
-    tool_arguments::{ArgumentError, ArgumentErrorKind, parse_id},
-};
+use super::reply_tool::ReplyServices;
 use dione_config::load_config;
 use dione_discord_identities::Snowflake;
 use dione_discord_introspection::{
