@@ -1,10 +1,15 @@
-//! MCP protocol responses: initialize handshake and tool list.
+//! Pure Dione MCP initialization and built-in discovery responses.
+//!
+//! The application supplies its version and current harness metadata snapshots.
+//! Discovery metadata grants no registration or execution authority. Authentication,
+//! live configuration, module installation and harness lifecycle remain with the
+//! application.
+#![warn(missing_docs)]
 
 use serde_json::{Value, json};
 use {
     dione_discord_presence::{ActivityType, OnlineStatus},
     dione_discord_tool_arguments::sentex_handles_schema,
-    dione_harness::HarnessConnection,
 };
 
 const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
@@ -15,28 +20,34 @@ const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
     "2024-11-05",
 ];
 
-/// Build the MCP `initialize` response.
-pub(crate) fn initialize_response(
-    harness: &HarnessConnection,
+/// Builds the MCP `initialize` response from the application's version and current capabilities.
+///
+/// The version belongs to the application, not this package. This function does
+/// not initialize a harness or authenticate a request.
+pub fn initialize_response(
+    application_version: &str,
+    capabilities: Value,
     requested_protocol_version: Option<&str>,
 ) -> Value {
     let protocol_version = requested_protocol_version
         .filter(|requested| SUPPORTED_PROTOCOL_VERSIONS.contains(requested))
         .unwrap_or(LATEST_PROTOCOL_VERSION);
-    let capabilities = harness.protocol().capabilities();
     json!({
         "protocolVersion": protocol_version,
         "capabilities": capabilities,
         "serverInfo": {
             "name": "dione",
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": application_version,
         }
     })
 }
 
-/// Build the MCP `tools/list` response.
-pub(crate) fn tools_list(
-    harness: &HarnessConnection,
+/// Builds the MCP `tools/list` response from the current harness definition snapshot.
+///
+/// Built-ins retain their existing order, followed by the supplied definitions.
+/// The caller separately validates registrations and appends installed module tools.
+pub fn tools_list(
+    harness_tools: Vec<Value>,
     evidence_markers_enabled: bool,
     version: dione_evidence::EvidenceMarkerVersion,
 ) -> Value {
@@ -284,7 +295,7 @@ pub(crate) fn tools_list(
         ]
     });
     if let Some(tools) = response["tools"].as_array_mut() {
-        tools.extend(harness.protocol().tools());
+        tools.extend(harness_tools);
     }
     if !evidence_markers_enabled && let Some(tools) = response["tools"].as_array_mut() {
         for tool in tools {
@@ -299,205 +310,10 @@ pub(crate) fn tools_list(
     response
 }
 
-pub(crate) fn tool(name: &str, description: &str, input_schema: Value) -> Value {
+fn tool(name: &str, description: &str, input_schema: Value) -> Value {
     json!({
         "name": name,
         "description": description,
         "inputSchema": input_schema,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn fetch_messages_schema() -> Value {
-        dione_discord_tool_contracts::query::definitions()
-            .find(|tool| tool["name"] == "fetch_messages")
-            .expect("fetch_messages must be in owner definitions")
-    }
-
-    /// Boundary pin for the presence tools: deleting either from the
-    /// advertised list must fail here, not in a reviewer's client.
-    #[test]
-    fn selected_evidence_version_is_advertised_consistently_by_reply_and_dm_for_both_harnesses() {
-        let (_queue_dir, codex) = crate::mcp::server::test_codex_connection();
-        for harness in [
-            &dione_claude::connect(
-                dione_harness::ProtocolOutput::new(tokio::io::stdout()),
-                dione_codex::TOOL_NAMES,
-            ),
-            &codex,
-        ] {
-            for (version, marker, encoding) in [
-                (
-                    dione_evidence::EvidenceMarkerVersion::V2,
-                    "[🔍=v2:<role>:<token>]",
-                    "all eight big-endian",
-                ),
-                (
-                    dione_evidence::EvidenceMarkerVersion::V3,
-                    "[🔍=v3:<role>:<token>]",
-                    "minimal-width big-endian",
-                ),
-            ] {
-                for enabled in [false, true] {
-                    let list = tools_list(harness, enabled, version);
-                    let dm = list["tools"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .find(|t| t["name"] == "send_dm")
-                        .unwrap();
-                    let reply = dione_discord_tool_contracts::reply::definition(enabled, version);
-                    for tool in [dm, &reply] {
-                        for field in ["claim_handles", "citation_handles"] {
-                            let property = &tool["inputSchema"]["properties"][field];
-                            if enabled {
-                                let description = property["description"].as_str().unwrap();
-                                assert!(description.contains(marker), "{description}");
-                                assert!(description.contains(encoding), "{description}");
-                                assert_eq!(property["maxItems"], 4);
-                            } else {
-                                assert!(property.is_null());
-                            }
-                        }
-                        assert!(
-                            tool["inputSchema"]["properties"]
-                                .get("evidence_marker_version")
-                                .is_none()
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn unknown_delivery_outcome_is_queryable_in_advertised_journal_schema() {
-        let list = tools_list(
-            &dione_claude::connect(
-                dione_harness::ProtocolOutput::new(tokio::io::stdout()),
-                dione_codex::TOOL_NAMES,
-            ),
-            false,
-            dione_evidence::EvidenceMarkerVersion::V3,
-        );
-        let stats = list["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|tool| tool["name"] == "no_rly_stats")
-            .unwrap();
-        assert_eq!(
-            stats["inputSchema"]["properties"]["outcome"]["enum"],
-            json!(["released", "rephrased", "expired", "unknown"])
-        );
-        assert_eq!(
-            dione_outbound_consent::journal::Outcome::parse("unknown"),
-            Some(dione_outbound_consent::journal::Outcome::Unknown)
-        );
-    }
-
-    #[test]
-    fn presence_tools_are_listed_with_their_schemas() {
-        let list = tools_list(
-            &dione_claude::connect(
-                dione_harness::ProtocolOutput::new(tokio::io::stdout()),
-                dione_codex::TOOL_NAMES,
-            ),
-            false,
-            dione_evidence::EvidenceMarkerVersion::V3,
-        );
-        let tools = list["tools"].as_array().unwrap();
-        let set = tools
-            .iter()
-            .find(|t| t["name"] == "set_presence")
-            .expect("set_presence must be in tools list");
-        for field in ["online_status", "activity_type", "activity_name"] {
-            assert!(
-                set["inputSchema"]["properties"].get(field).is_some(),
-                "set_presence schema must carry {field}"
-            );
-        }
-        assert!(
-            tools.iter().any(|t| t["name"] == "get_presence"),
-            "get_presence must be in tools list"
-        );
-    }
-
-    #[test]
-    fn claim_and_citation_handle_schemas_are_exposed_only_when_enabled() {
-        for enabled in [false, true] {
-            let (_queue_dir, harness) = crate::mcp::server::test_codex_connection();
-            let list = tools_list(&harness, enabled, dione_evidence::EvidenceMarkerVersion::V3);
-            for name in ["send_dm"] {
-                let tool = list["tools"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .find(|tool| tool["name"] == name)
-                    .unwrap();
-                let properties = &tool["inputSchema"]["properties"];
-                for field in ["claim_handles", "citation_handles"] {
-                    assert_eq!(
-                        properties.get(field).is_some(),
-                        enabled,
-                        "{name} {field} schema must follow the config gate"
-                    );
-                }
-                assert!(
-                    properties.get("evidence_keys").is_none(),
-                    "{name} must not advertise the removed evidence_keys alias"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn fetch_messages_schema_has_cursor_fields() {
-        let tool = fetch_messages_schema();
-        let props = &tool["inputSchema"]["properties"];
-        assert!(
-            props.get("before").is_some(),
-            "schema must include 'before'"
-        );
-        assert!(props.get("after").is_some(), "schema must include 'after'");
-    }
-
-    #[test]
-    fn fetch_messages_schema_documents_mutual_exclusion() {
-        let tool = fetch_messages_schema();
-        let desc = tool["description"].as_str().unwrap();
-        assert!(
-            desc.contains("mutually exclusive") || desc.contains("Mutually exclusive"),
-            "tool description must document mutual exclusion of before/after"
-        );
-    }
-
-    #[test]
-    fn fetch_messages_schema_documents_ordering() {
-        let tool = fetch_messages_schema();
-        let desc = tool["description"].as_str().unwrap();
-        assert!(
-            desc.contains("oldest-first"),
-            "tool description must document oldest-first ordering"
-        );
-    }
-
-    #[test]
-    fn fetch_messages_schema_cursor_descriptions_mention_exclusivity() {
-        let tool = fetch_messages_schema();
-        let props = &tool["inputSchema"]["properties"];
-        let before_desc = props["before"]["description"].as_str().unwrap();
-        let after_desc = props["after"]["description"].as_str().unwrap();
-        assert!(
-            before_desc.contains("Mutually exclusive"),
-            "before description must mention mutual exclusivity"
-        );
-        assert!(
-            after_desc.contains("Mutually exclusive"),
-            "after description must mention mutual exclusivity"
-        );
-    }
 }

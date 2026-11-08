@@ -2,7 +2,8 @@
 
 pub mod dispatch;
 pub(crate) mod presence_wire;
-pub mod protocol;
+#[cfg(test)]
+mod protocol_tests;
 pub(crate) mod render_wire;
 pub mod server;
 pub mod tools;

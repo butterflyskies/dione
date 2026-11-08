@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.141.0"
+version = "0.142.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -971,6 +971,7 @@ dependencies = [
  "dione-harness",
  "dione-harness-runtime",
  "dione-identity-display",
+ "dione-mcp-protocol",
  "dione-mcp-tools",
  "dione-messages",
  "dione-mutes",
@@ -1570,6 +1571,17 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "dione-mcp-protocol"
+version = "0.1.0"
+dependencies = [
+ "dione-attention",
+ "dione-discord-presence",
+ "dione-discord-tool-arguments",
+ "dione-evidence",
+ "serde_json",
 ]
 
 [[package]]

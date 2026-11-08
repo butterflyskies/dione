@@ -15,8 +15,6 @@ use crate::discord::messaging::MessagingCtx;
 use crate::mcp::dispatch::call_tool;
 use crate::mcp::harness_wire::PRIVATE_CONTROL_TOOLS;
 use crate::mcp::harness_wire::RequestOrigin;
-use crate::mcp::protocol::initialize_response;
-use crate::mcp::protocol::tools_list;
 use crate::mcp::tools::diagnostics::DiagnosticsCtx;
 use crate::mcp::tools::no_rly::NoRlyCtx;
 use camino::Utf8PathBuf;
@@ -41,6 +39,8 @@ use dione_harness::HarnessConnection;
 use dione_harness::HarnessError;
 use dione_harness::ProtocolOutput;
 use dione_harness_runtime::StdioExitPolicy;
+use dione_mcp_protocol::initialize_response;
+use dione_mcp_protocol::tools_list;
 use dione_mcp_tools::RegisteredTool;
 use dione_mcp_tools::RegistrationError;
 use dione_mcp_tools::ToolNameError;
@@ -119,7 +119,11 @@ pub struct DioneServer {
 }
 
 pub(crate) fn reserved_tool_names(harness: &HarnessConnection) -> BTreeSet<String> {
-    let definitions = tools_list(harness, true, dione_evidence::EvidenceMarkerVersion::V3);
+    let definitions = tools_list(
+        harness.protocol().tools(),
+        true,
+        dione_evidence::EvidenceMarkerVersion::V3,
+    );
     let mut reserved: BTreeSet<String> = dione_codex::TOOL_NAMES
         .iter()
         .map(|name| (*name).to_owned())
@@ -990,7 +994,8 @@ async fn dispatch(
 ) -> Result<Value, String> {
     match method {
         "initialize" => Ok(initialize_response(
-            &server.harness,
+            env!("CARGO_PKG_VERSION"),
+            server.harness.protocol().capabilities(),
             params.get("protocolVersion").and_then(Value::as_str),
         )),
         "notifications/initialized" => {
@@ -1007,7 +1012,7 @@ async fn dispatch(
         "tools/list" => {
             let config = dione_config::load_config(server.state_dir());
             let mut response = tools_list(
-                &server.harness,
+                server.harness.protocol().tools(),
                 config.delivery.evidence_markers_enabled,
                 config.delivery.evidence_marker_version,
             );
@@ -1258,8 +1263,8 @@ pub mod test_helpers {
     }
 
     fn complete_tools_list(harness: &HarnessConnection, evidence: bool) -> Value {
-        let mut response = crate::mcp::protocol::tools_list(
-            harness,
+        let mut response = tools_list(
+            harness.protocol().tools(),
             evidence,
             dione_evidence::EvidenceMarkerVersion::V3,
         );
@@ -1311,18 +1316,25 @@ pub mod test_helpers {
 
     /// Exposes `initialize_response` for unit testing the handshake.
     pub fn get_initialize_response() -> Value {
-        crate::mcp::protocol::initialize_response(
-            &dione_claude::connect(
+        initialize_response(
+            env!("CARGO_PKG_VERSION"),
+            dione_claude::connect(
                 dione_harness::ProtocolOutput::new(tokio::io::stdout()),
                 dione_codex::TOOL_NAMES,
-            ),
+            )
+            .protocol()
+            .capabilities(),
             None,
         )
     }
 
     /// Exposes the Codex initialize response for protocol tests.
     pub fn get_codex_initialize_response(harness: &HarnessConnection) -> Value {
-        crate::mcp::protocol::initialize_response(harness, None)
+        initialize_response(
+            env!("CARGO_PKG_VERSION"),
+            harness.protocol().capabilities(),
+            None,
+        )
     }
 
     /// Exposes `handle_request` for unit testing request dispatch.
