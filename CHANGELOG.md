@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.147.2] - 2026-11-08
+
+- Allow bounded observation of completed judgments in the Attention identity rollback fixture.
+
 ## [0.147.1] - 2026-11-08
 
 - Increase the Rook cancellation fixture reader-observation allowance while preserving production deadlines and quota assertions.
