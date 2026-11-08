@@ -2266,8 +2266,11 @@ jobs:
           sh scripts/package-preflight.sh dione-outbound-consent "${outbound_consent_version}" "${outbound_consent_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-mcp-tools:
-    needs: verify-dione
-    if: needs.verify-dione.outputs.publish-mcp-tools == 'true'
+    needs: [verify-dione, reconcile-evidence]
+    if: >-
+      needs.verify-dione.result == 'success' &&
+      needs.reconcile-evidence.result == 'success' &&
+      needs.verify-dione.outputs.publish-mcp-tools == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: release
@@ -2304,10 +2307,11 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   reconcile-mcp-tools:
-    needs: [verify-dione, publish-mcp-tools]
+    needs: [verify-dione, reconcile-evidence, publish-mcp-tools]
     if: >-
       always() &&
       needs.verify-dione.result == 'success' &&
+      needs.reconcile-evidence.result == 'success' &&
       (needs.publish-mcp-tools.result == 'success' || needs.publish-mcp-tools.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 20

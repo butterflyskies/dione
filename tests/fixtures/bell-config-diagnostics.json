@@ -74,14 +74,14 @@
     "load_display": "config parse error: TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
     "path": "bell_rings.max_bells",
     "path_display": "TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
-    "source": "[bell_rings]\nmax_bells=0\n[[bell_rings.providers]]\nurl='http://memory/mcp'\nscope='syne'\nalias=' '\n"
+    "source": "[bell_rings]\nmax_bells=0\n[[bell_rings.providers]]\nurl='http://memory/mcp'\nscope='fixture-orbit-27'\nalias=' '\n"
   },
   {
     "display": "TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
     "load_display": "config parse error: TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
     "path": "bell_rings.max_bells",
     "path_display": "TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",
-    "source": "[bell_rings]\nmax_bells=0\n[bell_rings.provider]\nurl='file:///tmp/memory'\nscope='syne'\n"
+    "source": "[bell_rings]\nmax_bells=0\n[bell_rings.provider]\nurl='file:///tmp/memory'\nscope='fixture-orbit-27'\n"
   },
   {
     "display": "TOML parse error at line 2, column 11\n  |\n2 | max_bells=0\n  |           ^\nmax_bells must be between 1 and 100\n",

@@ -1353,8 +1353,13 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     assert!(workflow.contains("publish-claude: ${{ steps.package.outputs.publish-claude }}"));
     assert!(reconcile_claude.contains("--ignore-vcs-info"));
 
-    assert!(publish_mcp_tools.contains("needs: verify-dione"));
-    assert!(reconcile_mcp_tools.contains("needs: [verify-dione, publish-mcp-tools]"));
+    assert!(publish_mcp_tools.contains("needs: [verify-dione, reconcile-evidence]"));
+    assert!(publish_mcp_tools.contains("needs.reconcile-evidence.result == 'success'"));
+    assert!(
+        reconcile_mcp_tools
+            .contains("needs: [verify-dione, reconcile-evidence, publish-mcp-tools]")
+    );
+    assert!(reconcile_mcp_tools.contains("needs.reconcile-evidence.result == 'success'"));
     assert!(reconcile_mcp_tools.contains("always()"));
     assert!(reconcile_mcp_tools.contains("needs.verify-dione.result == 'success'"));
     assert!(reconcile_mcp_tools.contains(
