@@ -367,6 +367,11 @@ fn project_message(message: &MessageView, attachments: AttachmentProjection) -> 
     projected
 }
 
+/// Projects the original unversioned read failure text.
+pub fn error(error: QueryError) -> Value {
+    json!({"error":error.kind.to_string()})
+}
+
 #[cfg(test)]
 mod context_tests {
     use super::*;
@@ -502,9 +507,4 @@ mod context_tests {
             json!({"status": "unavailable", "reason": "unsupported"})
         );
     }
-}
-
-/// Projects the original unversioned read failure text.
-pub fn error(error: QueryError) -> Value {
-    json!({"error":error.kind.to_string()})
 }

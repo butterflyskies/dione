@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.137.1]
+
+- Place extracted introspection and query test modules after production items so all-target lint checks cover the published owners.
+
 ## [0.137.0]
 
 - Extract the complete shared Discord tool argument contract, preserving parsing shapes, literal failures and root execution authority.

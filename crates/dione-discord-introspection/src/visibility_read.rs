@@ -221,6 +221,39 @@ fn is_absent_user(error: &serenity::Error) -> bool {
         if response.status_code.as_u16() == 404 && !matches!(response.error.code, UNKNOWN_CHANNEL | UNKNOWN_GUILD))
 }
 
+impl VisibilityObservation {
+    /// The channel whose visibility was observed.
+    pub fn channel(&self) -> ChannelId {
+        self.channel
+    }
+    /// Per-user observations in request order.
+    pub fn users(&self) -> &[UserVisibility] {
+        &self.users
+    }
+}
+
+impl UserVisibility {
+    /// The requested user ID.
+    pub fn user(&self) -> UserId {
+        self.user
+    }
+    /// The permission verdict or original lookup uncertainty.
+    pub fn outcome(&self) -> &VisibilityOutcome {
+        &self.outcome
+    }
+}
+
+impl VisibilityError {
+    /// The requested channel ID.
+    pub fn channel(&self) -> ChannelId {
+        self.channel
+    }
+    /// The failed prerequisite and its original cause.
+    pub fn kind(&self) -> &VisibilityErrorKind {
+        &self.kind
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,38 +311,5 @@ mod tests {
                 .is_err_and(|error| error.to_string().contains("not found")),
             "{result:?}"
         );
-    }
-}
-
-impl VisibilityObservation {
-    /// The channel whose visibility was observed.
-    pub fn channel(&self) -> ChannelId {
-        self.channel
-    }
-    /// Per-user observations in request order.
-    pub fn users(&self) -> &[UserVisibility] {
-        &self.users
-    }
-}
-
-impl UserVisibility {
-    /// The requested user ID.
-    pub fn user(&self) -> UserId {
-        self.user
-    }
-    /// The permission verdict or original lookup uncertainty.
-    pub fn outcome(&self) -> &VisibilityOutcome {
-        &self.outcome
-    }
-}
-
-impl VisibilityError {
-    /// The requested channel ID.
-    pub fn channel(&self) -> ChannelId {
-        self.channel
-    }
-    /// The failed prerequisite and its original cause.
-    pub fn kind(&self) -> &VisibilityErrorKind {
-        &self.kind
     }
 }
