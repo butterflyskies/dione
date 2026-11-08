@@ -268,7 +268,7 @@ The buffer is in memory;
 entering the gateway channel is not a durable inbox commit.
 
 [Attention](src/attention/mod.rs) adds optional recipient-local ambient
-admission. Its runtime owns source validation, evaluation, learned-policy
+admission. The [admission controller](crates/dione-attention-admission/src/lib.rs) owns recipient-local work ordering, cancellation and completion fences. Its returned metadata grants no delivery authority. The root runtime owns source validation, evaluation, learned-policy
 receipts, and transport outcome records. It is disabled by default. The
 [attention guide](docs/attention.md) describes modes and promotion requirements.
 [Bell evaluation](crates/dione-discord-bells/src/lib.rs) can attach memory recall metadata from

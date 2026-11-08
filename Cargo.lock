@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.134.0"
+version = "0.135.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -940,6 +940,7 @@ dependencies = [
  "color-eyre",
  "dione-access-requests",
  "dione-attention",
+ "dione-attention-admission",
  "dione-bell-rings",
  "dione-claude",
  "dione-codex",
@@ -1057,6 +1058,19 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "dione-attention-admission"
+version = "0.1.0"
+dependencies = [
+ "dione-attention",
+ "dione-config",
+ "dione-discord-events",
+ "dione-messages",
+ "serenity",
+ "tokio-util",
+ "uuid",
 ]
 
 [[package]]

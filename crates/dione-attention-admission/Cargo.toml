@@ -1,0 +1,22 @@
+[package]
+name = "dione-attention-admission"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Process-local attention work ownership, cancellation and ordered admission"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["attention", "admission", "ordering"]
+categories = ["data-structures"]
+
+[dependencies]
+dione-attention.workspace = true
+dione-config.workspace = true
+dione-discord-events.workspace = true
+serenity.workspace = true
+tokio-util.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+dione-messages.workspace = true

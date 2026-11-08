@@ -1,4 +1,5 @@
 //! The production admission state machine. Network evaluation never owns the ingress loop.
+#![warn(missing_docs)]
 
 use dione_attention::{config::AttentionMode, types::*};
 use dione_config::LoadedConfig;
@@ -10,31 +11,46 @@ use tokio_util::sync::CancellationToken;
 
 /// Source-bound evaluation work with cancellation tied to its admission lifetime.
 pub struct JudgmentWork {
+    /// Source-bound decision metadata, not delivery authority.
     pub record: DecisionRecord,
+    /// The effective evaluation mode selected at submission.
     pub mode: AttentionMode,
+    /// Cancellation tied to this admitted work lifetime.
     pub cancel: CancellationToken,
 }
 
 /// Routing result that keeps ordinary delivery separate from optional judgment work.
 pub enum Submission {
+    /// Preserve ordinary routing without provider judgment.
     Ordinary(NotificationEvent),
+    /// Preserve ordinary routing when evaluation prerequisites are unavailable.
     Unknown {
+        /// The observed event retained for ordinary routing.
         event: NotificationEvent,
+        /// The bounded prerequisite failure category.
         reason: &'static str,
     },
+    /// Return owned provider work and any independent ordinary event.
     Judge {
+        /// Source-bound evaluation work owned by this controller.
         work: Box<JudgmentWork>,
+        /// Ordinary delivery is independent in log mode.
         ordinary: Option<NotificationEvent>,
     },
+    /// The source already belongs to this controller.
     Duplicate,
+    /// Preserve ordinary routing because the evaluation limit is reached.
     Saturated {
+        /// The observed event retained for ordinary routing.
         event: NotificationEvent,
     },
 }
 
 /// A ready event paired with the decision that must be persisted before routing.
 pub struct AdmissionResult {
+    /// The ready event whose decision must be persisted before routing.
     pub event: MessageEvent,
+    /// Source-bound decision metadata, not delivery authority.
     pub record: DecisionRecord,
 }
 

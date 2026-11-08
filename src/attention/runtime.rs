@@ -4,6 +4,7 @@ use crate::discord::messaging;
 use crate::discord::messaging::MessagingCtx;
 use crate::ingress_ledger::SourceDeliveryFailure;
 use dione_attention::delivery::AttentionGuardFailure as Failure;
+use dione_attention_admission::JudgmentWork;
 use dione_config::attention_effect_guard;
 use dione_config::load_config;
 use dione_config::subscribe_generation;
@@ -21,7 +22,6 @@ use std::{
 };
 use {
     super::{
-        admission::JudgmentWork,
         source::{SourceFailure, SourceResolver, now_ms},
         store_access::LegacyOperationError,
     },
@@ -868,7 +868,7 @@ impl AttentionRuntime {
     pub async fn recover_pending(
         self: Arc<Self>,
         live_incarnation: IncarnationId,
-    ) -> Vec<super::admission::AdmissionResult> {
+    ) -> Vec<dione_attention_admission::AdmissionResult> {
         let config = load_config(&self.resolver.state_dir);
         let recipient = config.raw.attention.recipient.clone();
         let live_for_selection = live_incarnation.clone();
@@ -943,7 +943,7 @@ impl AttentionRuntime {
                     continue;
                 }
             }
-            recovered.push(super::admission::AdmissionResult { event, record });
+            recovered.push(dione_attention_admission::AdmissionResult { event, record });
         }
         recovered
     }
@@ -1157,8 +1157,6 @@ impl AttentionHealth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attention::admission::AdmissionController;
-    use crate::attention::admission::Submission;
     use crate::attention::source::now_ms;
     use camino::Utf8PathBuf;
     use dione_attention::config::AttentionBrief;
@@ -1166,6 +1164,8 @@ mod tests {
     use dione_attention::config::NoticeMode;
     use dione_attention::config::RoomAttention;
     use dione_attention::provider::TypeSafeProvider;
+    use dione_attention_admission::AdmissionController;
+    use dione_attention_admission::Submission;
     use dione_config::ConfigRuntime;
     use dione_discord_events::NotificationEvent;
     use parking_lot::Mutex as SyncMutex;

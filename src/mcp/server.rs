@@ -371,7 +371,7 @@ async fn run_with_input(
         let mut tz = initial_tz;
         let mut evidence_markers_enabled = initial_evidence_markers_enabled;
         const PRUNE_INTERVAL: u64 = 100;
-        let mut admissions = crate::attention::admission::AdmissionController::default();
+        let mut admissions = dione_attention_admission::AdmissionController::default();
         let mut evaluations = tokio::task::JoinSet::new();
         let mut attention_config = dione_config::subscribe_generation();
         let mut maintenance = tokio::task::JoinSet::new();
@@ -576,7 +576,7 @@ async fn run_with_input(
                         }
                     }
 
-                    use crate::attention::admission::Submission;
+                    use dione_attention_admission::Submission;
                     if let NotificationEvent::MessageEdit { chat_id, message_id, .. }
                         | NotificationEvent::MessageDelete { chat_id, message_id, .. } = &event {
                         let source = dione_attention::types::SourceKey { channel_id: *chat_id, message_id: *message_id };
@@ -2219,8 +2219,8 @@ async fn forward_ordinary(
 }
 
 async fn forward_attention_results(
-    results: Vec<crate::attention::admission::AdmissionResult>,
-    admissions: &mut crate::attention::admission::AdmissionController,
+    results: Vec<dione_attention_admission::AdmissionResult>,
+    admissions: &mut dione_attention_admission::AdmissionController,
     attention: &Arc<crate::attention::runtime::AttentionRuntime>,
     buffer: &mut DeliveryBuffer,
     evaluator: &Arc<BellEvaluator>,
@@ -2375,9 +2375,9 @@ async fn forward_attention_results(
 }
 
 async fn attention_transition(
-    admissions: &mut crate::attention::admission::AdmissionController,
+    admissions: &mut dione_attention_admission::AdmissionController,
     attention: &Arc<crate::attention::runtime::AttentionRuntime>,
-) -> Vec<crate::attention::admission::AdmissionResult> {
+) -> Vec<dione_attention_admission::AdmissionResult> {
     let _publication = dione_config::attention_effect_guard().await;
     admissions.cancel_work();
     let incarnation = admissions.incarnation().to_owned();
@@ -2416,12 +2416,12 @@ async fn attention_transition(
 }
 
 fn begin_attention(
-    admissions: &mut crate::attention::admission::AdmissionController,
+    admissions: &mut dione_attention_admission::AdmissionController,
     attention: &crate::attention::runtime::AttentionRuntime,
     event: NotificationEvent,
     config: &dione_config::LoadedConfig,
-) -> crate::attention::admission::Submission {
-    use crate::attention::admission::Submission;
+) -> dione_attention_admission::Submission {
+    use dione_attention_admission::Submission;
     let duplicate = match &event {
         NotificationEvent::Message(message) => {
             admissions.owns_source(&dione_attention::types::SourceKey {
