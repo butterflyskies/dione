@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.132.2] - 2026-11-08
+
+### Fixed
+
+- Carry the accepted fixture privacy and publication-order repairs through the
+  access and typing successor lineages without changing typing behavior.
+
 ## [0.132.1] - 2026-11-08
 
 ### Fixed
@@ -31,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Move complete live-authorized Discord typing and result projection into
   dione-discord-typing, preserving current DM/thread policy and SDK failures.
+## [0.131.4] - 2026-11-08
+
+### Fixed
+
+- Preserve the accepted fixture privacy and MCP-tools release-order repairs in
+  the complete access decision owner lineage.
 
 ## [0.131.3] - 2026-11-08
 
@@ -46,6 +59,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Extend dione-access-requests 0.2.0 with complete configuration-backed
   decisions and wire projections, preserving private durability tests and
   actual MCP dispatch behavior.
+## [0.130.16] - 2026-11-08
+
+### Security
+
+- Replace real agent identity fixtures with invented scopes and preserve their
+  literal diagnostic and delivery expectations.
+
+### Fixed
+
+- Require successful evidence reconciliation before MCP-tools publication and
+  reconciliation, preserving first-publication dependency ordering.
 
 ## [0.130.15]
 

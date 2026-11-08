@@ -1799,7 +1799,7 @@ fn fresh_ledger_disallowed_bot_ancestor_is_not_exported_or_derived() {
 fn native_bells_enrich_both_ordinary_and_attention_queue_deliveries() {
     scenario(|| async {
         let provider = crate::discord_bells_tests::tests::McpFixture::value(json!({
-            "recall_id":"r_combined", "results":[{"id":"native", "name":"memory", "scope":"syne", "distance":0.1, "match_type":"semantic"}], "count":1
+            "recall_id":"r_combined", "results":[{"id":"native", "name":"memory", "scope":"fixture-orbit-27", "distance":0.1, "match_type":"semantic"}], "count":1
         })).await;
         use dione_attention::{
             learning::{EvaluationPlan, FitOptions, FixedThresholdPolicy, PromotionLimits},
@@ -1948,7 +1948,7 @@ fn native_bells_enrich_both_ordinary_and_attention_queue_deliveries() {
         fixture.mode(AttentionMode::Off).await;
         let config_path = fixture.path.join("config.toml");
         let mut text = std::fs::read_to_string(&config_path).unwrap();
-        text.push_str(&format!("\n[bell_rings]\nenabled=true\nmode='live'\ntrigger='all'\n[[bell_rings.providers]]\nurl='{}'\nscope='syne'\nalias='combined'\n", provider.endpoint));
+        text.push_str(&format!("\n[bell_rings]\nenabled=true\nmode='live'\ntrigger='all'\n[[bell_rings.providers]]\nurl='{}'\nscope='fixture-orbit-27'\nalias='combined'\n", provider.endpoint));
         std::fs::write(&config_path, text).unwrap();
         let (_, warning) = ConfigRuntime::new(fixture.path.clone()).reload().await;
         assert!(warning.is_none());
@@ -1965,7 +1965,7 @@ fn native_bells_enrich_both_ordinary_and_attention_queue_deliveries() {
         assert_eq!(ordinary.len(), 1);
         assert_eq!(
             ordinary[0]["params"]["meta"]["bells"],
-            "2s syne/memory@combined d=0.1 id=native rid=r_combined"
+            "2s fixture-orbit-27/memory@combined d=0.1 id=native rid=r_combined"
         );
         assert_eq!(ordinary[0]["params"]["meta"]["bells_status"], "ok");
         fixture.mode(AttentionMode::On).await;
@@ -1982,7 +1982,7 @@ fn native_bells_enrich_both_ordinary_and_attention_queue_deliveries() {
         assert_eq!(attention[0]["params"]["meta"]["message_id"], "911");
         assert_eq!(
             attention[0]["params"]["meta"]["bells"],
-            "2s syne/memory@combined d=0.1 id=native rid=r_combined"
+            "2s fixture-orbit-27/memory@combined d=0.1 id=native rid=r_combined"
         );
         assert_eq!(attention[0]["params"]["meta"]["bells_status"], "ok");
         assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
