@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Extract complete Discord messaging outcomes and wire contracts, keeping actual publication, consent and sealed ingress authority at root.
 
+## [0.137.1]
+
+- Place extracted introspection and query test modules after production items so all-target lint checks cover the published owners.
+
+
 ## [0.137.0]
 
 - Extract the complete shared Discord tool argument contract, preserving parsing shapes, literal failures and root execution authority.
@@ -43,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [0.131.5]
 
 - Preserve accepted fixture privacy repairs in the access continuation.
+## [0.130.19]
+
+- Allow bounded introspection fixture exchanges under CI load without changing production deadlines or assertions.
+
+
+
 ## [0.130.18]
 
 - Replace remaining recorded nameplate participant fixtures with invented values.

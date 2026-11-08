@@ -1252,7 +1252,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-context"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "camino",
  "dione-config",
@@ -1309,7 +1309,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-introspection"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "dione-config",
@@ -1352,7 +1352,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-queries"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "camino",
@@ -1410,7 +1410,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-tool-arguments"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dione-discord-identities",
  "dione-discord-introspection",

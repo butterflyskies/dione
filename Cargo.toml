@@ -14,11 +14,11 @@ keywords = ["discord", "mcp", "claude-code", "codex", "bot"]
 categories = ["command-line-utilities"]
 
 [workspace.dependencies]
-dione-discord-introspection = { version = "=0.1.0", path = "crates/dione-discord-introspection" }
-dione-discord-queries = { version = "=0.2.0", path = "crates/dione-discord-queries" }
+dione-discord-introspection = { version = "=0.1.1", path = "crates/dione-discord-introspection" }
+dione-discord-queries = { version = "=0.2.1", path = "crates/dione-discord-queries" }
 dione-discord-messaging-contracts = { version = "=0.1.0", path = "crates/dione-discord-messaging-contracts" }
-dione-discord-tool-arguments = { version = "=0.1.0", path = "crates/dione-discord-tool-arguments" }
-dione-discord-context = { version = "=0.1.0", path = "crates/dione-discord-context" }
+dione-discord-tool-arguments = { version = "=0.1.1", path = "crates/dione-discord-tool-arguments" }
+dione-discord-context = { version = "=0.1.1", path = "crates/dione-discord-context" }
 dione-attention-admission = { version = "=0.1.0", path = "crates/dione-attention-admission" }
 dione-discord-typing = { version = "=0.1.0", path = "crates/dione-discord-typing" }
 dione-discord-scheduling = { version = "=0.1.5", path = "crates/dione-discord-scheduling" }

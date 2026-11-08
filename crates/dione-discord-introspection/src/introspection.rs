@@ -350,20 +350,6 @@ pub async fn list_emojis(
         .collect())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_thread_kinds_count_as_threads() {
-        assert!(is_thread(ChannelType::PublicThread));
-        assert!(is_thread(ChannelType::PrivateThread));
-        assert!(is_thread(ChannelType::NewsThread));
-        assert!(!is_thread(ChannelType::Text));
-        assert!(!is_thread(ChannelType::Category));
-    }
-}
-
 impl GuildObservation {
     /// The observed guild ID.
     pub fn id(&self) -> GuildId {
@@ -478,5 +464,19 @@ impl IntrospectionError {
     /// The original typed read failure.
     pub fn kind(&self) -> &IntrospectionErrorKind {
         &self.kind
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_thread_kinds_count_as_threads() {
+        assert!(is_thread(ChannelType::PublicThread));
+        assert!(is_thread(ChannelType::PrivateThread));
+        assert!(is_thread(ChannelType::NewsThread));
+        assert!(!is_thread(ChannelType::Text));
+        assert!(!is_thread(ChannelType::Category));
     }
 }
