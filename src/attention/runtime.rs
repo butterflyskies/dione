@@ -4,6 +4,8 @@ use crate::discord::messaging;
 use crate::discord::messaging::MessagingCtx;
 use crate::ingress_ledger::SourceDeliveryFailure;
 use dione_attention::delivery::AttentionGuardFailure as Failure;
+#[cfg(test)]
+use dione_attention::store_access::AttentionStoreAccessError;
 use dione_attention_admission::JudgmentWork;
 use dione_config::attention_effect_guard;
 use dione_config::load_config;
@@ -32,7 +34,7 @@ use {
         store::{AttentionStore, StoreLimits, ValidationFact, ValidationStatus},
         store_access::{
             AttentionInitializationError, AttentionInitializationErrorKind, AttentionReceiptError,
-            AttentionStoreAccessError, AttentionStoreAccessErrorKind,
+            AttentionStoreAccessErrorKind,
         },
         types::*,
     },
@@ -67,7 +69,7 @@ pub struct AttentionHealth {
 pub struct AttentionRuntime {
     pub resolver: SourceResolver,
     authority_module: dione_contracts::ModuleInstanceId,
-    store: Mutex<Result<AttentionStore, Arc<AttentionInitializationError>>>,
+    store: Arc<dione_attention::store_access::AttentionStoreAccess>,
     health: Mutex<AttentionHealth>,
     health_dirty: AtomicBool,
     health_epoch_ms: u64,
@@ -179,7 +181,9 @@ impl AttentionRuntime {
         Self {
             authority_module,
             resolver,
-            store: Mutex::new(store),
+            store: Arc::new(
+                dione_attention::store_access::AttentionStoreAccess::from_initialized(store),
+            ),
             health: Mutex::new(health),
             health_dirty: AtomicBool::new(true),
             health_epoch_ms: now_ms(),
@@ -200,39 +204,10 @@ impl AttentionRuntime {
         R: Send + 'static,
         F: FnOnce(&mut AttentionStore) -> Result<R, String> + Send + 'static,
     {
-        self.access_store(move |store| operation(store).map_err(LegacyOperationError))
+        self.store
+            .transact(move |store| operation(store).map_err(LegacyOperationError))
             .await
             .map_err(|error| error.to_string())
-    }
-
-    async fn access_store<R, E, F>(
-        self: &Arc<Self>,
-        operation: F,
-    ) -> Result<R, AttentionStoreAccessError<E>>
-    where
-        R: Send + 'static,
-        E: std::error::Error + Send + Sync + 'static,
-        F: FnOnce(&mut AttentionStore) -> Result<R, E> + Send + 'static,
-    {
-        let runtime = self.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut guard = runtime
-                .store
-                .lock()
-                .map_err(|_| AttentionStoreAccessError {
-                    kind: AttentionStoreAccessErrorKind::LockPoisoned,
-                })?;
-            let store = guard.as_mut().map_err(|error| AttentionStoreAccessError {
-                kind: AttentionStoreAccessErrorKind::Initialization(Arc::clone(error)),
-            })?;
-            operation(store).map_err(|error| AttentionStoreAccessError {
-                kind: AttentionStoreAccessErrorKind::Operation(error),
-            })
-        })
-        .await
-        .map_err(|error| AttentionStoreAccessError {
-            kind: AttentionStoreAccessErrorKind::Worker(error),
-        })?
     }
 
     /// Persists dirty health state off the async worker and reports persistence failure.
@@ -1014,7 +989,8 @@ impl AttentionRuntime {
         state: DeliveryState,
     ) -> Result<(), AttentionReceiptError> {
         let record = id.clone();
-        self.access_store(move |store| store.update_delivery(&id, state))
+        self.store
+            .transact(move |store| store.update_delivery(&id, state))
             .await
             .map_err(|source| AttentionReceiptError::store(record, source))
     }
@@ -1040,57 +1016,62 @@ impl dione_attention::delivery::AttentionDeliveryGuard for AttentionRuntime {
         let message = source.local().as_numeric().ok_or(Failure::Invalidated)?;
         let actor = author.local().as_numeric().ok_or(Failure::Invalidated)?;
         let id = descriptor.record();
-        // A concurrent durable write must defer this synchronous guard, not block Tokio on fsync.
-        let guard = self.store.try_lock().map_err(|_| Failure::Unavailable)?;
-        let store = guard.as_ref().map_err(|_| Failure::Unavailable)?;
-        let record = store.record(id).ok_or(Failure::Invalidated)?;
-        let config = load_config(&self.resolver.state_dir);
-        let expected = match descriptor.directive() {
-            dione_attention::delivery::AttentionDirective::Prompt => Admission::Prompt,
-            dione_attention::delivery::AttentionDirective::NextTurn => Admission::NextTurn,
-        };
-        if record.actual != expected
-            || record.recipient != config.raw.attention.recipient
-            || record.expires_at_ms <= now_ms()
-            || !matches!(
-                record.delivery,
-                DeliveryState::Admitted | DeliveryState::ReceiptUncertain
-            )
-        {
-            return Err(Failure::Invalidated);
-        }
-        for source in &record.sources {
-            self.resolver
-                .ledger
-                .delivery_check(
-                    source.key.message_id,
-                    source.key.channel_id,
-                    &source.content_hash,
-                    &config,
-                    MessageTargeting::Ambient,
-                )
-                .map_err(|error| match error {
-                    SourceDeliveryFailure::Unavailable => Failure::Unavailable,
-                    SourceDeliveryFailure::Invalidated => Failure::Invalidated,
-                })?;
-        }
-        if !store.sources_current(
-            &record.sources,
-            now_ms(),
-            config.raw.attention.revalidate_ms,
-        ) {
-            return Err(Failure::Unavailable);
-        }
-        let trigger = record.sources.first().ok_or(Failure::Invalidated)?;
-        if !trigger.matches_text(descriptor.original_text())
-            || channel.get() != trigger.key.channel_id.get()
-            || message.get() != trigger.key.message_id.get()
-            || actor.get() != trigger.author_id.get()
-        {
-            return Err(Failure::Invalidated);
-        }
-        // Already-admitted work survives mode changes, but not access or source loss.
-        Ok(())
+        // The owner holds the same nonblocking read lock through every guard predicate.
+        self.store
+            .try_read(|store| {
+                let record = store.record(id).ok_or(Failure::Invalidated)?;
+                let config = load_config(&self.resolver.state_dir);
+                let expected = match descriptor.directive() {
+                    dione_attention::delivery::AttentionDirective::Prompt => Admission::Prompt,
+                    dione_attention::delivery::AttentionDirective::NextTurn => Admission::NextTurn,
+                };
+                if record.actual != expected
+                    || record.recipient != config.raw.attention.recipient
+                    || record.expires_at_ms <= now_ms()
+                    || !matches!(
+                        record.delivery,
+                        DeliveryState::Admitted | DeliveryState::ReceiptUncertain
+                    )
+                {
+                    return Err(Failure::Invalidated);
+                }
+                for source in &record.sources {
+                    self.resolver
+                        .ledger
+                        .delivery_check(
+                            source.key.message_id,
+                            source.key.channel_id,
+                            &source.content_hash,
+                            &config,
+                            MessageTargeting::Ambient,
+                        )
+                        .map_err(|error| match error {
+                            SourceDeliveryFailure::Unavailable => Failure::Unavailable,
+                            SourceDeliveryFailure::Invalidated => Failure::Invalidated,
+                        })?;
+                }
+                if !store.sources_current(
+                    &record.sources,
+                    now_ms(),
+                    config.raw.attention.revalidate_ms,
+                ) {
+                    return Err(Failure::Unavailable);
+                }
+                let trigger = record.sources.first().ok_or(Failure::Invalidated)?;
+                if !trigger.matches_text(descriptor.original_text())
+                    || channel.get() != trigger.key.channel_id.get()
+                    || message.get() != trigger.key.message_id.get()
+                    || actor.get() != trigger.author_id.get()
+                {
+                    return Err(Failure::Invalidated);
+                }
+                // Already-admitted work survives mode changes, but not access or source loss.
+                Ok(())
+            })
+            .map_err(|error| match error.kind {
+                AttentionStoreAccessErrorKind::Operation(failure) => failure,
+                _ => Failure::Unavailable,
+            })
     }
 
     fn receipt<'a>(
@@ -1831,7 +1812,19 @@ mod tests {
             use dione_attention::delivery::{AttentionDeliveryGuard, AttentionGuardFailure};
 
             let fixture = NoticeFixture::new(AttentionMode::Log, NoticeMode::Off, 200).await;
-            let held = fixture.runtime.store.lock().unwrap();
+            let (entered, ready) = tokio::sync::oneshot::channel();
+            let (release, released) = std::sync::mpsc::sync_channel(0);
+            let access = fixture.runtime.store.clone();
+            let transaction = tokio::spawn(async move {
+                access
+                    .transact(move |_| -> Result<(), std::io::Error> {
+                        entered.send(()).unwrap();
+                        released.recv().unwrap();
+                        Ok(())
+                    })
+                    .await
+            });
+            ready.await.unwrap();
             let runtime = fixture.runtime.clone();
             let (sender, receiver) = std::sync::mpsc::sync_channel(1);
             let checker = std::thread::spawn(move || {
@@ -1860,7 +1853,8 @@ mod tests {
             });
             let observed = receiver.recv_timeout(Duration::from_secs(5));
             // Release even on regression so the checker exits before the assertion fails.
-            drop(held);
+            release.send(()).unwrap();
+            transaction.await.unwrap().unwrap();
             checker.join().unwrap();
             assert!(matches!(
                 observed,

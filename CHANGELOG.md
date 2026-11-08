@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.146.0] - 2026-11-08
+
+- Move Attention serialized store transactions and nonblocking read access into the existing owner while preserving sticky initialization, worker causes and root delivery authority.
+
 ## [0.145.0] - 2026-11-08
 
 - Move complete Discord management result metadata, typed errors and JSON projection into the existing contracts owner while retaining root execution authority.

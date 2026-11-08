@@ -38,3 +38,5 @@ partition and fitting constraints. Confirmed source loss removes review and
 sealed-evaluation provenance together; unavailable sources remain Unknown.
 
 `control::AttentionCommand` and `control::schema` describe the complete authenticated control surface. Commands retain closed decoding and descriptive mutation classification; they do not grant execution permission. The application rechecks current recipient, source and mutation authority at its effect boundaries. The existing default-off `test-support` feature also enables command serialization for hermetic application fixtures.
+
+`store_access::AttentionStoreAccess` owns one private mutex over the initialized store result. Typed transactions run on blocking workers and retain the store through waiter cancellation. Nonblocking reads use the same mutex and keep the complete caller validation under that lock. Initialization failures stay sticky; busy, poisoned and failed state never become an empty successful store. Root composition still opens the store and health in one worker, and retains source/configuration/ingress and delivery authority.
