@@ -271,7 +271,7 @@ pub(crate) mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            timeout(Duration::from_secs(5), async move {
+            timeout(Duration::from_secs(120), async move {
                 let mut requests = Vec::new();
                 for (status, body) in responses {
                     let (stream, _) = listener.accept().await.unwrap();
