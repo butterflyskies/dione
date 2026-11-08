@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.132.3]
+
+- Preserve accepted official fixture repairs in the typing continuation.
+
+## [0.131.5]
+
+- Preserve accepted fixture privacy repairs in the access continuation.
+
+## [0.130.17]
+
+- Replace identifying nameplate and Bell test fixtures with invented values.
+
 ## [Unreleased]
 
 ### Security
