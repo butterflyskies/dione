@@ -15,21 +15,33 @@ use std::{fmt, num::NonZeroU16, sync::Arc};
 use thiserror::Error;
 
 /// Dependencies selected at tool-call entry.
-pub(crate) struct IntrospectionCtx {
+pub struct IntrospectionCtx {
     pub(crate) http: Arc<Http>,
     pub(crate) config: Arc<LoadedConfig>,
 }
 
+impl IntrospectionCtx {
+    /// Selects the shared HTTP client and the configuration snapshot for one read.
+    pub fn new(http: Arc<Http>, config: Arc<LoadedConfig>) -> Self {
+        Self { http, config }
+    }
+
+    /// Borrows the client selected for this observation context.
+    pub fn http(&self) -> &Arc<Http> {
+        &self.http
+    }
+}
+
 /// A guild visible to the bot.
 #[derive(Debug)]
-pub(crate) struct GuildObservation {
+pub struct GuildObservation {
     pub(crate) id: GuildId,
     pub(crate) name: String,
 }
 
 /// A channel returned by a guild listing.
 #[derive(Debug)]
-pub(crate) struct ListedChannel {
+pub struct ListedChannel {
     pub(crate) id: ChannelId,
     pub(crate) name: String,
     pub(crate) kind: ChannelType,
@@ -37,25 +49,35 @@ pub(crate) struct ListedChannel {
 
 /// A channel's category and resolved name.
 #[derive(Debug)]
-pub(crate) enum ChannelObservation {
+pub enum ChannelObservation {
+    /// A guild channel or thread with observed permission metadata.
     Guild {
+        /// The observed channel identifier.
         id: ChannelId,
+        /// The SDK-resolved channel name.
         name: String,
+        /// Permission overwrites returned by Discord.
         permission_overwrites: Vec<PermissionOverwrite>,
+        /// The parent channel when this observation is a thread.
         thread_parent: Option<ChannelId>,
     },
+    /// A private channel with its SDK-resolved name.
     Private {
+        /// The observed private channel identifier.
         id: ChannelId,
+        /// The SDK-resolved private channel name.
         name: String,
     },
+    /// An SDK channel variant without supported metadata projection.
     Unknown {
+        /// The identifier of the unsupported channel variant.
         id: ChannelId,
     },
 }
 
 /// A Discord user, retaining the optional legacy discriminator.
 #[derive(Debug)]
-pub(crate) struct UserObservation {
+pub struct UserObservation {
     pub(crate) id: UserId,
     pub(crate) name: String,
     pub(crate) discriminator: Option<NonZeroU16>,
@@ -64,7 +86,7 @@ pub(crate) struct UserObservation {
 
 /// A guild member with a join time localized using the call's configuration.
 #[derive(Debug)]
-pub(crate) struct MemberObservation {
+pub struct MemberObservation {
     pub(crate) user_id: UserId,
     pub(crate) username: String,
     pub(crate) nick: Option<String>,
@@ -74,18 +96,18 @@ pub(crate) struct MemberObservation {
 
 /// A role's hierarchy position as normalized by Discord's SDK.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct RolePosition(u16);
+pub struct RolePosition(u16);
 
 impl RolePosition {
     /// Returns the numeric hierarchy position for protocol projection.
-    pub(crate) fn get(self) -> u16 {
+    pub fn get(self) -> u16 {
         self.0
     }
 }
 
 /// A guild role's displayed metadata.
 #[derive(Debug)]
-pub(crate) struct RoleObservation {
+pub struct RoleObservation {
     pub(crate) id: RoleId,
     pub(crate) name: String,
     pub(crate) position: RolePosition,
@@ -95,7 +117,7 @@ pub(crate) struct RoleObservation {
 
 /// A guild emoji's identity and animation state.
 #[derive(Debug)]
-pub(crate) struct EmojiObservation {
+pub struct EmojiObservation {
     pub(crate) id: EmojiId,
     pub(crate) name: String,
     pub(crate) animated: bool,
@@ -103,15 +125,29 @@ pub(crate) struct EmojiObservation {
 
 /// A metadata read and its required targets.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum IntrospectionOperation {
+pub enum IntrospectionOperation {
+    /// List the SDK default guild page.
     Guilds,
+    /// List channels in the named guild.
     Channels(GuildId),
+    /// Read the named channel.
     Channel(ChannelId),
+    /// Read the named user.
     User(UserId),
-    Member { guild: GuildId, user: UserId },
+    /// Read the user in the named guild.
+    Member {
+        /// The guild containing the member.
+        guild: GuildId,
+        /// The user whose membership is read.
+        user: UserId,
+    },
+    /// List the guild roles.
     Roles(GuildId),
+    /// List the guild emojis.
     Emojis(GuildId),
+    /// Observe visibility for the checked request.
     Visibility(VisibilityRequest),
+    /// Observe a bounded channel audience.
     Audience(ChannelId),
 }
 
@@ -136,7 +172,7 @@ impl fmt::Display for IntrospectionOperation {
 /// A metadata read failure with its typed target and original cause.
 #[derive(Debug, Error)]
 #[error("failed to {operation}")]
-pub(crate) struct IntrospectionError {
+pub struct IntrospectionError {
     pub(crate) operation: IntrospectionOperation,
     #[source]
     pub(crate) kind: IntrospectionErrorKind,
@@ -144,8 +180,9 @@ pub(crate) struct IntrospectionError {
 
 /// The cause of a metadata read failure.
 #[derive(Debug, Error)]
-pub(crate) enum IntrospectionErrorKind {
+pub enum IntrospectionErrorKind {
     #[error(transparent)]
+    /// The original SDK failure.
     Discord(Box<serenity::Error>),
 }
 
@@ -159,7 +196,7 @@ impl IntrospectionError {
 }
 
 /// Lists the SDK's default page of guilds in response order.
-pub(crate) async fn list_guilds(
+pub async fn list_guilds(
     ctx: &IntrospectionCtx,
 ) -> Result<Vec<GuildObservation>, IntrospectionError> {
     let guilds = ctx
@@ -177,7 +214,7 @@ pub(crate) async fn list_guilds(
 }
 
 /// Lists a guild's channels in response order.
-pub(crate) async fn list_channels(
+pub async fn list_channels(
     ctx: &IntrospectionCtx,
     guild: GuildId,
 ) -> Result<Vec<ListedChannel>, IntrospectionError> {
@@ -195,7 +232,7 @@ pub(crate) async fn list_channels(
 }
 
 /// Reads a channel, resolving private-channel names through the SDK.
-pub(crate) async fn get_channel(
+pub async fn get_channel(
     ctx: &IntrospectionCtx,
     channel: ChannelId,
 ) -> Result<ChannelObservation, IntrospectionError> {
@@ -222,7 +259,7 @@ pub(crate) async fn get_channel(
 }
 
 /// Reads a user's metadata.
-pub(crate) async fn get_user(
+pub async fn get_user(
     ctx: &IntrospectionCtx,
     user: UserId,
 ) -> Result<UserObservation, IntrospectionError> {
@@ -239,7 +276,7 @@ pub(crate) async fn get_user(
 }
 
 /// Reads a guild member and localizes the optional join time.
-pub(crate) async fn get_member(
+pub async fn get_member(
     ctx: &IntrospectionCtx,
     guild: GuildId,
     user: UserId,
@@ -269,7 +306,7 @@ pub(crate) async fn get_member(
 }
 
 /// Lists a guild's roles in response order.
-pub(crate) async fn list_roles(
+pub async fn list_roles(
     ctx: &IntrospectionCtx,
     guild: GuildId,
 ) -> Result<Vec<RoleObservation>, IntrospectionError> {
@@ -296,7 +333,7 @@ pub(crate) fn is_thread(kind: ChannelType) -> bool {
 }
 
 /// Lists a guild's custom emojis in response order.
-pub(crate) async fn list_emojis(
+pub async fn list_emojis(
     ctx: &IntrospectionCtx,
     guild: GuildId,
 ) -> Result<Vec<EmojiObservation>, IntrospectionError> {
@@ -324,5 +361,122 @@ mod tests {
         assert!(is_thread(ChannelType::NewsThread));
         assert!(!is_thread(ChannelType::Text));
         assert!(!is_thread(ChannelType::Category));
+    }
+}
+
+impl GuildObservation {
+    /// The observed guild ID.
+    pub fn id(&self) -> GuildId {
+        self.id
+    }
+    /// The observed guild name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl ListedChannel {
+    /// The listed channel ID.
+    pub fn id(&self) -> ChannelId {
+        self.id
+    }
+    /// The listed channel name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    /// The observed Discord channel category.
+    pub fn kind(&self) -> ChannelType {
+        self.kind
+    }
+}
+
+impl UserObservation {
+    /// The observed user ID.
+    pub fn id(&self) -> UserId {
+        self.id
+    }
+    /// The observed username.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    /// The optional legacy discriminator.
+    pub fn discriminator(&self) -> Option<NonZeroU16> {
+        self.discriminator
+    }
+    /// Whether Discord identifies the user as a bot.
+    pub fn bot(&self) -> bool {
+        self.bot
+    }
+}
+
+impl MemberObservation {
+    /// The observed member user ID.
+    pub fn user_id(&self) -> UserId {
+        self.user_id
+    }
+    /// The observed member username.
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+    /// The optional observed nickname.
+    pub fn nick(&self) -> Option<&str> {
+        self.nick.as_deref()
+    }
+    /// Role IDs in the SDK response order.
+    pub fn roles(&self) -> &[RoleId] {
+        &self.roles
+    }
+    /// The join time localized with the call-entry configuration.
+    pub fn joined_at(&self) -> Option<&Timestamp> {
+        self.joined_at.as_ref()
+    }
+}
+
+impl RoleObservation {
+    /// The observed role ID.
+    pub fn id(&self) -> RoleId {
+        self.id
+    }
+    /// The observed role name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    /// The SDK-normalized role hierarchy position.
+    pub fn position(&self) -> RolePosition {
+        self.position
+    }
+    /// Whether the observed role can be mentioned.
+    pub fn mentionable(&self) -> bool {
+        self.mentionable
+    }
+    /// The observed role permission bits.
+    pub fn permissions(&self) -> Permissions {
+        self.permissions
+    }
+}
+
+impl EmojiObservation {
+    /// The observed emoji ID.
+    pub fn id(&self) -> EmojiId {
+        self.id
+    }
+    /// The observed emoji name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    /// Whether the emoji is animated.
+    pub fn animated(&self) -> bool {
+        self.animated
+    }
+}
+
+impl IntrospectionError {
+    /// The attempted read and its target IDs.
+    pub fn operation(&self) -> &IntrospectionOperation {
+        &self.operation
+    }
+    /// The original typed read failure.
+    pub fn kind(&self) -> &IntrospectionErrorKind {
+        &self.kind
     }
 }

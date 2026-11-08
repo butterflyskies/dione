@@ -21,30 +21,33 @@ use thiserror::Error;
 
 /// Ordered visibility observations for one requested channel.
 #[derive(Debug)]
-pub(crate) struct VisibilityObservation {
+pub struct VisibilityObservation {
     pub(crate) channel: ChannelId,
     pub(crate) users: Vec<UserVisibility>,
 }
 
 /// A user's visibility or the concrete cause preventing its determination.
 #[derive(Debug)]
-pub(crate) struct UserVisibility {
+pub struct UserVisibility {
     pub(crate) user: UserId,
     pub(crate) outcome: VisibilityOutcome,
 }
 
 /// Lookup uncertainty is distinct from a permission denial.
 #[derive(Debug)]
-pub(crate) enum VisibilityOutcome {
+pub enum VisibilityOutcome {
+    /// Permission facts determine a visibility verdict.
     Determined(ViewVerdict),
+    /// A failed member lookup leaves visibility unknown.
     MemberLookupFailed(Box<serenity::Error>),
+    /// A failed private-thread lookup leaves membership unknown.
     ThreadMembershipUnknown(Box<serenity::Error>),
 }
 
 /// A channel visibility read failed before per-user evaluation.
 #[derive(Debug, Error)]
 #[error("failed to check visibility of channel {channel}: {kind}")]
-pub(crate) struct VisibilityError {
+pub struct VisibilityError {
     pub(crate) channel: ChannelId,
     #[source]
     pub(crate) kind: VisibilityErrorKind,
@@ -52,18 +55,24 @@ pub(crate) struct VisibilityError {
 
 /// The failed visibility prerequisite and its original cause.
 #[derive(Debug, Error)]
-pub(crate) enum VisibilityErrorKind {
+pub enum VisibilityErrorKind {
     #[error(transparent)]
+    /// The channel lookup failed.
     Channel(Box<serenity::Error>),
     #[error("can_view_channel requires a guild channel or thread")]
+    /// The selected channel is not a guild channel or thread.
     NotGuildChannel,
     #[error("thread has no parent channel")]
+    /// The thread response omitted its parent.
     MissingParent,
     #[error("thread parent is not a guild channel")]
+    /// The thread parent is not a guild channel.
     NotGuildParent,
     #[error("failed to fetch thread parent: {0}")]
+    /// The thread parent lookup failed.
     Parent(#[source] Box<serenity::Error>),
     #[error("failed to fetch guild: {0}")]
+    /// The guild lookup failed.
     Guild(#[source] Box<serenity::Error>),
 }
 
@@ -96,7 +105,7 @@ impl PreparedVisibility {
 }
 
 /// Evaluates users in request order and reads private membership only when decisive.
-pub(crate) async fn can_view_channel(
+pub async fn can_view_channel(
     ctx: &IntrospectionCtx,
     request: &VisibilityRequest,
 ) -> Result<VisibilityObservation, VisibilityError> {
@@ -269,5 +278,38 @@ mod tests {
                 .is_err_and(|error| error.to_string().contains("not found")),
             "{result:?}"
         );
+    }
+}
+
+impl VisibilityObservation {
+    /// The channel whose visibility was observed.
+    pub fn channel(&self) -> ChannelId {
+        self.channel
+    }
+    /// Per-user observations in request order.
+    pub fn users(&self) -> &[UserVisibility] {
+        &self.users
+    }
+}
+
+impl UserVisibility {
+    /// The requested user ID.
+    pub fn user(&self) -> UserId {
+        self.user
+    }
+    /// The permission verdict or original lookup uncertainty.
+    pub fn outcome(&self) -> &VisibilityOutcome {
+        &self.outcome
+    }
+}
+
+impl VisibilityError {
+    /// The requested channel ID.
+    pub fn channel(&self) -> ChannelId {
+        self.channel
+    }
+    /// The failed prerequisite and its original cause.
+    pub fn kind(&self) -> &VisibilityErrorKind {
+        &self.kind
     }
 }

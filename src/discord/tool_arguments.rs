@@ -41,7 +41,7 @@ pub(crate) enum ArgumentErrorKind {
     #[error("invalid user_ids: must be nonzero Discord snowflakes")]
     UserIdZero,
     #[error(transparent)]
-    VisibilityRequest(#[from] crate::discord::visibility::VisibilityRequestError),
+    VisibilityRequest(#[from] dione_discord_introspection::visibility::VisibilityRequestError),
     #[error("{0}")]
     Hook(#[from] PipelineError),
     #[error("claim_handles and citation_handles require evidence_markers_enabled")]

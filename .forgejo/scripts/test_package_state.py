@@ -15,7 +15,7 @@ from workflow_test_support import read_jobs, run_blocks
 
 
 SOURCE = Path(__file__).resolve().parents[2]
-PACKAGES = ('dione', 'dione-rendering', 'dione-durable', 'dione-contracts', 'dione-rook', 'dione-attention', 'dione-evidence', 'dione-messages', 'dione-rate-limiter', 'dione-vaelii', 'dione-gaie', 'dione-identity-display', 'dione-harness', 'dione-presentation', 'dione-contradictionary', 'dione-bell-rings', 'dione-delivery-scheduler', 'dione-access-requests', 'dione-mutes', 'dione-coordination', 'dione-pre-send', 'dione-teams-identities', 'dione-discord-identities', 'dione-pluralkit-identities', 'dione-config', 'dione-outbound-consent', 'dione-mcp-tools', 'dione-provider-delivery', 'dione-teams', 'dione-omp', 'dione-codex', 'dione-claude', 'dione-discord-presence', 'dione-discord-state', 'dione-discord-events', 'dione-tracing-channel', 'dione-config-watcher', 'dione-drop-ledger', 'dione-permissions', 'dione-discord-bells', 'dione-discord-gate', 'dione-oneshot', 'dione-harness-runtime', 'dione-discord-scheduling', 'dione-discord-typing')
+PACKAGES = ('dione', 'dione-rendering', 'dione-durable', 'dione-contracts', 'dione-rook', 'dione-attention', 'dione-evidence', 'dione-messages', 'dione-rate-limiter', 'dione-vaelii', 'dione-gaie', 'dione-identity-display', 'dione-harness', 'dione-presentation', 'dione-contradictionary', 'dione-bell-rings', 'dione-delivery-scheduler', 'dione-access-requests', 'dione-mutes', 'dione-coordination', 'dione-pre-send', 'dione-teams-identities', 'dione-discord-identities', 'dione-pluralkit-identities', 'dione-config', 'dione-outbound-consent', 'dione-mcp-tools', 'dione-provider-delivery', 'dione-teams', 'dione-omp', 'dione-codex', 'dione-claude', 'dione-discord-presence', 'dione-discord-state', 'dione-discord-events', 'dione-tracing-channel', 'dione-config-watcher', 'dione-drop-ledger', 'dione-permissions', 'dione-discord-bells', 'dione-discord-gate', 'dione-oneshot', 'dione-harness-runtime', 'dione-discord-scheduling', 'dione-discord-typing', 'dione-discord-introspection')
 
 
 @unittest.skipUnless(shutil.which("sh"), "package state requires a POSIX shell")
@@ -425,6 +425,28 @@ class ReleasePreflightTests(unittest.TestCase):
         for name in ("publish-crate", "reconcile-dione"):
             self.assertIn("reconcile-discord-typing", jobs[name].splitlines()[0])
         self.assertIn("needs.reconcile-discord-typing.result == 'success'", jobs["reconcile-dione"])
+
+    def test_discord_introspection_reconciliation_requires_every_direct_capability(self):
+        workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
+        jobs = read_jobs(workflow)
+        self.assertIn("    permissions:\n      contents: read\n      id-token: write\n", jobs["publish-discord-introspection"])
+        self.assertIn("    permissions:\n      contents: read\n", jobs["reconcile-discord-introspection"])
+        for name in ("publish-discord-introspection", "reconcile-discord-introspection"):
+            self.assertNotIn("    discord-introspection:", jobs[name])
+        capabilities = ('config', 'messages')
+        expected = {"verify-dione"} | {"reconcile-" + name for name in capabilities}
+        for name, extra in (("publish-discord-introspection", set()), ("reconcile-discord-introspection", {"publish-discord-introspection"})):
+            needs = jobs[name].splitlines()[0].strip().removeprefix("needs: [").removesuffix("]")
+            self.assertEqual(set(needs.split(", ")), expected | extra)
+        reconcile = jobs["reconcile-discord-introspection"]
+        self.assertIn("always()", reconcile)
+        self.assertIn("needs.verify-dione.result == 'success'", reconcile)
+        for name in capabilities:
+            self.assertIn("needs.reconcile-" + name + ".result == 'success'", reconcile)
+        self.assertIn("(needs.publish-discord-introspection.result == 'success' || needs.publish-discord-introspection.result == 'skipped')", reconcile)
+        for name in ("publish-crate", "reconcile-dione"):
+            self.assertIn("reconcile-discord-introspection", jobs[name].splitlines()[0])
+        self.assertIn("needs.reconcile-discord-introspection.result == 'success'", jobs["reconcile-dione"])
 
     def test_drop_ledger_reconciliation_requires_every_direct_capability(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()

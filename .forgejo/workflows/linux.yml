@@ -13,6 +13,7 @@ on:
       - main
       - refactor/plugin-crates
       - refactor/access-decisions-continuation
+      - refactor/discord-typing
       - "refactor/*-crate"
       - refactor/vertical-slices
       - refactor/teams-identities-publication

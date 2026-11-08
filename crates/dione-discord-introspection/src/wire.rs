@@ -1,6 +1,6 @@
 //! MCP result projection for Discord metadata reads.
 
-use crate::discord::{
+use crate::{
     audience::{AudienceError, AudienceMember, AudienceObservation, AudiencePermission, CensusEnd},
     introspection::{
         ChannelObservation, EmojiObservation, GuildObservation, IntrospectionError,
@@ -24,7 +24,7 @@ fn error(error: IntrospectionError) -> Value {
 }
 
 /// Projects a guild listing into the MCP result shape.
-pub(crate) fn guilds(result: Result<Vec<GuildObservation>, IntrospectionError>) -> Value {
+pub fn guilds(result: Result<Vec<GuildObservation>, IntrospectionError>) -> Value {
     match result {
         Ok(guilds) => json!({"guilds": guilds.into_iter().map(|guild| json!({
             "id": guild.id.to_string(), "name": guild.name,
@@ -34,7 +34,7 @@ pub(crate) fn guilds(result: Result<Vec<GuildObservation>, IntrospectionError>) 
 }
 
 /// Projects channel subtypes using the historical SDK Debug vocabulary.
-pub(crate) fn channels(result: Result<Vec<ListedChannel>, IntrospectionError>) -> Value {
+pub fn channels(result: Result<Vec<ListedChannel>, IntrospectionError>) -> Value {
     match result {
         Ok(channels) => json!({"channels": channels.into_iter().map(|channel| json!({
             "id": channel.id.to_string(), "name": channel.name, "kind": format!("{:?}", channel.kind),
@@ -44,7 +44,7 @@ pub(crate) fn channels(result: Result<Vec<ListedChannel>, IntrospectionError>) -
 }
 
 /// Projects a channel's coarse category and name.
-pub(crate) fn channel(result: Result<ChannelObservation, IntrospectionError>) -> Value {
+pub fn channel(result: Result<ChannelObservation, IntrospectionError>) -> Value {
     match result {
         Ok(channel) => match channel {
             ChannelObservation::Guild {
@@ -72,7 +72,7 @@ pub(crate) fn channel(result: Result<ChannelObservation, IntrospectionError>) ->
 }
 
 /// Projects a user's optional discriminator without padding.
-pub(crate) fn user(result: Result<UserObservation, IntrospectionError>) -> Value {
+pub fn user(result: Result<UserObservation, IntrospectionError>) -> Value {
     match result {
         Ok(user) => json!({
             "id": user.id.to_string(), "name": user.name,
@@ -84,7 +84,7 @@ pub(crate) fn user(result: Result<UserObservation, IntrospectionError>) -> Value
 }
 
 /// Projects a member, retaining null keys for absent metadata.
-pub(crate) fn member(result: Result<MemberObservation, IntrospectionError>) -> Value {
+pub fn member(result: Result<MemberObservation, IntrospectionError>) -> Value {
     match result {
         Ok(member) => json!({
             "user_id": member.user_id.to_string(), "username": member.username, "nick": member.nick,
@@ -96,7 +96,7 @@ pub(crate) fn member(result: Result<MemberObservation, IntrospectionError>) -> V
 }
 
 /// Projects a guild's role metadata.
-pub(crate) fn roles(result: Result<Vec<RoleObservation>, IntrospectionError>) -> Value {
+pub fn roles(result: Result<Vec<RoleObservation>, IntrospectionError>) -> Value {
     match result {
         Ok(roles) => json!({"roles": roles.into_iter().map(|role| json!({
             "id": role.id.to_string(), "name": role.name,
@@ -138,7 +138,7 @@ fn audience_member(member: AudienceMember) -> Value {
 }
 
 /// Projects a bounded census without mistaking unknown or incomplete data for denial.
-pub(crate) fn audience(result: Result<AudienceObservation, AudienceError>) -> Value {
+pub fn audience(result: Result<AudienceObservation, AudienceError>) -> Value {
     let observation = match result {
         Ok(observation) => observation,
         Err(cause) => {
@@ -189,7 +189,7 @@ pub(crate) fn audience(result: Result<AudienceObservation, AudienceError>) -> Va
 }
 
 /// Projects lookup uncertainty without turning it into a permission denial.
-pub(crate) fn visibility(result: Result<VisibilityObservation, VisibilityError>) -> Value {
+pub fn visibility(result: Result<VisibilityObservation, VisibilityError>) -> Value {
     match result {
         Err(cause) => json!({"error":cause.kind.to_string()}),
         Ok(observation) => json!({
@@ -210,7 +210,7 @@ pub(crate) fn visibility(result: Result<VisibilityObservation, VisibilityError>)
 }
 
 /// Projects emoji metadata, deriving its mention text at the wire boundary.
-pub(crate) fn emojis(result: Result<Vec<EmojiObservation>, IntrospectionError>) -> Value {
+pub fn emojis(result: Result<Vec<EmojiObservation>, IntrospectionError>) -> Value {
     match result {
         Ok(emojis) => json!({"emojis": emojis.into_iter().map(|emoji| json!({
             "id": emoji.id.to_string(), "name": emoji.name, "animated": emoji.animated,
@@ -227,8 +227,8 @@ pub(crate) fn emojis(result: Result<Vec<EmojiObservation>, IntrospectionError>) 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::discord::introspection;
-    use crate::discord::introspection::IntrospectionCtx;
+    use crate::introspection;
+    use crate::introspection::IntrospectionCtx;
     use dione_config::Config;
     use dione_config::LoadedConfig;
     use serenity::model::{
@@ -244,7 +244,7 @@ pub(crate) mod tests {
     };
 
     /// Keeps fixture traffic on the local SDK proxy rather than its rate-limiter route.
-    pub(crate) fn fixture_http(address: SocketAddr) -> serenity::http::Http {
+    pub fn fixture_http(address: SocketAddr) -> serenity::http::Http {
         let proxy = format!("http://{address}");
         let http = serenity::http::HttpBuilder::new("fake")
             .proxy(&proxy)
@@ -265,7 +265,7 @@ pub(crate) mod tests {
         http
     }
 
-    pub(crate) async fn fixture(
+    pub async fn fixture(
         responses: Vec<(&'static str, Value)>,
     ) -> (IntrospectionCtx, JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

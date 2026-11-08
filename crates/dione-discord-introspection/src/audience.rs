@@ -15,21 +15,23 @@ use thiserror::Error;
 use tokio::time::{Instant, timeout_at};
 
 /// Maximum number of members examined by one audience read.
-pub(crate) const MAX_AUDIENCE_MEMBERS: usize = 1_000;
+pub const MAX_AUDIENCE_MEMBERS: usize = 1_000;
 const MEMBER_PAGE_SIZE: u8 = 100;
 const MAX_MEMBER_PAGES: usize = 11;
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A member's permission verdict, or missing role data that prevents a verdict.
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum AudiencePermission {
+pub enum AudiencePermission {
+    /// Observed role facts determine a permission verdict.
     Determined(ViewVerdict),
+    /// Missing role facts prevent a verdict.
     MissingRoles,
 }
 
 /// Minimal member metadata and effective visibility in the observed context.
 #[derive(Debug)]
-pub(crate) struct AudienceMember {
+pub struct AudienceMember {
     pub(crate) user: UserId,
     pub(crate) username: String,
     pub(crate) nick: Option<String>,
@@ -37,7 +39,8 @@ pub(crate) struct AudienceMember {
 }
 
 impl AudienceMember {
-    pub(crate) fn is_unknown(&self) -> bool {
+    /// Whether missing facts prevent a definite permission answer.
+    pub fn is_unknown(&self) -> bool {
         match self.permission {
             AudiencePermission::Determined(verdict) => verdict.can_view() == CanView::Unknown,
             AudiencePermission::MissingRoles => true,
@@ -47,22 +50,31 @@ impl AudienceMember {
 
 /// Why enumeration stopped; only exhaustion establishes a complete observed census.
 #[derive(Debug)]
-pub(crate) enum CensusEnd {
+pub enum CensusEnd {
+    /// The observed member listing was exhausted.
     Exhausted,
+    /// The member cap stopped enumeration.
     MemberLimit,
+    /// The page cap stopped enumeration.
     PageLimit,
+    /// The shared read deadline elapsed.
     Deadline,
+    /// The SDK page violated ordering or size requirements.
     InvalidPage,
+    /// The exhausted listing did not include the guild owner.
     OwnerNotObserved,
+    /// The member-listing request failed.
     LookupFailed(Box<serenity::Error>),
 }
 
 impl CensusEnd {
-    pub(crate) fn is_complete(&self) -> bool {
+    /// Whether this observation reached its completeness contract.
+    pub fn is_complete(&self) -> bool {
         matches!(self, Self::Exhausted)
     }
 
-    pub(crate) fn reason(&self) -> &'static str {
+    /// Returns the stable tool-facing census stop reason.
+    pub fn reason(&self) -> &'static str {
         match self {
             Self::Exhausted => "end_of_members",
             Self::MemberLimit => "member_limit",
@@ -77,7 +89,7 @@ impl CensusEnd {
 
 /// A non-atomic observation, never a grant to disclose content to another room.
 #[derive(Debug)]
-pub(crate) struct AudienceObservation {
+pub struct AudienceObservation {
     pub(crate) channel: ChannelId,
     pub(crate) guild: GuildId,
     pub(crate) observed_at: Timestamp,
@@ -87,22 +99,25 @@ pub(crate) struct AudienceObservation {
 }
 
 impl AudienceObservation {
-    pub(crate) fn is_complete(&self) -> bool {
+    /// Whether this observation reached its completeness contract.
+    pub fn is_complete(&self) -> bool {
         self.census_end.is_complete() && !self.members.iter().any(AudienceMember::is_unknown)
     }
 }
 
 /// An audience read failed before a usable permission context was available.
 #[derive(Debug, Error)]
-pub(crate) enum AudienceError {
+pub enum AudienceError {
     #[error(transparent)]
+    /// Required channel permission facts could not be observed.
     Visibility(#[from] VisibilityError),
     #[error("channel audience read deadline elapsed")]
+    /// The shared deadline elapsed before permission facts were available.
     Deadline,
 }
 
 /// Enumerates observed members and reuses the candidate visibility evaluator.
-pub(crate) async fn channel_effective_audience(
+pub async fn channel_effective_audience(
     ctx: &IntrospectionCtx,
     channel: ChannelId,
 ) -> Result<AudienceObservation, AudienceError> {
@@ -198,5 +213,51 @@ fn classify(prepared: &PreparedVisibility, member: Member) -> AudienceMember {
         username: member.user.name,
         nick: member.nick,
         permission,
+    }
+}
+
+impl AudienceMember {
+    /// The observed member ID.
+    pub fn user(&self) -> UserId {
+        self.user
+    }
+    /// The observed username.
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+    /// The optional observed nickname.
+    pub fn nick(&self) -> Option<&str> {
+        self.nick.as_deref()
+    }
+    /// The observed permission or missing-role uncertainty.
+    pub fn permission(&self) -> AudiencePermission {
+        self.permission
+    }
+}
+
+impl AudienceObservation {
+    /// The channel whose audience was observed.
+    pub fn channel(&self) -> ChannelId {
+        self.channel
+    }
+    /// The observed guild ID.
+    pub fn guild(&self) -> GuildId {
+        self.guild
+    }
+    /// When the bounded observation began.
+    pub fn observed_at(&self) -> &Timestamp {
+        &self.observed_at
+    }
+    /// When the bounded observation ended.
+    pub fn completed_at(&self) -> &Timestamp {
+        &self.completed_at
+    }
+    /// Members examined before the census stopped.
+    pub fn members(&self) -> &[AudienceMember] {
+        &self.members
+    }
+    /// Why the non-atomic member census stopped.
+    pub fn census_end(&self) -> &CensusEnd {
+        &self.census_end
     }
 }

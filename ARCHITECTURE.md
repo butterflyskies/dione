@@ -346,7 +346,7 @@ one-shot send path with an explicit expected bot identity, described in the
 [one-shot guide](docs/oneshot-send.md).
 
 [presence owner](crates/dione-discord-presence/src/lib.rs) owns typed requests, the shared presence
-authority, queue acceptance, and reconnect replay. [Discord typing](crates/dione-discord-typing/src/lib.rs)
+authority, queue acceptance, and reconnect replay. [Discord introspection](crates/dione-discord-introspection/src/lib.rs) owns metadata, visibility and bounded audience observations with wire projection; resident admission and argument parsing remain at root. [Discord typing](crates/dione-discord-typing/src/lib.rs)
 authorizes and sends typing notifications. The public
 [`dione-discord-identities`](crates/dione-discord-identities/src/lib.rs) owner validates
 external Discord IDs through `dione_discord_identities::Snowflake`.

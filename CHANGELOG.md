@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.133.0]
+
+- Extract complete Discord metadata, visibility, audience observation and result projection into a dedicated owner while retaining resident admission at root.
+
 ## [0.132.4]
 
 - Retain the accepted nameplate fixture repair and verify access-target CI admission.

@@ -983,12 +983,12 @@ mod tests {
             "roles":[], "joined_at":"2026-07-10T12:30:00Z",
             "deaf":false,"mute":false,"flags":0
         });
-        let (ctx, requests) = crate::discord::introspection_wire::tests::fixture(vec![
+        let (ctx, requests) = crate::discord::introspection_test_support::fixture(vec![
             ("200 OK", member.clone()),
             ("200 OK", member),
         ])
         .await;
-        let (_dir, server) = presence_test_server_with_http(ctx.http).await;
+        let (_dir, server) = presence_test_server_with_http(ctx.http().clone()).await;
         for (timezone, expected) in [
             ("America/Chicago", "2026-07-10T07:30:00-05:00"),
             ("Asia/Tokyo", "2026-07-10T21:30:00+09:00"),
@@ -1026,7 +1026,7 @@ mod tests {
 
     #[tokio::test]
     async fn introspection_contract_dispatch_parsing_and_http_envelopes() {
-        let (ctx, requests) = crate::discord::introspection_wire::tests::fixture(vec![
+        let (ctx, requests) = crate::discord::introspection_test_support::fixture(vec![
             ("200 OK", json!([])),
             ("200 OK", json!([])),
             ("200 OK", json!({"id":"91","type":0,"name":"returned-channel"})),
@@ -1036,7 +1036,7 @@ mod tests {
             ("200 OK", json!([])),
             ("403 Forbidden", json!({"code":50013,"message":"Missing Permissions"})),
         ]).await;
-        let (_dir, server) = presence_test_server_with_http(ctx.http).await;
+        let (_dir, server) = presence_test_server_with_http(ctx.http().clone()).await;
         for (tool, args, expected) in [
             ("list_channels", json!({}), "missing guild_id"),
             (

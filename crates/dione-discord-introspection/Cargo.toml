@@ -1,0 +1,26 @@
+[package]
+name = "dione-discord-introspection"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Discord metadata, visibility observations and bounded audience census"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+keywords = ["discord", "metadata", "permissions"]
+categories = ["asynchronous"]
+
+[dependencies]
+dione-config.workspace = true
+dione-messages.workspace = true
+serenity.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+reqwest.workspace = true
+test-case.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

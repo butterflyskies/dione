@@ -22,32 +22,47 @@ use thiserror::Error;
 
 /// Whether the visibility computation reached a definite answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CanView {
+pub enum CanView {
+    /// The member can view the channel.
     Yes,
+    /// The member cannot view the channel.
     No,
+    /// Required permission or membership facts could not be observed.
     Unknown,
 }
 
 /// The rule that decided a visibility answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Reason {
+pub enum Reason {
+    /// The user is not a guild member.
     NotAMember,
+    /// The user owns the guild.
     Owner,
+    /// An administrator permission bypasses channel overwrites.
     Administrator,
+    /// Guild role permissions decide the answer.
     BasePermissions,
+    /// The everyone overwrite decides the answer.
     EveryoneOverwrite,
+    /// Aggregated role overwrites decide the answer.
     RoleOverwrite,
+    /// The user-specific overwrite decides the answer.
     MemberOverwrite,
+    /// Thread management permits viewing the private thread.
     ManageThreads,
+    /// The user is a private-thread member.
     PrivateThreadMember,
+    /// The user is not a private-thread member.
     NotPrivateThreadMember,
+    /// Private-thread membership could not be determined.
     PrivateThreadMembershipUnknown,
+    /// The member lookup failed without proving absence.
     MemberLookupFailed,
 }
 
 impl Reason {
     /// The name reported to tool callers.
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::NotAMember => "not_a_member",
             Self::Owner => "owner",
@@ -67,17 +82,19 @@ impl Reason {
 
 /// The answer for one user and the rule that decided it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ViewVerdict {
+pub struct ViewVerdict {
     can_view: CanView,
     reason: Reason,
 }
 
 impl ViewVerdict {
-    pub(crate) fn can_view(self) -> CanView {
+    /// Returns the determined answer or uncertainty.
+    pub fn can_view(self) -> CanView {
         self.can_view
     }
 
-    pub(crate) fn reason(self) -> Reason {
+    /// Returns the rule that determined this verdict.
+    pub fn reason(self) -> Reason {
         self.reason
     }
 }
@@ -193,20 +210,18 @@ fn verdict(can_view: CanView, reason: Reason) -> ViewVerdict {
 }
 
 /// Maximum member lookups admitted by one visibility request.
-pub(crate) const MAX_CAN_VIEW_USER_IDS: usize = 25;
+pub const MAX_CAN_VIEW_USER_IDS: usize = 25;
 
 /// A validated channel and nonempty bounded user sequence in request order.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct VisibilityRequest {
+pub struct VisibilityRequest {
     channel: ChannelId,
     users: Vec<UserId>,
 }
 
 impl VisibilityRequest {
-    pub(crate) fn new(
-        channel: ChannelId,
-        users: Vec<UserId>,
-    ) -> Result<Self, VisibilityRequestError> {
+    /// Checks the existing nonempty, at-most-25-user request contract.
+    pub fn new(channel: ChannelId, users: Vec<UserId>) -> Result<Self, VisibilityRequestError> {
         if users.is_empty() {
             return Err(VisibilityRequestError::Empty);
         }
@@ -216,21 +231,25 @@ impl VisibilityRequest {
         Ok(Self { channel, users })
     }
 
-    pub(crate) fn channel(&self) -> ChannelId {
+    /// Returns the requested channel.
+    pub fn channel(&self) -> ChannelId {
         self.channel
     }
 
-    pub(crate) fn users(&self) -> &[UserId] {
+    /// Returns user IDs in request order.
+    pub fn users(&self) -> &[UserId] {
         &self.users
     }
 }
 
 /// A visibility request's user count is outside the public tool contract.
 #[derive(Debug, Error)]
-pub(crate) enum VisibilityRequestError {
+pub enum VisibilityRequestError {
     #[error("invalid user_ids: must contain at least one ID")]
+    /// No users were requested.
     Empty,
     #[error("invalid user_ids: at most 25 IDs are allowed")]
+    /// The request exceeds the 25-user limit.
     TooMany,
 }
 

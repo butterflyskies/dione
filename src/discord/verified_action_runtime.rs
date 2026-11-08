@@ -581,7 +581,7 @@ mod tests {
     #[tokio::test]
     async fn observed_creator_cache_rechecks_current_trust_without_another_http_request() {
         let creator = dione_pluralkit_identities::PLURALKIT_APPLICATION_ID;
-        let (ctx, server) = super::super::introspection_wire::tests::fixture(vec![(
+        let (ctx, server) = super::super::introspection_test_support::fixture(vec![(
             "200 OK",
             serde_json::json!({"id":"40", "type":1, "guild_id":"30", "channel_id":"20", "name":"fixture", "user":{"id":creator.to_string(), "username":"creator", "discriminator":"0", "bot":true}}),
         )]).await;
@@ -589,7 +589,7 @@ mod tests {
         let verifier = DiscordTransportVerifier::new();
         let trusted = verifier
             .verify(
-                &ctx.http,
+                ctx.http(),
                 &state,
                 &TrustedWebhookCreators::from_ids([creator]),
                 message(10, 20, Some(30), Some(40)),
@@ -599,7 +599,7 @@ mod tests {
         assert_eq!(trusted.provider(), TransportProvider::PluralKit);
         let reclassified = verifier
             .verify(
-                &ctx.http,
+                ctx.http(),
                 &state,
                 &TrustedWebhookCreators::from_ids([]),
                 message(11, 20, Some(30), Some(40)),

@@ -1,16 +1,17 @@
 //! Discord-owned metadata tool definitions, parsing, and execution.
 
 use super::{
-    audience,
-    introspection::{self, IntrospectionCtx, IntrospectionOperation},
-    introspection_wire,
     reply_tool::ReplyServices,
     tool_arguments::{ArgumentError, ArgumentErrorKind, parse_id},
-    visibility::{MAX_CAN_VIEW_USER_IDS, VisibilityRequest, VisibilityRequestError},
-    visibility_read,
 };
 use dione_config::load_config;
 use dione_discord_identities::Snowflake;
+use dione_discord_introspection::{
+    audience,
+    introspection::{self, IntrospectionCtx, IntrospectionOperation},
+    visibility::{MAX_CAN_VIEW_USER_IDS, VisibilityRequest, VisibilityRequestError},
+    visibility_read, wire as introspection_wire,
+};
 use dione_mcp_tools::McpTool;
 use dione_mcp_tools::RegisteredTool;
 use dione_mcp_tools::ToolCallError;
@@ -178,10 +179,10 @@ impl McpTool for IntrospectionTool {
                 .map_err(|source| ToolCallError {
                     kind: ToolCallErrorKind::OwnerInput(Box::new(source)),
                 })?;
-            let ctx = IntrospectionCtx {
-                http: self.services.http().clone(),
-                config: load_config(self.services.state_dir()),
-            };
+            let ctx = IntrospectionCtx::new(
+                self.services.http().clone(),
+                load_config(self.services.state_dir()),
+            );
             Ok(match operation {
                 IntrospectionOperation::Guilds => {
                     introspection_wire::guilds(introspection::list_guilds(&ctx).await)

@@ -1,9 +1,6 @@
-pub(crate) mod audience;
 pub mod client;
 pub mod events;
-pub(crate) mod introspection;
 pub(crate) mod introspection_tools;
-pub(crate) mod introspection_wire;
 pub(crate) mod management;
 pub(crate) mod management_tools;
 pub(crate) mod management_wire;
@@ -14,10 +11,8 @@ pub mod rook_context;
 pub(crate) mod rook_observation;
 pub(crate) mod verified_action;
 pub(crate) mod verified_action_runtime;
-pub(crate) mod visibility;
 #[cfg(test)]
 mod visibility_contract_tests;
-pub(crate) mod visibility_read;
 
 pub(crate) mod messaging_wire;
 pub(crate) mod reply_tool;
@@ -26,3 +21,6 @@ pub(crate) mod tool_arguments;
 pub(crate) mod query_tools;
 pub(crate) mod query_wire;
 pub(crate) mod search_wire;
+
+#[cfg(test)]
+pub(crate) mod introspection_test_support;
