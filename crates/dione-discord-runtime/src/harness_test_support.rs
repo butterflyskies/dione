@@ -13,12 +13,6 @@ pub(crate) fn module() -> ModuleInstanceId {
         ModuleSlotId::new("primary").unwrap(),
     )
 }
-pub(crate) fn context() -> PresentationContext {
-    PresentationContext::new(None, EvidenceVisibility::Enabled)
-}
-pub(crate) fn delivery(event: NotificationEvent) -> Delivery {
-    delivery::single(&module(), event, context()).unwrap()
-}
 pub(crate) async fn snapshot(value: &Delivery) -> Value {
     let directory = tempfile::TempDir::new().unwrap();
     let path = camino::Utf8PathBuf::from_path_buf(directory.path().to_owned()).unwrap();
