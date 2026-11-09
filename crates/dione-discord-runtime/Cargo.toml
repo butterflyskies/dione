@@ -45,6 +45,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+arc-swap.workspace = true
 dione-codex.workspace = true
 dione-messages.workspace = true
 dione-discord-introspection.workspace = true
