@@ -84,10 +84,6 @@ pub struct GatewayServices {
 }
 impl GatewayServices {
     /// Supplies existing concrete application resources without admitting an event.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "application resources are independently owned"
-    )]
     pub fn new(
         state: dione_discord_state::State,
         queue: Arc<tokio::sync::Mutex<AccessQueue>>,
