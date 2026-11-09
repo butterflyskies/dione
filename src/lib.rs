@@ -2,7 +2,7 @@ pub mod attention;
 pub mod discord;
 #[cfg(test)]
 mod discord_bells_tests;
-pub mod ingress_ledger;
+
 pub mod mcp;
 #[expect(
     dead_code,
@@ -45,3 +45,6 @@ mod codex_dispatch_tests;
 mod codex_test_process;
 #[cfg(test)]
 mod codex_test_wire;
+
+#[cfg(test)]
+mod gateway_test_support;

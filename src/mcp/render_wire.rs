@@ -107,7 +107,7 @@ mod tests {
             Arc::new(dione_outbound_consent::consent::ConsentGate::new(
                 camino::Utf8Path::new("/tmp"),
             )),
-            Arc::new(crate::ingress_ledger::IngressLedger::new()),
+            Arc::new(dione_discord_runtime::IngressLedger::new()),
         );
         let hook = HookName::parse("tier-1").unwrap();
 
@@ -134,11 +134,11 @@ mod contract_tests {
     use super::*;
     use crate::discord::messaging::MessagingCtx;
     use crate::discord::rendering::render_to_channel;
-    use crate::ingress_ledger::IngressLedger;
     use camino::Utf8PathBuf;
     use dione_config::ChannelConfig;
     use dione_config::Config;
     use dione_config::LoadedConfig;
+    use dione_discord_runtime::IngressLedger;
     use dione_discord_state::new_state;
     use dione_outbound_consent::consent::ConsentGate;
     use dione_pre_send::{

@@ -8,8 +8,6 @@ mod lifecycle_acceptance;
 use super::*;
 use crate::attention::control::execute;
 use crate::attention::runtime::AttentionRuntime;
-use crate::attention::source::SourceResolver;
-use crate::attention::source::now_ms;
 use dione_access_requests::AccessQueue;
 use dione_attention::config::AttentionBrief;
 use dione_attention::config::AttentionConfig;
@@ -34,6 +32,7 @@ use dione_config::ConfigRuntime;
 use dione_contracts::{ModuleInstanceId, ModuleSlotId, ProviderId};
 use dione_discord_events::MessageEvent;
 use dione_discord_events::MessageTargeting;
+use dione_discord_runtime::now_ms;
 use parking_lot::Mutex as SyncMutex;
 use serde_json::{Value, json};
 use serenity::model::id::{ChannelId, MessageId, UserId};
@@ -383,12 +382,12 @@ impl Fixture {
         assert!(warning.is_none(), "{warning:?}");
         let attention = Arc::new(
             AttentionRuntime::new(
-                SourceResolver {
-                    http: network.http(),
-                    state: dione_discord_state::new_state(),
-                    state_dir: path.clone(),
-                    ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
-                },
+                crate::attention::runtime::AttentionServices::new(
+                    network.http(),
+                    dione_discord_state::new_state(),
+                    path.clone(),
+                    Arc::new(dione_discord_runtime::IngressLedger::new()),
+                ),
                 true,
                 dione_contracts::ModuleInstanceId::new(
                     dione_contracts::ProviderId::new("discord").unwrap(),
@@ -536,7 +535,7 @@ impl Fixture {
     async fn rpc(&self, arguments: Value) -> Value {
         let (tx, _rx) = tokio::sync::mpsc::channel(4);
         let mut server = super::DioneServer::new(
-            self.attention.resolver.state.clone(),
+            self.attention.notice.state.clone(),
             Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&self.path))),
             self.network.http(),
             self.path.clone(),
@@ -546,7 +545,7 @@ impl Fixture {
             Arc::new(dione_outbound_consent::consent::ConsentGate::new(
                 &self.path,
             )),
-            self.attention.resolver.ledger.clone(),
+            self.attention.resolver.ledger().clone(),
             dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
@@ -1615,12 +1614,12 @@ fn recipient_workflow_promotes_only_evaluated_policy_and_recovers_only_unconfirm
         drop(fixture.attention);
         fixture.attention = Arc::new(
             AttentionRuntime::new(
-                SourceResolver {
-                    http: fixture.network.http(),
-                    state: dione_discord_state::new_state(),
-                    state_dir: fixture.path.clone(),
-                    ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
-                },
+                crate::attention::runtime::AttentionServices::new(
+                    fixture.network.http(),
+                    dione_discord_state::new_state(),
+                    fixture.path.clone(),
+                    Arc::new(dione_discord_runtime::IngressLedger::new()),
+                ),
                 true,
                 dione_contracts::ModuleInstanceId::new(
                     dione_contracts::ProviderId::new("discord").unwrap(),
@@ -1995,11 +1994,11 @@ fn native_bells_enrich_both_ordinary_and_attention_queue_deliveries() {
 fn source_recovery_reads_the_live_mute_store_at_current_policy_gate() {
     scenario(|| async {
         let fixture = Fixture::new(AttentionMode::Off).await;
-        crate::composition::mutes::init_global(dione_mutes::MuteStore::from_state(
+        dione_mutes::init_global(dione_mutes::MuteStore::from_state(
             dione_mutes::MuteState::default(),
             &fixture.path,
         ));
-        let store = crate::composition::mutes::global().unwrap();
+        let store = dione_mutes::global().unwrap();
         let resolver = &fixture.attention.resolver;
         fixture
             .network
@@ -2025,7 +2024,7 @@ fn source_recovery_reads_the_live_mute_store_at_current_policy_gate() {
             .unwrap();
         assert!(matches!(
             resolver.resolve(key(27_102), None, false).await,
-            Err(crate::attention::source::SourceFailure::Access)
+            Err(dione_discord_runtime::SourceFailure::Access)
         ));
         store.unmute_guild(500).await.unwrap();
         assert_eq!(

@@ -651,11 +651,11 @@ async fn post_once(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ingress_ledger::IngressLedger;
     use dione_config::ChannelConfig;
     use dione_config::Config;
     use dione_config::LoadedConfig;
     use dione_config::ReplyToMode;
+    use dione_discord_runtime::IngressLedger;
     use dione_outbound_consent::consent::ConsentGate;
     use serde_json::{Value, json};
     use serenity::http::Http;
@@ -736,12 +736,14 @@ mod tests {
             let directory = tempfile::TempDir::new().unwrap();
             let path = camino::Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).unwrap();
             let ledger = Arc::new(IngressLedger::new());
-            ledger.note_admitted(
+            crate::gateway_test_support::admit_direct(
+                &ledger,
                 MessageId::new(30),
                 ChannelId::new(10),
                 serenity::model::id::UserId::new(20),
                 "event",
-            );
+            )
+            .await;
             let consent = Arc::new(ConsentGate::new(&path));
             let http = Arc::new(Http::new("fixture"));
             let mut provider = DiscordPublicationProvider::new(

@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.149.0] - 2026-11-09
+
+- Move the complete registered Discord gateway, private admission and lifecycle authority, and source revalidation into Discord runtime. Preserve the shared mute registry and actual event-driven consumer fixtures.
+
 ## [0.148.0] - 2026-11-08
 
 - Move bounded ingress lifecycle storage into Discord events while retaining private lineage and current policy checks in the root critical section.

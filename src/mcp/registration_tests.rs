@@ -68,7 +68,7 @@ async fn try_server_with_http(
         TraceLevelController::noop(),
         harness,
         Arc::new(ConsentGate::new(&path)),
-        Arc::new(crate::ingress_ledger::IngressLedger::new()),
+        Arc::new(dione_discord_runtime::IngressLedger::new()),
         ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),

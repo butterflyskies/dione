@@ -1,6 +1,6 @@
 use camino::Utf8Path;
-use dione::composition::mutes::{global, init_global};
 use dione_mutes::{MuteState, MuteStore};
+use dione_mutes::{global, init_global};
 use std::{env, process::Command, sync::Arc};
 use tempfile::TempDir;
 

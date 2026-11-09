@@ -158,7 +158,7 @@ impl DioneServer {
         self.discord.no_rly()
     }
     /// Borrows the ingress authority shared by Discord tools.
-    pub fn ingress_ledger(&self) -> &Arc<crate::ingress_ledger::IngressLedger> {
+    pub fn ingress_ledger(&self) -> &Arc<dione_discord_runtime::IngressLedger> {
         self.discord.ingress_ledger()
     }
     /// Borrows the configured gateway event sender.
@@ -181,18 +181,18 @@ impl DioneServer {
         trace_controller: TraceLevelController,
         harness: HarnessConnection,
         no_rly: Arc<ConsentGate>,
-        ingress_ledger: Arc<crate::ingress_ledger::IngressLedger>,
+        ingress_ledger: Arc<dione_discord_runtime::IngressLedger>,
         authority_module: ModuleInstanceId,
         event_tx: Option<mpsc::Sender<NotificationEvent>>,
     ) -> Result<Self, ServerConstructionError> {
         let attention = Arc::new(
             crate::attention::runtime::AttentionRuntime::new(
-                crate::attention::source::SourceResolver {
-                    http: http.clone(),
-                    state: state.clone(),
-                    state_dir: state_dir.clone(),
-                    ledger: ingress_ledger.clone(),
-                },
+                crate::attention::runtime::AttentionServices::new(
+                    http.clone(),
+                    state.clone(),
+                    state_dir.clone(),
+                    ingress_ledger.clone(),
+                ),
                 harness.attention_policy() == AttentionPolicy::SafeTurn,
                 authority_module,
             )
@@ -1521,7 +1521,7 @@ mod tests {
             Arc::new(dione_outbound_consent::consent::ConsentGate::new(
                 &state_dir,
             )),
-            Arc::new(crate::ingress_ledger::IngressLedger::new()),
+            Arc::new(dione_discord_runtime::IngressLedger::new()),
             dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
@@ -1613,7 +1613,7 @@ mod tests {
             Arc::new(dione_outbound_consent::consent::ConsentGate::new(
                 &state_dir,
             )),
-            Arc::new(crate::ingress_ledger::IngressLedger::new()),
+            Arc::new(dione_discord_runtime::IngressLedger::new()),
             dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
@@ -2240,7 +2240,7 @@ async fn forward_attention_results(
 ) -> Result<(), HarnessError> {
     let mut results = results.into_iter();
     while let Some(mut result) = results.next() {
-        let cfg = dione_config::load_config(&attention.resolver.state_dir);
+        let cfg = dione_config::load_config(attention.resolver.directory());
         if result.record.recipient != cfg.raw.attention.recipient {
             continue;
         }
@@ -2251,7 +2251,7 @@ async fn forward_attention_results(
         let Some(source) = result.record.sources.first() else {
             continue;
         };
-        match attention.resolver.ledger.delivery_check(
+        match attention.resolver.ledger().delivery_check(
             source.key.message_id,
             source.key.channel_id,
             &source.content_hash,
@@ -2259,7 +2259,7 @@ async fn forward_attention_results(
             result.event.targeting,
         ) {
             Ok(()) => {}
-            Err(crate::ingress_ledger::SourceDeliveryFailure::Unavailable) => {
+            Err(dione_discord_runtime::SourceDeliveryFailure::Unavailable) => {
                 attention
                     .health
                     .unknown("pending source authority is unavailable");
@@ -2269,7 +2269,7 @@ async fn forward_attention_results(
                 admissions.defer(deferred);
                 return Ok(());
             }
-            Err(crate::ingress_ledger::SourceDeliveryFailure::Invalidated) => {
+            Err(dione_discord_runtime::SourceDeliveryFailure::Invalidated) => {
                 if let Err(error) = attention
                     .mark_delivery(result.record.id, DeliveryState::Invalidated)
                     .await
@@ -2399,7 +2399,7 @@ async fn attention_transition(
     let _publication = dione_config::attention_effect_guard().await;
     admissions.cancel_work();
     let incarnation = admissions.incarnation().to_owned();
-    let recipient = dione_config::load_config(&attention.resolver.state_dir)
+    let recipient = dione_config::load_config(attention.resolver.directory())
         .raw
         .attention
         .recipient
@@ -2457,7 +2457,7 @@ fn begin_attention(
         admissions.submit(
             event,
             config,
-            crate::attention::source::now_ms(),
+            dione_discord_runtime::now_ms(),
             attention.enforcement_supported,
         )
     } else {

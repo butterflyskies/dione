@@ -239,8 +239,8 @@ the startup assembly.
 
 ## Discord ingress and admission
 
-[client.rs](src/discord/client.rs) builds the Serenity client and requests
-gateway intents. [events.rs](src/discord/events.rs) handles messages, edits,
+[client.rs](crates/dione-discord-runtime/src/client.rs) builds the Serenity client and requests
+gateway intents. [events.rs](crates/dione-discord-runtime/src/events.rs) handles messages, edits,
 deletions, reactions, interactions, and presence state.
 
 Each message handler loads the current immutable configuration snapshot.
@@ -250,12 +250,12 @@ identity ignores, and targeting rules. Unknown DM senders can enter the bounded
 delivery through the [mute store](crates/dione-mutes/src/lib.rs).
 
 Webhook identity follows a separate path. The
-[runtime verifier](src/discord/verified_action_runtime.rs) observes the webhook
+[runtime verifier](crates/dione-discord-runtime/src/verified_action_runtime.rs) observes the webhook
 creator and resolves supported PluralKit identity before the
-[verified-action gate](src/discord/verified_action.rs) admits an action.
+[verified-action gate](crates/dione-discord-runtime/src/verified_action.rs) admits an action.
 Display names and webhook payload IDs alone are not user authority.
 [principal_policy.rs](crates/dione-discord-gate/src/principal_policy.rs) holds the typed principal policy.
-The [ingress ledger](src/ingress_ledger.rs) retains private lineage admission and current policy authority for edits, deletes, reply context, and subsequent reads. Its [lifecycle storage controller](crates/dione-discord-events/src/lifecycle_storage.rs) owns bounded retention, sequence allocation, content ordering and tombstones. Root checks and storage mutations share one borrowed critical section; retained metadata grants no authority.
+The [ingress ledger](crates/dione-discord-runtime/src/ingress.rs) retains private lineage admission and current policy authority for edits, deletes, reply context, and subsequent reads. Its [lifecycle storage controller](crates/dione-discord-events/src/lifecycle_storage.rs) owns bounded retention, sequence allocation, content ordering and tombstones. Runtime authority checks and storage mutations share one borrowed critical section; retained metadata grants no authority.
 
 Admitted events enter a Tokio channel with capacity 256. The notification task
 in [server.rs](src/mcp/server.rs) applies rate limits and optional attention
@@ -373,7 +373,7 @@ not imply that all writes have the same durability guarantee.
 | Attention | [AttentionRuntime](src/attention/runtime.rs) uses `attention/records.json` through the [attention store](crates/dione-attention/src/store.rs) and its [private serialized access controller](crates/dione-attention/src/store_access.rs), plus the [health lifecycle controller](crates/dione-attention/src/health.rs) for serialized backoff, notice bookkeeping and `attention-status.json` persistence. Root composition retains the single initialization worker and current notice route, consent and transport authority. |
 | Consent outcomes | [JournalHandle](crates/dione-outbound-consent/src/journal.rs) serializes writes to `no_rly_journal.jsonl`. Pending consent handles are owned by [HoldQueue](crates/dione-outbound-consent/src/queue.rs). |
 | Attachments | [Discord queries](crates/dione-discord-queries/src/queries.rs) download Discord attachments into the state directory's `inbox/`. |
-| Transient Discord state | [shared Discord state](crates/dione-discord-state/src/lib.rs) holds entity caches, DM indexes, sent-message identities, and permission requests. The [ingress ledger](src/ingress_ledger.rs), delivery buffer, and rate limiter are also process-local. |
+| Transient Discord state | [shared Discord state](crates/dione-discord-state/src/lib.rs) holds entity caches, DM indexes, sent-message identities, and permission requests. The [ingress ledger](crates/dione-discord-runtime/src/ingress.rs), delivery buffer, and rate limiter are also process-local. |
 | Archive data | The separate [GAIE archive](crates/dione-gaie/src/archive.rs) owns corpus NDJSON, checkpoints, attachment data, origin evidence, and archive locks. See the [archive guide](docs/gaie-archive.md). |
 
 The [config watcher](crates/dione-config-watcher/src/lib.rs) reloads changed files through
@@ -389,7 +389,7 @@ Publishing a new snapshot does not reconstruct those captured values.
 
 | Integration | Implementing code and purpose |
 |-------------|-------------------------------|
-| Discord Gateway and REST | [Serenity client](src/discord/client.rs), [events](src/discord/events.rs), [messaging](src/discord/messaging.rs), [presence](crates/dione-discord-presence/src/lib.rs), [typing](crates/dione-discord-typing/src/lib.rs), and the remaining [tools](src/mcp/tools) receive events and execute authorized operations. |
+| Discord Gateway and REST | [Serenity client](crates/dione-discord-runtime/src/client.rs), [events](crates/dione-discord-runtime/src/events.rs), [messaging](src/discord/messaging.rs), [presence](crates/dione-discord-presence/src/lib.rs), [typing](crates/dione-discord-typing/src/lib.rs), and the remaining [tools](src/mcp/tools) receive events and execute authorized operations. |
 | Codex app-server | [Delivery worker](crates/dione-codex/src/app_server.rs) addresses an exact local thread. |
 | PluralKit | [Identity resolver](crates/dione-pluralkit-resolver/src/lib.rs) resolves supported proxy identity. |
 | Pronouns and nameplates | [Pronoun service](crates/dione-identity-display/src/pronouns.rs) and [nameplate service](crates/dione-identity-display/src/nameplates.rs) enrich display metadata when enabled. |
@@ -459,8 +459,10 @@ Discord message read, search, attachment and native observation ownership reside
 
 [Discord tool contracts](crates/dione-discord-tool-contracts/src/lib.rs) own metadata, query, management and reply catalogs without access or execution authority. Root execution adapters use these requests directly.
 
-[PluralKit fact resolution](crates/dione-pluralkit-resolver/src/lib.rs) owns provider HTTP, response-coordinate checks, retry bounds and the facts-only cache. The [root sealed adapter](src/discord/verified_action_runtime.rs) projects verified event coordinates into an ordinary lookup and consumes returned facts through the existing private action transition. The provider library grants no lifecycle or policy authority.
+[PluralKit fact resolution](crates/dione-pluralkit-resolver/src/lib.rs) owns provider HTTP, response-coordinate checks, retry bounds and the facts-only cache. The [root sealed adapter](crates/dione-discord-runtime/src/verified_action_runtime.rs) projects verified event coordinates into an ordinary lookup and consumes returned facts through the existing private action transition. The provider library grants no lifecycle or policy authority.
 
 [Attention control commands](crates/dione-attention/src/control.rs) own the twelve-operation decoder, descriptive mutation classification and MCP schema in the existing Attention library. The [root executor](src/attention/control.rs) retains authentication-derived recipient context, current configuration and source checks, lifecycle state and durable effect admission. A decoded command is not permission to execute it.
 
 [MCP response contracts](crates/dione-mcp-protocol/src/lib.rs) own protocol negotiation and the thirty-three built-in discovery definitions. The [root server](src/mcp/server.rs) supplies its application version and current harness capability/tool snapshots, then retains authentication, installed registration, current configuration, execution and lifecycle hooks. Discovery metadata grants no authority.
+
+The registered Discord gateway runtime owns its verification producers and policy/lifecycle enforcers together. Root composition supplies concrete services and shares the enforcing ledger with MCP and Attention; proof constructors remain private inside the runtime. Process-global mute installation has one registry in `dione-mutes`. Observation remains disabled at startup.

@@ -231,13 +231,10 @@ fn a04_production_ingress_gate_receipts_cover_denied_and_muted_direct_variants()
         const MUTED_GUILD: u64 = 9_000_004;
         let fixture = Fixture::new(AttentionMode::On).await;
 
-        if crate::composition::mutes::global().is_none() {
-            crate::composition::mutes::init_global(MuteStore::from_state(
-                MuteState::default(),
-                &fixture.path,
-            ));
+        if dione_mutes::global().is_none() {
+            dione_mutes::init_global(MuteStore::from_state(MuteState::default(), &fixture.path));
         }
-        let mute_store = crate::composition::mutes::global().unwrap();
+        let mute_store = dione_mutes::global().unwrap();
         mute_store
             .mute_guild(MUTED_GUILD, 60, "boundary-fixture".into(), None)
             .await
@@ -259,7 +256,7 @@ fn a04_production_ingress_gate_receipts_cover_denied_and_muted_direct_variants()
                 8,
                 false,
                 Some(500),
-                crate::composition::mutes::global().as_deref()
+                dione_mutes::global().as_deref()
             ),
             Drop
         );
@@ -270,7 +267,7 @@ fn a04_production_ingress_gate_receipts_cover_denied_and_muted_direct_variants()
                 7,
                 false,
                 Some(500),
-                crate::composition::mutes::global().as_deref()
+                dione_mutes::global().as_deref()
             ),
             Drop
         );
@@ -281,7 +278,7 @@ fn a04_production_ingress_gate_receipts_cover_denied_and_muted_direct_variants()
                 8,
                 true,
                 Some(500),
-                crate::composition::mutes::global().as_deref()
+                dione_mutes::global().as_deref()
             ),
             Drop
         );
@@ -293,7 +290,7 @@ fn a04_production_ingress_gate_receipts_cover_denied_and_muted_direct_variants()
                 7,
                 false,
                 Some(MUTED_GUILD),
-                crate::composition::mutes::global().as_deref()
+                dione_mutes::global().as_deref()
             ),
             Drop
         );
@@ -304,7 +301,7 @@ fn a04_production_ingress_gate_receipts_cover_denied_and_muted_direct_variants()
                 7,
                 true,
                 Some(MUTED_GUILD),
-                crate::composition::mutes::global().as_deref()
+                dione_mutes::global().as_deref()
             ),
             Drop
         );

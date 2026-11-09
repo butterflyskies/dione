@@ -6,11 +6,12 @@ use dione_config::ConfigDurability;
 use dione_config::ConfigRuntime;
 use dione_config::attention_effect_guard;
 use dione_config::load_config;
+use dione_discord_runtime::now_ms;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use {
-    super::{runtime::AttentionRuntime, source::now_ms},
+    super::runtime::AttentionRuntime,
     dione_attention::types::{ArtifactDigest, DecisionRecord, EvaluationId, Feedback, RecordId},
 };
 
@@ -22,7 +23,7 @@ async fn records(
     runtime: &Arc<AttentionRuntime>,
     ids: Vec<RecordId>,
 ) -> Result<Vec<DecisionRecord>, String> {
-    let recipient = load_config(&runtime.resolver.state_dir)
+    let recipient = load_config(runtime.resolver.directory())
         .raw
         .attention
         .recipient
@@ -65,7 +66,7 @@ async fn validate_artifact(
     digest: ArtifactDigest,
     evaluation: Option<EvaluationId>,
 ) -> Result<(), String> {
-    let recipient = load_config(&runtime.resolver.state_dir)
+    let recipient = load_config(runtime.resolver.directory())
         .raw
         .attention
         .recipient
@@ -112,7 +113,7 @@ where
     F: FnOnce(&mut dione_attention::store::AttentionStore) -> Result<R, String> + Send + 'static,
 {
     let publication = attention_effect_guard().await;
-    let current = load_config(&runtime.resolver.state_dir);
+    let current = load_config(runtime.resolver.directory());
     if current.generation() != expected_generation || current.access.admin_only_mutations {
         return Err("attention control authority changed during validation".to_owned());
     }
@@ -136,7 +137,7 @@ pub async fn execute(
             "admin_only_mutations is enabled; attention mutation tools are disabled".to_owned(),
         );
     }
-    let initial = load_config(&runtime.resolver.state_dir);
+    let initial = load_config(runtime.resolver.directory());
     let recipient = initial.raw.attention.recipient.clone();
     match command {
         AttentionCommand::Status => {
@@ -167,7 +168,7 @@ pub async fn execute(
                     "recipient identity cannot be changed through its attention tool".to_owned(),
                 );
             }
-            let path = runtime.resolver.state_dir.clone();
+            let path = runtime.resolver.directory().to_owned();
             let outcome = ConfigRuntime::new(path.clone())
                 .mutate(move |editor| {
                     let current = load_config(&path);

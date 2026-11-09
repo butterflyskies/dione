@@ -106,7 +106,7 @@ impl Fixture {
             Arc::new(dione_outbound_consent::consent::ConsentGate::new(
                 &state_dir,
             )),
-            Arc::new(crate::ingress_ledger::IngressLedger::new()),
+            Arc::new(dione_discord_runtime::IngressLedger::new()),
             None,
         ));
         let source = ModuleInstanceId::new(

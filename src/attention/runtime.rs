@@ -2,7 +2,6 @@
 
 use crate::discord::messaging;
 use crate::discord::messaging::MessagingCtx;
-use crate::ingress_ledger::SourceDeliveryFailure;
 use dione_attention::delivery::AttentionGuardFailure as Failure;
 use dione_attention::health::{AttentionHealth, AttentionHealthController};
 #[cfg(test)]
@@ -13,6 +12,8 @@ use dione_config::load_config;
 use dione_config::subscribe_generation;
 use dione_discord_events::MessageTargeting;
 use dione_discord_events::NotificationEvent;
+use dione_discord_runtime::SourceDeliveryFailure;
+use dione_discord_runtime::{SourceFailure, SourceResolver, now_ms};
 use dione_outbound_consent::consent::ConsentGate;
 use std::{
     fmt,
@@ -20,10 +21,7 @@ use std::{
     time::Duration,
 };
 use {
-    super::{
-        source::{SourceFailure, SourceResolver, now_ms},
-        store_access::LegacyOperationError,
-    },
+    super::store_access::LegacyOperationError,
     dione_attention::{
         config::AttentionMode,
         learning::FixedThresholdPolicy,
@@ -46,8 +44,38 @@ pub const SHADOW_BASELINE: FixedThresholdPolicy = FixedThresholdPolicy {
 };
 
 /// Coordinates source validation, durable decisions, provider work and guarded delivery.
+#[derive(Clone)]
+pub(crate) struct NoticeServices {
+    pub(crate) http: Arc<serenity::http::Http>,
+    pub(crate) state: dione_discord_state::State,
+}
+/// Root application assembly keeps publication services separate from source authority.
+pub struct AttentionServices {
+    resolver: SourceResolver,
+    notice: NoticeServices,
+}
+impl AttentionServices {
+    /// Assembles source revalidation and the root's existing notice resources.
+    pub fn new(
+        http: Arc<serenity::http::Http>,
+        state: dione_discord_state::State,
+        directory: camino::Utf8PathBuf,
+        ledger: Arc<dione_discord_runtime::IngressLedger>,
+    ) -> Self {
+        let notice = NoticeServices {
+            http: http.clone(),
+            state: state.clone(),
+        };
+        Self {
+            resolver: SourceResolver::new(http, state, directory, ledger),
+            notice,
+        }
+    }
+}
+
 pub struct AttentionRuntime {
     pub resolver: SourceResolver,
+    pub(crate) notice: NoticeServices,
     authority_module: dione_contracts::ModuleInstanceId,
     store: Arc<dione_attention::store_access::AttentionStoreAccess>,
     pub(crate) health: Arc<AttentionHealthController>,
@@ -96,11 +124,12 @@ impl AttentionRuntime {
 
     /// Initializes persistent attention state without blocking the async runtime.
     pub async fn new(
-        resolver: SourceResolver,
+        services: AttentionServices,
         enforcement_supported: bool,
         authority_module: dione_contracts::ModuleInstanceId,
     ) -> Self {
-        let config = load_config(&resolver.state_dir);
+        let AttentionServices { resolver, notice } = services;
+        let config = load_config(resolver.directory());
         let attention = &config.raw.attention;
         let limits = StoreLimits {
             max_records: attention.max_records,
@@ -109,8 +138,8 @@ impl AttentionRuntime {
             ..StoreLimits::default()
         };
         let outage_retry_ms = attention.outage_retry_ms;
-        let store_path = resolver.state_dir.join("attention").join("records.json");
-        let health_path = resolver.state_dir.join("attention-status.json");
+        let store_path = resolver.directory().join("attention").join("records.json");
+        let health_path = resolver.directory().join("attention-status.json");
         let initialized = tokio::task::spawn_blocking(move || {
             let store = AttentionStore::open_with_limits(store_path, limits).map_err(|error| {
                 Arc::new(AttentionInitializationError {
@@ -140,10 +169,11 @@ impl AttentionRuntime {
         if store.is_err() {
             health.degraded = Some("attention metadata is unavailable".to_owned());
         }
-        let health_dir = resolver.state_dir.clone();
+        let health_dir = resolver.directory().to_owned();
         Self {
             authority_module,
             resolver,
+            notice,
             store: Arc::new(
                 dione_attention::store_access::AttentionStoreAccess::from_initialized(store),
             ),
@@ -191,7 +221,7 @@ impl AttentionRuntime {
         // This bounded publication serializes with configuration changes. A muted
         // or removed route cannot become an asynchronous stale send.
         let publication = attention_effect_guard().await;
-        let config = load_config(&self.resolver.state_dir);
+        let config = load_config(self.resolver.directory());
         let Ok(text) = self.health.propose_notice(&config.raw.attention) else {
             return;
         };
@@ -203,12 +233,12 @@ impl AttentionRuntime {
             {
                 Ok(Some(channel)) => {
                     let mut ctx = MessagingCtx::new(
-                        self.resolver.http.clone(),
-                        self.resolver.state.clone(),
+                        self.notice.http.clone(),
+                        self.notice.state.clone(),
                         config.clone(),
-                        self.resolver.state_dir.clone(),
+                        self.resolver.directory().to_owned(),
                         no_rly,
-                        self.resolver.ledger.clone(),
+                        self.resolver.ledger().clone(),
                     );
                     ctx.event_tx = event_tx;
                     match tokio::time::timeout(
@@ -247,7 +277,7 @@ impl AttentionRuntime {
     }
 
     fn failed(&self, reason: String) {
-        let config = load_config(&self.resolver.state_dir);
+        let config = load_config(self.resolver.directory());
         self.health
             .failed(reason, config.raw.attention.outage_retry_ms);
     }
@@ -311,7 +341,7 @@ impl AttentionRuntime {
     /// This predicate is also called by the HTTP client before each retry. Source
     /// versions and room export grants are authority; the model's judgment is not.
     fn export_current(&self, record: &DecisionRecord) -> bool {
-        let config = load_config(&self.resolver.state_dir);
+        let config = load_config(self.resolver.directory());
         let attention = &config.raw.attention;
         record.config_generation == config.generation()
             && record.compatibility == attention.compatibility()
@@ -324,7 +354,7 @@ impl AttentionRuntime {
                     && attention.provider_eligible(source.key.channel_id)
                     && self
                         .resolver
-                        .ledger
+                        .ledger()
                         .delivery_check(
                             source.key.message_id,
                             source.key.channel_id,
@@ -359,7 +389,7 @@ impl AttentionRuntime {
             return record;
         }
         let timeout = Duration::from_millis(
-            load_config(&self.resolver.state_dir)
+            load_config(self.resolver.directory())
                 .raw
                 .attention
                 .request_timeout_ms,
@@ -399,7 +429,7 @@ impl AttentionRuntime {
                         }
                         finalized.actual = Admission::Ordinary;
                         let mut policy_failure = None;
-                        let current = load_config(&runtime.resolver.state_dir);
+                        let current = load_config(runtime.resolver.directory());
                         if let Some(selected) = store.selected_artifact(&finalized.recipient) {
                             if selected.compatibility != finalized.compatibility {
                                 policy_failure = Some(
@@ -417,7 +447,7 @@ impl AttentionRuntime {
                                             .all(|source| {
                                                 runtime
                                                     .resolver
-                                                    .ledger
+                                                    .ledger()
                                                     .delivery_check(
                                                         source.key.message_id,
                                                         source.key.channel_id,
@@ -536,7 +566,7 @@ impl AttentionRuntime {
         record: &mut DecisionRecord,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<(), EvaluationFailure> {
-        let config = load_config(&self.resolver.state_dir);
+        let config = load_config(self.resolver.directory());
         let attention = &config.raw.attention;
         let (trigger, antecedents, mut missing_context) = self
             .resolver
@@ -612,7 +642,7 @@ impl AttentionRuntime {
         if unique.len() > 8_192 {
             return Err(SourceFailure::Unknown);
         }
-        let config = load_config(&self.resolver.state_dir);
+        let config = load_config(self.resolver.directory());
         let deadline =
             tokio::time::Instant::now() + Duration::from_millis(config.raw.attention.revalidate_ms);
         let mut facts = Vec::with_capacity(unique.len());
@@ -648,7 +678,7 @@ impl AttentionRuntime {
 
     /// Prunes evidence, applies storage bounds, and revalidates the selected policy.
     pub async fn maintain(self: Arc<Self>) {
-        let config = load_config(&self.resolver.state_dir);
+        let config = load_config(self.resolver.directory());
         let recipient = config.raw.attention.recipient.clone();
         let limits = StoreLimits {
             max_records: config.raw.attention.max_records,
@@ -690,7 +720,7 @@ impl AttentionRuntime {
         self: Arc<Self>,
         live_incarnation: IncarnationId,
     ) -> Vec<dione_attention_admission::AdmissionResult> {
-        let config = load_config(&self.resolver.state_dir);
+        let config = load_config(self.resolver.directory());
         let recipient = config.raw.attention.recipient.clone();
         let live_for_selection = live_incarnation.clone();
         let rows = self
@@ -772,7 +802,7 @@ impl AttentionRuntime {
 
     /// Returns a recipient-owned record and excerpts after current exact-source revalidation.
     pub async fn retrieve(self: &Arc<Self>, id: RecordId) -> Result<serde_json::Value, String> {
-        let recipient = load_config(&self.resolver.state_dir)
+        let recipient = load_config(self.resolver.directory())
             .raw
             .attention
             .recipient
@@ -798,11 +828,11 @@ impl AttentionRuntime {
                     .map_err(|_| "attention source unavailable".to_owned())?,
             );
         }
-        let current = load_config(&self.resolver.state_dir);
+        let current = load_config(self.resolver.directory());
         if current.raw.attention.recipient != record.recipient
             || !record.sources.iter().all(|source| {
                 self.resolver
-                    .ledger
+                    .ledger()
                     .delivery_check(
                         source.key.message_id,
                         source.key.channel_id,
@@ -867,7 +897,7 @@ impl dione_attention::delivery::AttentionDeliveryGuard for AttentionRuntime {
         self.store
             .try_read(|store| {
                 let record = store.record(id).ok_or(Failure::Invalidated)?;
-                let config = load_config(&self.resolver.state_dir);
+                let config = load_config(self.resolver.directory());
                 let expected = match descriptor.directive() {
                     dione_attention::delivery::AttentionDirective::Prompt => Admission::Prompt,
                     dione_attention::delivery::AttentionDirective::NextTurn => Admission::NextTurn,
@@ -884,7 +914,7 @@ impl dione_attention::delivery::AttentionDeliveryGuard for AttentionRuntime {
                 }
                 for source in &record.sources {
                     self.resolver
-                        .ledger
+                        .ledger()
                         .delivery_check(
                             source.key.message_id,
                             source.key.channel_id,
@@ -944,7 +974,6 @@ impl dione_attention::delivery::AttentionDeliveryGuard for AttentionRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attention::source::now_ms;
     use camino::Utf8PathBuf;
     use dione_attention::config::AttentionBrief;
     use dione_attention::config::AttentionConfig;
@@ -955,6 +984,7 @@ mod tests {
     use dione_attention_admission::Submission;
     use dione_config::ConfigRuntime;
     use dione_discord_events::NotificationEvent;
+    use dione_discord_runtime::now_ms;
     use parking_lot::Mutex as SyncMutex;
     use serde_json::{Value, json};
     use serenity::model::id::{ChannelId, MessageId, UserId};
@@ -1258,12 +1288,12 @@ mod tests {
             publish_settings(&path, &settings).await;
             let runtime = Arc::new(
                 AttentionRuntime::new(
-                    SourceResolver {
-                        http: network.http(),
-                        state: dione_discord_state::new_state(),
-                        state_dir: path.clone(),
-                        ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
-                    },
+                    crate::attention::runtime::AttentionServices::new(
+                        network.http(),
+                        dione_discord_state::new_state(),
+                        path.clone(),
+                        Arc::new(dione_discord_runtime::IngressLedger::new()),
+                    ),
                     true,
                     dione_contracts::ModuleInstanceId::new(
                         dione_contracts::ProviderId::new("discord").unwrap(),
@@ -1580,11 +1610,9 @@ mod tests {
             let resolver = &fixture.runtime.resolver;
             let unavailable = Arc::new(
                 AttentionRuntime::new(
-                    SourceResolver {
-                        http: resolver.http.clone(),
-                        state: resolver.state.clone(),
-                        state_dir: resolver.state_dir.clone(),
-                        ledger: resolver.ledger.clone(),
+                    AttentionServices {
+                        resolver: resolver.clone(),
+                        notice: fixture.runtime.notice.clone(),
                     },
                     true,
                     fixture.runtime.authority_module().clone(),

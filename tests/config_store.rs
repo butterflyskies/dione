@@ -52,7 +52,7 @@ async fn make_server(state_dir: &Utf8PathBuf) -> DioneServer {
             dione_codex::TOOL_NAMES,
         ),
         Arc::new(ConsentGate::new(state_dir)),
-        Arc::new(dione::ingress_ledger::IngressLedger::new()),
+        Arc::new(dione_discord_runtime::IngressLedger::new()),
         dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),

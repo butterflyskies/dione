@@ -2,11 +2,11 @@
 use super::messaging::MessagingCtx;
 use super::messaging::ReplyToolOptions;
 use super::messaging::reply_with_evidence_and_hook_overrides;
-use crate::ingress_ledger::IngressLedger;
 use camino::Utf8PathBuf;
 use dione_config::load_config;
 use dione_discord_events::NotificationEvent;
 use dione_discord_messaging_contracts::wire as messaging_wire;
+use dione_discord_runtime::IngressLedger;
 use dione_discord_state::State;
 use dione_discord_tool_contracts::reply::{DESCRIPTION, ReplyRequest, definition};
 use dione_mcp_tools::McpTool;

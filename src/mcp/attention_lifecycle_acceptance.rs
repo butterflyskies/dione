@@ -180,12 +180,12 @@ fn retained_digest(artifact: &LearnedArtifact) -> ArtifactDigest {
 async fn runtime_for(path: Utf8PathBuf, network: &Network) -> Arc<AttentionRuntime> {
     Arc::new(
         AttentionRuntime::new(
-            SourceResolver {
-                http: network.http(),
-                state: dione_discord_state::new_state(),
-                state_dir: path,
-                ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
-            },
+            crate::attention::runtime::AttentionServices::new(
+                network.http(),
+                dione_discord_state::new_state(),
+                path,
+                Arc::new(dione_discord_runtime::IngressLedger::new()),
+            ),
             true,
             dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
@@ -364,17 +364,9 @@ fn unavailable_final_guard_retries_committed_fifo_without_replay_or_source_leaka
         release.send(()).unwrap();
         held.await.unwrap();
 
-        let context = crate::discord::verified_action::LifecycleContext::Guild(
-            serenity::model::id::GuildId::new(500),
+        assert!(
+            matches!(gateway_delete(&fixture, source).await, NotificationEvent::MessageDelete { chat_id, message_id, .. } if chat_id == source.channel_id && message_id == source.message_id)
         );
-        assert!(matches!(
-            fixture.attention.resolver.ledger.transition_delete(
-                source.message_id,
-                source.channel_id,
-                context,
-            ),
-            crate::ingress_ledger::TransitionResult::Admitted(_)
-        ));
         fixture
             .network
             .state
@@ -442,21 +434,9 @@ fn duplicate_overlap_edit_delete_and_reconnect_never_reintroduce_an_old_excerpt(
         };
         let edit_text = "current lifecycle version two";
         fixture.network.insert(channel, id, edit_text, None);
-        let context = crate::discord::verified_action::LifecycleContext::Guild(
-            serenity::model::id::GuildId::new(500),
+        assert!(
+            matches!(gateway_edit(&fixture, source, edit_text).await, NotificationEvent::MessageEdit { chat_id, message_id, .. } if chat_id == source.channel_id && message_id == source.message_id)
         );
-        assert!(matches!(
-            fixture.attention.resolver.ledger.transition_passive_edit(
-                source.message_id,
-                source.channel_id,
-                context,
-                UserId::new(7),
-                edit_text,
-                serenity::model::Timestamp::parse("2026-09-21T10:00:01Z").unwrap(),
-                |_| true,
-            ),
-            crate::ingress_ledger::TransitionResult::Admitted(_)
-        ));
         let ready = fixture.admissions.invalidate(source);
         assert!(ready.is_empty());
         fixture.attention.invalidate(source).await.unwrap();
@@ -503,14 +483,9 @@ fn duplicate_overlap_edit_delete_and_reconnect_never_reintroduce_an_old_excerpt(
         fixture.finish(overlap.await.unwrap()).await;
         fixture.network.state.lock().provider_gate = None;
 
-        assert!(matches!(
-            fixture.attention.resolver.ledger.transition_delete(
-                source.message_id,
-                source.channel_id,
-                context,
-            ),
-            crate::ingress_ledger::TransitionResult::Admitted(_)
-        ));
+        assert!(
+            matches!(gateway_delete(&fixture, source).await, NotificationEvent::MessageDelete { chat_id, message_id, .. } if chat_id == source.channel_id && message_id == source.message_id)
+        );
         fixture.network.state.lock().messages.remove(&(channel, id));
         fixture.admissions.invalidate(source);
         fixture.attention.invalidate(source).await.unwrap();
@@ -1586,17 +1561,9 @@ fn known_deleted_parent_is_withheld_at_provider_capture_even_if_source_http_is_s
             .insert(channel, parent_id, deleted_text, None);
         let parent = fixture.event(channel, parent_id).await;
         assert_eq!(parent.content, deleted_text);
-        let context = crate::discord::verified_action::LifecycleContext::Guild(
-            serenity::model::id::GuildId::new(500),
+        assert!(
+            matches!(gateway_delete(&fixture, SourceKey { channel_id: ChannelId::new(channel), message_id: MessageId::new(parent_id) }).await, NotificationEvent::MessageDelete { chat_id, message_id, .. } if chat_id == ChannelId::new(channel) && message_id == MessageId::new(parent_id))
         );
-        assert!(matches!(
-            fixture.attention.resolver.ledger.transition_delete(
-                MessageId::new(parent_id),
-                ChannelId::new(channel),
-                context,
-            ),
-            crate::ingress_ledger::TransitionResult::Admitted(_)
-        ));
         assert_eq!(
             fixture.network.state.lock().messages[&(channel, parent_id)]["content"],
             deleted_text,
@@ -1916,17 +1883,9 @@ fn deleted_deferred_source_is_absent_from_serialized_denial_and_sink_transcript(
         assert_eq!(deferred.delivery, DeliveryState::Deferred);
 
         let source = deferred.sources[0].key;
-        let context = crate::discord::verified_action::LifecycleContext::Guild(
-            serenity::model::id::GuildId::new(500),
+        assert!(
+            matches!(gateway_delete(&fixture, source).await, NotificationEvent::MessageDelete { chat_id, message_id, .. } if chat_id == source.channel_id && message_id == source.message_id)
         );
-        assert!(matches!(
-            fixture.attention.resolver.ledger.transition_delete(
-                source.message_id,
-                source.channel_id,
-                context,
-            ),
-            crate::ingress_ledger::TransitionResult::Admitted(_)
-        ));
         assert_eq!(
             fixture.network.state.lock().messages[&(channel, id)]["content"],
             excerpt,
@@ -2276,4 +2235,39 @@ fn accepted_live_turn_is_not_replayed_after_real_receipt_write_failure() {
         );
         assert_eq!(outcomes.lock().unwrap().len(), 1);
     });
+}
+
+async fn gateway_delete(fixture: &Fixture, source: SourceKey) -> NotificationEvent {
+    let (gateway, mut notifications) = crate::gateway_test_support::handler(
+        fixture.attention.resolver.ledger().clone(),
+        fixture.attention.notice.state.clone(),
+        fixture.path.clone(),
+    );
+    gateway
+        .process_delete(
+            source.channel_id,
+            source.message_id,
+            Some(serenity::model::id::GuildId::new(500)),
+        )
+        .await;
+    notifications
+        .try_recv()
+        .expect("the actual gateway must emit the admitted deletion")
+}
+async fn gateway_edit(fixture: &Fixture, source: SourceKey, text: &str) -> NotificationEvent {
+    let (gateway, mut notifications) = crate::gateway_test_support::handler(
+        fixture.attention.resolver.ledger().clone(),
+        fixture.attention.notice.state.clone(),
+        fixture.path.clone(),
+    );
+    let mut raw = wire_message(source.channel_id.get(), source.message_id.get(), text);
+    raw["edited_timestamp"] = json!("2026-09-21T10:00:01Z");
+    let message: serenity::model::channel::Message = serde_json::from_value(raw.clone()).unwrap();
+    let update: serenity::model::event::MessageUpdateEvent = serde_json::from_value(raw).unwrap();
+    gateway
+        .process_update(&fixture.network.http(), None, Some(message), update)
+        .await;
+    notifications
+        .try_recv()
+        .expect("the actual gateway must emit the admitted edit")
 }

@@ -1,14 +1,8 @@
-pub mod client;
-pub mod events;
 pub(crate) mod introspection_tools;
 pub(crate) mod management;
 pub(crate) mod management_tools;
 pub mod messaging;
-pub(crate) mod observation;
 pub(crate) mod rendering;
-pub(crate) mod rook_observation;
-pub(crate) mod verified_action;
-pub(crate) mod verified_action_runtime;
 #[cfg(test)]
 mod visibility_contract_tests;
 

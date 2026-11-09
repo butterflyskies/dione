@@ -76,7 +76,7 @@ async fn registered_queries_parse_execute_project_and_reload_policy() {
         Arc::new(dione_outbound_consent::consent::ConsentGate::new(
             &state_dir,
         )),
-        Arc::new(crate::ingress_ledger::IngressLedger::new()),
+        Arc::new(dione_discord_runtime::IngressLedger::new()),
         None,
     ));
     let registry = ToolRegistry::new(
@@ -284,7 +284,7 @@ async fn wrong_observation_exchange() {
         Arc::new(dione_outbound_consent::consent::ConsentGate::new(
             &state_dir,
         )),
-        Arc::new(crate::ingress_ledger::IngressLedger::new()),
+        Arc::new(dione_discord_runtime::IngressLedger::new()),
         None,
     ));
     let registry = ToolRegistry::new(
@@ -464,7 +464,7 @@ async fn attachment_diagnostics_exchange() {
         dione_discord_state::new_state(),
         state.clone(),
         Arc::new(dione_outbound_consent::consent::ConsentGate::new(&state)),
-        Arc::new(crate::ingress_ledger::IngressLedger::new()),
+        Arc::new(dione_discord_runtime::IngressLedger::new()),
         None,
     ));
     let registry = ToolRegistry::new(

@@ -3,7 +3,6 @@ use dione_discord_tool_contracts::management::{MessageAction, MessageCommand};
 
 use crate::discord::messaging::TargetPolicy;
 use crate::discord::messaging::verify_message_target;
-use crate::ingress_ledger::IngressLedger;
 use dione_config::LoadedConfig;
 use dione_discord_gate::OutboundGate;
 #[cfg(test)]
@@ -12,6 +11,7 @@ use dione_discord_messaging_contracts::TargetOperation;
 use dione_discord_messaging_contracts::management::{
     CreatedThread, ManagementError, ManagementErrorKind,
 };
+use dione_discord_runtime::IngressLedger;
 use dione_discord_state::State;
 use serenity::{
     builder::CreateThread,
@@ -161,7 +161,7 @@ mod tests {
             http: Arc::new(serenity::http::Http::new("fake")),
             state: new_state(),
             config: Arc::new(config),
-            ingress_ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
+            ingress_ledger: Arc::new(dione_discord_runtime::IngressLedger::new()),
         }
     }
 
@@ -403,8 +403,14 @@ mod tests {
             if own_send {
                 ctx.state.write().await.note_sent(9001);
             } else {
-                ctx.ingress_ledger
-                    .note_admitted(message, channel, UserId::new(7), "hello");
+                crate::gateway_test_support::admit_direct(
+                    &ctx.ingress_ledger,
+                    message,
+                    channel,
+                    UserId::new(7),
+                    "hello",
+                )
+                .await;
             }
             assert_eq!(
                 management_wire::mutation(
@@ -609,12 +615,14 @@ mod tests {
             if own_send {
                 ctx.state.write().await.note_sent(9001);
             } else {
-                ctx.ingress_ledger.note_admitted(
+                crate::gateway_test_support::admit_direct(
+                    &ctx.ingress_ledger,
                     MessageId::new(9001),
                     channel,
                     UserId::new(7),
                     "hello",
-                );
+                )
+                .await;
             }
             assert_eq!(
                 management_wire::thread(create_thread(&ctx, channel, message, name).await),
@@ -755,8 +763,14 @@ mod tests {
         let channel = ChannelId::new(42);
         let message = MessageId::new(9001);
         ctx.state.write().await.note_sent(9001);
-        ctx.ingress_ledger
-            .note_admitted(message, ChannelId::new(99), UserId::new(7), "hello");
+        crate::gateway_test_support::admit_direct(
+            &ctx.ingress_ledger,
+            message,
+            ChannelId::new(99),
+            UserId::new(7),
+            "hello",
+        )
+        .await;
         for (result, operation, error) in [
             (
                 management_wire::mutation(

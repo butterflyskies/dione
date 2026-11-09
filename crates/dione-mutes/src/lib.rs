@@ -23,6 +23,9 @@
 
 #![warn(missing_docs)]
 
+mod registry;
+pub use registry::{global, init_global};
+
 use arc_swap::ArcSwap;
 use camino::Utf8Path;
 use chrono::{DateTime, Utc};

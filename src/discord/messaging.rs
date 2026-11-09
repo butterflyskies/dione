@@ -2,8 +2,6 @@
 
 /// Discord message reads and attachment downloads.
 mod rook_publication;
-use crate::ingress_ledger::IngressLedger;
-use crate::ingress_ledger::VerifyResult;
 use camino::Utf8PathBuf;
 use dione_config::ChunkMode;
 use dione_config::DmPolicy;
@@ -19,6 +17,9 @@ use dione_discord_messaging_contracts::{
     PartialReceipt, RedirectRestrictedSurface, ReplyOutcome, ReplyPing, Report, TargetError,
     TargetOperation,
 };
+use dione_discord_runtime::IngressLedger;
+use dione_discord_runtime::VerifyResult;
+use dione_discord_runtime::create_dm_channel;
 use dione_discord_state::State;
 use dione_evidence::SentexHandles;
 use dione_evidence::SentexRole;
@@ -227,7 +228,7 @@ async fn verify_message_target_with_mute_store(
                 let drops = dione_drop_ledger::global();
                 let guild_muted = match mute_store_override {
                     Some(store) => store.is_guild_muted(guild_id.get()),
-                    None => crate::composition::mutes::global()
+                    None => dione_mutes::global()
                         .is_some_and(|store| store.is_guild_muted(guild_id.get())),
                 };
                 if guild_muted
@@ -278,8 +279,8 @@ fn verify_message_target_with_alert(
     mut alert: impl FnMut(ChannelId, String),
 ) -> Result<(), TargetError> {
     match verdict {
-        crate::ingress_ledger::VerifyResult::Admitted { .. } => Ok(()),
-        crate::ingress_ledger::VerifyResult::Unknown if own_send => {
+        dione_discord_runtime::VerifyResult::Admitted { .. } => Ok(()),
+        dione_discord_runtime::VerifyResult::Unknown if own_send => {
             // The acting seat authored this target. It is correctly absent from
             // the received-message ingress ledger, so its `Unknown` is expected,
             // not suspicious. Exempt from the phantom canary — proven our own
@@ -292,7 +293,7 @@ fn verify_message_target_with_alert(
             );
             Ok(())
         }
-        crate::ingress_ledger::VerifyResult::Unknown => {
+        dione_discord_runtime::VerifyResult::Unknown => {
             tracing::warn!(
                 message_id = message_id.get(),
                 channel_id = channel_id.get(),
@@ -315,7 +316,7 @@ fn verify_message_target_with_alert(
                 operation,
             })
         }
-        crate::ingress_ledger::VerifyResult::ChannelMismatch {
+        dione_discord_runtime::VerifyResult::ChannelMismatch {
             admitted_channel,
             claimed_channel,
         } => {
@@ -333,7 +334,7 @@ fn verify_message_target_with_alert(
                 operation,
             })
         }
-        crate::ingress_ledger::VerifyResult::Expired => {
+        dione_discord_runtime::VerifyResult::Expired => {
             tracing::info!(
                 message_id = message_id.get(),
                 channel_id = channel_id.get(),
@@ -342,7 +343,7 @@ fn verify_message_target_with_alert(
             );
             Ok(())
         }
-        crate::ingress_ledger::VerifyResult::Unavailable => {
+        dione_discord_runtime::VerifyResult::Unavailable => {
             tracing::warn!(
                 message_id = message_id.get(),
                 operation = %operation,
@@ -1829,16 +1830,6 @@ pub async fn send_file_with_hook_overrides(
 
 // ── DM helpers ───────────────────────────────────────────────────────────────
 
-pub(crate) async fn create_dm_channel(
-    http: &serenity::http::Http,
-    user_id: UserId,
-) -> Result<serenity::model::channel::PrivateChannel, Box<serenity::Error>> {
-    let dm_body = json!({ "recipient_id": user_id.get().to_string() });
-    http.create_private_channel(&dm_body)
-        .await
-        .map_err(Box::new)
-}
-
 // ── send_dm ──────────────────────────────────────────────────────────────────
 
 /// Open (or reuse) a DM channel and send through the shared [`reply`] path.
@@ -2255,16 +2246,18 @@ mod tests {
         LoadedConfig::try_from_raw(raw).expect("valid test configuration")
     }
 
-    #[test]
-    fn ingress_rejections_route_alerts_by_verdict() {
+    #[tokio::test]
+    async fn ingress_rejections_route_alerts_by_verdict() {
         let config = configured_ingress_test_config();
-        let ledger = IngressLedger::new();
-        ledger.note_admitted(
+        let ledger = Arc::new(IngressLedger::new());
+        crate::gateway_test_support::admit_direct(
+            &ledger,
             MessageId::new(7),
             ChannelId::new(41),
             UserId::new(100),
             "known message",
-        );
+        )
+        .await;
         let mut alerts = Vec::new();
 
         let mismatch = verify_message_target_with_alert(
@@ -2315,10 +2308,10 @@ mod tests {
     /// dione#334: the acting seat's own-authored targets are exempt from the
     /// phantom canary, and nothing else is. Each assertion is a mutation guard —
     /// the comment names the change that turns it red.
-    #[test]
-    fn own_send_exemption_covers_unknown_and_never_a_spoof() {
+    #[tokio::test]
+    async fn own_send_exemption_covers_unknown_and_never_a_spoof() {
         let config = configured_ingress_test_config();
-        let ledger = IngressLedger::new();
+        let ledger = Arc::new(IngressLedger::new());
         let mut alerts = Vec::new();
 
         // (1) known-mine: an own-authored target is (correctly) absent from the
@@ -2364,12 +2357,14 @@ mod tests {
         // is `Unknown`-only. Admitted in channel 41, claimed in 42, own_send=true
         // still blocks as a mismatch with no page. RED if the exemption is
         // broadened past the `Unknown` arm.
-        ledger.note_admitted(
+        crate::gateway_test_support::admit_direct(
+            &ledger,
             MessageId::new(7),
             ChannelId::new(41),
             UserId::new(100),
             "known message",
-        );
+        )
+        .await;
         let mismatch = verify_message_target_with_alert(
             ledger.verify(MessageId::new(7), ChannelId::new(42)),
             &config,
@@ -2716,12 +2711,9 @@ mod tests {
                 cutoff_event_id: String::new(),
             },
         );
-        crate::composition::mutes::init_global(MuteStore::from_state(
-            state,
-            camino::Utf8Path::new("/tmp"),
-        ));
+        dione_mutes::init_global(MuteStore::from_state(state, camino::Utf8Path::new("/tmp")));
         assert!(
-            crate::composition::mutes::global()
+            dione_mutes::global()
                 .expect("global store installed")
                 .is_guild_muted(500)
         );
@@ -2796,12 +2788,14 @@ mod tests {
             ..Default::default()
         });
         let ledger = Arc::new(IngressLedger::new());
-        ledger.note_admitted(
+        crate::gateway_test_support::admit_direct(
+            &ledger,
             MessageId::new(7),
             ChannelId::new(41),
             UserId::new(100),
             "known message",
-        );
+        )
+        .await;
         let ctx = MessagingCtx::new(
             http,
             new_state(),
@@ -2934,7 +2928,7 @@ mod tests {
             Arc::new(config),
             "/tmp".into(),
             Arc::new(ConsentGate::new(camino::Utf8Path::new("/tmp"))),
-            Arc::new(crate::ingress_ledger::IngressLedger::new()),
+            Arc::new(dione_discord_runtime::IngressLedger::new()),
         )
     }
 
@@ -3888,7 +3882,7 @@ mod tests {
             Arc::new(LoadedConfig::try_from_raw(raw).expect("valid test configuration")),
             state_dir.clone(),
             Arc::new(ConsentGate::new(&state_dir)),
-            Arc::new(crate::ingress_ledger::IngressLedger::new()),
+            Arc::new(dione_discord_runtime::IngressLedger::new()),
         );
         (ctx, requests, server, dir)
     }
@@ -4614,7 +4608,7 @@ mod tests {
                 Arc::new(config),
                 state_dir.to_owned(),
                 Arc::new(ConsentGate::new(state_dir)),
-                Arc::new(crate::ingress_ledger::IngressLedger::new()),
+                Arc::new(dione_discord_runtime::IngressLedger::new()),
             );
             let handles = dione_evidence::parse_tool_sentex_handles(
                 &json!({
@@ -4840,19 +4834,23 @@ mod tests {
             id: "42".to_owned(),
             ..Default::default()
         });
-        let ledger = Arc::new(crate::ingress_ledger::IngressLedger::new());
-        ledger.note_admitted(
+        let ledger = Arc::new(dione_discord_runtime::IngressLedger::new());
+        crate::gateway_test_support::admit_direct(
+            &ledger,
             MessageId::new(7),
             ChannelId::new(42),
             UserId::new(99),
             "admitted",
-        );
-        ledger.note_admitted(
+        )
+        .await;
+        crate::gateway_test_support::admit_direct(
+            &ledger,
             MessageId::new(8),
             ChannelId::new(41),
             UserId::new(99),
             "wrong channel",
-        );
+        )
+        .await;
         let (http, requests, server) = fake_discord_http().await;
         let (mut ctx, _) = messaging_ctx_with_halt_pipeline(
             LoadedConfig::try_from_raw(raw).expect("valid test configuration"),
@@ -4911,11 +4909,11 @@ mod tests {
         assert_eq!(
             ledger.take_observed_verifications(),
             vec![
-                crate::ingress_ledger::VerifyResult::Admitted {
+                dione_discord_runtime::VerifyResult::Admitted {
                     channel: dione_discord_messaging_contracts::ChannelRef::new(42),
                 },
-                crate::ingress_ledger::VerifyResult::Unknown,
-                crate::ingress_ledger::VerifyResult::ChannelMismatch {
+                dione_discord_runtime::VerifyResult::Unknown,
+                dione_discord_runtime::VerifyResult::ChannelMismatch {
                     admitted_channel: dione_discord_messaging_contracts::ChannelRef::new(41),
                     claimed_channel: dione_discord_messaging_contracts::ChannelRef::new(42),
                 },

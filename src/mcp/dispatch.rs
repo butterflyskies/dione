@@ -220,7 +220,7 @@ pub(crate) async fn call_tool(
                 // Annotate with active guild mutes so the caller sees muted guilds
                 // alongside the channel list (channels don't carry guild_id, so
                 // per-channel annotation isn't possible).
-                if let Some(store) = crate::composition::mutes::global() {
+                if let Some(store) = dione_mutes::global() {
                     let now = store.now();
                     let mutes: Vec<Value> = store
                         .list_muted()
@@ -430,7 +430,7 @@ pub(crate) async fn call_tool(
                     ));
                 }
                 let reason = args.get("reason").and_then(Value::as_str).map(String::from);
-                let store = crate::composition::mutes::global()
+                let store = dione_mutes::global()
                     .ok_or_else(|| "mute store not initialized".to_string())?;
                 match store
                     .mute_guild(guild_id, ttl_minutes, "admin".into(), reason)
@@ -453,7 +453,7 @@ pub(crate) async fn call_tool(
                 let guild_id: u64 = guild_id_str
                     .parse()
                     .map_err(|_| format!("invalid guild_id: {guild_id_str}"))?;
-                let store = crate::composition::mutes::global()
+                let store = dione_mutes::global()
                     .ok_or_else(|| "mute store not initialized".to_string())?;
                 match store.unmute_guild(guild_id).await {
                     Ok(mute) => json!({
@@ -466,7 +466,7 @@ pub(crate) async fn call_tool(
             }
             "list_muted_servers" => {
                 check_admin_gate(&config)?;
-                let store = crate::composition::mutes::global()
+                let store = dione_mutes::global()
                     .ok_or_else(|| "mute store not initialized".to_string())?;
                 let now = store.now();
                 let mutes: Vec<Value> = store
@@ -769,7 +769,7 @@ mod tests {
                 .1
                 .is_none()
         );
-        crate::composition::mutes::init_global(MuteStore::load(server.state_dir()).await.unwrap());
+        dione_mutes::init_global(MuteStore::load(server.state_dir()).await.unwrap());
         assert_eq!(
             call_tool(
                 &server,
@@ -780,11 +780,7 @@ mod tests {
             .unwrap_err(),
             "ttl_minutes must be at least 1"
         );
-        assert!(
-            !crate::composition::mutes::global()
-                .unwrap()
-                .is_guild_muted(42)
-        );
+        assert!(!dione_mutes::global().unwrap().is_guild_muted(42));
         let response = call_tool(
             &server,
             "mute_server",
@@ -796,11 +792,7 @@ mod tests {
             serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(body["ok"], true);
         assert_eq!(body["guild_id"], "42");
-        assert!(
-            crate::composition::mutes::global()
-                .unwrap()
-                .is_guild_muted(42)
-        );
+        assert!(dione_mutes::global().unwrap().is_guild_muted(42));
     }
 
     #[tokio::test]
@@ -1325,7 +1317,7 @@ mod tests {
             std::sync::Arc::new(dione_outbound_consent::consent::ConsentGate::new(
                 &state_dir,
             )),
-            std::sync::Arc::new(crate::ingress_ledger::IngressLedger::new()),
+            std::sync::Arc::new(dione_discord_runtime::IngressLedger::new()),
             dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
@@ -1570,7 +1562,7 @@ mod tests {
             std::sync::Arc::new(dione_outbound_consent::consent::ConsentGate::new(
                 &state_dir,
             )),
-            std::sync::Arc::new(crate::ingress_ledger::IngressLedger::new()),
+            std::sync::Arc::new(dione_discord_runtime::IngressLedger::new()),
             dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),

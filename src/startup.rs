@@ -21,7 +21,7 @@ use std::{
     env,
     future::Future,
     net::SocketAddr,
-    sync::{Arc, atomic::AtomicU64},
+    sync::Arc,
     time::Duration,
 };
 use tokio::{
@@ -32,10 +32,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{EnvFilter, prelude::*, reload};
-use {
-    crate::{discord::events::Handler, mcp::server::DioneServer},
-    dione_harness::AttentionPolicy,
-};
+use {crate::mcp::server::DioneServer, dione_harness::AttentionPolicy};
 
 /// Discord MCP channel server for Claude Code, Codex, and Oh My Pi.
 #[derive(Parser)]
@@ -143,13 +140,13 @@ pub async fn run() -> Result<(), StartupError> {
     let mute_store = MuteStore::load(&state_dir)
         .await
         .map_err(StartupErrorKind::Mute)?;
-    crate::composition::mutes::init_global(mute_store);
+    dione_mutes::init_global(mute_store);
 
     if let Some(path) = &cli.attention_command {
         return run_attention_command(path, &state_dir, &config, cli.mode.attention_policy()).await;
     }
 
-    let expiry_handle = crate::composition::mutes::global()
+    let expiry_handle = dione_mutes::global()
         .ok_or(StartupErrorKind::MuteUnavailable)?
         .spawn_expiry_task();
 
@@ -220,33 +217,24 @@ pub async fn run() -> Result<(), StartupError> {
         None
     };
 
-    let ingress_ledger = std::sync::Arc::new(crate::ingress_ledger::IngressLedger::new());
-
-    let pk_resolver = Some(std::sync::Arc::new(
-        crate::discord::verified_action_runtime::BoundPkResolver::new(
-            dione_pluralkit_resolver::PkResolver::with_defaults(),
-        ),
-    ));
+    let ingress_ledger = std::sync::Arc::new(dione_discord_runtime::IngressLedger::new());
 
     let (shared_presence, server_presence) = dione_discord_presence::wire_shared_presence();
-    let handler = Handler {
-        state: state.clone(),
-        queue: queue.clone(),
-        tx: event_tx.clone(),
-        state_dir: state_dir.clone(),
-        bot_user_id: AtomicU64::new(0),
-        discord_cmd_rx: tokio::sync::Mutex::new(None),
-        presence: shared_presence,
-        pronoun_service,
-        nameplate_service,
-        ingress_ledger: ingress_ledger.clone(),
-        pk_resolver,
-        observation: crate::discord::observation::ObservationIngress::disabled(
+    let handler = dione_discord_runtime::GatewayHandler::new(
+        dione_discord_runtime::GatewayServices::new(
+            state.clone(),
+            queue.clone(),
+            event_tx.clone(),
+            state_dir.clone(),
+            ingress_ledger.clone(),
+            shared_presence,
             authority_module.clone(),
-        ),
-    };
+        )
+        .with_identity_services(pronoun_service, nameplate_service)
+        .with_pluralkit(Some(dione_pluralkit_resolver::PkResolver::with_defaults())),
+    );
 
-    let mut discord_client = crate::discord::client::build_client(&token, handler)
+    let mut discord_client = dione_discord_runtime::build_client(&token, handler)
         .await
         .map_err(|source| StartupErrorKind::Discord(Box::new(source)))?;
 
@@ -490,12 +478,12 @@ async fn run_attention_command(
     };
     let runtime = Arc::new(
         crate::attention::runtime::AttentionRuntime::new(
-            crate::attention::source::SourceResolver {
-                http: Arc::new(serenity::http::Http::new(&token)),
-                state: Arc::new(RwLock::new(SharedState::new())),
-                state_dir: state_dir.clone(),
-                ledger: Arc::new(crate::ingress_ledger::IngressLedger::new()),
-            },
+            crate::attention::runtime::AttentionServices::new(
+                Arc::new(serenity::http::Http::new(&token)),
+                Arc::new(RwLock::new(SharedState::new())),
+                state_dir.clone(),
+                Arc::new(dione_discord_runtime::IngressLedger::new()),
+            ),
             policy == AttentionPolicy::SafeTurn,
             dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord")

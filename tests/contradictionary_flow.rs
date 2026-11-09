@@ -133,7 +133,7 @@ fn test_ctx_with_state_dir(config: LoadedConfig, state_dir: Utf8PathBuf) -> Mess
         Arc::new(config),
         state_dir.clone(),
         Arc::new(ConsentGate::new(&state_dir)),
-        Arc::new(dione::ingress_ledger::IngressLedger::new()),
+        Arc::new(dione_discord_runtime::IngressLedger::new()),
     )
 }
 
@@ -404,7 +404,7 @@ async fn release_into_a_revoked_channel_is_refused_and_keeps_the_handle() {
         Arc::new(config_with_contradictionary(ariadne_entries())),
         state_dir.clone(),
         gate.clone(),
-        Arc::new(dione::ingress_ledger::IngressLedger::new()),
+        Arc::new(dione_discord_runtime::IngressLedger::new()),
     );
     let bounce = messaging::reply(
         &ctx_allowed,
@@ -427,7 +427,7 @@ async fn release_into_a_revoked_channel_is_refused_and_keeps_the_handle() {
         ),
         state_dir.clone(),
         gate.clone(),
-        Arc::new(dione::ingress_ledger::IngressLedger::new()),
+        Arc::new(dione_discord_runtime::IngressLedger::new()),
     );
     let result = messaging::release_held(&ctx_revoked, &handle).await;
     assert!(

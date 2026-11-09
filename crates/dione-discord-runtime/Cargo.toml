@@ -1,0 +1,54 @@
+[package]
+name = "dione-discord-runtime"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Registered Discord gateway authority and lifecycle runtime"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+
+[features]
+default = []
+# Read-only verification results; never exposes admission or mutation APIs.
+test-support = []
+
+[dependencies]
+camino.workspace = true
+chrono.workspace = true
+dione-access-requests.workspace = true
+dione-attention.workspace = true
+dione-config.workspace = true
+dione-contracts.workspace = true
+dione-coordination.workspace = true
+dione-discord-context.workspace = true
+dione-discord-events.workspace = true
+dione-discord-gate.workspace = true
+dione-discord-identities.workspace = true
+dione-discord-messaging-contracts.workspace = true
+dione-discord-presence.workspace = true
+dione-discord-queries.workspace = true
+dione-discord-state.workspace = true
+dione-drop-ledger.workspace = true
+dione-identity-display.workspace = true
+dione-mutes.workspace = true
+dione-permissions.workspace = true
+dione-pluralkit-identities.workspace = true
+dione-pluralkit-resolver.workspace = true
+dione-rook.workspace = true
+serde_json.workspace = true
+serenity.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+dione-codex.workspace = true
+dione-messages.workspace = true
+dione-discord-introspection.workspace = true
+reqwest.workspace = true
+tempfile.workspace = true
+trybuild.workspace = true
+proptest.workspace = true

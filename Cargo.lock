@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.148.0"
+version = "0.149.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -959,6 +959,7 @@ dependencies = [
  "dione-discord-messaging-contracts",
  "dione-discord-presence",
  "dione-discord-queries",
+ "dione-discord-runtime",
  "dione-discord-scheduling",
  "dione-discord-state",
  "dione-discord-tool-arguments",
@@ -1255,7 +1256,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-context"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "camino",
  "dione-config",
@@ -1292,7 +1293,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-gate"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "camino",
  "dione-config",
@@ -1330,7 +1331,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-messaging-contracts"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "dione-contradictionary",
  "dione-discord-queries",
@@ -1358,7 +1359,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-queries"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "base64 0.22.1",
  "camino",
@@ -1383,6 +1384,48 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "dione-discord-runtime"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "chrono",
+ "dione-access-requests",
+ "dione-attention",
+ "dione-codex",
+ "dione-config",
+ "dione-contracts",
+ "dione-coordination",
+ "dione-discord-context",
+ "dione-discord-events",
+ "dione-discord-gate",
+ "dione-discord-identities",
+ "dione-discord-introspection",
+ "dione-discord-messaging-contracts",
+ "dione-discord-presence",
+ "dione-discord-queries",
+ "dione-discord-state",
+ "dione-drop-ledger",
+ "dione-identity-display",
+ "dione-messages",
+ "dione-mutes",
+ "dione-permissions",
+ "dione-pluralkit-identities",
+ "dione-pluralkit-resolver",
+ "dione-rook",
+ "proptest",
+ "reqwest 0.12.28",
+ "serde_json",
+ "serenity",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "trybuild",
+ "uuid",
 ]
 
 [[package]]
@@ -1428,7 +1471,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-tool-contracts"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "dione-discord-identities",
  "dione-discord-introspection",
@@ -1447,7 +1490,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-typing"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "dione-config",
  "dione-discord-gate",
@@ -1615,7 +1658,7 @@ dependencies = [
 
 [[package]]
 name = "dione-mutes"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "arc-swap",
  "camino",
@@ -1656,7 +1699,7 @@ dependencies = [
 
 [[package]]
 name = "dione-oneshot"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "camino",
  "dione-config",

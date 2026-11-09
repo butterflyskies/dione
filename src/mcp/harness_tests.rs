@@ -97,7 +97,7 @@ async fn third_adapter_routes_notifications_invalidation_and_protocol() {
         TraceLevelController::noop(),
         connection.clone(),
         Arc::new(ConsentGate::new(&path)),
-        Arc::new(crate::ingress_ledger::IngressLedger::new()),
+        Arc::new(dione_discord_runtime::IngressLedger::new()),
         dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
@@ -234,7 +234,7 @@ async fn notification_loop_invalidates_edits_and_deletes_before_delivery() {
             TraceLevelController::noop(),
             connection,
             Arc::new(ConsentGate::new(&path)),
-            Arc::new(crate::ingress_ledger::IngressLedger::new()),
+            Arc::new(dione_discord_runtime::IngressLedger::new()),
             dione_contracts::ModuleInstanceId::new(
                 dione_contracts::ProviderId::new("discord").unwrap(),
                 dione_contracts::ModuleSlotId::new("primary").unwrap(),
@@ -325,7 +325,7 @@ async fn oh_my_pi_ordinary_mcp_tools_remain_available() {
         TraceLevelController::noop(),
         connection.clone(),
         Arc::new(ConsentGate::new(&path)),
-        Arc::new(crate::ingress_ledger::IngressLedger::new()),
+        Arc::new(dione_discord_runtime::IngressLedger::new()),
         dione_contracts::ModuleInstanceId::new(
             dione_contracts::ProviderId::new("discord").unwrap(),
             dione_contracts::ModuleSlotId::new("primary").unwrap(),
