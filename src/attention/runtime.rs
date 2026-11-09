@@ -1756,13 +1756,7 @@ mod tests {
                 assert!(health.degraded.is_none());
                 assert_eq!(health.notice_failures, 0);
                 assert_eq!(
-                    fixture
-                        .runtime
-                        .notice
-                        .state
-                        .read()
-                        .await
-                        .is_own_send(9_999),
+                    fixture.runtime.notice.state.read().await.is_own_send(9_999),
                     notices != NoticeMode::Off,
                     "published notices must be tracked by shared outbound delivery"
                 );

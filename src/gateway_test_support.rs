@@ -51,7 +51,8 @@ pub(crate) async fn admit_direct(
     std::fs::write(
         directory.join("config.toml"),
         format!("[access]\nallow_from = [\"{}\"]\n", user.get()),
-    ).unwrap();
+    )
+    .unwrap();
     assert!(dione_config::reload_config(&directory).await.1.is_none());
     let state = dione_discord_state::new_state();
     let (handler, mut rx) = handler(ledger.clone(), state, directory.clone());
