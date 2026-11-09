@@ -45,6 +45,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 arc-swap.workspace = true
 dione-codex.workspace = true
 dione-messages.workspace = true
