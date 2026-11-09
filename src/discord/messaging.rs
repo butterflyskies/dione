@@ -53,6 +53,7 @@ use dione_pre_send::{
 };
 pub use rook_publication::{DiscordPublicationInitError, DiscordPublicationProvider};
 use serde::Deserialize;
+#[cfg(test)]
 use serde_json::json;
 use serenity::{
     builder::{CreateAllowedMentions, CreateAttachment, CreateMessage, EditMessage},

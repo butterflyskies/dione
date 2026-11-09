@@ -1758,7 +1758,7 @@ mod tests {
                 assert_eq!(
                     fixture
                         .runtime
-                        .resolver
+                        .notice
                         .state
                         .read()
                         .await
