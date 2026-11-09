@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.149.1] - 2026-11-09
+
+- Stabilize the Rook publication capacity fixture against changing snapshot encoding and pending wake callbacks.
+
 ## [0.149.0] - 2026-11-09
 
 - Move the complete registered Discord gateway, private admission and lifecycle authority, and source revalidation into Discord runtime. Preserve the shared mute registry and actual event-driven consumer fixtures.

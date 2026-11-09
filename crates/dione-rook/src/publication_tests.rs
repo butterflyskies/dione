@@ -882,10 +882,42 @@ async fn completion_headroom_survives_capacity_pressure_and_rejects_limit_decrea
             .await
             .unwrap();
         notified(&publisher.dispatching).await;
+        service.handle.tick().await.unwrap();
+        service.handle.drain_callbacks_for_test().await.unwrap();
         let before = retained(&fixture).await;
         let encoded = serde_json::to_vec(&before).unwrap().len();
+
+        // The capacity field is part of its own encoding. A valid wide limit
+        // demonstrates why the previous snapshot's length can permit a decrease.
+        let mut stale_candidate = before.clone();
+        stale_candidate.limits.snapshot_bytes = 64 * 1024 * 1024;
+        let stale_encoded = serde_json::to_vec(&stale_candidate).unwrap().len();
+        let stale_limit = stale_encoded + COMPLETION_HEADROOM - 1;
+        stale_candidate.limits.snapshot_bytes = stale_limit;
+        let stale_candidate_bytes = serde_json::to_vec(&stale_candidate).unwrap().len();
+        assert!(stale_candidate_bytes + COMPLETION_HEADROOM <= stale_limit);
+
         let mut reduced = fixture.limits.clone();
         reduced.snapshot_bytes = encoded + COMPLETION_HEADROOM - 1;
+        let mut candidate = before.clone();
+        loop {
+            candidate.limits = reduced.clone();
+            let exact = serde_json::to_vec(&candidate).unwrap().len();
+            let limit = exact + COMPLETION_HEADROOM - 1;
+            if limit == reduced.snapshot_bytes {
+                break;
+            }
+            reduced.snapshot_bytes = limit;
+        }
+        let candidate_bytes = serde_json::to_vec(&candidate).unwrap().len();
+        assert_eq!(
+            candidate_bytes + COMPLETION_HEADROOM - 1,
+            reduced.snapshot_bytes
+        );
+        eprintln!(
+            "capacity fixture mode={mode} before={encoded} stale_before={stale_encoded} stale_candidate={stale_candidate_bytes} stale_limit={stale_limit} candidate={candidate_bytes} headroom={COMPLETION_HEADROOM} limit={}",
+            reduced.snapshot_bytes
+        );
         assert!(matches!(
             service
                 .handle
