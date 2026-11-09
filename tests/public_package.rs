@@ -3186,7 +3186,7 @@ fn gateway_runtime_release_waits_for_its_actual_normal_dependencies() {
         for job in [publish, reconcile] {
             assert!(
                 job.lines()
-                    .next()
+                    .find(|line| line.trim_start().starts_with("needs:"))
                     .unwrap()
                     .contains(&format!("reconcile-{name}")),
                 "{dependency}"
