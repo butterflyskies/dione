@@ -46,10 +46,12 @@ pub(crate) async fn admit_direct(
 ) {
     let dir = tempfile::tempdir().unwrap();
     let directory = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
-    let previous = dione_config::load_config(&directory);
-    let mut admitted = previous.raw.clone();
-    admitted.access.allow_from.push(user.get().to_string());
-    std::fs::write(directory.join("config.toml"), toml::to_string(&admitted).unwrap()).unwrap();
+    // This standalone event fixture owns its cached policy. Consumer assertions
+    // retain their independently constructed configuration unchanged.
+    std::fs::write(
+        directory.join("config.toml"),
+        format!("[access]\nallow_from = [\"{}\"]\n", user.get()),
+    ).unwrap();
     assert!(dione_config::reload_config(&directory).await.1.is_none());
     let state = dione_discord_state::new_state();
     let (handler, mut rx) = handler(ledger.clone(), state, directory.clone());
@@ -64,7 +66,7 @@ pub(crate) async fn admit_direct(
     handler
         .process_message(&serenity::http::Http::new("fixture"), event)
         .await;
-    std::fs::write(directory.join("config.toml"), toml::to_string(&previous.raw).unwrap()).unwrap();
+    std::fs::write(directory.join("config.toml"), "").unwrap();
     assert!(dione_config::reload_config(&directory).await.1.is_none());
     assert!(
         matches!(rx.try_recv().unwrap(), dione_discord_events::NotificationEvent::Message(value) if value.message_id == message && value.chat_id == channel && value.user_id == user && value.content == content)
