@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.149.2] - 2026-11-09
+
+- Replace identified fixture identities with invented values and require all packaged local dev prerequisites before Discord runtime publication and reconciliation.
+
 ## [0.149.1] - 2026-11-09
 
 - Stabilize the Rook publication capacity fixture against changing snapshot encoding and pending wake callbacks.

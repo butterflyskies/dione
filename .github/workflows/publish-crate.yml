@@ -4610,9 +4610,12 @@ jobs:
           sh scripts/package-preflight.sh dione-mcp-protocol "${mcp_protocol_version}" "${mcp_protocol_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-discord-runtime:
-    needs: [verify-dione, reconcile-access-requests, reconcile-attention, reconcile-config, reconcile-contracts, reconcile-coordination, reconcile-discord-context, reconcile-discord-events, reconcile-discord-gate, reconcile-discord-identities, reconcile-discord-messaging-contracts, reconcile-discord-presence, reconcile-discord-queries, reconcile-discord-state, reconcile-drop-ledger, reconcile-identity-display, reconcile-mutes, reconcile-permissions, reconcile-pluralkit-identities, reconcile-pluralkit-resolver, reconcile-rook]
+    needs: [verify-dione, reconcile-codex, reconcile-discord-introspection, reconcile-messages, reconcile-access-requests, reconcile-attention, reconcile-config, reconcile-contracts, reconcile-coordination, reconcile-discord-context, reconcile-discord-events, reconcile-discord-gate, reconcile-discord-identities, reconcile-discord-messaging-contracts, reconcile-discord-presence, reconcile-discord-queries, reconcile-discord-state, reconcile-drop-ledger, reconcile-identity-display, reconcile-mutes, reconcile-permissions, reconcile-pluralkit-identities, reconcile-pluralkit-resolver, reconcile-rook]
     if: >-
       needs.verify-dione.outputs.publish-discord-runtime == 'true' &&
+      needs.reconcile-codex.result == 'success' &&
+      needs.reconcile-discord-introspection.result == 'success' &&
+      needs.reconcile-messages.result == 'success' &&
       needs.reconcile-access-requests.result == 'success' &&
       needs.reconcile-attention.result == 'success' &&
       needs.reconcile-config.result == 'success' &&
@@ -4669,10 +4672,13 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   reconcile-discord-runtime:
-    needs: [verify-dione, reconcile-access-requests, reconcile-attention, reconcile-config, reconcile-contracts, reconcile-coordination, reconcile-discord-context, reconcile-discord-events, reconcile-discord-gate, reconcile-discord-identities, reconcile-discord-messaging-contracts, reconcile-discord-presence, reconcile-discord-queries, reconcile-discord-state, reconcile-drop-ledger, reconcile-identity-display, reconcile-mutes, reconcile-permissions, reconcile-pluralkit-identities, reconcile-pluralkit-resolver, reconcile-rook, publish-discord-runtime]
+    needs: [verify-dione, reconcile-codex, reconcile-discord-introspection, reconcile-messages, reconcile-access-requests, reconcile-attention, reconcile-config, reconcile-contracts, reconcile-coordination, reconcile-discord-context, reconcile-discord-events, reconcile-discord-gate, reconcile-discord-identities, reconcile-discord-messaging-contracts, reconcile-discord-presence, reconcile-discord-queries, reconcile-discord-state, reconcile-drop-ledger, reconcile-identity-display, reconcile-mutes, reconcile-permissions, reconcile-pluralkit-identities, reconcile-pluralkit-resolver, reconcile-rook, publish-discord-runtime]
     if: >-
       always() &&
       needs.verify-dione.result == 'success' &&
+      needs.reconcile-codex.result == 'success' &&
+      needs.reconcile-discord-introspection.result == 'success' &&
+      needs.reconcile-messages.result == 'success' &&
       needs.reconcile-access-requests.result == 'success' &&
       needs.reconcile-attention.result == 'success' &&
       needs.reconcile-config.result == 'success' &&

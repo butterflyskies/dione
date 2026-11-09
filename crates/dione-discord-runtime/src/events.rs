@@ -61,7 +61,7 @@ fn gateway_presence(request: &PresenceRequest) -> (Option<ActivityData>, OnlineS
     (activity, status)
 }
 
-/// A display name with pronouns already resolved and appended (e.g. "paceheart (she/her)").
+/// A display name with pronouns already resolved and appended (e.g. "fixture-orbit (she/her)").
 pub(crate) struct PronounDisplayName(pub(crate) String);
 
 // ── Event types ───────────────────────────────────────────────────────────────
@@ -4533,7 +4533,7 @@ mod tests {
                     bytes.extend_from_slice(&buffer[..count]);
                 }
                 captured.fetch_add(1, Ordering::SeqCst);
-                let body = "nameplates:\n  \"42\":\n    name: Iris\n    pronouns: [she/her]\n";
+                let body = "nameplates:\n  \"42\":\n    name: Fixture-Quartz-42\n    pronouns: [she/her]\n";
                 stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
             }
         });
@@ -4573,16 +4573,16 @@ mod tests {
         assert_eq!(
             fixture
                 .handler
-                .resolve_identity_enrichment(42, true, "Iris")
+                .resolve_identity_enrichment(42, true, "Fixture-Quartz-42")
                 .await,
-            "Iris (she/her)"
+            "Fixture-Quartz-42 (she/her)"
         );
         assert_eq!(
             fixture
                 .handler
-                .resolve_identity_enrichment(42, true, "Iris (xe/it)")
+                .resolve_identity_enrichment(42, true, "Fixture-Quartz-42 (xe/it)")
                 .await,
-            "Iris (xe/it)"
+            "Fixture-Quartz-42 (xe/it)"
         );
         assert_eq!(requests.load(Ordering::SeqCst), 1);
         server.abort();

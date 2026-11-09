@@ -3167,7 +3167,7 @@ fn mcp_protocol_reconciliation_retains_every_normal_owner_and_success_guard() {
 }
 
 #[test]
-fn gateway_runtime_release_waits_for_its_actual_normal_dependencies() {
+fn gateway_runtime_release_waits_for_its_actual_packaged_dependencies() {
     let workflow = include_str!("../.github/workflows/publish-crate.yml");
     let (_, publish) = workflow.split_once("\n  publish-discord-runtime:").unwrap();
     let (publish, reconcile) = publish
@@ -3176,10 +3176,10 @@ fn gateway_runtime_release_waits_for_its_actual_normal_dependencies() {
     let (reconcile, root) = reconcile.split_once("\n  publish-crate:").unwrap();
     let manifest: toml::Value =
         toml::from_str(include_str!("../crates/dione-discord-runtime/Cargo.toml")).unwrap();
-    for dependency in manifest["dependencies"]
-        .as_table()
-        .unwrap()
-        .keys()
+    for dependency in ["dependencies", "dev-dependencies", "build-dependencies"]
+        .into_iter()
+        .filter_map(|section| manifest.get(section).and_then(toml::Value::as_table))
+        .flat_map(|dependencies| dependencies.keys())
         .filter(|name| name.starts_with("dione-"))
     {
         let name = dependency.strip_prefix("dione-").unwrap();

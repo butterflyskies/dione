@@ -96,6 +96,15 @@ class ReleasePreflightTests(unittest.TestCase):
         second = "  publish-two:\n    needs: reconcile-one\n"
         self.assertEqual(read_jobs("jobs:\n" + first + second), read_jobs("jobs:\n" + second + first))
 
+    def test_runtime_packaged_dev_prerequisites_gate_both_jobs(self):
+        jobs = read_jobs((SOURCE / ".github/workflows/publish-crate.yml").read_text())
+        for name in ("publish-discord-runtime", "reconcile-discord-runtime"):
+            needs = jobs[name].splitlines()[0].strip().removeprefix("needs: [").removesuffix("]")
+            for dependency in ("codex", "discord-introspection", "messages"):
+                with self.subTest(job=name, dependency=dependency):
+                    self.assertIn("reconcile-" + dependency, needs.split(", "))
+                    self.assertIn("needs.reconcile-" + dependency + ".result == 'success'", jobs[name])
+
     def test_scheduler_reconciliation_gates_root_publication(self):
         workflow = (SOURCE / ".github/workflows/publish-crate.yml").read_text()
         jobs = read_jobs(workflow)

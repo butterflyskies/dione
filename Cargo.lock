@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.149.1"
+version = "0.149.2"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1256,7 +1256,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-context"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "camino",
  "dione-config",
@@ -1331,7 +1331,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-messaging-contracts"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "dione-contradictionary",
  "dione-discord-queries",
@@ -1359,7 +1359,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-queries"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "base64 0.22.1",
  "camino",
@@ -1388,7 +1388,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-runtime"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "arc-swap",
  "camino",
@@ -1472,7 +1472,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-tool-contracts"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "dione-discord-identities",
  "dione-discord-introspection",
