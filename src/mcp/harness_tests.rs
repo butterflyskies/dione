@@ -163,6 +163,8 @@ async fn third_adapter_routes_notifications_invalidation_and_protocol() {
         "method not found: notifications/claude/channel/permission_request"
     );
     let authority_module = server.attention.authority_module().clone();
+    let attention = server.attention.clone();
+    let no_rly = server.no_rly().clone();
     assert_eq!(
         run_resident_control(
             Arc::new(server),
@@ -175,19 +177,24 @@ async fn third_adapter_routes_notifications_invalidation_and_protocol() {
         "resident control is unavailable for this harness"
     );
     for (request_id, granted) in [("first", true), ("second", false)] {
-        deliver_flushed(
-            &connection,
-            &authority_module,
-            vec![NotificationEvent::PermissionResponse {
+        let (events, input) = mpsc::channel(1);
+        events
+            .send(NotificationEvent::PermissionResponse {
                 request_id: request_id.into(),
                 granted,
-            }],
+            })
+            .await
+            .unwrap();
+        drop(events);
+        dione_recipient_attention::run_notifications(
+            attention.clone(),
+            connection.clone(),
+            no_rly.clone(),
             None,
-            false,
+            input,
+            CancellationToken::new(),
         )
-        .await
-        .into_result()
-        .unwrap();
+        .await;
         if granted {
             connection
                 .invalidate_attention(MessageRef::new(

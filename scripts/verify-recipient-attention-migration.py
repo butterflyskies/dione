@@ -64,6 +64,20 @@ def key(body):
  ts=[x[0] for x in tokens(normalize(body))]
  # Ignore only optional formatting trailing commas, never literal contents.
  return tuple(v for i,v in enumerate(ts) if not (v==',' and i+1<len(ts) and ts[i+1] in [')',']','}']))
+def asserts(s):
+ ts=tokens(normalize(s));out=[]
+ for i,(t,a,b) in enumerate(ts):
+  if t not in ['assert','assert_eq','assert_ne','debug_assert','debug_assert_eq','debug_assert_ne','prop_assert','prop_assert_eq','prop_assert_ne']:continue
+  if i+2>=len(ts) or ts[i+1][0]!='!' or ts[i+2][0] not in ['(','{','[']:continue
+  close={'(':')','{':'}','[':']'};stack=[close[ts[i+2][0]]];j=i+3
+  while stack:
+   z=ts[j][0]
+   if z in close:stack.append(close[z])
+   elif z==stack[-1]:stack.pop()
+   j+=1
+  out.append(tuple(x[0] for x in ts[i:j]))
+ return collections.Counter(out)
+
 checks=[]
 def compare(path,dest,names=None,excluded=()):
  after=collections.Counter((x['name'],key(x['body'])) for x in funcs(dest.read_text()))
@@ -82,6 +96,15 @@ forward=['ok','into_result','presentation','deliver_flushed','message_rate_limit
 server=old('src/mcp/server.rs');tests=server[server.index('    fn config_with_channel_delay'):server.index('/// The same forwarding unit')]
 forward+= [x['name'] for x in funcs(tests[:tests.rfind('}')])]
 compare('src/mcp/server.rs',S/'forwarding.rs',names=forward)
+compare('src/mcp/harness_tests.rs',W/'src/mcp/harness_tests.rs',excluded=['third_adapter_routes_notifications_invalidation_and_protocol'])
+harness_before=old('src/mcp/harness_tests.rs')
+harness_after=(W/'src/mcp/harness_tests.rs').read_text()
+assert asserts(harness_before)==asserts(harness_after), 'root harness business assertions changed'
+harness_delta={}
+for side,text in [('before',harness_before),('after',harness_after)]:
+ body=next(x['body'] for x in funcs(text) if x['name']=='third_adapter_routes_notifications_invalidation_and_protocol')
+ harness_delta[side]=hashlib.sha256(' '.join(key(body)).encode()).hexdigest()
+assert harness_delta=={'before': '89d9960e7ad1c07be291dfdfb3b8b42f4940b70d1a6948c301da2c02536740e7', 'after': '8c72ee7f6b489d9f12ee1cee6ac9fa38701a7df47ad806f55002969ddfce7db8'}, 'undeclared root harness adapter delta'
 retained=['resident_control_allows_only_bounded_tools','resident_social_tools_are_the_exact_closed_bridge_surface','resident_control_frames_are_bounded_and_newline_delimited','resident_shutdown_waits_for_accepted_reply_after_client_disconnect','messaging_context_uses_process_installed_pipeline']
 compare('src/mcp/server.rs',W/'src/mcp/server.rs',names=retained)
 # Exact moved loop, including all abort/join ordering and final flush. Only assembly names change.
@@ -132,7 +155,7 @@ while changed:
 names=[]
 for p in S.glob('*.rs'):
  for m in re.finditer(r'#\[(?:tokio::)?test(?:\([^\]]*\))?\]\s*(?:async )?fn (\w+)',p.read_text()):names.append({'file':p.name,'name':m[1]})
-result={'baseline':args.baseline,'body_checks':checks,'body_count':len(checks),'body_mismatches':[x for x in checks if not x['same_body']], 'whole_notification_loop_preserved':loop_preserved,'private_rpc_helper_delta':'DioneServer construction/private injection/root dispatch replaced with owner execute and private response envelope; moved cases no longer root wire evidence. Separate ordinary root caller case added.', 'private_fixture_adaptations':'Codex process helper keeps used methods only; private Bell loopback specializes existing successful Value response; gateway handler and wire helpers copied privately. No public fixture feature.', 'member_count':len(graph),'normal_graph':graph,'owner_normal_dependencies':graph['dione-recipient-attention'],'owner_packaged_local_prerequisites':prereqs,'normal_reverse_release_closure':sorted(normal_reverse),'workflow_jobs':len(workflow),'external_count':len(ext(after)),'external_records_equal':external_equal,'owner_test_attributes':names,'limits':'Source lexical/manifest proof only; Cargo resolution, visibility, features and all runtime effects remain uncompiled.'}
+result={'root_harness_adapter_delta':harness_delta,'root_harness_business_assertions_equal':True,'root_harness_adapter_attribution':'Same ordinary constructed runtime now executes real owner recipient loop instead of root-private deliver_flushed; outer protocol assertions preserved. No public private-helper export.', 'baseline':args.baseline,'body_checks':checks,'body_count':len(checks),'body_mismatches':[x for x in checks if not x['same_body']], 'whole_notification_loop_preserved':loop_preserved,'private_rpc_helper_delta':'DioneServer construction/private injection/root dispatch replaced with owner execute and private response envelope; moved cases no longer root wire evidence. Separate ordinary root caller case added.', 'private_fixture_adaptations':'Codex process helper keeps used methods only; private Bell loopback specializes existing successful Value response; gateway handler and wire helpers copied privately. No public fixture feature.', 'member_count':len(graph),'normal_graph':graph,'owner_normal_dependencies':graph['dione-recipient-attention'],'owner_packaged_local_prerequisites':prereqs,'normal_reverse_release_closure':sorted(normal_reverse),'workflow_jobs':len(workflow),'external_count':len(ext(after)),'external_records_equal':external_equal,'owner_test_attributes':names,'limits':'Source lexical/manifest proof only; Cargo resolution, visibility, features and all runtime effects remain uncompiled.'}
 Path(args.output).write_text(json.dumps(result,indent=2)+'\n')
 print('bodies',len(checks),'mismatches',len(result['body_mismatches']),'loop',loop_preserved,'tests',len(names),'normal',len(graph['dione-recipient-attention']),'packaged',len(prereqs),'external',len(ext(after)),external_equal)
 for x in result['body_mismatches']:print(x)

@@ -11,7 +11,7 @@ use futures_util::future::BoxFuture;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::io::AsyncWriteExt;
 use {
-    dione_harness::{HarnessDelivery, HarnessProtocol},
+    dione_harness::{HarnessDelivery, HarnessError, HarnessProtocol},
     dione_messages::delivery::Delivery,
     dione_provider_delivery::ReplyHandle,
     dione_teams::{

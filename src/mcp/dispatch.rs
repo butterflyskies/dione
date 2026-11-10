@@ -1293,9 +1293,10 @@ mod tests {
             );
         }
     }
-    #[tokio::test]
-    async fn attention_recipient_root_wire_status_configure_and_admin_refusal() {
+    #[test]
+    fn attention_recipient_root_wire_status_configure_and_admin_refusal() {
         let _configuration = crate::config_test_guard();
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
         let (_dir, server) = presence_test_server().await;
         std::fs::write(
             server.state_dir().join("config.toml"),
@@ -1367,6 +1368,7 @@ mod tests {
                 .mode,
             dione_attention::config::AttentionMode::Log
         );
+        });
     }
 
     async fn presence_test_server() -> (tempfile::TempDir, DioneServer) {
