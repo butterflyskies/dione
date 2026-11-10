@@ -3,7 +3,7 @@ use crate::{BellProviderConfig, BellProviderUrl, BellScope, RecallOptions};
 use futures_util::future::join_all;
 use rmcp::{
     ServiceExt,
-    model::{CallToolRequestParams, ClientInfo, RawContent},
+    model::{CallToolRequestParams, ClientConfig, ContentBlock},
     service::{RoleClient, RunningService},
     transport::{
         StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig,
@@ -146,7 +146,7 @@ trait Provider: Send + Sync {
 
 struct MemoryMcpProvider {
     endpoint: BellProviderUrl,
-    client: Mutex<Option<RunningService<RoleClient, ClientInfo>>>,
+    client: Mutex<Option<RunningService<RoleClient, ClientConfig>>>,
 }
 
 impl MemoryMcpProvider {
@@ -169,7 +169,7 @@ impl MemoryMcpProvider {
                 DiagnosticHttpClient(http),
                 StreamableHttpClientTransportConfig::with_uri(self.endpoint.as_str().to_owned()),
             );
-            match ClientInfo::default().serve(transport).await {
+            match ClientConfig::default().serve(transport).await {
                 Ok(connected) => {
                     *client = Some(connected);
                     ConnectOutcome::Ready
@@ -228,8 +228,8 @@ impl MemoryMcpProvider {
         let text = result
             .content
             .iter()
-            .find_map(|content| match &content.raw {
-                RawContent::Text(text) => Some(text.text.as_str()),
+            .find_map(|content| match content {
+                ContentBlock::Text(text) => Some(text.text.as_str()),
                 _ => None,
             })
             .ok_or(BellProviderError {
