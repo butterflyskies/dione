@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.150.9] - 2026-11-10
+
+### Fixed
+- Use an invented memory namespace consistently in the identified Bell fixtures.
+
 ## [0.150.8] - 2026-11-10
 
 ### Fixed

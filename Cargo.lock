@@ -963,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.150.8"
+version = "0.150.9"
 dependencies = [
  "dione-mcp-session",
  "dione-recipient-attention",

@@ -3,7 +3,7 @@ members = [".", "crates/dione-receipt-gate", "crates/dione-mcp-session", "crates
 
 [package]
 name = "dione"
-version = "0.150.8"
+version = "0.150.9"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"

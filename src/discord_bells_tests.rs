@@ -355,7 +355,7 @@ pub(crate) mod tests {
             mode: dione_config::BellMode::Live,
             providers: vec![BellProviderConfig {
                 url: BellProviderUrl::parse("http://memory.example/mcp").unwrap(),
-                scope: BellScope::parse("syne").unwrap(),
+                scope: BellScope::parse("fixture-orbit-27").unwrap(),
                 alias: None,
             }],
             trigger: dione_config::BellTrigger::Directed,
@@ -390,7 +390,7 @@ pub(crate) mod tests {
         json!({
             "id": id,
             "name": name,
-            "scope": "syne",
+            "scope": "fixture-orbit-27",
             "distance": distance,
             "match_type": match_type,
         })
@@ -413,7 +413,7 @@ pub(crate) mod tests {
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
         let requests = provider.requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].scope, "syne");
+        assert_eq!(requests[0].scope, "fixture-orbit-27");
         assert_eq!(requests[0].query, "query text");
         assert_eq!(requests[0].limit, 3);
     }
@@ -482,8 +482,8 @@ pub(crate) mod tests {
             "[bell_rings]\ndeadline_ms=0",
             "[bell_rings]\ndeadline_ms=2001",
             "[bell_rings]\nenabled=true",
-            "[bell_rings.provider]\nurl='file:///tmp/memory'\nscope='syne'",
-            "[bell_rings.provider]\nurl='https://user:pass@memory/mcp'\nscope='syne'",
+            "[bell_rings.provider]\nurl='file:///tmp/memory'\nscope='fixture-orbit-27'",
+            "[bell_rings.provider]\nurl='https://user:pass@memory/mcp'\nscope='fixture-orbit-27'",
         ] {
             assert!(toml::from_str::<Config>(invalid).is_err(), "{invalid}");
         }
@@ -668,7 +668,7 @@ pub(crate) mod tests {
     fn zero_channel_id_is_rejected() {
         let parsed = toml::from_str::<Config>(
             "[bell_rings]\nenabled=true\ntrigger='all'\n\
-            [bell_rings.provider]\nurl='http://memory/mcp'\nscope='syne'\n\
+            [bell_rings.provider]\nurl='http://memory/mcp'\nscope='fixture-orbit-27'\n\
             [[bell_rings.channel_overrides]]\nchannel_id='0'\ntrigger='directed'",
         );
         assert!(parsed.is_err(), "channel_id=0 must be rejected");
@@ -744,11 +744,11 @@ pub(crate) mod tests {
     #[test]
     fn legacy_singular_provider_config_still_works() {
         let cfg: Config = toml::from_str(
-            "[bell_rings]\nenabled=true\n[bell_rings.provider]\nurl='http://memory/mcp'\nscope='syne'",
+            "[bell_rings]\nenabled=true\n[bell_rings.provider]\nurl='http://memory/mcp'\nscope='fixture-orbit-27'",
         )
         .unwrap();
         assert_eq!(cfg.bell_rings.providers.len(), 1);
-        assert_eq!(cfg.bell_rings.providers[0].scope.as_str(), "syne");
+        assert_eq!(cfg.bell_rings.providers[0].scope.as_str(), "fixture-orbit-27");
     }
 
     #[test]
@@ -768,7 +768,7 @@ pub(crate) mod tests {
     fn trigger_all_config_parses() {
         let cfg: Config = toml::from_str(
             "[bell_rings]\nenabled=true\ntrigger='all'\n\
-            [bell_rings.provider]\nurl='http://memory/mcp'\nscope='syne'",
+            [bell_rings.provider]\nurl='http://memory/mcp'\nscope='fixture-orbit-27'",
         )
         .unwrap();
         assert_eq!(cfg.bell_rings.trigger, dione_config::BellTrigger::All);
@@ -855,7 +855,7 @@ pub(crate) mod tests {
         let wire = returned.fixture_notification().await;
         assert_eq!(
             wire["params"]["meta"]["bells"],
-            "2s syne/retrieved@fixture d=0.1 id=new rid=r_test"
+            "2s fixture-orbit-27/retrieved@fixture d=0.1 id=new rid=r_test"
         );
         assert_eq!(wire["params"]["meta"]["bells_status"], "ok");
         let mut old = message(MessageTargeting::DirectMessage);
