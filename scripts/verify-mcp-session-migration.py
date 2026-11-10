@@ -40,6 +40,11 @@ checks=[];fail=[]
 for source,dest in paths.items():
  after=collections.Counter((x['name'],key(x['body'])) for x in ns['funcs'](dest.read_text()))
  for f in ns['funcs'](old(source)):
+  removed_unused={'src/mcp/server.rs':{'make_batch','get_codex_tools_list'}, 'src/codex_test_process.rs':{'teams_delivery','queued','resident_next','resident_ack'}, 'src/harness_test_support.rs':{'fixture_notification','fixture_notification_with_evidence'}}
+  if f['name'] in removed_unused.get(source,set()):
+   assert not any(x['name']==f['name'] for x in ns['funcs'](dest.read_text()))
+   checks.append({'source':source,'function':f['name'],'disposition':'compiler-reported unused copied test fixture removed; exact witness retained'})
+   continue
   if source=='src/mcp/server.rs' and f['name']=='ingress_ledger':
    assert not any('.ingress_ledger()' in p.read_text() for p in S.rglob('*.rs'))
    checks.append({'source':source,'function':f['name'],'disposition':'unused former public getter removed after private migration; no new owner caller'})

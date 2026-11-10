@@ -801,25 +801,6 @@ pub(crate) mod test_helpers {
         Ok(delivery)
     }
 
-    /// Converts a nonempty test batch into the current typed delivery.
-    pub fn make_batch(
-        events: Vec<NotificationEvent>,
-        tz: Option<chrono_tz::Tz>,
-    ) -> Result<Option<dione_messages::delivery::Delivery>, Box<dyn std::error::Error + Send + Sync>>
-    {
-        let mut events = events.into_iter();
-        let Some(first) = events.next() else {
-            return Ok(None);
-        };
-        let module = dione_contracts::ModuleInstanceId::new(
-            dione_contracts::ProviderId::new("discord")?,
-            dione_contracts::ModuleSlotId::new("fixture")?,
-        );
-        let delivery =
-            dione_discord_events::batch(&module, first, events.collect(), presentation(tz, true))?;
-        Ok(Some(delivery))
-    }
-
     fn complete_tools_list(harness: &HarnessConnection, evidence: bool) -> Value {
         let mut response = tools_list(
             harness.protocol().tools(),
@@ -866,10 +847,6 @@ pub(crate) mod test_helpers {
             ),
             true,
         )
-    }
-
-    pub fn get_codex_tools_list(harness: &HarnessConnection) -> Value {
-        complete_tools_list(harness, false)
     }
 
     /// Exposes `initialize_response` for unit testing the handshake.

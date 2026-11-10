@@ -18,12 +18,6 @@ use std::{
     time::Duration,
 };
 
-#[derive(serde::Deserialize)]
-pub(crate) struct ResidentEvent {
-    pub(crate) event: Value,
-    pub(crate) delivery_token: String,
-}
-
 struct ChildGuard(Child);
 impl Drop for ChildGuard {
     fn drop(&mut self) {
@@ -183,27 +177,7 @@ impl OwnerProcess {
     pub(crate) async fn command(&self, request: Value) -> Value {
         self.proxy.command(request).await
     }
-    pub(crate) fn teams_delivery(&self) -> TeamsDelivery {
-        TeamsDelivery::new(TeamsProxy(self.proxy.clone()))
-    }
-    pub(crate) async fn queued(&self) -> u64 {
-        self.command(json!({"command":"status"})).await["queued"]
-            .as_u64()
-            .unwrap()
-    }
-    pub(crate) async fn resident_next(
-        &self,
-        thread: &dione_codex::CodexThreadId,
-    ) -> Option<ResidentEvent> {
-        serde_json::from_value(self.command(json!({"command":"resident_next","thread":thread.as_str(),"wait_seconds":0,"lease_seconds":30})).await).unwrap()
-    }
-    pub(crate) async fn resident_ack(&self, token: &str) {
-        assert_eq!(
-            self.command(json!({"command":"resident_ack","token":token}))
-                .await,
-            true
-        );
-    }
+
     pub(crate) fn connection(&self) -> HarnessConnection {
         HarnessConnection::from_adapter(self.proxy.clone(), ProtocolOutput::new(tokio::io::sink()))
     }

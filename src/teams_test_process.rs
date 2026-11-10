@@ -4,16 +4,10 @@ use dione_provider_delivery::{
     ProviderEventKey, ReplyHandle, TeamsAdmissionOutcome, TeamsDelivery, TeamsDeliveryErrorKind,
     TeamsResidentEvent,
 };
-use dione_teams::{
-    edge::LiveReplyReceipt,
-    runtime::{TeamsReplyAuthority, TeamsRuntimeError, TeamsRuntimeErrorKind},
-};
 use dione_teams_identities::{ActivityId, ActorId, BotId, ConversationId, TenantId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    future::Future,
-    pin::Pin,
     process::Stdio,
     sync::{
         Arc,
@@ -176,52 +170,6 @@ async fn deliver(
     Json(outcome)
 }
 
-struct ReplyProxy {
-    client: reqwest::Client,
-    control_url: String,
-}
-impl TeamsReplyAuthority for ReplyProxy {
-    fn reply<'a>(
-        &'a self,
-        handle: &'a ReplyHandle,
-        text: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<LiveReplyReceipt, TeamsRuntimeError>> + Send + 'a>>
-    {
-        Box::pin(async move {
-            let result = self
-                .client
-                .post(format!("{}/reply", self.control_url))
-                .json(&ReplyRequest {
-                    reply_handle: handle,
-                    text,
-                })
-                .send()
-                .await
-                .unwrap()
-                .error_for_status()
-                .unwrap()
-                .json::<ReplyResult>()
-                .await
-                .unwrap();
-            match result {
-                ReplyResult::Sent {
-                    incoming_activity_id,
-                    outgoing_activity_id,
-                    conversation_id,
-                } => Ok(LiveReplyReceipt {
-                    incoming_activity_id,
-                    outgoing_activity_id,
-                    conversation_id,
-                }),
-                ReplyResult::UnknownReplyHandle => {
-                    Err(TeamsRuntimeErrorKind::UnknownReplyHandle.into())
-                }
-                other => panic!("unexpected native tool outcome in this composed test: {other:?}"),
-            }
-        })
-    }
-}
-
 struct FixtureChild(std::process::Child);
 impl Drop for FixtureChild {
     fn drop(&mut self) {
@@ -304,12 +252,7 @@ impl FixtureProcess {
             ready,
         }
     }
-    pub(crate) fn authority(&self) -> Arc<dyn TeamsReplyAuthority> {
-        Arc::new(ReplyProxy {
-            client: self.client.clone(),
-            control_url: self.ready.control_url.clone(),
-        })
-    }
+
     pub(crate) fn activity(&self, id: &str) -> Vec<u8> {
         let mut body: Value = serde_json::from_slice(&self.ready.activity).unwrap();
         body["id"] = Value::String(id.to_owned());

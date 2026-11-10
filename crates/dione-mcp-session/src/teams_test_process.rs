@@ -93,7 +93,6 @@ pub(crate) enum ReplyResult {
 pub(crate) struct Snapshot {
     pub(crate) token_requests: usize,
     pub(crate) replies: Vec<(String, Value)>,
-    pub(crate) pending_count: usize,
 }
 #[derive(Debug, Serialize)]
 struct BeginAdmission<'a> {

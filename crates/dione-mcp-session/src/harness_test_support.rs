@@ -49,28 +49,3 @@ pub(crate) async fn snapshot(value: &Delivery) -> Value {
         .expect("actual Codex adapter retained notification")
         .event
 }
-pub(crate) trait FixtureNotification {
-    async fn fixture_notification(self) -> Value;
-    async fn fixture_notification_with_evidence(self, enabled: bool) -> Value;
-}
-impl FixtureNotification for NotificationEvent {
-    async fn fixture_notification(self) -> Value {
-        self.fixture_notification_with_evidence(true).await
-    }
-    async fn fixture_notification_with_evidence(self, enabled: bool) -> Value {
-        let value = delivery::single(
-            &module(),
-            self,
-            PresentationContext::new(
-                None,
-                if enabled {
-                    EvidenceVisibility::Enabled
-                } else {
-                    EvidenceVisibility::Disabled
-                },
-            ),
-        )
-        .unwrap();
-        snapshot(&value).await
-    }
-}
