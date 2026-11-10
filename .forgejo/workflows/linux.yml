@@ -143,7 +143,8 @@ jobs:
   package:
     name: Public package boundary
     runs-on: docker
-    timeout-minutes: 60
+    # Covers public-package tests and pristine verification of every workspace archive.
+    timeout-minutes: 120
     steps:
       - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

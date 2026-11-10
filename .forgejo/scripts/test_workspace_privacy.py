@@ -79,7 +79,17 @@ class WorkspacePrivacyTests(unittest.TestCase):
 
     def test_linux_workspace_package_step_scans_every_member(self):
         workflow = (SOURCE / ".forgejo/workflows/linux.yml").read_text()
-        blocks = [block for block in run_blocks(read_jobs(workflow)["package"])
+        jobs = read_jobs(workflow)
+        self.assertEqual(jobs["package"].count("    timeout-minutes: 120\n"), 1)
+        self.assertEqual(run_blocks(jobs["package"]), [
+            "cargo test --test public_package --locked\n",
+            "cargo package --workspace --locked\n"
+            "python3 scripts/verify-workspace-package-privacy.py\n",
+        ])
+        self.assertIn("package", jobs["required"].splitlines()[0]
+                      .strip().removeprefix("needs: [").removesuffix("]").split(", "))
+        self.assertIn('"package=${{ needs.package.result }}"', jobs["required"])
+        blocks = [block for block in run_blocks(jobs["package"])
                   if "cargo package --workspace --locked" in block]
         self.assertEqual(len(blocks), 1)
         (self.target / "package/public-renamed-3.1.0.crate").unlink()
