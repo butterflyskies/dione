@@ -900,6 +900,7 @@ pub mod test_helpers {
 mod tests {
     use super::*;
     use dione_config::{Config, LoadedConfig};
+    use dione_provider_delivery::ReplyHandle;
 
     #[test]
     fn resident_control_allows_only_bounded_tools() {
