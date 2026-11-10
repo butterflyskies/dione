@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.150.2] - 2026-11-10
+
+- Remove the unused root-only gateway admission fixture after its operation consumers moved into their owning crate.
+
 ## [0.150.1] - 2026-11-10
 
 - Upgrade the MCP client to the patched release and bound private Bell transport JSON, error and SSE response buffering while preserving diagnostic redaction and provider authority.
