@@ -188,7 +188,19 @@ async fn oversized_get_terminates_real_service_without_second_get() {
         1,
         "overflow must not reconnect GET through the real SDK"
     );
-    wait_for(|| service.is_closed()).await;
+    let peer = service.peer().clone();
+    let reason = tokio::time::timeout(Duration::from_secs(5), service.waiting())
+        .await
+        .expect("oversize must terminate the real service without caller cancellation")
+        .expect("real service task must not panic");
+    assert!(
+        matches!(reason, rmcp::service::QuitReason::Closed),
+        "unexpected service completion: {reason:?}"
+    );
+    assert!(
+        peer.is_transport_closed(),
+        "Bell must recognize the closed transport before a fresh connection attempt"
+    );
     assert_eq!(
         fixture.gets.load(Ordering::SeqCst),
         1,
@@ -238,7 +250,19 @@ async fn oversized_post_after_event_id_terminates_without_resumption_get() {
         "POST overflow must not create a resumption GET"
     );
     assert!(fixture.resumptions.lock().unwrap().is_empty());
-    wait_for(|| service.is_closed()).await;
+    let peer = service.peer().clone();
+    let reason = tokio::time::timeout(Duration::from_secs(5), service.waiting())
+        .await
+        .expect("oversize must terminate the real service without caller cancellation")
+        .expect("real service task must not panic");
+    assert!(
+        matches!(reason, rmcp::service::QuitReason::Closed),
+        "unexpected service completion: {reason:?}"
+    );
+    assert!(
+        peer.is_transport_closed(),
+        "Bell must recognize the closed transport before a fresh connection attempt"
+    );
     assert_eq!(
         fixture.gets.load(Ordering::SeqCst),
         1,

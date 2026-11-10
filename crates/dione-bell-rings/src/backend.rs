@@ -157,7 +157,10 @@ impl MemoryMcpProvider {
 
     async fn ensure_connected(&self) -> ConnectOutcome {
         let mut client = self.client.lock().await;
-        if client.as_ref().is_none_or(RunningService::is_closed) {
+        if client
+            .as_ref()
+            .is_none_or(|service| service.is_closed() || service.peer().is_transport_closed())
+        {
             // Match rmcp's default HTTP client, including disabled idle pooling.
             let http = reqwest_mcp::Client::builder()
                 .pool_max_idle_per_host(0)
@@ -184,7 +187,10 @@ impl MemoryMcpProvider {
 
     async fn recall_inner(&self, request: RecallRequest) -> Result<Value, BellProviderError> {
         let mut client = self.client.lock().await;
-        if client.as_ref().is_none_or(RunningService::is_closed) {
+        if client
+            .as_ref()
+            .is_none_or(|service| service.is_closed() || service.peer().is_transport_closed())
+        {
             return Err(BellProviderError {
                 kind: BellProviderErrorKind::Transport,
             });
