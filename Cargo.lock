@@ -963,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.150.2"
+version = "0.150.3"
 dependencies = [
  "dione-discord-operations",
  "arc-swap",
@@ -1065,7 +1065,7 @@ dependencies = [
 
 [[package]]
 name = "dione-access-requests"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "camino",
  "chrono",
@@ -1105,7 +1105,7 @@ dependencies = [
 
 [[package]]
 name = "dione-attention-admission"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "dione-attention",
  "dione-config",
@@ -1118,7 +1118,7 @@ dependencies = [
 
 [[package]]
 name = "dione-bell-rings"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "futures-util",
  "reqwest 0.12.28",
@@ -1129,6 +1129,7 @@ dependencies = [
  "sse-stream",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1150,7 +1151,7 @@ dependencies = [
 
 [[package]]
 name = "dione-codex"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "axum",
  "camino",
@@ -1183,7 +1184,7 @@ dependencies = [
 
 [[package]]
 name = "dione-config"
-version = "0.4.7"
+version = "0.4.8"
 dependencies = [
  "arc-swap",
  "camino",
@@ -1219,7 +1220,7 @@ dependencies = [
 
 [[package]]
 name = "dione-config-watcher"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "camino",
  "dione-config",
@@ -1279,7 +1280,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-bells"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "dione-attention",
  "dione-bell-rings",
@@ -1292,7 +1293,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-context"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "camino",
  "dione-config",
@@ -1312,7 +1313,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-events"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "dione-attention",
  "dione-bell-rings",
@@ -1329,7 +1330,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-gate"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "camino",
  "dione-config",
@@ -1351,7 +1352,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-introspection"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "axum",
  "dione-config",
@@ -1367,7 +1368,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-messaging-contracts"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "dione-contradictionary",
  "dione-discord-queries",
@@ -1383,7 +1384,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-operations"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "camino",
  "chrono",
@@ -1443,7 +1444,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-queries"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "base64 0.22.1",
  "camino",
@@ -1472,7 +1473,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-runtime"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "arc-swap",
  "camino",
@@ -1515,7 +1516,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-scheduling"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "dione-attention",
  "dione-contracts",
@@ -1544,7 +1545,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-tool-arguments"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "dione-discord-identities",
  "dione-discord-introspection",
@@ -1556,7 +1557,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-tool-contracts"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "dione-discord-identities",
  "dione-discord-introspection",
@@ -1575,7 +1576,7 @@ dependencies = [
 
 [[package]]
 name = "dione-discord-typing"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "dione-config",
  "dione-discord-gate",
@@ -1662,7 +1663,7 @@ dependencies = [
 
 [[package]]
 name = "dione-harness-runtime"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "camino",
  "chrono-tz",
@@ -1706,7 +1707,7 @@ dependencies = [
 
 [[package]]
 name = "dione-mcp-protocol"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "dione-attention",
  "dione-discord-presence",
@@ -1784,7 +1785,7 @@ dependencies = [
 
 [[package]]
 name = "dione-oneshot"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "camino",
  "dione-config",
@@ -1802,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "dione-outbound-consent"
-version = "0.2.11"
+version = "0.2.12"
 dependencies = [
  "camino",
  "chrono",
@@ -1825,7 +1826,7 @@ dependencies = [
 
 [[package]]
 name = "dione-permissions"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "camino",
  "chrono",
@@ -1863,7 +1864,7 @@ dependencies = [
 
 [[package]]
 name = "dione-pre-send"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "dione-evidence",
  "regex",
@@ -1993,7 +1994,7 @@ dependencies = [
 
 [[package]]
 name = "dione-tracing-channel"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "dione-discord-events",
  "native-tls",

@@ -3,7 +3,7 @@ members = [".", "crates/dione-discord-operations", "crates/dione-discord-runtime
 
 [package]
 name = "dione"
-version = "0.150.2"
+version = "0.150.3"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -14,33 +14,33 @@ keywords = ["discord", "mcp", "claude-code", "codex", "bot"]
 categories = ["command-line-utilities"]
 
 [workspace.dependencies]
-dione-discord-operations = { version = "=0.1.1", path = "crates/dione-discord-operations" }
-dione-discord-runtime = { version = "=0.1.4", path = "crates/dione-discord-runtime" }
+dione-discord-operations = { version = "=0.1.2", path = "crates/dione-discord-operations" }
+dione-discord-runtime = { version = "=0.1.5", path = "crates/dione-discord-runtime" }
 dione-pluralkit-resolver = { version = "=0.1.0", path = "crates/dione-pluralkit-resolver" }
-dione-discord-tool-contracts = { version = "=0.1.9", path = "crates/dione-discord-tool-contracts" }
-dione-discord-introspection = { version = "=0.1.6", path = "crates/dione-discord-introspection" }
-dione-discord-queries = { version = "=0.2.9", path = "crates/dione-discord-queries" }
-dione-discord-messaging-contracts = { version = "=0.2.7", path = "crates/dione-discord-messaging-contracts" }
-dione-discord-tool-arguments = { version = "=0.1.6", path = "crates/dione-discord-tool-arguments" }
-dione-discord-context = { version = "=0.1.11", path = "crates/dione-discord-context" }
-dione-attention-admission = { version = "=0.1.6", path = "crates/dione-attention-admission" }
-dione-discord-typing = { version = "=0.1.7", path = "crates/dione-discord-typing" }
-dione-discord-scheduling = { version = "=0.1.10", path = "crates/dione-discord-scheduling" }
-dione-harness-runtime = { version = "=0.1.17", path = "crates/dione-harness-runtime" }
+dione-discord-tool-contracts = { version = "=0.1.10", path = "crates/dione-discord-tool-contracts" }
+dione-discord-introspection = { version = "=0.1.7", path = "crates/dione-discord-introspection" }
+dione-discord-queries = { version = "=0.2.10", path = "crates/dione-discord-queries" }
+dione-discord-messaging-contracts = { version = "=0.2.8", path = "crates/dione-discord-messaging-contracts" }
+dione-discord-tool-arguments = { version = "=0.1.7", path = "crates/dione-discord-tool-arguments" }
+dione-discord-context = { version = "=0.1.12", path = "crates/dione-discord-context" }
+dione-attention-admission = { version = "=0.1.7", path = "crates/dione-attention-admission" }
+dione-discord-typing = { version = "=0.1.8", path = "crates/dione-discord-typing" }
+dione-discord-scheduling = { version = "=0.1.11", path = "crates/dione-discord-scheduling" }
+dione-harness-runtime = { version = "=0.1.18", path = "crates/dione-harness-runtime" }
 clap = { version = "4", features = ["derive", "env"] }
-dione-oneshot = { version = "=0.1.19", path = "crates/dione-oneshot" }
-dione-discord-gate = { version = "=0.1.18", path = "crates/dione-discord-gate" }
-dione-discord-bells = { version = "=0.1.16", path = "crates/dione-discord-bells" }
-dione-permissions = { version = "=0.1.16", path = "crates/dione-permissions" }
+dione-oneshot = { version = "=0.1.20", path = "crates/dione-oneshot" }
+dione-discord-gate = { version = "=0.1.19", path = "crates/dione-discord-gate" }
+dione-discord-bells = { version = "=0.1.17", path = "crates/dione-discord-bells" }
+dione-permissions = { version = "=0.1.17", path = "crates/dione-permissions" }
 dione-drop-ledger = { version = "=0.1.0", path = "crates/dione-drop-ledger" }
 notify = "8"
-dione-config-watcher = { version = "=0.1.16", path = "crates/dione-config-watcher" }
-dione-tracing-channel = { version = "=0.1.10", path = "crates/dione-tracing-channel" }
-dione-discord-events = { version = "=0.2.1", path = "crates/dione-discord-events" }
+dione-config-watcher = { version = "=0.1.17", path = "crates/dione-config-watcher" }
+dione-tracing-channel = { version = "=0.1.11", path = "crates/dione-tracing-channel" }
+dione-discord-events = { version = "=0.2.2", path = "crates/dione-discord-events" }
 dione-discord-state = { version = "=0.1.0", path = "crates/dione-discord-state" }
 dione-discord-presence = { version = "=0.2.0", path = "crates/dione-discord-presence" }
 dione-claude = { version = "=0.1.8", path = "crates/dione-claude" }
-dione-codex = { version = "=0.1.16", path = "crates/dione-codex" }
+dione-codex = { version = "=0.1.17", path = "crates/dione-codex" }
 tokio-tungstenite = { version = "0.21", default-features = false, features = ["handshake"] }
 dione-omp = { version = "=0.2.9", path = "crates/dione-omp" }
 dione-teams = { version = "=0.1.5", path = "crates/dione-teams" }
@@ -49,24 +49,24 @@ jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 rcgen = "0.13"
 dione-provider-delivery = { version = "=0.1.5", path = "crates/dione-provider-delivery" }
-dione-mcp-protocol = { version = "=0.1.5", path = "crates/dione-mcp-protocol" }
+dione-mcp-protocol = { version = "=0.1.6", path = "crates/dione-mcp-protocol" }
 dione-mcp-tools = { version = "=0.2.0", path = "crates/dione-mcp-tools" }
 insta = { version = "1", features = ["json", "redactions"] }
-dione-outbound-consent = { version = "=0.2.11", path = "crates/dione-outbound-consent" }
-dione-config = { version = "=0.4.7", path = "crates/dione-config" }
+dione-outbound-consent = { version = "=0.2.12", path = "crates/dione-outbound-consent" }
+dione-config = { version = "=0.4.8", path = "crates/dione-config" }
 toml_edit = "0.25"
 dione-pluralkit-identities = { version = "=0.1.0", path = "crates/dione-pluralkit-identities" }
 dione-discord-identities = { version = "=0.1.0", path = "crates/dione-discord-identities" }
 dione-teams-identities = { version = "=0.1.0", path = "crates/dione-teams-identities" }
 regex = "1"
-dione-pre-send = { version = "=0.2.0", path = "crates/dione-pre-send" }
+dione-pre-send = { version = "=0.2.1", path = "crates/dione-pre-send" }
 dione-coordination = { version = "=0.1.1", path = "crates/dione-coordination" }
 arc-swap = "1"
 dione-mutes = { version = "=0.2.0", path = "crates/dione-mutes" }
-dione-access-requests = { version = "=0.2.6", path = "crates/dione-access-requests" }
+dione-access-requests = { version = "=0.2.7", path = "crates/dione-access-requests" }
 dione-delivery-scheduler = { version = "=0.1.0", path = "crates/dione-delivery-scheduler" }
 rmcp = { version = "3.9.0", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
-dione-bell-rings = { version = "=0.1.3", path = "crates/dione-bell-rings" }
+dione-bell-rings = { version = "=0.1.4", path = "crates/dione-bell-rings" }
 aho-corasick = "1"
 dione-contradictionary = { version = "=0.1.1", path = "crates/dione-contradictionary" }
 dione-presentation = { version = "=0.1.8", path = "crates/dione-presentation" }

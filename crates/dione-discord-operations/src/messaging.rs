@@ -2344,7 +2344,7 @@ mod tests {
             "own-send exemption must not page the phantom canary"
         );
 
-        // (2) spoof guard (Ari's guard — security-critical): the SAME target id
+        // (2) security-critical spoof guard: the SAME target id
         // with own_send=false — an inbound merely *claiming* our identity, which
         // never passed a send path — must still alert and block. This is also
         // the fail-closed case: no authenticated own-send evidence => not exempt.

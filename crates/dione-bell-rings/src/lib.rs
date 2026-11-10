@@ -13,3 +13,6 @@ pub use values::{
     BellProviderConfig, BellProviderUrl, BellScope, ProviderValueError, ProviderValueErrorKind,
     RecallOptions, RecallOptionsError, RecallOptionsErrorKind,
 };
+
+#[cfg(test)]
+mod transport_tests;

@@ -30,6 +30,7 @@ use rmcp::{
     },
 };
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
+use tokio_util::sync::CancellationToken;
 
 /// Reserved headers that must not be overridden by user-supplied custom headers.
 /// `MCP-Protocol-Version` is in this list but is allowed through because the worker
@@ -111,7 +112,7 @@ fn parse_json_rpc_error(body: &str) -> Option<ServerJsonRpcMessage> {
 // rmcp logs worker failures before returning them to the provider. Remove the
 // request URL from reqwest errors at that boundary, without changing requests.
 #[derive(Clone)]
-pub(crate) struct DiagnosticHttpClient(pub(crate) reqwest_mcp::Client);
+pub(crate) struct DiagnosticHttpClient(reqwest_mcp::Client, CancellationToken);
 
 fn without_request_url(
     error: StreamableHttpError<reqwest_mcp::Error>,
@@ -237,6 +238,28 @@ impl StreamableHttpClient for DiagnosticHttpClient {
 }
 
 impl DiagnosticHttpClient {
+    pub(crate) fn new(http: reqwest_mcp::Client) -> Self {
+        Self(http, CancellationToken::new())
+    }
+
+    pub(crate) fn into_transport(
+        self,
+        config: rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig,
+    ) -> rmcp::transport::StreamableHttpClientTransport<Self> {
+        let cancellation = self.1.clone();
+        let worker =
+            rmcp::transport::streamable_http_client::StreamableHttpClientWorker::new(self, config);
+        rmcp::transport::worker::WorkerTransport::spawn_with_ct(worker, cancellation)
+    }
+
+    fn ensure_connection_open(&self) -> Result<(), StreamableHttpError<reqwest_mcp::Error>> {
+        if self.1.is_cancelled() {
+            Err(StreamableHttpError::TransportChannelClosed)
+        } else {
+            Ok(())
+        }
+    }
+
     // Preserve the existing reqwest status-error category rather than adopting
     // upstream3.9's new HttpStatus variant for GET failures. SSE accounting is
     // bounded and session-less resumption follows the3.9 trait contract.
@@ -249,6 +272,7 @@ impl DiagnosticHttpClient {
         custom_headers: HashMap<HeaderName, HeaderValue>,
         max_sse_event_size: usize,
     ) -> Result<BoxedSseResponse, StreamableHttpError<reqwest::Error>> {
+        self.ensure_connection_open()?;
         let mut request = self
             .0
             .get(uri.as_ref())
@@ -304,7 +328,11 @@ impl DiagnosticHttpClient {
                 )));
             }
         }
-        Ok(bounded_sse_response(response, max_sse_event_size))
+        Ok(bounded_sse_response(
+            response,
+            max_sse_event_size,
+            self.1.clone(),
+        ))
     }
 
     async fn post_message_inner(
@@ -316,6 +344,7 @@ impl DiagnosticHttpClient {
         custom_headers: HashMap<HeaderName, HeaderValue>,
         max_sse_event_size: usize,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<reqwest::Error>> {
+        self.ensure_connection_open()?;
         let mut request = self
             .0
             .post(uri.as_ref())
@@ -418,7 +447,8 @@ impl DiagnosticHttpClient {
         }
         match content_type.as_deref() {
             Some(ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
-                let event_stream = bounded_sse_response(response, max_sse_event_size);
+                let event_stream =
+                    bounded_sse_response(response, max_sse_event_size, self.1.clone());
                 Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
             }
             Some(ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {

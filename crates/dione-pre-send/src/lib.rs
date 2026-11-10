@@ -1237,8 +1237,8 @@ mod tests {
 
     #[test]
     fn construct_id_rejects_empty_and_noncanonical_values() {
-        assert_eq!(ConstructId::parse("syne").unwrap().as_str(), "syne");
-        for invalid in ["", "Syne", "syne_2", "-syne", "syne-"] {
+        assert_eq!(ConstructId::parse("fixture-orbit").unwrap().as_str(), "fixture-orbit");
+        for invalid in ["", "Fixture-orbit", "fixture_orbit", "-fixture-orbit", "fixture-orbit-"] {
             assert!(ConstructId::parse(invalid).is_err());
         }
     }

@@ -5,9 +5,7 @@ use rmcp::{
     ServiceExt,
     model::{CallToolRequestParams, ClientConfig, ContentBlock},
     service::{RoleClient, RunningService},
-    transport::{
-        StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig,
-    },
+    transport::streamable_http_client::StreamableHttpClientTransportConfig,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -165,8 +163,7 @@ impl MemoryMcpProvider {
                 .pool_max_idle_per_host(0)
                 .build()
                 .expect("failed to build default reqwest client");
-            let transport = StreamableHttpClientTransport::with_client(
-                DiagnosticHttpClient(http),
+            let transport = DiagnosticHttpClient::new(http).into_transport(
                 StreamableHttpClientTransportConfig::with_uri(self.endpoint.as_str().to_owned()),
             );
             match ClientConfig::default().serve(transport).await {
@@ -708,7 +705,7 @@ mod tests {
             ));
             socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1\r\nConnection: close\r\n\r\n{").await.unwrap();
         });
-        let client = DiagnosticHttpClient(
+        let client = DiagnosticHttpClient::new(
             reqwest_mcp::Client::builder()
                 .pool_max_idle_per_host(0)
                 .build()
@@ -789,7 +786,7 @@ mod tests {
                 url.as_str()
                     .ends_with("?token=SYNTHETIC_QUERY_CANARY#SYNTHETIC_FRAGMENT_CANARY")
             );
-            let client = DiagnosticHttpClient(
+            let client = DiagnosticHttpClient::new(
                 reqwest_mcp::Client::builder()
                     .pool_max_idle_per_host(0)
                     .build()
@@ -923,7 +920,7 @@ mod tests {
                 limit + 1
             );
             let (url, server) = diagnostic_http_fixture(raw).await;
-            let client = DiagnosticHttpClient(reqwest_mcp::Client::new());
+            let client = DiagnosticHttpClient::new(reqwest_mcp::Client::new());
             let error = client
                 .post_message(
                     url.as_str().into(),
@@ -944,7 +941,7 @@ mod tests {
         // Under-limit I/O failures retain the old acceptance behavior; an
         // oversize failure above must never take this fallback.
         let (url, server) = diagnostic_http_fixture("HTTP/1.1 200 Fixture\r\nContent-Type: application/json\r\nContent-Length: 9\r\nConnection: close\r\n\r\n{".to_owned()).await;
-        let client = DiagnosticHttpClient(reqwest_mcp::Client::new());
+        let client = DiagnosticHttpClient::new(reqwest_mcp::Client::new());
         let result = client
             .post_message(
                 url.as_str().into(),
@@ -1016,7 +1013,7 @@ mod tests {
         ] {
             let (url, server) =
                 diagnostic_http_fixture(http_response(status, content_type, extra, body)).await;
-            let client = DiagnosticHttpClient(
+            let client = DiagnosticHttpClient::new(
                 reqwest_mcp::Client::builder()
                     .pool_max_idle_per_host(0)
                     .build()
@@ -1110,7 +1107,7 @@ mod tests {
         let (_capture, diagnostics) = capture_diagnostics();
         for method in ["POST", "GET"] {
             let (url, server) = diagnostic_http_fixture("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 1000\r\nConnection: close\r\n\r\ndata: {}\n\n".to_owned()).await;
-            let client = DiagnosticHttpClient(
+            let client = DiagnosticHttpClient::new(
                 reqwest_mcp::Client::builder()
                     .pool_max_idle_per_host(0)
                     .build()
@@ -1221,7 +1218,7 @@ mod tests {
             server.await.unwrap();
             assert_safe_diagnostics(&diagnostics, "bell provider cold-start failed");
             let (url, server) = diagnostic_http_fixture(response).await;
-            let client = DiagnosticHttpClient(
+            let client = DiagnosticHttpClient::new(
                 reqwest_mcp::Client::builder()
                     .pool_max_idle_per_host(0)
                     .build()
@@ -1263,7 +1260,7 @@ mod tests {
         let (_capture, diagnostics) = capture_diagnostics();
         let response = http_response(200, "text/SYNTHETIC_QUERY_CANARY", "", "");
         let (url, server) = diagnostic_http_fixture(response).await;
-        let client = DiagnosticHttpClient(
+        let client = DiagnosticHttpClient::new(
             reqwest_mcp::Client::builder()
                 .pool_max_idle_per_host(0)
                 .build()

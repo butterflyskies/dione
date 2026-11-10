@@ -9,6 +9,7 @@ use rmcp::transport::{
 };
 use sse_stream::{Error as SseError, SseStream};
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 
 pub(crate) const MAX_JSON_RESPONSE_SIZE: usize = 16 * 1024 * 1024;
 pub(crate) const MAX_ERROR_RESPONSE_SIZE: usize = 64 * 1024;
@@ -122,27 +123,36 @@ impl SseEventSizeLimiter {
 pub(crate) fn bounded_sse_response(
     response: reqwest_mcp::Response,
     max_event_size: usize,
+    cancellation: CancellationToken,
 ) -> BoxedSseResponse {
     let chunks = response.bytes_stream().boxed();
     let stream = stream::unfold(
-        (chunks, SseEventSizeLimiter::new(max_event_size), false),
-        |(mut chunks, mut limiter, failed)| async move {
+        (
+            chunks,
+            SseEventSizeLimiter::new(max_event_size),
+            false,
+            cancellation,
+        ),
+        |(mut chunks, mut limiter, failed, cancellation)| async move {
             if failed {
                 return None;
             }
             match chunks.next().await {
                 Some(Ok(chunk)) => match limiter.observe(&chunk) {
-                    Ok(()) => Some((Ok(chunk), (chunks, limiter, false))),
+                    Ok(()) => Some((Ok(chunk), (chunks, limiter, false, cancellation))),
                     Err(()) => {
+                        // Terminate this real transport, not merely this stream: the
+                        // SDK cannot recognize a downstream private error type.
+                        cancellation.cancel();
                         let error = BoundedSseStreamError::EventTooLarge {
                             max_size: limiter.max_size,
                         };
-                        Some((Err(error), (chunks, limiter, true)))
+                        Some((Err(error), (chunks, limiter, true, cancellation)))
                     }
                 },
                 Some(Err(error)) => Some((
                     Err(BoundedSseStreamError::Source(Box::new(error))),
-                    (chunks, limiter, true),
+                    (chunks, limiter, true, cancellation),
                 )),
                 None => None,
             }
@@ -257,7 +267,7 @@ mod tests {
     #[tokio::test]
     async fn sse_unterminated_event_rejects_then_stops_reading() {
         let (response, server) = response("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n10\r\ndata: abcdefghij\r\n".into()).await;
-        let mut events = bounded_sse_response(response, 8);
+        let mut events = bounded_sse_response(response, 8, CancellationToken::new());
         let error = tokio::time::timeout(std::time::Duration::from_secs(5), events.next())
             .await
             .unwrap()
