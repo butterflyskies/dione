@@ -40,6 +40,10 @@ checks=[];fail=[]
 for source,dest in paths.items():
  after=collections.Counter((x['name'],key(x['body'])) for x in ns['funcs'](dest.read_text()))
  for f in ns['funcs'](old(source)):
+  if source=='src/mcp/server.rs' and f['name']=='ingress_ledger':
+   assert not any('.ingress_ledger()' in p.read_text() for p in S.rglob('*.rs'))
+   checks.append({'source':source,'function':f['name'],'disposition':'unused former public getter removed after private migration; no new owner caller'})
+   continue
   pair=f['name'],key(f['body']);ok=after[pair]>0
   if ok:after[pair]-=1
   checks.append({'source':source,'destination':str(dest.relative_to(W)),'function':f['name'],'body_equal_after_declared_adapters':ok})

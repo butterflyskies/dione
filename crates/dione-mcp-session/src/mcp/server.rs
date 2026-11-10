@@ -146,10 +146,6 @@ impl DioneServer {
     pub(crate) fn no_rly(&self) -> &Arc<ConsentGate> {
         self.discord.no_rly()
     }
-    /// Borrows the ingress authority shared by Discord tools.
-    pub(crate) fn ingress_ledger(&self) -> &Arc<dione_discord_runtime::IngressLedger> {
-        self.discord.ingress_ledger()
-    }
     /// Borrows the configured gateway event sender.
     pub(crate) fn event_tx(&self) -> &Option<mpsc::Sender<NotificationEvent>> {
         self.discord.event_tx()
