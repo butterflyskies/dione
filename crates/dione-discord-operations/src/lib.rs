@@ -1,9 +1,9 @@
 //! Complete Discord operations and registered services with private target and delivery authority.
+#![warn(missing_docs)]
 #[cfg(test)]
 mod gateway_test_support;
 #[cfg(test)]
 mod introspection_test_support;
-#![warn(missing_docs)]
 
 pub mod introspection_tools;
 mod management;
