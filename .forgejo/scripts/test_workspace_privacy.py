@@ -81,13 +81,16 @@ class WorkspacePrivacyTests(unittest.TestCase):
         workflow = (SOURCE / ".forgejo/workflows/linux.yml").read_text()
         jobs = read_jobs(workflow)
         self.assertEqual(jobs["package"].count("    timeout-minutes: 120\n"), 1)
+        public_test = "        run: cargo test --test public_package --locked\n"
+        self.assertEqual(jobs["package"].count(public_test), 1)
         self.assertEqual(run_blocks(jobs["package"]), [
-            "cargo test --test public_package --locked\n",
             "cargo package --workspace --locked\n"
             "python3 scripts/verify-workspace-package-privacy.py\n",
         ])
-        self.assertIn("package", jobs["required"].splitlines()[0]
-                      .strip().removeprefix("needs: [").removesuffix("]").split(", "))
+        self.assertLess(jobs["package"].index(public_test),
+                        jobs["package"].index("          cargo package --workspace --locked\n"))
+        self.assertIn("    needs: [hygiene, format, lint, test, package, msrv, build, audit]\n",
+                      jobs["required"])
         self.assertIn('"package=${{ needs.package.result }}"', jobs["required"])
         blocks = [block for block in run_blocks(jobs["package"])
                   if "cargo package --workspace --locked" in block]
