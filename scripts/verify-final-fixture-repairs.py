@@ -27,7 +27,12 @@ def main():
     identified = re.search(rb'BellScope::parse\("([^"]+)"\)', principal_line)[1]
     assert before.count(identified) == 10
     current = (ROOT / bell_path).read_bytes()
-    assert current == before.replace(identified, b'fixture-orbit-27')
+    expected = before.replace(identified, b'fixture-orbit-27')
+    expected = expected.replace(
+        b'        assert_eq!(cfg.bell_rings.providers[0].scope.as_str(), "fixture-orbit-27");',
+        b'        assert_eq!(\n            cfg.bell_rings.providers[0].scope.as_str(),\n            "fixture-orbit-27"\n        );',
+    )
+    assert current == expected
     assert identified not in current
     proxy_checks = []
     for path in ['src/codex_test_process.rs', 'crates/dione-mcp-session/src/codex_test_process.rs']:

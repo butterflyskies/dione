@@ -748,7 +748,10 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(cfg.bell_rings.providers.len(), 1);
-        assert_eq!(cfg.bell_rings.providers[0].scope.as_str(), "fixture-orbit-27");
+        assert_eq!(
+            cfg.bell_rings.providers[0].scope.as_str(),
+            "fixture-orbit-27"
+        );
     }
 
     #[test]
