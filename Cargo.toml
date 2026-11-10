@@ -3,7 +3,7 @@ members = [".", "crates/dione-recipient-attention", "crates/dione-discord-operat
 
 [package]
 name = "dione"
-version = "0.150.5"
+version = "0.150.6"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
