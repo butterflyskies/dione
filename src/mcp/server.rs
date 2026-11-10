@@ -11,7 +11,6 @@
 //! - Error    → `{"jsonrpc":"2.0","id":N,"error":{"code":-32000,"message":"..."}}`
 //! - Notification (no id) → `{"jsonrpc":"2.0","method":"...","params":{...}}`
 
-use crate::discord::messaging::MessagingCtx;
 use crate::mcp::dispatch::call_tool;
 use crate::mcp::harness_wire::PRIVATE_CONTROL_TOOLS;
 use crate::mcp::harness_wire::RequestOrigin;
@@ -31,6 +30,7 @@ use dione_delivery_scheduler::BufferResult;
 use dione_discord_bells::prepare_bells;
 use dione_discord_events::MessageEvent;
 use dione_discord_events::NotificationEvent;
+use dione_discord_operations::messaging::MessagingCtx;
 use dione_discord_presence::PresenceCapability;
 use dione_discord_scheduling::DeliveryBuffer;
 use dione_discord_typing::TypingCtx;
@@ -115,7 +115,7 @@ pub struct DioneServer {
     pub attention: Arc<crate::attention::runtime::AttentionRuntime>,
     pub(super) module_tools: ToolRegistry,
     discord_tools: Vec<RegisteredTool>,
-    discord: Arc<crate::discord::reply_tool::ReplyServices>,
+    discord: Arc<dione_discord_operations::reply_tool::ReplyServices>,
 }
 
 pub(crate) fn reserved_tool_names(harness: &HarnessConnection) -> BTreeSet<String> {
@@ -198,7 +198,7 @@ impl DioneServer {
             )
             .await,
         );
-        let discord = Arc::new(crate::discord::reply_tool::ReplyServices::new(
+        let discord = Arc::new(dione_discord_operations::reply_tool::ReplyServices::new(
             http,
             state,
             state_dir,
@@ -206,21 +206,22 @@ impl DioneServer {
             ingress_ledger,
             event_tx,
         ));
-        let mut discord_tools = crate::discord::introspection_tools::registrations(discord.clone())
-            .map_err(ServerConstructionError::definition)?;
+        let mut discord_tools =
+            dione_discord_operations::introspection_tools::registrations(discord.clone())
+                .map_err(ServerConstructionError::definition)?;
         discord_tools.extend(
-            crate::discord::query_tools::registrations(
+            dione_discord_operations::query_tools::registrations(
                 discord.clone(),
                 attention.authority_module().clone(),
             )
             .map_err(ServerConstructionError::definition)?,
         );
         discord_tools.extend(
-            crate::discord::management_tools::registrations(discord.clone())
+            dione_discord_operations::management_tools::registrations(discord.clone())
                 .map_err(ServerConstructionError::definition)?,
         );
         discord_tools.push(
-            crate::discord::reply_tool::registration(discord.clone())
+            dione_discord_operations::reply_tool::registration(discord.clone())
                 .map_err(ServerConstructionError::definition)?,
         );
         let module_tools = ToolRegistry::new(&reserved_tool_names(&harness), discord_tools.clone())
@@ -1594,7 +1595,7 @@ mod tests {
         let pipeline = dione_pre_send::configured_pipeline(true, Vec::new())
             .expect("configured pipeline")
             .expect("enabled pipeline");
-        crate::composition::pre_send::install_pipeline(Some(pipeline));
+        dione_pre_send::install_pipeline(Some(pipeline));
         let dir = tempfile::TempDir::new().expect("temp dir");
         let state_dir =
             camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf-8 path");
@@ -1628,7 +1629,7 @@ mod tests {
         ));
 
         assert!(context.has_pre_send_pipeline());
-        crate::composition::pre_send::install_pipeline(None);
+        dione_pre_send::install_pipeline(None);
     }
 
     fn config_with_channel_delay(channel_id: u64, delay_ms: u64) -> LoadedConfig {

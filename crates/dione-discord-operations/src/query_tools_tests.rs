@@ -80,7 +80,7 @@ async fn registered_queries_parse_execute_project_and_reload_policy() {
         None,
     ));
     let registry = ToolRegistry::new(
-        &crate::mcp::server::reserved_tool_names(&dione_claude::connect(
+        &crate::test_support::reserved_tool_names(&dione_claude::connect(
             dione_harness::ProtocolOutput::new(tokio::io::stdout()),
             dione_codex::TOOL_NAMES,
         )),
@@ -288,7 +288,7 @@ async fn wrong_observation_exchange() {
         None,
     ));
     let registry = ToolRegistry::new(
-        &crate::mcp::server::reserved_tool_names(&dione_claude::connect(
+        &crate::test_support::reserved_tool_names(&dione_claude::connect(
             dione_harness::ProtocolOutput::new(tokio::io::stdout()),
             dione_codex::TOOL_NAMES,
         )),
@@ -468,7 +468,7 @@ async fn attachment_diagnostics_exchange() {
         None,
     ));
     let registry = ToolRegistry::new(
-        &crate::mcp::server::reserved_tool_names(&dione_claude::connect(
+        &crate::test_support::reserved_tool_names(&dione_claude::connect(
             dione_harness::ProtocolOutput::new(tokio::io::stdout()),
             dione_codex::TOOL_NAMES,
         )),

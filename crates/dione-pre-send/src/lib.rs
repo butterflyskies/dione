@@ -1502,3 +1502,6 @@ mod audit_sink_tests {
         );
     }
 }
+
+mod registry;
+pub use registry::{install_pipeline, installed_pipeline};

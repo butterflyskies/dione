@@ -25,7 +25,7 @@ struct QueryHandler {
     search: Arc<search::SearchTransport>,
 }
 /// Registers the six Discord query tools and their resident access policy.
-pub(crate) fn registrations(
+pub fn registrations(
     services: Arc<ReplyServices>,
     source: ModuleInstanceId,
 ) -> Result<Vec<RegisteredTool>, ToolNameError> {

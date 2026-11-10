@@ -1,7 +1,7 @@
 //! MCP projections of rendered files and Discord rendering outcomes.
 
-use crate::discord::rendering::RenderToChannelError;
-use crate::discord::rendering::RenderToChannelErrorKind;
+use crate::rendering::RenderToChannelError;
+use crate::rendering::RenderToChannelErrorKind;
 use dione_discord_messaging_contracts::wire as messaging_wire;
 use dione_rendering::wire::render_error;
 #[cfg(test)]
@@ -13,7 +13,8 @@ use serde_json::Value;
 use serde_json::json;
 use serenity::model::id::MessageId;
 
-pub(super) fn channel(result: Result<MessageId, RenderToChannelError>) -> Value {
+/// Projects a completed channel-render operation without exposing private paths.
+pub fn channel(result: Result<MessageId, RenderToChannelError>) -> Value {
     match result {
         Ok(message_id) => messaging_wire::message(Ok(message_id)),
         Err(error) => match error.kind {
@@ -26,8 +27,8 @@ pub(super) fn channel(result: Result<MessageId, RenderToChannelError>) -> Value 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discord::messaging::MessagingCtx;
-    use crate::discord::rendering::render_to_channel;
+    use crate::messaging::MessagingCtx;
+    use crate::rendering::render_to_channel;
     use camino::Utf8PathBuf;
     use dione_config::Config;
     use dione_config::LoadedConfig;
@@ -132,8 +133,8 @@ mod tests {
 #[cfg(test)]
 mod contract_tests {
     use super::*;
-    use crate::discord::messaging::MessagingCtx;
-    use crate::discord::rendering::render_to_channel;
+    use crate::messaging::MessagingCtx;
+    use crate::rendering::render_to_channel;
     use camino::Utf8PathBuf;
     use dione_config::ChannelConfig;
     use dione_config::Config;

@@ -7,8 +7,8 @@
 //! a real HTTP layer, so we verify the conditions that trigger the self-react).
 
 use camino::Utf8PathBuf;
-use dione::discord::messaging;
-use dione::discord::messaging::MessagingCtx;
+use dione_discord_operations::messaging;
+use dione_discord_operations::messaging::MessagingCtx;
 use dione_config::ChannelConfig;
 use dione_config::Config;
 use dione_config::LoadedConfig;

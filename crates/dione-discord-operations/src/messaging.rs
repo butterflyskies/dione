@@ -402,7 +402,7 @@ impl MessagingCtx {
         let pre_send_pipeline = config
             .pre_send
             .enabled
-            .then(crate::composition::pre_send::installed_pipeline)
+            .then(dione_pre_send::installed_pipeline)
             .flatten();
         Self {
             author_id: config.pre_send_author_id,
@@ -424,8 +424,9 @@ impl MessagingCtx {
         self
     }
 
-    #[cfg(test)]
-    pub(crate) fn has_pre_send_pipeline(&self) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    /// Reports whether this context captured the installed pipeline. This grants no mutation authority.
+    pub fn has_pre_send_pipeline(&self) -> bool {
         self.pre_send_pipeline.is_some()
     }
 }
@@ -1670,7 +1671,7 @@ pub async fn edit_message_with_hook_overrides(
         .await
 }
 
-pub(crate) async fn edit_message_with_embed_control(
+pub async fn edit_message_with_embed_control(
     ctx: &MessagingCtx,
     channel_id: ChannelId,
     message_id: MessageId,
@@ -1866,7 +1867,7 @@ pub async fn send_dm_with_hook_overrides(
     .await
 }
 
-pub(crate) async fn send_dm_with_evidence_and_hook_overrides(
+pub async fn send_dm_with_evidence_and_hook_overrides(
     ctx: &MessagingCtx,
     user_id: UserId,
     content: &str,
@@ -1987,7 +1988,6 @@ fn parse_reaction_type(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dione_access_requests::AccessQueue;
     use dione_config::ChannelConfig;
     use dione_config::Config;
     use dione_contradictionary::Action;
@@ -4778,7 +4778,7 @@ mod tests {
     #[tokio::test]
     async fn pre_send_hot_reload_enabled_to_disabled_applies_to_next_context() {
         let installed = dione_pre_send::observe_pipeline(Vec::new()).expect("pipeline");
-        crate::composition::pre_send::install_pipeline(Some(installed));
+        dione_pre_send::install_pipeline(Some(installed));
         let enabled = messaging_ctx(
             LoadedConfig::try_from_raw(Config::default()).expect("valid test configuration"),
         );
@@ -4795,7 +4795,7 @@ mod tests {
     #[tokio::test]
     async fn pre_send_hot_reload_disabled_to_enabled_applies_to_next_context() {
         let installed = dione_pre_send::observe_pipeline(Vec::new()).expect("pipeline");
-        crate::composition::pre_send::install_pipeline(Some(installed));
+        dione_pre_send::install_pipeline(Some(installed));
         let mut disabled_config = Config::default();
         disabled_config.pre_send.enabled = false;
         let disabled = messaging_ctx(
@@ -5167,8 +5167,8 @@ mod tests {
             id: "42".to_owned(),
             ..Default::default()
         });
-        raw.pre_send.construct_id = "syne".to_owned();
-        raw.pre_send.author_id = Some(UserId::new(1522260806975099030));
+        raw.pre_send.construct_id = "Fixture-Nebula-61".to_owned();
+        raw.pre_send.author_id = Some(UserId::new(61));
         let captured = Arc::new(std::sync::Mutex::new(None));
         let pipeline =
             PreSendPipeline::new(vec![Box::new(ContextCaptureHook(Arc::clone(&captured)))])
@@ -5187,8 +5187,8 @@ mod tests {
             .expect("context lock")
             .clone()
             .expect("context");
-        assert_eq!(captured.construct_id(), "syne");
-        assert_eq!(captured.author_id(), Some(UserId::new(1522260806975099030)));
+        assert_eq!(captured.construct_id(), "Fixture-Nebula-61");
+        assert_eq!(captured.author_id(), Some(UserId::new(61)));
         assert_eq!(captured.guild_id(), None);
     }
 
@@ -6036,234 +6036,5 @@ mod tests {
         );
         assert_eq!(posted_contents(&requests), [""]);
         server.abort();
-    }
-    #[tokio::test]
-    async fn registered_reply_reloads_discovery_and_policy_and_preserves_options() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
-        std::fs::write(
-            path.join("config.toml"),
-            "[delivery]\nevidence_markers_enabled = false\n",
-        )
-        .unwrap();
-        assert!(dione_config::reload_config(&path).await.1.is_none());
-        let (http, requests, peer) = fake_discord_http().await;
-        let (notifications, _rx) = tokio::sync::mpsc::channel(4);
-        let server = crate::mcp::server::DioneServer::new(
-            new_state(),
-            Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&path))),
-            http,
-            path.clone(),
-            notifications,
-            dione_tracing_channel::TraceLevelController::noop(),
-            dione_claude::connect(
-                dione_harness::ProtocolOutput::new(tokio::io::stdout()),
-                dione_codex::TOOL_NAMES,
-            ),
-            Arc::new(ConsentGate::new(&path)),
-            Arc::new(IngressLedger::new()),
-            dione_contracts::ModuleInstanceId::new(
-                dione_contracts::ProviderId::new("discord").unwrap(),
-                dione_contracts::ModuleSlotId::new("primary").unwrap(),
-            ),
-            None,
-        )
-        .await
-        .unwrap()
-        .with_module_tools(Vec::new())
-        .unwrap();
-        let list = json!({"jsonrpc":"2.0","id":1,"method":"tools/list"});
-        // Exercise the live registry and registered reply against the same reloaded pin.
-        for (pin, marker, expected) in [
-            (
-                "v2",
-                "[🔍=v2:<role>:<token>]",
-                "pinned [🔍=v2:claim:AAAAAAAAAAE]",
-            ),
-            ("v3", "[🔍=v3:<role>:<token>]", "pinned [🔍=v3:claim:AQ]"),
-        ] {
-            std::fs::write(path.join("config.toml"), format!("[[channels]]\nid = \"42\"\nrequire_mention = false\n[delivery]\nevidence_markers_enabled = true\nevidence_marker_version = \"{pin}\"\n")).unwrap();
-            assert!(dione_config::reload_config(&path).await.1.is_none());
-            let listed = crate::mcp::server::test_helpers::dispatch_request(&server, list.clone())
-                .await
-                .unwrap();
-            for name in ["reply", "send_dm"] {
-                let tool = listed["result"]["tools"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .find(|tool| tool["name"] == name)
-                    .unwrap();
-                for field in ["claim_handles", "citation_handles"] {
-                    assert!(
-                        tool["inputSchema"]["properties"][field]["description"]
-                            .as_str()
-                            .unwrap()
-                            .contains(marker)
-                    );
-                }
-                assert!(
-                    tool["inputSchema"]["properties"]
-                        .get("evidence_marker_version")
-                        .is_none()
-                );
-            }
-            let result = crate::mcp::server::test_helpers::dispatch_request(&server, json!({"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"reply","arguments":{"channel_id":"42","content":"pinned","claim_handles":["1"]}}})).await.unwrap();
-            assert!(result["result"].get("isError").is_none(), "{result}");
-            let bodies = posted_contents(&requests);
-            assert_eq!(bodies.last().unwrap(), expected);
-        }
-        requests.lock().unwrap().clear();
-        std::fs::write(
-            path.join("config.toml"),
-            "[delivery]\nevidence_markers_enabled = false\n",
-        )
-        .unwrap();
-        assert!(dione_config::reload_config(&path).await.1.is_none());
-        let initial = crate::mcp::server::test_helpers::dispatch_request(&server, list.clone())
-            .await
-            .unwrap();
-        let reply = initial["result"]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|tool| tool["name"] == "reply")
-            .unwrap();
-        assert!(
-            reply["inputSchema"]["properties"]
-                .get("claim_handles")
-                .is_none()
-        );
-        assert_eq!(
-            initial["result"]["tools"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|tool| tool["name"] == "reply")
-                .count(),
-            1
-        );
-        let call = |arguments| json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"reply","arguments":arguments}});
-        let disabled = crate::mcp::server::test_helpers::dispatch_request(
-            &server,
-            call(json!({"channel_id":"42","content":"hello","claim_handles":[]})),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            disabled["error"]["message"],
-            "claim_handles and citation_handles require evidence_markers_enabled"
-        );
-        let denied = crate::mcp::server::test_helpers::dispatch_request(
-            &server,
-            call(json!({"channel_id":"42","content":"hello"})),
-        )
-        .await
-        .unwrap();
-        let denied: Value =
-            serde_json::from_str(denied["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert!(
-            denied["error"]
-                .as_str()
-                .unwrap()
-                .contains("not a permitted outbound target")
-        );
-        assert!(requests.lock().unwrap().is_empty());
-
-        std::fs::write(path.join("config.toml"), "[[channels]]\nid = \"42\"\nrequire_mention = false\n[delivery]\nevidence_markers_enabled = true\n").unwrap();
-        assert!(dione_config::reload_config(&path).await.1.is_none());
-        let enabled = crate::mcp::server::test_helpers::dispatch_request(&server, list)
-            .await
-            .unwrap();
-        let reply = enabled["result"]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|tool| tool["name"] == "reply")
-            .unwrap();
-        assert_eq!(
-            reply["inputSchema"]["properties"]["claim_handles"]["type"],
-            "array"
-        );
-        assert_eq!(
-            reply["inputSchema"]["properties"]["citation_handles"]["type"],
-            "array"
-        );
-        let accepted = crate::mcp::server::test_helpers::dispatch_request(&server, call(json!({"channel_id":42,"content":"hello","reply_to_message_id":"7001","suppress_ping":true,"suppress_embeds":true,"no_rly_hooks":[],"claim_handles":["1"]}))).await.unwrap();
-        assert!(accepted["result"].get("isError").is_none(), "{accepted}");
-        let accepted: Value =
-            serde_json::from_str(accepted["result"]["content"][0]["text"].as_str().unwrap())
-                .unwrap();
-        assert_eq!(accepted["message_ids"], json!([9003]));
-        assert_eq!(accepted["ok"], true);
-        assert_eq!(accepted["claim_locators"].as_array().unwrap().len(), 1);
-        let sent: Vec<Value> = requests
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(route, body)| route.ends_with("/channels/42/messages") && !body.is_empty())
-            .map(|(_, body)| serde_json::from_str(body).unwrap())
-            .collect();
-        assert_eq!(sent.len(), 1);
-        assert_eq!(sent[0]["message_reference"]["message_id"], "7001");
-        assert_eq!(sent[0]["allowed_mentions"]["replied_user"], false);
-        assert_eq!(sent[0]["flags"], 4);
-        assert!(
-            sent[0]["content"]
-                .as_str()
-                .unwrap()
-                .starts_with("hello [🔍=v3:claim:")
-        );
-
-        std::fs::write(path.join("config.toml"), "[[channels]]\nid = \"42\"\nrequire_mention = false\n[contradictionary]\nenabled = true\n[[contradictionary.entries]]\npattern = \"blocked\"\naction = \"block\"\nmatch_mode = \"word\"\n").unwrap();
-        assert!(dione_config::reload_config(&path).await.1.is_none());
-        let before_hold = requests.lock().unwrap().len();
-        let held = crate::mcp::server::test_helpers::dispatch_request(
-            &server,
-            call(json!({"channel_id":"42","content":"blocked"})),
-        )
-        .await
-        .unwrap();
-        assert_eq!(held["result"]["isError"], true);
-        let held: Value =
-            serde_json::from_str(held["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-        let handle = held["held"]["handle"]
-            .as_str()
-            .expect("reply issued a held capability");
-        assert_eq!(requests.lock().unwrap().len(), before_hold);
-        let release = json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"no_rly","arguments":{"handle":handle}}});
-        let released = crate::mcp::server::test_helpers::dispatch_request(&server, release.clone())
-            .await
-            .unwrap();
-        assert!(released["result"].get("isError").is_none(), "{released}");
-        let released: Value =
-            serde_json::from_str(released["result"]["content"][0]["text"].as_str().unwrap())
-                .unwrap();
-        assert_eq!(released["ok"], true);
-        assert_eq!(released["released"], handle);
-        assert_eq!(released["message_ids"], json!([9004]));
-        let release_count = requests.lock().unwrap().len();
-        let duplicate = crate::mcp::server::test_helpers::dispatch_request(&server, release)
-            .await
-            .unwrap();
-        assert_eq!(duplicate["result"]["isError"], true);
-        assert_eq!(requests.lock().unwrap().len(), release_count);
-
-        let before_denial = requests.lock().unwrap().len();
-        std::fs::write(
-            path.join("config.toml"),
-            "[delivery]\nevidence_markers_enabled = false\n",
-        )
-        .unwrap();
-        assert!(dione_config::reload_config(&path).await.1.is_none());
-        let denied = crate::mcp::server::test_helpers::dispatch_request(
-            &server,
-            call(json!({"channel_id":"42","content":"after revocation"})),
-        )
-        .await
-        .unwrap();
-        assert_eq!(denied["result"]["isError"], true);
-        assert_eq!(requests.lock().unwrap().len(), before_denial);
-        peer.abort();
     }
 }

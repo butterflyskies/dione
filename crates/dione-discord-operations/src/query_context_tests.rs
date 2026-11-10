@@ -7,7 +7,7 @@ use std::{collections::VecDeque, sync::Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
 fn fixtures() -> Value {
-    serde_json::from_str(include_str!("../../tests/fixtures/context/v2.json")).unwrap()
+    serde_json::from_str(include_str!("../tests/fixtures/context/v2.json")).unwrap()
 }
 
 fn message() -> Value {
@@ -114,7 +114,7 @@ impl Fixture {
             ModuleSlotId::new(slot).unwrap(),
         );
         let registry = ToolRegistry::new(
-            &crate::mcp::server::reserved_tool_names(&dione_claude::connect(
+            &crate::test_support::reserved_tool_names(&dione_claude::connect(
                 dione_harness::ProtocolOutput::new(tokio::io::stdout()),
                 dione_codex::TOOL_NAMES,
             )),

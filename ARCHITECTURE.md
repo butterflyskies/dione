@@ -277,7 +277,7 @@ configured MCP providers in shadow or live mode.
 
 [MCP response contracts](crates/dione-mcp-protocol/src/lib.rs) define protocol negotiation and the thirty-three built-in discovery schemas.
 [Discord reply contracts](crates/dione-discord-tool-contracts/src/reply.rs) own the reply schema
-and argument parsing. [Discord reply registration](src/discord/reply_tool.rs) keeps execution
+and argument parsing. [Discord reply registration](crates/dione-discord-operations/src/reply_tool.rs) keeps execution
 and evidence-dependent discovery using the current configuration.
 [dispatch.rs](src/mcp/dispatch.rs) loads a fresh configuration snapshot for a
 tool call and routes it to Discord operations and the remaining
@@ -285,7 +285,7 @@ tool call and routes it to Discord operations and the remaining
 The current request loop awaits each handler before reading the next request.
 A slow handler can therefore delay later requests and cancellation handling.
 
-[Messaging handlers](src/discord/messaging.rs) perform destination access
+[Messaging handlers](crates/dione-discord-operations/src/messaging.rs) perform destination access
 checks and use Serenity HTTP for Discord operations. File uploads pass the
 canonical-path guard in [gate.rs](crates/dione-discord-gate/src/lib.rs), which excludes the state
 directory except its attachment inbox. Fetch and download operations also
@@ -313,13 +313,13 @@ durable queue removal. The [Access wire projection](crates/dione-access-requests
 responses. Dispatch preserves the existing mutation-disable switch before ID
 parsing and leaves listing ungated.
 
-[Discord management](src/discord/management.rs) owns authorized pin, unpin,
+[Discord management](crates/dione-discord-operations/src/management.rs) owns authorized pin, unpin,
 delete, and thread creation. A complete message command selects a mutation;
 thread creation returns its own typed result and registers the requested parent
 before returning. The narrow context contains HTTP, state, configuration, and
 the ingress ledger. The [management result contract](crates/dione-discord-messaging-contracts/src/management/wire.rs)
 owns descriptive thread metadata, typed errors and their JSON projection. [Management contracts](crates/dione-discord-tool-contracts/src/management.rs)
-own argument parsing; [registered management tools](src/discord/management_tools.rs) keep registration and execution.
+own argument parsing; [registered management tools](crates/dione-discord-operations/src/management_tools.rs) keep registration and execution.
 
 [Discord introspection](crates/dione-discord-introspection/src/introspection.rs) owns guild, channel, user,
 member, role, and emoji reads. It returns typed observations and failures,
@@ -328,14 +328,14 @@ using the configuration selected at call entry. These reads use the bot HTTP
 client's authority and have no local allowlist or ingress checks. The
 [Discord introspection adapter](crates/dione-discord-introspection/src/wire.rs) formats results and
 original SDK error text. [Metadata contracts](crates/dione-discord-tool-contracts/src/metadata.rs)
-own argument parsing; [registered introspection tools](src/discord/introspection_tools.rs) keep registration and execution.
+own argument parsing; [registered introspection tools](crates/dione-discord-operations/src/introspection_tools.rs) keep registration and execution.
 
 [Consent delivery types](crates/dione-outbound-consent/src/delivery.rs) distinguish total failure from
 nonempty partial progress and retain retry state privately. Attention consumes
 the same typed outcomes and treats only complete delivery as success.
 
 [dione-pre-send](crates/dione-pre-send/src/lib.rs) owns the hook runner, private
-status lint and production roster. [Process composition](src/composition/pre_send.rs)
+status lint and production roster. [Installed pipeline registry](crates/dione-pre-send/src/registry.rs)
 installs the production pipeline in Observe mode. Observe records findings without changing or stopping output. Separately,
 the [no_rly consent gate](crates/dione-outbound-consent/src/consent.rs) can hold rejected message text
 for an explicit release or rephrase. Its pending handles are in memory, while
@@ -352,8 +352,8 @@ authority, queue acceptance, and reconnect replay. Its [wire contract](crates/di
 authorizes and sends typing notifications. The public
 [`dione-discord-identities`](crates/dione-discord-identities/src/lib.rs) owner validates
 external Discord IDs through `dione_discord_identities::Snowflake`.
-Production gateway code uses the Discord owners directly. The [Discord tool catalog](crates/dione-discord-tool-contracts/src/lib.rs) owns the twenty remaining root-adapted tool definitions and typed request decoding. Root MCP adapters retain current configuration, resident registration and execution; the MCP response library owns built-in discovery metadata. Application messaging remains at
-`discord::messaging`; the former MCP messaging and ID aliases were removed.
+Production gateway code uses the Discord owners directly. The [Discord tool catalog](crates/dione-discord-tool-contracts/src/lib.rs) owns the twenty remaining root-adapted tool definitions and typed request decoding. Root MCP adapters retain current configuration, resident registration and execution; the MCP response library owns built-in discovery metadata. Application messaging lives in
+`dione_discord_operations::messaging`; the former MCP messaging and ID aliases were removed.
 The former
 `mcp::tools::bot_state` alias was removed in 0.53.0.
 
@@ -389,7 +389,7 @@ Publishing a new snapshot does not reconstruct those captured values.
 
 | Integration | Implementing code and purpose |
 |-------------|-------------------------------|
-| Discord Gateway and REST | [Serenity client](crates/dione-discord-runtime/src/client.rs), [events](crates/dione-discord-runtime/src/events.rs), [messaging](src/discord/messaging.rs), [presence](crates/dione-discord-presence/src/lib.rs), [typing](crates/dione-discord-typing/src/lib.rs), and the remaining [tools](src/mcp/tools) receive events and execute authorized operations. |
+| Discord Gateway and REST | [Serenity client](crates/dione-discord-runtime/src/client.rs), [events](crates/dione-discord-runtime/src/events.rs), [messaging](crates/dione-discord-operations/src/messaging.rs), [presence](crates/dione-discord-presence/src/lib.rs), [typing](crates/dione-discord-typing/src/lib.rs), and the remaining [tools](src/mcp/tools) receive events and execute authorized operations. |
 | Codex app-server | [Delivery worker](crates/dione-codex/src/app_server.rs) addresses an exact local thread. |
 | PluralKit | [Identity resolver](crates/dione-pluralkit-resolver/src/lib.rs) resolves supported proxy identity. |
 | Pronouns and nameplates | [Pronoun service](crates/dione-identity-display/src/pronouns.rs) and [nameplate service](crates/dione-identity-display/src/nameplates.rs) enrich display metadata when enabled. |
@@ -400,8 +400,8 @@ Publishing a new snapshot does not reconstruct those captured values.
 [Cargo.toml](Cargo.toml) is the dependency inventory. The main runtime uses
 Tokio, Serenity, serde, ArcSwap, and tracing. Reqwest supports HTTP integrations.
 Typst, its renderer and fonts, and mitex support [PNG rendering and retained files](crates/dione-rendering/src/lib.rs).
-[Discord rendering](src/discord/rendering.rs) authorizes and sends math attachments;
-The rendering member [file contract](crates/dione-rendering/src/wire.rs) projects retained-file results and rendering failures. The root [channel projection](src/mcp/render_wire.rs) retains Discord messaging results.
+[Discord rendering](crates/dione-discord-operations/src/rendering.rs) authorizes and sends math attachments;
+The rendering member [file contract](crates/dione-rendering/src/wire.rs) projects retained-file results and rendering failures. The root [channel projection](crates/dione-discord-operations/src/render_wire.rs) retains Discord messaging results.
 The package currently requires Rust 1.98 and edition 2024. Unix sockets and Unix
 signal handling appear in the runtime, so this map does not claim native Windows
 support. The [justfile](justfile) defines `just check` and the broader
@@ -455,7 +455,7 @@ Discord message read, search, attachment and native observation ownership reside
 
 [Shared Discord tool arguments](crates/dione-discord-tool-arguments/src/lib.rs) own typed argument validation and evidence handle schema projection. Root tool registrations retain parsing order, current configuration, authorization and execution authority.
 
-[Discord messaging contracts](crates/dione-discord-messaging-contracts/src/lib.rs) own descriptive outcomes, error metadata and JSON projection. Root delivery, consent and ingress verification retain authority.
+[Discord messaging contracts](crates/dione-discord-messaging-contracts/src/lib.rs) own descriptive outcomes, error metadata and JSON projection. The Discord operations owner retains destination checks, consent coordination and effect bookkeeping; the gateway runtime owns ingress verification.
 
 [Discord tool contracts](crates/dione-discord-tool-contracts/src/lib.rs) own metadata, query, management and reply catalogs without access or execution authority. Root execution adapters use these requests directly.
 
@@ -466,3 +466,5 @@ Discord message read, search, attachment and native observation ownership reside
 [MCP response contracts](crates/dione-mcp-protocol/src/lib.rs) own protocol negotiation and the thirty-three built-in discovery definitions. The [root server](src/mcp/server.rs) supplies its application version and current harness capability/tool snapshots, then retains authentication, installed registration, current configuration, execution and lifecycle hooks. Discovery metadata grants no authority.
 
 The registered Discord gateway runtime owns its verification producers and policy/lifecycle enforcers together. Root composition supplies concrete services and shares the enforcing ledger with MCP and Attention; proof constructors remain private inside the runtime. Process-global mute installation has one registry in `dione-mutes`. Observation remains disabled at startup.
+
+[Discord operations](crates/dione-discord-operations/src/lib.rs) own complete authorized SDK effects and their actual shared tool registrations. Root assembles the same concrete services, immutable tool registry and Attention notice caller; private prepared outbound and target policy stay inside the operation owner. The [pre-send registry](crates/dione-pre-send/src/registry.rs) is the single installed pipeline used by startup and newly constructed operation contexts. No production Rook provider or observation registration is added.

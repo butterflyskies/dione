@@ -3,7 +3,7 @@
 pub mod dispatch;
 #[cfg(test)]
 mod protocol_tests;
-pub(crate) mod render_wire;
+
 pub mod server;
 pub mod tools;
 

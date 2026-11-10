@@ -1,12 +1,4 @@
 //! Tool dispatch: routes `tools/call` requests to the correct handler.
-use crate::discord::messaging::edit_message_with_embed_control;
-use crate::discord::messaging::react as discord_react;
-use crate::discord::messaging::release_held;
-use crate::discord::messaging::rephrase_held;
-use crate::discord::messaging::send_dm_with_evidence_and_hook_overrides;
-use crate::discord::messaging::send_file_with_hook_overrides;
-use crate::discord::rendering::render_to_channel;
-use crate::mcp::render_wire;
 use crate::mcp::server::DioneServer;
 use crate::mcp::tools::diagnostics::get_version;
 use crate::mcp::tools::diagnostics::set_stderr_level;
@@ -19,6 +11,14 @@ use dione_config::ConfigStore;
 use dione_config::DiscordId;
 use dione_discord_messaging_contracts::LinkPreviews;
 use dione_discord_messaging_contracts::wire as messaging_wire;
+use dione_discord_operations::messaging::edit_message_with_embed_control;
+use dione_discord_operations::messaging::react as discord_react;
+use dione_discord_operations::messaging::release_held;
+use dione_discord_operations::messaging::rephrase_held;
+use dione_discord_operations::messaging::send_dm_with_evidence_and_hook_overrides;
+use dione_discord_operations::messaging::send_file_with_hook_overrides;
+use dione_discord_operations::render_wire;
+use dione_discord_operations::rendering::render_to_channel;
 use dione_discord_presence::wire as presence_wire;
 use dione_discord_tool_arguments::parse_enabled_sentex_handles;
 use dione_discord_tool_arguments::parse_hook_overrides;
@@ -975,7 +975,7 @@ mod tests {
             "roles":[], "joined_at":"2026-07-10T12:30:00Z",
             "deaf":false,"mute":false,"flags":0
         });
-        let (ctx, requests) = crate::discord::introspection_test_support::fixture(vec![
+        let (ctx, requests) = dione_discord_operations::introspection_test_support::fixture(vec![
             ("200 OK", member.clone()),
             ("200 OK", member),
         ])
@@ -1018,7 +1018,7 @@ mod tests {
 
     #[tokio::test]
     async fn introspection_contract_dispatch_parsing_and_http_envelopes() {
-        let (ctx, requests) = crate::discord::introspection_test_support::fixture(vec![
+        let (ctx, requests) = dione_discord_operations::introspection_test_support::fixture(vec![
             ("200 OK", json!([])),
             ("200 OK", json!([])),
             ("200 OK", json!({"id":"91","type":0,"name":"returned-channel"})),

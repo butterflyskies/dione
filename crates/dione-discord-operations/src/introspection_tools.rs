@@ -25,9 +25,7 @@ struct IntrospectionTool {
 }
 
 /// Builds the complete Discord metadata registrations with their resident policy.
-pub(crate) fn registrations(
-    services: Arc<ReplyServices>,
-) -> Result<Vec<RegisteredTool>, ToolNameError> {
+pub fn registrations(services: Arc<ReplyServices>) -> Result<Vec<RegisteredTool>, ToolNameError> {
     MetadataTool::ALL
         .into_iter()
         .map(|operation| {

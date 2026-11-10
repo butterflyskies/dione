@@ -951,14 +951,20 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     let (_, remaining) = remaining
         .split_once("\n  reconcile-discord-runtime:")
         .unwrap();
-    let (reconcile_discord_runtime, remaining) =
+    let (reconcile_discord_runtime, remaining) = remaining
+        .split_once("\n  publish-discord-operations:")
+        .unwrap();
+    let (_, remaining) = remaining
+        .split_once("\n  reconcile-discord-operations:")
+        .unwrap();
+    let (reconcile_discord_operations, remaining) =
         remaining.split_once("\n  publish-crate:").unwrap();
     let (publish_dione, reconcile_dione) = remaining.split_once("\n  reconcile-dione:").unwrap();
 
     assert_eq!(
         workflow.matches("scripts/package-preflight.sh").count(),
         workflow.matches("cargo package -p").count()
-            + 55 * workflow.matches("cargo package --workspace").count(),
+            + 56 * workflow.matches("cargo package --workspace").count(),
         "every workspace archive must cross the privacy verifier"
     );
     for job in [
@@ -1017,6 +1023,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         reconcile_pluralkit_resolver,
         reconcile_mcp_protocol,
         reconcile_discord_runtime,
+        reconcile_discord_operations,
         reconcile_dione,
     ] {
         assert!(!job.contains("CARGO_REGISTRY_TOKEN"));
@@ -3173,7 +3180,10 @@ fn gateway_runtime_release_waits_for_its_actual_packaged_dependencies() {
     let (publish, reconcile) = publish
         .split_once("\n  reconcile-discord-runtime:")
         .unwrap();
-    let (reconcile, root) = reconcile.split_once("\n  publish-crate:").unwrap();
+    let (reconcile, _) = reconcile
+        .split_once("\n  publish-discord-operations:")
+        .unwrap();
+    let root = workflow.split_once("\n  publish-crate:").unwrap().1;
     let manifest: toml::Value =
         toml::from_str(include_str!("../crates/dione-discord-runtime/Cargo.toml")).unwrap();
     for dependency in ["dependencies", "dev-dependencies", "build-dependencies"]
@@ -3200,4 +3210,44 @@ fn gateway_runtime_release_waits_for_its_actual_packaged_dependencies() {
     assert!(reconcile.contains("needs.verify-dione.result == 'success'"));
     assert!(root.contains("needs.reconcile-discord-runtime.result == 'success'"));
     assert!(publish.contains("cargo publish -p dione-discord-runtime --locked --no-verify"));
+}
+
+#[test]
+fn discord_operations_release_waits_for_its_actual_packaged_dependencies() {
+    let workflow = include_str!("../.github/workflows/publish-crate.yml");
+    let (_, publish) = workflow
+        .split_once("\n  publish-discord-operations:")
+        .unwrap();
+    let (publish, reconcile) = publish
+        .split_once("\n  reconcile-discord-operations:")
+        .unwrap();
+    let (reconcile, root) = reconcile.split_once("\n  publish-crate:").unwrap();
+    let manifest: toml::Value = toml::from_str(include_str!(
+        "../crates/dione-discord-operations/Cargo.toml"
+    ))
+    .unwrap();
+    for dependency in ["dependencies", "dev-dependencies", "build-dependencies"]
+        .into_iter()
+        .filter_map(|section| manifest.get(section).and_then(toml::Value::as_table))
+        .flat_map(|dependencies| dependencies.keys())
+        .filter(|name| name.starts_with("dione-"))
+    {
+        let name = dependency.strip_prefix("dione-").unwrap();
+        for job in [publish, reconcile] {
+            assert!(
+                job.lines()
+                    .find(|line| line.trim_start().starts_with("needs:"))
+                    .unwrap()
+                    .contains(&format!("reconcile-{name}")),
+                "{dependency}"
+            );
+            assert!(
+                job.contains(&format!("needs.reconcile-{name}.result == 'success'")),
+                "{dependency}"
+            );
+        }
+    }
+    assert!(reconcile.contains("needs.verify-dione.result == 'success'"));
+    assert!(root.contains("needs.reconcile-discord-operations.result == 'success'"));
+    assert!(publish.contains("cargo publish -p dione-discord-operations --locked --no-verify"));
 }

@@ -119,7 +119,7 @@ fn registry(ctx: &IntrospectionCtx, state_dir: &camino::Utf8Path) -> ToolRegistr
         None,
     ));
     ToolRegistry::new(
-        &crate::mcp::server::reserved_tool_names(&dione_claude::connect(
+        &crate::test_support::reserved_tool_names(&dione_claude::connect(
             dione_harness::ProtocolOutput::new(tokio::io::stdout()),
             dione_codex::TOOL_NAMES,
         )),

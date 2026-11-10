@@ -1,7 +1,5 @@
 //! Recipient-local attention execution. Network work never owns the ingress loop.
 
-use crate::discord::messaging;
-use crate::discord::messaging::MessagingCtx;
 use dione_attention::delivery::AttentionGuardFailure as Failure;
 use dione_attention::health::{AttentionHealth, AttentionHealthController};
 #[cfg(test)]
@@ -12,6 +10,8 @@ use dione_config::load_config;
 use dione_config::subscribe_generation;
 use dione_discord_events::MessageTargeting;
 use dione_discord_events::NotificationEvent;
+use dione_discord_operations::messaging;
+use dione_discord_operations::messaging::MessagingCtx;
 use dione_discord_runtime::SourceDeliveryFailure;
 use dione_discord_runtime::{SourceFailure, SourceResolver, now_ms};
 use dione_outbound_consent::consent::ConsentGate;

@@ -1,5 +1,4 @@
 pub mod attention;
-pub mod discord;
 #[cfg(test)]
 mod discord_bells_tests;
 
@@ -16,9 +15,6 @@ mod harness_test_support;
 
 /// Process composition and offline operator commands.
 pub mod startup;
-
-/// Explicit application composition adapters.
-pub mod composition;
 
 #[cfg(test)]
 mod coordination_consumers;
@@ -48,3 +44,10 @@ mod codex_test_wire;
 
 #[cfg(test)]
 mod gateway_test_support;
+
+#[cfg(test)]
+#[path = "discord_operations_tests/management.rs"]
+mod discord_management_registration_tests;
+#[cfg(test)]
+#[path = "discord_operations_tests/reply.rs"]
+mod discord_reply_registration_tests;

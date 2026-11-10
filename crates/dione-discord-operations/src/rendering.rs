@@ -1,8 +1,8 @@
 //! Authorized rendering and delivery of a math attachment.
 
-use crate::discord::messaging;
-use crate::discord::messaging::MessagingCtx;
-use crate::discord::messaging::OutboundSurface;
+use crate::messaging;
+use crate::messaging::MessagingCtx;
+use crate::messaging::OutboundSurface;
 use dione_discord_messaging_contracts::MessagingError;
 use dione_pre_send::HookName;
 use dione_rendering::{self as rendering, RenderError};
@@ -14,7 +14,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 #[error("failed to render to channel {channel_id}: {kind}")]
-pub(crate) struct RenderToChannelError {
+pub struct RenderToChannelError {
     pub(crate) channel_id: ChannelId,
     #[source]
     pub(crate) kind: RenderToChannelErrorKind,
@@ -28,7 +28,7 @@ pub(crate) enum RenderToChannelErrorKind {
     Messaging(Box<MessagingError>),
 }
 
-pub(crate) async fn render_to_channel(
+pub async fn render_to_channel(
     ctx: &MessagingCtx,
     channel_id: ChannelId,
     latex: &str,

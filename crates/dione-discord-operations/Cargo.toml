@@ -1,0 +1,62 @@
+[package]
+name = "dione-discord-operations"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Authorized Discord operations and actual tool registrations"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+
+[features]
+default = []
+# Read-only pipeline metadata for actual application consumers; no mutation or proof factories.
+test-support = []
+
+[dependencies]
+camino.workspace = true
+dione-config.workspace = true
+dione-contracts.workspace = true
+dione-contradictionary.workspace = true
+dione-coordination.workspace = true
+dione-discord-events.workspace = true
+dione-discord-gate.workspace = true
+dione-discord-introspection.workspace = true
+dione-discord-messaging-contracts.workspace = true
+dione-discord-queries.workspace = true
+dione-discord-runtime.workspace = true
+dione-discord-state.workspace = true
+dione-discord-tool-contracts.workspace = true
+dione-drop-ledger.workspace = true
+dione-evidence.workspace = true
+dione-identity-display.workspace = true
+dione-mcp-tools.workspace = true
+dione-messages.workspace = true
+dione-mutes.workspace = true
+dione-outbound-consent.workspace = true
+dione-pre-send.workspace = true
+dione-rendering.workspace = true
+dione-rook.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+serenity.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+dione-rook = { workspace = true, features = ["test-support"] }
+tokio = { workspace = true, features = ["test-util"] }
+chrono.workspace = true
+dione-access-requests.workspace = true
+dione-claude.workspace = true
+dione-codex.workspace = true
+dione-discord-presence.workspace = true
+dione-harness.workspace = true
+dione-mcp-protocol.workspace = true
+png.workspace = true
+tempfile.workspace = true
+tracing-subscriber.workspace = true

@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.150.0] - 2026-11-10
+
+- Move complete authorized Discord operations and their actual shared registrations into an independent owner, preserving delivery bookkeeping and the single installed pre-send pipeline. Application callers now import dione-discord-operations directly.
+
 ## [0.149.2] - 2026-11-09
 
 - Replace identified fixture identities with invented values and require all packaged local dev prerequisites before Discord runtime publication and reconciliation.

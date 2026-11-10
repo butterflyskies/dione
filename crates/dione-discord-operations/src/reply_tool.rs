@@ -24,7 +24,8 @@ use serenity::http::Http;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-pub(crate) struct ReplyServices {
+/// Concrete shared Discord resources used by the actual registered operations.
+pub struct ReplyServices {
     http: Arc<Http>,
     state: State,
     state_dir: Utf8PathBuf,
@@ -34,7 +35,8 @@ pub(crate) struct ReplyServices {
 }
 
 impl ReplyServices {
-    pub(crate) fn query_ctx(
+    /// Builds a read context from the current validated configuration and shared resources.
+    pub fn query_ctx(
         &self,
         config: Arc<dione_config::LoadedConfig>,
     ) -> dione_discord_queries::QueryCtx {
@@ -47,7 +49,8 @@ impl ReplyServices {
             construct_id,
         )
     }
-    pub(crate) fn new(
+    /// Assembles the existing concrete shared Discord resources without minting authority.
+    pub fn new(
         http: Arc<Http>,
         state: State,
         state_dir: Utf8PathBuf,
@@ -64,7 +67,8 @@ impl ReplyServices {
             event_tx,
         }
     }
-    pub(crate) fn messaging_ctx(&self, config: Arc<dione_config::LoadedConfig>) -> MessagingCtx {
+    /// Captures current configuration and the single installed pipeline for one operation.
+    pub fn messaging_ctx(&self, config: Arc<dione_config::LoadedConfig>) -> MessagingCtx {
         let mut ctx = MessagingCtx::new(
             self.http.clone(),
             self.state.clone(),
@@ -76,27 +80,33 @@ impl ReplyServices {
         ctx.event_tx = self.event_tx.clone();
         ctx
     }
-    pub(crate) fn http(&self) -> &Arc<Http> {
+    /// Borrows the shared authenticated Discord HTTP service.
+    pub fn http(&self) -> &Arc<Http> {
         &self.http
     }
-    pub(crate) fn state(&self) -> &State {
+    /// Borrows the same application state used by gateway and operations.
+    pub fn state(&self) -> &State {
         &self.state
     }
-    pub(crate) fn state_dir(&self) -> &Utf8PathBuf {
+    /// Borrows the configured state directory.
+    pub fn state_dir(&self) -> &Utf8PathBuf {
         &self.state_dir
     }
-    pub(crate) fn no_rly(&self) -> &Arc<ConsentGate> {
+    /// Borrows the existing consent gate.
+    pub fn no_rly(&self) -> &Arc<ConsentGate> {
         &self.no_rly
     }
-    pub(crate) fn ingress_ledger(&self) -> &Arc<IngressLedger> {
+    /// Borrows the enforcing ingress facade shared with the gateway.
+    pub fn ingress_ledger(&self) -> &Arc<IngressLedger> {
         &self.ingress_ledger
     }
-    pub(crate) fn event_tx(&self) -> &Option<mpsc::Sender<NotificationEvent>> {
+    /// Borrows the optional existing notification sender.
+    pub fn event_tx(&self) -> &Option<mpsc::Sender<NotificationEvent>> {
         &self.event_tx
     }
 }
 
-pub(crate) fn registration(services: Arc<ReplyServices>) -> Result<RegisteredTool, ToolNameError> {
+pub fn registration(services: Arc<ReplyServices>) -> Result<RegisteredTool, ToolNameError> {
     Ok(RegisteredTool::new(
         ToolDefinition::new(
             ToolName::new("reply")?,

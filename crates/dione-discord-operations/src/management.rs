@@ -1,8 +1,8 @@
 //! Authorized Discord message mutations and thread creation.
 use dione_discord_tool_contracts::management::{MessageAction, MessageCommand};
 
-use crate::discord::messaging::TargetPolicy;
-use crate::discord::messaging::verify_message_target;
+use crate::messaging::TargetPolicy;
+use crate::messaging::verify_message_target;
 use dione_config::LoadedConfig;
 use dione_discord_gate::OutboundGate;
 #[cfg(test)]
@@ -132,7 +132,6 @@ pub(crate) async fn create_thread(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dione_access_requests::AccessQueue;
     use dione_config::ChannelConfig;
     use dione_config::Config;
     use dione_config::LoadedConfig;
@@ -910,139 +909,6 @@ mod tests {
                 line: "PUT /api/v10/channels/42/pins/9001 HTTP/1.1".into(),
                 body: Value::Null
             }]
-        );
-    }
-    #[tokio::test]
-    async fn registered_management_preserves_http_and_reloads_authority() {
-        let (ctx, peer) = fixture(vec![
-            ("204 No Content", Value::Null),
-            ("204 No Content", Value::Null),
-            ("204 No Content", Value::Null),
-            ("200 OK", thread_response()),
-            ("200 OK", thread_response()),
-        ])
-        .await;
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
-        ctx.state.write().await.note_sent(9001);
-        let server = crate::mcp::server::DioneServer::new(
-            ctx.state.clone(),
-            Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&path))),
-            ctx.http.clone(),
-            path.clone(),
-            tokio::sync::mpsc::channel(1).0,
-            dione_tracing_channel::TraceLevelController::noop(),
-            dione_claude::connect(
-                dione_harness::ProtocolOutput::new(tokio::io::stdout()),
-                dione_codex::TOOL_NAMES,
-            ),
-            Arc::new(dione_outbound_consent::consent::ConsentGate::new(&path)),
-            ctx.ingress_ledger.clone(),
-            dione_contracts::ModuleInstanceId::new(
-                dione_contracts::ProviderId::new("discord").unwrap(),
-                dione_contracts::ModuleSlotId::new("primary").unwrap(),
-            ),
-            None,
-        )
-        .await
-        .unwrap();
-        for name in [
-            "pin_message",
-            "unpin_message",
-            "delete_message",
-            "create_thread",
-        ] {
-            let invalid = crate::mcp::dispatch::call_tool(
-                &server,
-                name,
-                json!({"channel_id":"bad", "message_id":"9001", "name":"thread"}),
-            )
-            .await
-            .unwrap_err();
-            assert_eq!(invalid, "invalid channel_id: not a valid u64");
-            let denied = crate::mcp::dispatch::call_tool(
-                &server,
-                name,
-                json!({"channel_id":"42", "message_id":"9001", "name":"thread"}),
-            )
-            .await
-            .unwrap();
-            assert_eq!(
-                denied,
-                json!({"content":[{"type":"text","text":"{\"error\":\"channel not in allowlist\"}"}],"isError":true})
-            );
-        }
-        std::fs::write(path.join("config.toml"), "[[channels]]\nid = \"42\"\n").unwrap();
-        assert!(dione_config::reload_config(&path).await.1.is_none());
-        for name in ["pin_message", "unpin_message", "delete_message"] {
-            let result = crate::mcp::dispatch::call_tool(
-                &server,
-                name,
-                json!({"channel_id":42,"message_id":"9001","extra":true}),
-            )
-            .await
-            .unwrap();
-            assert_eq!(
-                result,
-                json!({"content":[{"type":"text","text":"{\"ok\":true}"}]})
-            );
-        }
-        for message in [json!({}), json!("9001")] {
-            let result = crate::mcp::dispatch::call_tool(
-                &server,
-                "create_thread",
-                json!({"channel_id":"42","message_id":message,"name":"","extra":true}),
-            )
-            .await
-            .unwrap();
-            let wire: Value =
-                serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
-            assert_eq!(
-                wire,
-                json!({"ok":true,"thread_id":"200","name":"Discord returned name"})
-            );
-        }
-        assert_eq!(
-            ctx.state.read().await.thread_parents.get(&200),
-            Some(&Some(42))
-        );
-        std::fs::write(path.join("config.toml"), "").unwrap();
-        assert!(dione_config::reload_config(&path).await.1.is_none());
-        let denied = crate::mcp::dispatch::call_tool(
-            &server,
-            "pin_message",
-            json!({"channel_id":42,"message_id":9001}),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            denied,
-            json!({"content":[{"type":"text","text":"{\"error\":\"channel not in allowlist\"}"}],"isError":true})
-        );
-        assert_eq!(
-            peer.await.unwrap(),
-            vec![
-                Request {
-                    line: "PUT /api/v10/channels/42/pins/9001 HTTP/1.1".into(),
-                    body: Value::Null
-                },
-                Request {
-                    line: "DELETE /api/v10/channels/42/pins/9001 HTTP/1.1".into(),
-                    body: Value::Null
-                },
-                Request {
-                    line: "DELETE /api/v10/channels/42/messages/9001 HTTP/1.1".into(),
-                    body: Value::Null
-                },
-                Request {
-                    line: "POST /api/v10/channels/42/threads HTTP/1.1".into(),
-                    body: json!({"name":"","type":11})
-                },
-                Request {
-                    line: "POST /api/v10/channels/42/messages/9001/threads HTTP/1.1".into(),
-                    body: json!({"name":"","type":11})
-                },
-            ]
         );
     }
 }

@@ -24,9 +24,7 @@ struct RegisteredManagementTool {
 }
 
 /// Registers message mutation and thread tools with their resident authority.
-pub(crate) fn registrations(
-    services: Arc<ReplyServices>,
-) -> Result<Vec<RegisteredTool>, ToolNameError> {
+pub fn registrations(services: Arc<ReplyServices>) -> Result<Vec<RegisteredTool>, ToolNameError> {
     ManagementTool::ALL
         .into_iter()
         .map(|operation| {
