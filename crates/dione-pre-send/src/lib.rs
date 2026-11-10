@@ -1237,8 +1237,17 @@ mod tests {
 
     #[test]
     fn construct_id_rejects_empty_and_noncanonical_values() {
-        assert_eq!(ConstructId::parse("fixture-orbit").unwrap().as_str(), "fixture-orbit");
-        for invalid in ["", "Fixture-orbit", "fixture_orbit", "-fixture-orbit", "fixture-orbit-"] {
+        assert_eq!(
+            ConstructId::parse("fixture-orbit").unwrap().as_str(),
+            "fixture-orbit"
+        );
+        for invalid in [
+            "",
+            "Fixture-orbit",
+            "fixture_orbit",
+            "-fixture-orbit",
+            "fixture-orbit-",
+        ] {
             assert!(ConstructId::parse(invalid).is_err());
         }
     }
