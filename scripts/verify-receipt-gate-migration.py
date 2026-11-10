@@ -24,7 +24,9 @@ def main():
     args = parser.parse_args()
     old = predecessor('src/receipt_gate/store.rs')
     current = (ROOT / 'crates/dione-receipt-gate/src/store.rs').read_bytes()
-    sanitized = old.replace(b'#[non_exhaustive]\n', b'').replace(b'PACE', b'LANTERN').replace(b'437002871280631808', b'424242')
+    principal = re.search(rb'    const ([A-Z]+): UserId = UserId::new\(([0-9]{15,})\);', old)
+    assert principal and hashlib.sha256(principal.group()).hexdigest() == 'c9ace5b9616ac0772fa037c215a4a10e0f3ff54ea64ed7f23c55be37349aed99'
+    sanitized = old.replace(b'#[non_exhaustive]\n', b'').replace(principal[1], b'LANTERN').replace(principal[2], b'424242')
     assert current == sanitized
     assert not (ROOT / 'src/receipt_gate').exists()
     assert 'receipt_gate' not in (ROOT / 'src/lib.rs').read_text()
