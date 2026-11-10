@@ -711,7 +711,7 @@ async fn discord_introspection_registration_preserves_discovery_and_resident_aut
 
 #[tokio::test]
 async fn discord_introspection_resident_call_uses_registered_owner_without_discovery_access() {
-    let (ctx, requests) = dione_discord_operations::introspection_test_support::fixture(vec![(
+    let (ctx, requests) = crate::introspection_test_support::fixture(vec![(
         "200 OK",
         json!({"id":"91","username":"observed","discriminator":"0","bot":false}),
     )])

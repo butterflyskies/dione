@@ -51,3 +51,6 @@ mod discord_management_registration_tests;
 #[cfg(test)]
 #[path = "discord_operations_tests/reply.rs"]
 mod discord_reply_registration_tests;
+
+#[cfg(test)]
+mod introspection_test_support;

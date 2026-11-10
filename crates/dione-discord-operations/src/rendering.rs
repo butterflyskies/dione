@@ -12,6 +12,7 @@ use serenity::{
 };
 use thiserror::Error;
 
+/// A channel-render failure retaining its requested channel and original source.
 #[derive(Debug, Error)]
 #[error("failed to render to channel {channel_id}: {kind}")]
 pub struct RenderToChannelError {
@@ -28,6 +29,7 @@ pub(crate) enum RenderToChannelErrorKind {
     Messaging(Box<MessagingError>),
 }
 
+/// Authorizes, renders and delivers a math attachment through the existing operation checks.
 pub async fn render_to_channel(
     ctx: &MessagingCtx,
     channel_id: ChannelId,

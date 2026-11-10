@@ -3,6 +3,8 @@
 mod gateway_test_support;
 #[cfg(test)]
 mod introspection_test_support;
+#![warn(missing_docs)]
+
 pub mod introspection_tools;
 mod management;
 pub mod management_tools;

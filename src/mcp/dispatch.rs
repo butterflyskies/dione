@@ -975,7 +975,7 @@ mod tests {
             "roles":[], "joined_at":"2026-07-10T12:30:00Z",
             "deaf":false,"mute":false,"flags":0
         });
-        let (ctx, requests) = dione_discord_operations::introspection_test_support::fixture(vec![
+        let (ctx, requests) = crate::introspection_test_support::fixture(vec![
             ("200 OK", member.clone()),
             ("200 OK", member),
         ])
@@ -1018,7 +1018,7 @@ mod tests {
 
     #[tokio::test]
     async fn introspection_contract_dispatch_parsing_and_http_envelopes() {
-        let (ctx, requests) = dione_discord_operations::introspection_test_support::fixture(vec![
+        let (ctx, requests) = crate::introspection_test_support::fixture(vec![
             ("200 OK", json!([])),
             ("200 OK", json!([])),
             ("200 OK", json!({"id":"91","type":0,"name":"returned-channel"})),

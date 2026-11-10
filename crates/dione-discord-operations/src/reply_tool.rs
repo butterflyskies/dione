@@ -106,6 +106,7 @@ impl ReplyServices {
     }
 }
 
+/// Registers the actual reply service with its existing resident access policy.
 pub fn registration(services: Arc<ReplyServices>) -> Result<RegisteredTool, ToolNameError> {
     Ok(RegisteredTool::new(
         ToolDefinition::new(

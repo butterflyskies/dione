@@ -378,19 +378,27 @@ impl BotDisplayName {
 
 /// Context available to all messaging tools.
 pub struct MessagingCtx {
+    /// Authenticated Discord HTTP service shared by the application.
     pub http: Arc<serenity::http::Http>,
+    /// Application state shared with the actual gateway and other operations.
     pub state: State,
+    /// Validated configuration snapshot for this operation context.
     pub config: Arc<LoadedConfig>,
+    /// Directory for the existing consent and diary state.
     pub state_dir: Utf8PathBuf,
     pre_send_pipeline: Option<Arc<PreSendPipeline>>,
     author_id: Option<UserId>,
     construct_id: ConstructId,
+    /// Existing consent gate used for held delivery and settlement.
     pub no_rly: Arc<ConsentGate>,
+    /// Optional existing application notification channel.
     pub event_tx: Option<mpsc::Sender<NotificationEvent>>,
+    /// Enforcing ingress facade shared with the actual gateway.
     pub ingress_ledger: Arc<IngressLedger>,
 }
 
 impl MessagingCtx {
+    /// Captures concrete application services and the currently installed enabled pipeline.
     pub fn new(
         http: Arc<serenity::http::Http>,
         state: State,
@@ -1671,6 +1679,7 @@ pub async fn edit_message_with_hook_overrides(
         .await
 }
 
+/// Edits a message through the same target, hook and explicit link-preview controls.
 pub async fn edit_message_with_embed_control(
     ctx: &MessagingCtx,
     channel_id: ChannelId,
@@ -1867,6 +1876,7 @@ pub async fn send_dm_with_hook_overrides(
     .await
 }
 
+/// Sends a direct message through the existing recipient, evidence and named-hook checks.
 pub async fn send_dm_with_evidence_and_hook_overrides(
     ctx: &MessagingCtx,
     user_id: UserId,
