@@ -941,6 +941,22 @@ mod tests {
             assert!(!format!("{error:?} {error}").contains("SYNTHETIC_"));
             server.await.unwrap();
         }
+        // Under-limit I/O failures retain the old acceptance behavior; an
+        // oversize failure above must never take this fallback.
+        let (url, server) = diagnostic_http_fixture("HTTP/1.1 200 Fixture\r\nContent-Type: application/json\r\nContent-Length: 9\r\nConnection: close\r\n\r\n{".to_owned()).await;
+        let client = DiagnosticHttpClient(reqwest_mcp::Client::new());
+        let result = client
+            .post_message(
+                url.as_str().into(),
+                serde_json::from_value(json!({"jsonrpc":"2.0","id":1,"method":"ping"})).unwrap(),
+                None,
+                None,
+                HashMap::new(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(result, StreamableHttpPostResponse::Accepted));
+        server.await.unwrap();
         let diagnostics = diagnostics.0.lock().unwrap();
         assert!(!String::from_utf8_lossy(&diagnostics).contains("SYNTHETIC_"));
     }

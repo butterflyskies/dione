@@ -425,7 +425,18 @@ impl DiagnosticHttpClient {
                 // Try to parse as a valid JSON-RPC message. If the body is
                 // malformed (e.g. a 200 response to a notification that lacks
                 // an `id` field), treat it as accepted rather than failing.
-                let body = read_bounded_body(response, MAX_JSON_RESPONSE_SIZE).await?;
+                let body = match read_bounded_body(response, MAX_JSON_RESPONSE_SIZE).await {
+                    Ok(body) => body,
+                    Err(error @ StreamableHttpError::ResponseBodyTooLarge { .. }) => {
+                        return Err(error);
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            "could not read JSON response as ServerJsonRpcMessage, treating as accepted"
+                        );
+                        return Ok(StreamableHttpPostResponse::Accepted);
+                    }
+                };
                 match serde_json::from_slice::<ServerJsonRpcMessage>(&body) {
                     Ok(message) => Ok(StreamableHttpPostResponse::Json(message, session_id)),
                     Err(_) => {

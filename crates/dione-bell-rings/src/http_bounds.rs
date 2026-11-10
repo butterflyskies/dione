@@ -7,7 +7,7 @@ use futures_util::{StreamExt, stream};
 use rmcp::transport::{
     common::client_side_sse::BoxedSseResponse, streamable_http_client::StreamableHttpError,
 };
-use sse_stream::SseStream;
+use sse_stream::{Error as SseError, SseStream};
 use thiserror::Error;
 
 pub(crate) const MAX_JSON_RESPONSE_SIZE: usize = 16 * 1024 * 1024;
@@ -148,7 +148,21 @@ pub(crate) fn bounded_sse_response(
             }
         },
     );
-    SseStream::from_bytes_stream(stream).boxed()
+    SseStream::from_bytes_stream(stream)
+        .map(|event| {
+            event.map_err(|error| match error {
+                // Keep the original reqwest body cause visible to existing consumers.
+                SseError::Body(error) => match error.downcast::<BoundedSseStreamError>() {
+                    Ok(error) => match *error {
+                        BoundedSseStreamError::Source(source) => SseError::Body(source),
+                        oversized => SseError::Body(Box::new(oversized)),
+                    },
+                    Err(error) => SseError::Body(error),
+                },
+                other => other,
+            })
+        })
+        .boxed()
 }
 
 #[cfg(test)]
