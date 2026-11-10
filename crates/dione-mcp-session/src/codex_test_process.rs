@@ -34,17 +34,35 @@ struct Proxy {
 }
 impl Proxy {
     async fn command(&self, request: Value) -> Value {
+        let command = match request["command"].as_str() {
+            Some("tools") => "tools",
+            Some("teams_setup") => "teams_setup",
+            Some("teams_begin") => "teams_begin",
+            Some("teams_wait") => "teams_wait",
+            Some("teams_reached") => "teams_reached",
+            Some("teams_release") => "teams_release",
+            Some("teams_cancel") => "teams_cancel",
+            Some("teams_drain") => "teams_drain",
+            Some("teams_restart") => "teams_restart",
+            Some("shutdown") => "shutdown",
+            _ => "other",
+        };
         self.client
             .post(&self.url)
             .json(&request)
             .send()
             .await
-            .unwrap()
+            .unwrap_or_else(|error| {
+                panic!(
+                    "Codex fixture {command} send failed; timed_out={}",
+                    error.is_timeout()
+                )
+            })
             .error_for_status()
-            .unwrap()
+            .unwrap_or_else(|_| panic!("Codex fixture {command} returned an error status"))
             .json()
             .await
-            .unwrap()
+            .unwrap_or_else(|_| panic!("Codex fixture {command} response decoding failed"))
     }
 }
 impl HarnessDelivery for Proxy {
@@ -159,7 +177,7 @@ impl OwnerProcess {
         let mut proxy = Proxy {
             client: reqwest::Client::builder()
                 .no_proxy()
-                .timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(120))
                 .build()
                 .unwrap(),
             url: format!("http://{address}/"),

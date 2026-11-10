@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [0.150.9] - 2026-11-10
 
 ### Fixed
+- Give the private Codex test proxy a bounded observation allowance and command-stage diagnostics without changing production deadlines.
 - Use an invented memory namespace consistently in the identified Bell fixtures.
 
 ## [0.150.8] - 2026-11-10

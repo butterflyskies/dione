@@ -15,7 +15,7 @@ categories = ["command-line-utilities"]
 
 [workspace.dependencies]
 dione-receipt-gate = { version = "=0.1.0", path = "crates/dione-receipt-gate" }
-dione-mcp-session = { version = "=0.1.0", path = "crates/dione-mcp-session" }
+dione-mcp-session = { version = "=0.1.1", path = "crates/dione-mcp-session" }
 parking_lot = "0.12"
 dione-recipient-attention = { version = "=0.1.1", path = "crates/dione-recipient-attention" }
 dione-discord-operations = { version = "=0.1.3", path = "crates/dione-discord-operations" }
