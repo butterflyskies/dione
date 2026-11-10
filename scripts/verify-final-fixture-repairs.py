@@ -50,6 +50,37 @@ def main():
     for path in subprocess.check_output(['git', 'ls-tree', '-r', '--name-only', BASE, 'src', 'crates'], cwd=ROOT, text=True).splitlines():
         if path.endswith('.rs') and path not in [bell_path, *[row['path'] for row in proxy_checks]]:
             assert (ROOT / path).read_bytes() == old(path), path
+    for path in ['src/lib.rs', 'crates/dione-mcp-session/src/lib.rs']:
+        assert re.search(r'#\[cfg\(test\)\]\nmod codex_test_process;', (ROOT / path).read_text())
+    workspace = tomllib.loads((ROOT / 'Cargo.toml').read_text())
+    documents = {}
+    for path in [ROOT / 'Cargo.toml', *sorted((ROOT / 'crates').glob('*/Cargo.toml'))]:
+        document = tomllib.loads(path.read_text())
+        documents[document['package']['name']] = document
+    normal = {name: set() for name in documents}
+    packaged = {name: set() for name in documents}
+    for name, document in documents.items():
+        for table in [document, *document.get('target', {}).values()]:
+            for section in ['dependencies', 'build-dependencies', 'dev-dependencies']:
+                for alias, declaration in table.get(section, {}).items():
+                    if not isinstance(declaration, dict):
+                        continue
+                    dep = workspace['workspace']['dependencies'][alias] if declaration.get('workspace') else declaration
+                    if 'path' in dep:
+                        package = dep.get('package', alias)
+                        assert dep['version'] == '=' + documents[package]['package']['version']
+                        packaged[name].add(package)
+                        if section != 'dev-dependencies':
+                            normal[name].add(package)
+    def reverse_closure(graph):
+        closure = {'dione-mcp-session'}
+        while True:
+            enlarged = closure | {name for name, deps in graph.items() if deps & closure}
+            if enlarged == closure:
+                return sorted(closure)
+            closure = enlarged
+    assert reverse_closure(normal) == ['dione', 'dione-mcp-session']
+    assert reverse_closure(packaged) == ['dione', 'dione-mcp-session']
     baseline_lock = tomllib.loads(old('Cargo.lock').decode())
     lock = tomllib.loads((ROOT / 'Cargo.lock').read_text())
     def external(document):
@@ -72,7 +103,9 @@ def main():
               'substitution_lines': [i for i, line in enumerate(before.splitlines(), 1) if identified in line],
               'invented_namespace': 'fixture-orbit-27', 'proxy_copies': proxy_checks,
               'all_other_Rust_bytes_unchanged': True, 'accepted_receipt_bytes_and_release_workflow_unchanged': True,
-              'external_records_unchanged': len(external(lock)), 'normal_and_packaged_version_closure': ['dione-mcp-session', 'dione'],
+              'external_records_unchanged': len(external(lock)), 'normal_reverse_version_closure': reverse_closure(normal),
+              'packaged_reverse_version_closure': reverse_closure(packaged),
+              'normal_packages': len(documents),
               'affected_Bell_test_names': cases, 'affected_Bell_test_count': len(cases),
               'Codex_exact_named_case': 'owned_admission_completion_retains_native_authority_after_queue_restart',
               'limits': 'Source-only binding. Historical timeout command/cause unknown. No native result or official approval.'}
