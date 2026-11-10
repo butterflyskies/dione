@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.150.5] - 2026-11-10
+
+- Require real peer transport liveness in Bell under-limit and interruption controls before explicit cleanup.
+
 ## [0.150.4] - 2026-11-10
 
 ### Changed
