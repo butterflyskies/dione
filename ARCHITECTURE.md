@@ -177,7 +177,7 @@ flowchart LR
 
 The default `dione` mode is `claude-code`. All modes expose MCP requests and
 responses on stdin and stdout. Logs use stderr and an optional log file.
-[server.rs](src/mcp/server.rs) implements line-delimited JSON-RPC directly so
+[server.rs](crates/dione-mcp-session/src/mcp/server.rs) implements line-delimited JSON-RPC directly so
 responses and channel notifications can share stdout.
 
 [HarnessConnection](crates/dione-harness/src/connection.rs) couples delivery and MCP
@@ -278,9 +278,9 @@ configured MCP providers in shadow or live mode.
 [Discord reply contracts](crates/dione-discord-tool-contracts/src/reply.rs) own the reply schema
 and argument parsing. [Discord reply registration](crates/dione-discord-operations/src/reply_tool.rs) keeps execution
 and evidence-dependent discovery using the current configuration.
-[dispatch.rs](src/mcp/dispatch.rs) loads a fresh configuration snapshot for a
+[dispatch.rs](crates/dione-mcp-session/src/mcp/dispatch.rs) loads a fresh configuration snapshot for a
 tool call and routes it to Discord operations and the remaining
-[tool handlers](src/mcp/tools).
+[tool handlers](crates/dione-mcp-session/src/mcp/tools).
 The current request loop awaits each handler before reading the next request.
 A slow handler can therefore delay later requests and cancellation handling.
 
@@ -388,7 +388,7 @@ Publishing a new snapshot does not reconstruct those captured values.
 
 | Integration | Implementing code and purpose |
 |-------------|-------------------------------|
-| Discord Gateway and REST | [Serenity client](crates/dione-discord-runtime/src/client.rs), [events](crates/dione-discord-runtime/src/events.rs), [messaging](crates/dione-discord-operations/src/messaging.rs), [presence](crates/dione-discord-presence/src/lib.rs), [typing](crates/dione-discord-typing/src/lib.rs), and the remaining [tools](src/mcp/tools) receive events and execute authorized operations. |
+| Discord Gateway and REST | [Serenity client](crates/dione-discord-runtime/src/client.rs), [events](crates/dione-discord-runtime/src/events.rs), [messaging](crates/dione-discord-operations/src/messaging.rs), [presence](crates/dione-discord-presence/src/lib.rs), [typing](crates/dione-discord-typing/src/lib.rs), and the remaining [tools](crates/dione-mcp-session/src/mcp/tools) receive events and execute authorized operations. |
 | Codex app-server | [Delivery worker](crates/dione-codex/src/app_server.rs) addresses an exact local thread. |
 | PluralKit | [Identity resolver](crates/dione-pluralkit-resolver/src/lib.rs) resolves supported proxy identity. |
 | Pronouns and nameplates | [Pronoun service](crates/dione-identity-display/src/pronouns.rs) and [nameplate service](crates/dione-identity-display/src/nameplates.rs) enrich display metadata when enabled. |
@@ -462,7 +462,7 @@ Discord message read, search, attachment and native observation ownership reside
 
 [Attention control commands](crates/dione-attention/src/control.rs) own the twelve-operation decoder, descriptive mutation classification and MCP schema in the existing Attention library. The [recipient executor](crates/dione-recipient-attention/src/control.rs) retains authentication-derived recipient context, current configuration and source checks, lifecycle state and durable effect admission. A decoded command is not permission to execute it.
 
-[MCP response contracts](crates/dione-mcp-protocol/src/lib.rs) own protocol negotiation and the thirty-three built-in discovery definitions. The [root server](src/mcp/server.rs) supplies its application version and current harness capability/tool snapshots, then retains authentication, installed registration, current configuration, execution and lifecycle hooks. Discovery metadata grants no authority.
+[MCP response contracts](crates/dione-mcp-protocol/src/lib.rs) own protocol negotiation and the thirty-three built-in discovery definitions. The [MCP session](crates/dione-mcp-session/src/mcp/server.rs) receives the application version from root startup and current harness capability/tool snapshots, then owns authentication, installed registration, current configuration, execution and lifecycle hooks. Discovery metadata grants no authority.
 
 The registered Discord gateway runtime owns its verification producers and policy/lifecycle enforcers together. Root composition supplies concrete services and shares the enforcing ledger with MCP and Attention; proof constructors remain private inside the runtime. Process-global mute installation has one registry in `dione-mutes`. Observation remains disabled at startup.
 
