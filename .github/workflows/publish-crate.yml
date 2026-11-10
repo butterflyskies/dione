@@ -3626,8 +3626,18 @@ jobs:
           sh scripts/package-preflight.sh dione-oneshot "${oneshot_version}" "${oneshot_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-harness-runtime:
-    needs: [verify-dione, reconcile-harness, reconcile-config, reconcile-attention, reconcile-codex, reconcile-omp, reconcile-claude]
-    if: needs.verify-dione.outputs.publish-harness-runtime == 'true'
+    needs: [verify-dione, reconcile-harness, reconcile-config, reconcile-attention, reconcile-codex, reconcile-omp, reconcile-claude, reconcile-discord-events]
+    if: >-
+      always() &&
+      needs.verify-dione.result == 'success' &&
+      needs.reconcile-harness.result == 'success' &&
+      needs.reconcile-config.result == 'success' &&
+      needs.reconcile-attention.result == 'success' &&
+      needs.reconcile-codex.result == 'success' &&
+      needs.reconcile-omp.result == 'success' &&
+      needs.reconcile-claude.result == 'success' &&
+      needs.reconcile-discord-events.result == 'success' &&
+      needs.verify-dione.outputs.publish-harness-runtime == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: release
@@ -3664,7 +3674,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   reconcile-harness-runtime:
-    needs: [verify-dione, reconcile-harness, reconcile-config, reconcile-attention, reconcile-codex, reconcile-omp, reconcile-claude, publish-harness-runtime]
+    needs: [verify-dione, reconcile-harness, reconcile-config, reconcile-attention, reconcile-codex, reconcile-omp, reconcile-claude, reconcile-discord-events, publish-harness-runtime]
     if: >-
       always() &&
       needs.verify-dione.result == 'success' &&
@@ -3674,6 +3684,7 @@ jobs:
       needs.reconcile-codex.result == 'success' &&
       needs.reconcile-omp.result == 'success' &&
       needs.reconcile-claude.result == 'success' &&
+      needs.reconcile-discord-events.result == 'success' &&
       (needs.publish-harness-runtime.result == 'success' || needs.publish-harness-runtime.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 20

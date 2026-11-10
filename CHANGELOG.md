@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.150.8] - 2026-11-10
 
+### Fixed
+- Wait for the packaged Discord-event prerequisite before publishing or reconciling the harness runtime.
+
 ### Changed
 - Move the dormant, sealed reaction receipt gate into its owning crate without registering new runtime behavior.
 
