@@ -493,12 +493,7 @@ async fn registered_reply_reloads_discovery_and_policy_and_preserves_options() {
     peer.abort();
 }
 
-fn wire_message(
-    id: u64,
-    content: &str,
-    timestamp: &str,
-    attachments: Value,
-) -> Value {
+fn wire_message(id: u64, content: &str, timestamp: &str, attachments: Value) -> Value {
     json!({
         "id": id.to_string(),
         "type": 0,
