@@ -114,6 +114,8 @@ jobs:
       discord-runtime-version: ${{ steps.package.outputs.discord-runtime-version }}
       discord-operations-version: ${{ steps.package.outputs.discord-operations-version }}
       recipient-attention-version: ${{ steps.package.outputs.recipient-attention-version }}
+      receipt-gate-version: ${{ steps.package.outputs.receipt-gate-version }}
+      publish-receipt-gate: ${{ steps.package.outputs.publish-receipt-gate }}
       mcp-session-version: ${{ steps.package.outputs.mcp-session-version }}
       publish-mcp-session: ${{ steps.package.outputs.publish-mcp-session }}
       publish-recipient-attention: ${{ steps.package.outputs.publish-recipient-attention }}
@@ -398,6 +400,11 @@ jobs:
           recipient_attention_crate="target/package/dione-recipient-attention-${recipient_attention_version}.crate"
           sh scripts/package-preflight.sh dione-recipient-attention "${recipient_attention_version}" "${recipient_attention_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-recipient-attention butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
           echo "recipient-attention-version=${recipient_attention_version}" >> "${GITHUB_OUTPUT}"
+          receipt_gate_version="$(scripts/workspace-package-version.sh dione-receipt-gate)"
+          receipt_gate_crate="target/package/dione-receipt-gate-${receipt_gate_version}.crate"
+          sh scripts/package-preflight.sh dione-receipt-gate "${receipt_gate_version}" "${receipt_gate_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-receipt-gate butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
+          echo "receipt-gate-version=${receipt_gate_version}" >> "${GITHUB_OUTPUT}"
+
           mcp_session_version="$(scripts/workspace-package-version.sh dione-mcp-session)"
           mcp_session_crate="target/package/dione-mcp-session-${mcp_session_version}.crate"
           sh scripts/package-preflight.sh dione-mcp-session "${mcp_session_version}" "${mcp_session_crate}" --ignore-vcs-info verify "${GITHUB_OUTPUT}" publish-mcp-session butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
@@ -5010,6 +5017,82 @@ jobs:
           recipient_attention_crate="target/package/dione-recipient-attention-${recipient_attention_version}.crate"
           sh scripts/package-preflight.sh dione-recipient-attention "${recipient_attention_version}" "${recipient_attention_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
+  publish-receipt-gate:
+    needs: verify-dione
+    if: needs.verify-dione.outputs.publish-receipt-gate == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: "1.98.0"
+      - name: Recheck receipt-gate package contents
+        id: preflight
+        run: |
+          set -euo pipefail
+
+          receipt_gate_version="$(scripts/workspace-package-version.sh dione-receipt-gate)"
+          test "${receipt_gate_version}" = "${{ needs.verify-dione.outputs.receipt-gate-version }}"
+          cargo package -p dione-receipt-gate --locked --no-verify
+          receipt_gate_crate="target/package/dione-receipt-gate-${receipt_gate_version}.crate"
+          sh scripts/package-preflight.sh dione-receipt-gate "${receipt_gate_version}" "${receipt_gate_crate}" --ignore-vcs-info upload "${GITHUB_OUTPUT}" upload butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
+      - name: Authenticate with crates.io
+        if: steps.preflight.outputs.upload == 'true'
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
+        id: auth
+      - name: Upload pre-verified receipt-gate package
+        if: steps.preflight.outputs.upload == 'true'
+        continue-on-error: true
+        run: cargo publish -p dione-receipt-gate --locked --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  reconcile-receipt-gate:
+    needs: [verify-dione, publish-receipt-gate]
+    if: >-
+      always() &&
+      needs.verify-dione.result == 'success' &&
+      (needs.publish-receipt-gate.result == 'success' || needs.publish-receipt-gate.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: "1.98.0"
+      - name: Reconcile receipt-gate registry contents
+        run: |
+          set -euo pipefail
+
+          receipt_gate_version="${{ needs.verify-dione.outputs.receipt-gate-version }}"
+          for attempt in $(seq 1 20); do
+            if timeout 10s cargo info --registry crates-io "dione-receipt-gate@${receipt_gate_version}" > /dev/null 2>&1; then
+              break
+            fi
+            if [ "${attempt}" = 20 ]; then
+              echo "Cargo could not resolve dione-receipt-gate ${receipt_gate_version} after bounded retries" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          cargo package -p dione-receipt-gate --locked
+          receipt_gate_crate="target/package/dione-receipt-gate-${receipt_gate_version}.crate"
+          sh scripts/package-preflight.sh dione-receipt-gate "${receipt_gate_version}" "${receipt_gate_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
+
   publish-mcp-session:
     needs: [verify-dione, reconcile-access-requests, reconcile-attention, reconcile-bell-rings, reconcile-claude, reconcile-codex, reconcile-config, reconcile-contracts, reconcile-discord-events, reconcile-discord-gate, reconcile-discord-introspection, reconcile-discord-messaging-contracts, reconcile-discord-operations, reconcile-discord-presence, reconcile-discord-runtime, reconcile-discord-state, reconcile-discord-tool-arguments, reconcile-discord-tool-contracts, reconcile-discord-typing, reconcile-evidence, reconcile-harness, reconcile-harness-runtime, reconcile-mcp-protocol, reconcile-mcp-tools, reconcile-messages, reconcile-mutes, reconcile-omp, reconcile-outbound-consent, reconcile-permissions, reconcile-pre-send, reconcile-provider-delivery, reconcile-recipient-attention, reconcile-rendering, reconcile-teams, reconcile-teams-identities, reconcile-tracing-channel]
     if: >-
@@ -5160,11 +5243,12 @@ jobs:
           sh scripts/package-preflight.sh dione-mcp-session "${mcp_session_version}" "${mcp_session_crate}" --ignore-vcs-info reconcile - - butterflysky github:butterflyskies:lacuna-blinkers github:butterflyskies:superadmins
 
   publish-crate:
-    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime, reconcile-discord-scheduling, reconcile-discord-typing, reconcile-discord-introspection, reconcile-discord-queries, reconcile-attention-admission, reconcile-discord-context, reconcile-discord-tool-arguments, reconcile-discord-messaging-contracts, reconcile-discord-tool-contracts, reconcile-pluralkit-resolver, reconcile-mcp-protocol, reconcile-discord-runtime, reconcile-discord-operations, reconcile-recipient-attention, reconcile-mcp-session]
+    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime, reconcile-discord-scheduling, reconcile-discord-typing, reconcile-discord-introspection, reconcile-discord-queries, reconcile-attention-admission, reconcile-discord-context, reconcile-discord-tool-arguments, reconcile-discord-messaging-contracts, reconcile-discord-tool-contracts, reconcile-pluralkit-resolver, reconcile-mcp-protocol, reconcile-discord-runtime, reconcile-discord-operations, reconcile-recipient-attention, reconcile-mcp-session, reconcile-receipt-gate]
     if: >-
       needs.verify-dione.outputs.publish-dione == 'true' &&
       needs.reconcile-discord-runtime.result == 'success' &&
       needs.reconcile-mcp-session.result == 'success' &&
+      needs.reconcile-receipt-gate.result == 'success' &&
       needs.reconcile-recipient-attention.result == 'success' &&
       needs.reconcile-discord-operations.result == 'success'
     runs-on: ubuntu-latest
@@ -5203,7 +5287,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   reconcile-dione:
-    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime, reconcile-discord-scheduling, reconcile-discord-typing, reconcile-discord-introspection, reconcile-discord-queries, reconcile-attention-admission, reconcile-discord-context, reconcile-discord-tool-arguments, reconcile-discord-messaging-contracts, reconcile-discord-tool-contracts, reconcile-pluralkit-resolver, reconcile-mcp-protocol, publish-crate, reconcile-discord-runtime, reconcile-discord-operations, reconcile-recipient-attention, reconcile-mcp-session]
+    needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime, reconcile-discord-scheduling, reconcile-discord-typing, reconcile-discord-introspection, reconcile-discord-queries, reconcile-attention-admission, reconcile-discord-context, reconcile-discord-tool-arguments, reconcile-discord-messaging-contracts, reconcile-discord-tool-contracts, reconcile-pluralkit-resolver, reconcile-mcp-protocol, publish-crate, reconcile-discord-runtime, reconcile-discord-operations, reconcile-recipient-attention, reconcile-mcp-session, reconcile-receipt-gate]
     if: >-
       always() &&
       needs.verify-dione.result == 'success' &&
@@ -5262,6 +5346,7 @@ jobs:
       needs.reconcile-mcp-protocol.result == 'success' &&
       needs.reconcile-discord-runtime.result == 'success' &&
       needs.reconcile-mcp-session.result == 'success' &&
+      needs.reconcile-receipt-gate.result == 'success' &&
       needs.reconcile-recipient-attention.result == 'success' &&
       needs.reconcile-discord-operations.result == 'success' &&
       (needs.publish-crate.result == 'success' || needs.publish-crate.result == 'skipped')

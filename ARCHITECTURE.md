@@ -471,3 +471,7 @@ The registered Discord gateway runtime owns its verification producers and polic
 ### MCP session ownership
 
 `dione-mcp-session` owns immutable owner registrations, JSON-RPC request dispatch, private resident admission and stdio/resident task lifetimes. Process startup supplies the application version and concrete capabilities, starts the harness and transports, and retains process signal and final drain ordering. Request origins, registry mutation and test helpers stay private to the session library.
+
+### Dormant receipt authority owner
+
+The sealed [dione-receipt-gate](crates/dione-receipt-gate/src/lib.rs) library owns the existing reaction receipt store, exact command parser and private proof construction. It has no registered runtime caller or public authority-construction interface. Root retains only process composition and executable adapters; this move does not enable receipt-gated reactions, Rook publication or gateway observation.

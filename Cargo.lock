@@ -963,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.150.7"
+version = "0.150.8"
 dependencies = [
  "dione-mcp-session",
  "dione-recipient-attention",
@@ -1990,6 +1990,16 @@ dependencies = [
  "typst-as-lib",
  "typst-assets",
  "typst-render",
+]
+
+[[package]]
+name = "dione-receipt-gate"
+version = "0.1.0"
+dependencies = [
+ "serenity",
+ "sha2",
+ "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]

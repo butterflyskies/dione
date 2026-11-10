@@ -1,12 +1,6 @@
 #[cfg(test)]
 mod discord_bells_tests;
 
-#[expect(
-    dead_code,
-    reason = "standalone receipt-gate fixture is runtime-wired in a follow-up PR"
-)]
-pub(crate) mod receipt_gate;
-
 /// Agent harness integration.
 #[cfg(test)]
 mod harness_test_support;

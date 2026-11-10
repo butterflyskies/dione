@@ -231,7 +231,6 @@ impl VerifyRequest {
 
 /// Errors returned while minting or maintaining receipt-gate state.
 #[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
 pub(crate) enum ReceiptStoreError {
     /// Internal mutex state was poisoned by a prior panic.
     #[error("receipt store unavailable")]
