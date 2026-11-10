@@ -36,7 +36,7 @@ use {
 };
 
 /// An inspectable replay baseline, never an implicitly promoted enforcement policy.
-pub const SHADOW_BASELINE: FixedThresholdPolicy = FixedThresholdPolicy {
+pub(crate) const SHADOW_BASELINE: FixedThresholdPolicy = FixedThresholdPolicy {
     wanted: 0.5,
     prompt: 0.5,
     participation: 0.5,
@@ -49,13 +49,13 @@ pub(crate) struct NoticeServices {
     pub(crate) http: Arc<serenity::http::Http>,
     pub(crate) state: dione_discord_state::State,
 }
-/// Root application assembly keeps publication services separate from source authority.
+/// Concrete application resources for source checks and recipient notice publication.
 pub struct AttentionServices {
     resolver: SourceResolver,
     notice: NoticeServices,
 }
 impl AttentionServices {
-    /// Assembles source revalidation and the root's existing notice resources.
+    /// Assembles source revalidation and the application's existing notice resources.
     pub fn new(
         http: Arc<serenity::http::Http>,
         state: dione_discord_state::State,
@@ -73,8 +73,9 @@ impl AttentionServices {
     }
 }
 
+/// Owns recipient policy execution, source checks and durable delivery fences.
 pub struct AttentionRuntime {
-    pub resolver: SourceResolver,
+    pub(crate) resolver: SourceResolver,
     pub(crate) notice: NoticeServices,
     authority_module: dione_contracts::ModuleInstanceId,
     store: Arc<dione_attention::store_access::AttentionStoreAccess>,
@@ -84,7 +85,7 @@ pub struct AttentionRuntime {
     test_provider: Option<Arc<TypeSafeProvider>>,
     #[cfg(test)]
     test_completed_judgment: Mutex<Option<CompletedJudgmentPause>>,
-    pub enforcement_supported: bool,
+    pub(crate) enforcement_supported: bool,
 }
 
 #[cfg(test)]
@@ -193,7 +194,12 @@ impl AttentionRuntime {
 
     /// Disk transactions run outside Tokio's async worker threads. Errors never
     /// replace a corrupt store with an apparently successful empty one.
-    pub async fn with_store<R, F>(self: &Arc<Self>, operation: F) -> Result<R, String>
+    /// Checks sticky store initialization without exposing a mutable transaction.
+    pub async fn check_store_available(self: &Arc<Self>) -> Result<(), String> {
+        self.with_store(|_| Ok(())).await
+    }
+
+    pub(crate) async fn with_store<R, F>(self: &Arc<Self>, operation: F) -> Result<R, String>
     where
         R: Send + 'static,
         F: FnOnce(&mut AttentionStore) -> Result<R, String> + Send + 'static,
@@ -205,7 +211,7 @@ impl AttentionRuntime {
     }
 
     /// Persists dirty health state off the async worker and reports persistence failure.
-    pub async fn persist_health(self: &Arc<Self>) -> Result<(), String> {
+    pub(crate) async fn persist_health(self: &Arc<Self>) -> Result<(), String> {
         self.health
             .persist()
             .await
@@ -213,7 +219,7 @@ impl AttentionRuntime {
     }
 
     /// Publishes a bounded opt-in notice under the current route and publication guard.
-    pub async fn publish_notice(
+    pub(crate) async fn publish_notice(
         self: Arc<Self>,
         no_rly: Arc<ConsentGate>,
         event_tx: Option<tokio::sync::mpsc::Sender<NotificationEvent>>,
@@ -367,7 +373,7 @@ impl AttentionRuntime {
     }
 
     /// Evaluates authorized work, rejecting stale configuration and preserving ordinary fallback.
-    pub async fn evaluate(self: Arc<Self>, work: JudgmentWork) -> DecisionRecord {
+    pub(crate) async fn evaluate(self: Arc<Self>, work: JudgmentWork) -> DecisionRecord {
         let mut record = work.record;
         let mut changes = subscribe_generation();
         if work.cancel.is_cancelled() || !self.export_current(&record) {
@@ -618,7 +624,7 @@ impl AttentionRuntime {
     }
 
     /// Revalidation is an observed fact, never inferred from a durable row.
-    pub async fn validate_record(
+    pub(crate) async fn validate_record(
         self: &Arc<Self>,
         record: &DecisionRecord,
     ) -> Result<(), SourceFailure> {
@@ -629,7 +635,7 @@ impl AttentionRuntime {
     }
 
     /// Revalidates exact sources within one shared deadline and persists the observed facts.
-    pub async fn validate_sources(
+    pub(crate) async fn validate_sources(
         self: &Arc<Self>,
         sources: &[SourceVersion],
     ) -> Result<(), SourceFailure> {
@@ -677,7 +683,7 @@ impl AttentionRuntime {
     }
 
     /// Prunes evidence, applies storage bounds, and revalidates the selected policy.
-    pub async fn maintain(self: Arc<Self>) {
+    pub(crate) async fn maintain(self: Arc<Self>) {
         let config = load_config(self.resolver.directory());
         let recipient = config.raw.attention.recipient.clone();
         let limits = StoreLimits {
@@ -716,7 +722,7 @@ impl AttentionRuntime {
     }
 
     /// Recovers eligible held work from earlier lifetimes without replaying uncertain receipts.
-    pub async fn recover_pending(
+    pub(crate) async fn recover_pending(
         self: Arc<Self>,
         live_incarnation: IncarnationId,
     ) -> Vec<dione_attention_admission::AdmissionResult> {
@@ -801,7 +807,10 @@ impl AttentionRuntime {
     }
 
     /// Returns a recipient-owned record and excerpts after current exact-source revalidation.
-    pub async fn retrieve(self: &Arc<Self>, id: RecordId) -> Result<serde_json::Value, String> {
+    pub(crate) async fn retrieve(
+        self: &Arc<Self>,
+        id: RecordId,
+    ) -> Result<serde_json::Value, String> {
         let recipient = load_config(self.resolver.directory())
             .raw
             .attention
@@ -849,7 +858,7 @@ impl AttentionRuntime {
     }
 
     /// Invalidates retained evidence and dependent artifacts for a Discord source.
-    pub async fn invalidate(self: &Arc<Self>, source: SourceKey) -> Result<(), String> {
+    pub(crate) async fn invalidate(self: &Arc<Self>, source: SourceKey) -> Result<(), String> {
         self.with_store(move |store| {
             store
                 .invalidate_source(source, None)
@@ -860,7 +869,7 @@ impl AttentionRuntime {
     }
 
     /// Persists delivery state off the async worker before callers acknowledge durability.
-    pub async fn mark_delivery(
+    pub(crate) async fn mark_delivery(
         self: &Arc<Self>,
         id: RecordId,
         state: DeliveryState,
@@ -1288,7 +1297,7 @@ mod tests {
             publish_settings(&path, &settings).await;
             let runtime = Arc::new(
                 AttentionRuntime::new(
-                    crate::attention::runtime::AttentionServices::new(
+                    crate::runtime::AttentionServices::new(
                         network.http(),
                         dione_discord_state::new_state(),
                         path.clone(),
@@ -1534,7 +1543,7 @@ mod tests {
     #[test]
     fn notice_destination_requires_independent_recipient_authority() {
         scenario(|| async {
-            use crate::attention::control::execute;
+            use crate::control::execute;
             use dione_attention::control::AttentionCommand;
 
             let fixture = NoticeFixture::new(AttentionMode::Log, NoticeMode::Failures, 200).await;

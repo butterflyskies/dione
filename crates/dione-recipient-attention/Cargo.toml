@@ -1,0 +1,59 @@
+[package]
+name = "dione-recipient-attention"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Recipient Attention execution and notification delivery lifecycle"
+repository = "https://github.com/butterflyskies/dione"
+readme = "README.md"
+
+[dependencies]
+futures-util.workspace = true
+camino.workspace = true
+chrono-tz.workspace = true
+dione-attention.workspace = true
+dione-attention-admission.workspace = true
+dione-bell-rings.workspace = true
+dione-config.workspace = true
+dione-contracts.workspace = true
+dione-delivery-scheduler.workspace = true
+dione-discord-bells.workspace = true
+dione-discord-events.workspace = true
+dione-discord-messaging-contracts.workspace = true
+dione-discord-operations.workspace = true
+dione-discord-runtime.workspace = true
+dione-discord-scheduling.workspace = true
+dione-discord-state.workspace = true
+dione-harness.workspace = true
+dione-messages.workspace = true
+dione-outbound-consent.workspace = true
+dione-rate-limiter.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serenity.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+dione-mutes.workspace = true
+dione-discord-gate.workspace = true
+sha2.workspace = true
+tokio-tungstenite.workspace = true
+dione-codex.workspace = true
+dione-claude.workspace = true
+dione-access-requests.workspace = true
+dione-discord-presence.workspace = true
+dione-provider-delivery.workspace = true
+axum.workspace = true
+reqwest.workspace = true
+tempfile.workspace = true
+toml.workspace = true
+chrono.workspace = true
+toml_edit.workspace = true
+dione-attention = { workspace = true, features = ["test-support"] }
+dione-discord-runtime = { workspace = true, features = ["test-support"] }
+tokio = { workspace = true, features = ["test-util", "process"] }
+parking_lot.workspace = true

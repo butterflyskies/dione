@@ -477,8 +477,8 @@ async fn run_attention_command(
         dione_config::resolve_token(config).ok_or(StartupErrorKind::ValidationToken)?
     };
     let runtime = Arc::new(
-        crate::attention::runtime::AttentionRuntime::new(
-            crate::attention::runtime::AttentionServices::new(
+        dione_recipient_attention::AttentionRuntime::new(
+            dione_recipient_attention::AttentionServices::new(
                 Arc::new(serenity::http::Http::new(&token)),
                 Arc::new(RwLock::new(SharedState::new())),
                 state_dir.clone(),
@@ -495,11 +495,11 @@ async fn run_attention_command(
         .await,
     );
     runtime
-        .with_store(|_| Ok(()))
+        .check_store_available()
         .await
         .map_err(StartupErrorKind::AttentionStore)?;
     let result =
-        crate::attention::control::execute(runtime, command, !config.access.admin_only_mutations)
+        dione_recipient_attention::execute(runtime, command, !config.access.admin_only_mutations)
             .await
             .map_err(StartupErrorKind::AttentionExecute)?;
     println!(

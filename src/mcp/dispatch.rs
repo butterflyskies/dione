@@ -245,7 +245,7 @@ pub(crate) async fn call_tool(
                 let command: dione_attention::control::AttentionCommand =
                     serde_json::from_value(args.clone())
                         .map_err(|error| format!("invalid attention command: {error}"))?;
-                crate::attention::control::execute(
+                dione_recipient_attention::execute(
                     server.attention.clone(),
                     command,
                     !config.access.admin_only_mutations,
@@ -1293,6 +1293,82 @@ mod tests {
             );
         }
     }
+    #[tokio::test]
+    async fn attention_recipient_root_wire_status_configure_and_admin_refusal() {
+        let _configuration = crate::config_test_guard();
+        let (_dir, server) = presence_test_server().await;
+        std::fs::write(
+            server.state_dir().join("config.toml"),
+            "[access]\nadmin_only_mutations = false\n",
+        )
+        .unwrap();
+        assert!(
+            dione_config::reload_config(server.state_dir())
+                .await
+                .1
+                .is_none()
+        );
+        let request = |arguments| json!({"jsonrpc":"2.0","id":71,"method":"tools/call","params":{"name":"attention","arguments":arguments}});
+        let status = crate::mcp::server::test_helpers::dispatch_request(
+            &server,
+            request(json!({"operation":"status"})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status["id"], 71);
+        assert!(status["error"].is_null(), "{status}");
+        let value: Value =
+            serde_json::from_str(status["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(value["settings"]["mode"], "off");
+        let mut settings = dione_config::load_config(server.state_dir())
+            .raw
+            .attention
+            .clone();
+        settings.mode = dione_attention::config::AttentionMode::Log;
+        let configure = request(json!({"operation":"configure","settings":settings}));
+        let accepted =
+            crate::mcp::server::test_helpers::dispatch_request(&server, configure.clone())
+                .await
+                .unwrap();
+        assert!(accepted["error"].is_null(), "{accepted}");
+        assert_eq!(
+            dione_config::load_config(server.state_dir())
+                .raw
+                .attention
+                .mode,
+            dione_attention::config::AttentionMode::Log
+        );
+        let text = std::fs::read_to_string(server.state_dir().join("config.toml")).unwrap();
+        std::fs::write(
+            server.state_dir().join("config.toml"),
+            text.replace(
+                "admin_only_mutations = false",
+                "admin_only_mutations = true",
+            ),
+        )
+        .unwrap();
+        assert!(
+            dione_config::reload_config(server.state_dir())
+                .await
+                .1
+                .is_none()
+        );
+        let denied = crate::mcp::server::test_helpers::dispatch_request(&server, configure)
+            .await
+            .unwrap();
+        assert_eq!(
+            denied["error"]["message"],
+            "admin_only_mutations is enabled; attention mutation tools are disabled"
+        );
+        assert_eq!(
+            dione_config::load_config(server.state_dir())
+                .raw
+                .attention
+                .mode,
+            dione_attention::config::AttentionMode::Log
+        );
+    }
+
     async fn presence_test_server() -> (tempfile::TempDir, DioneServer) {
         presence_test_server_with_http(std::sync::Arc::new(serenity::http::Http::new("fake"))).await
     }

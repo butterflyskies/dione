@@ -180,7 +180,7 @@ fn retained_digest(artifact: &LearnedArtifact) -> ArtifactDigest {
 async fn runtime_for(path: Utf8PathBuf, network: &Network) -> Arc<AttentionRuntime> {
     Arc::new(
         AttentionRuntime::new(
-            crate::attention::runtime::AttentionServices::new(
+            crate::runtime::AttentionServices::new(
                 network.http(),
                 dione_discord_state::new_state(),
                 path,

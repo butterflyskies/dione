@@ -2,7 +2,7 @@
 use super::*;
 use dione_access_requests::AccessQueue;
 use dione_contracts::MessageRef;
-use dione_harness::{HarnessDelivery, HarnessError, HarnessProtocol};
+use dione_harness::{AttentionPolicy, HarnessDelivery, HarnessError, HarnessProtocol};
 use dione_messages::delivery::Delivery;
 use dione_tracing_channel::TraceLevelController;
 use futures_util::future::BoxFuture;

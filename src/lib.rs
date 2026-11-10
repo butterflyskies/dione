@@ -1,4 +1,3 @@
-pub mod attention;
 #[cfg(test)]
 mod discord_bells_tests;
 

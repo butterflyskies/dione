@@ -963,8 +963,9 @@ dependencies = [
 
 [[package]]
 name = "dione"
-version = "0.150.3"
+version = "0.150.4"
 dependencies = [
+ "dione-recipient-attention",
  "dione-discord-operations",
  "arc-swap",
  "axum",
@@ -1924,6 +1925,55 @@ dependencies = [
  "typst-as-lib",
  "typst-assets",
  "typst-render",
+]
+
+[[package]]
+name = "dione-recipient-attention"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "camino",
+ "chrono",
+ "chrono-tz",
+ "dione-access-requests",
+ "dione-attention",
+ "dione-attention-admission",
+ "dione-bell-rings",
+ "dione-claude",
+ "dione-codex",
+ "dione-config",
+ "dione-contracts",
+ "dione-delivery-scheduler",
+ "dione-discord-bells",
+ "dione-discord-events",
+ "dione-discord-gate",
+ "dione-discord-messaging-contracts",
+ "dione-discord-operations",
+ "dione-discord-presence",
+ "dione-discord-runtime",
+ "dione-discord-scheduling",
+ "dione-discord-state",
+ "dione-harness",
+ "dione-messages",
+ "dione-mutes",
+ "dione-outbound-consent",
+ "dione-provider-delivery",
+ "dione-rate-limiter",
+ "futures-util",
+ "parking_lot",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serenity",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "toml 1.1.6+spec-1.1.0",
+ "toml_edit 0.25.15+spec-1.1.0",
+ "tracing",
 ]
 
 [[package]]

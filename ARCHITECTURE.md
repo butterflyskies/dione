@@ -36,8 +36,7 @@ context reads, and publication slots. Its private snapshot keeps claim and
 publication commits together. Discord retains current policy checks, native
 observation conversion, and HTTP transport behind Rook's existing provider traits.
 The public `dione-attention` package owns judgments, source-bound metadata,
-feedback, replay, evaluation, and learning. Dione retains attention admission,
-current source policy, runtime scheduling, and controls. The engine preserves
+feedback, replay, evaluation, and learning. The upper `dione-recipient-attention` library owns current source policy, runtime scheduling, controls and the complete notification delivery lifecycle; Dione composes its concrete inputs. The engine preserves
 its existing Serenity identity types and provider HTTP implementation.
 The public `dione-evidence` package owns terminal sentex syntax, checked handle
 arguments, supplied-author JSON projection, and the Markdown scanner shared by
@@ -258,7 +257,7 @@ Display names and webhook payload IDs alone are not user authority.
 The [ingress ledger](crates/dione-discord-runtime/src/ingress.rs) retains private lineage admission and current policy authority for edits, deletes, reply context, and subsequent reads. Its [lifecycle storage controller](crates/dione-discord-events/src/lifecycle_storage.rs) owns bounded retention, sequence allocation, content ordering and tombstones. Runtime authority checks and storage mutations share one borrowed critical section; retained metadata grants no authority.
 
 Admitted events enter a Tokio channel with capacity 256. The notification task
-in [server.rs](src/mcp/server.rs) applies rate limits and optional attention
+in [recipient forwarding](crates/dione-recipient-attention/src/forwarding.rs) applies rate limits and optional attention
 evaluation, then buffers and coalesces ordinary delivery through
 [Discord scheduling](crates/dione-discord-scheduling/src/lib.rs) and [delivery scheduler](crates/dione-delivery-scheduler/src/lib.rs).
 [Discord event contracts](crates/dione-discord-events/src/lib.rs) own descriptive observations and targeting reasons. [Discord delivery conversion](crates/dione-discord-events/src/delivery.rs) constructs typed batches, and
@@ -266,8 +265,8 @@ evaluation, then buffers and coalesces ordinary delivery through
 The buffer is in memory;
 entering the gateway channel is not a durable inbox commit.
 
-[Attention](src/attention/mod.rs) adds optional recipient-local ambient
-admission. The [admission controller](crates/dione-attention-admission/src/lib.rs) owns recipient-local work ordering, cancellation and completion fences. Its returned metadata grants no delivery authority. The root runtime owns source validation, evaluation, learned-policy
+[Recipient Attention](crates/dione-recipient-attention/src/lib.rs) adds optional recipient-local ambient
+admission. The [admission controller](crates/dione-attention-admission/src/lib.rs) owns recipient-local work ordering, cancellation and completion fences. Its returned metadata grants no delivery authority. The recipient runtime owns source validation, evaluation, learned-policy
 receipts, and transport outcome records. It is disabled by default. The
 [attention guide](docs/attention.md) describes modes and promotion requirements.
 [Bell evaluation](crates/dione-discord-bells/src/lib.rs) can attach memory recall metadata from
@@ -370,7 +369,7 @@ not imply that all writes have the same durability guarantee.
 | Access requests | [AccessQueue](crates/dione-access-requests/src/lib.rs) keeps requests in memory and writes `queue.json` through a temporary file and rename. Persistence errors are logged after memory changes. |
 | Codex delivery | [CodexEventQueue](crates/dione-codex/src/queue.rs) adapts the shared [durable owner](crates/dione-durable/src/queue.rs); its [legacy codec](crates/dione-codex/src/queue_codec.rs) preserves pending events, leases, consumers, and bindings in `codex-inbox.json`. The [store](crates/dione-durable/src/store.rs) holds `codex-inbox.lock` for its lifetime to exclude a second owner. |
 | Guild mutes | [MuteStore](crates/dione-mutes/src/lib.rs) rebuilds state from `guild_mute_receipts.jsonl`. Receipt append precedes snapshot publication. |
-| Attention | [AttentionRuntime](src/attention/runtime.rs) uses `attention/records.json` through the [attention store](crates/dione-attention/src/store.rs) and its [private serialized access controller](crates/dione-attention/src/store_access.rs), plus the [health lifecycle controller](crates/dione-attention/src/health.rs) for serialized backoff, notice bookkeeping and `attention-status.json` persistence. Root composition retains the single initialization worker and current notice route, consent and transport authority. |
+| Attention | [AttentionRuntime](crates/dione-recipient-attention/src/runtime.rs) uses `attention/records.json` through the [attention store](crates/dione-attention/src/store.rs) and its [private serialized access controller](crates/dione-attention/src/store_access.rs), plus the [health lifecycle controller](crates/dione-attention/src/health.rs) for serialized backoff, notice bookkeeping and `attention-status.json` persistence. The recipient owner retains the single initialization worker and current notice route, consent and transport authority; root composes the existing concrete resources. |
 | Consent outcomes | [JournalHandle](crates/dione-outbound-consent/src/journal.rs) serializes writes to `no_rly_journal.jsonl`. Pending consent handles are owned by [HoldQueue](crates/dione-outbound-consent/src/queue.rs). |
 | Attachments | [Discord queries](crates/dione-discord-queries/src/queries.rs) download Discord attachments into the state directory's `inbox/`. |
 | Transient Discord state | [shared Discord state](crates/dione-discord-state/src/lib.rs) holds entity caches, DM indexes, sent-message identities, and permission requests. The [ingress ledger](crates/dione-discord-runtime/src/ingress.rs), delivery buffer, and rate limiter are also process-local. |
@@ -461,7 +460,7 @@ Discord message read, search, attachment and native observation ownership reside
 
 [PluralKit fact resolution](crates/dione-pluralkit-resolver/src/lib.rs) owns provider HTTP, response-coordinate checks, retry bounds and the facts-only cache. The [root sealed adapter](crates/dione-discord-runtime/src/verified_action_runtime.rs) projects verified event coordinates into an ordinary lookup and consumes returned facts through the existing private action transition. The provider library grants no lifecycle or policy authority.
 
-[Attention control commands](crates/dione-attention/src/control.rs) own the twelve-operation decoder, descriptive mutation classification and MCP schema in the existing Attention library. The [root executor](src/attention/control.rs) retains authentication-derived recipient context, current configuration and source checks, lifecycle state and durable effect admission. A decoded command is not permission to execute it.
+[Attention control commands](crates/dione-attention/src/control.rs) own the twelve-operation decoder, descriptive mutation classification and MCP schema in the existing Attention library. The [recipient executor](crates/dione-recipient-attention/src/control.rs) retains authentication-derived recipient context, current configuration and source checks, lifecycle state and durable effect admission. A decoded command is not permission to execute it.
 
 [MCP response contracts](crates/dione-mcp-protocol/src/lib.rs) own protocol negotiation and the thirty-three built-in discovery definitions. The [root server](src/mcp/server.rs) supplies its application version and current harness capability/tool snapshots, then retains authentication, installed registration, current configuration, execution and lifecycle hooks. Discovery metadata grants no authority.
 

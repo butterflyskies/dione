@@ -6,9 +6,8 @@ mod boundary_acceptance;
 mod lifecycle_acceptance;
 
 use super::*;
-use crate::attention::control::execute;
-use crate::attention::runtime::AttentionRuntime;
-use dione_access_requests::AccessQueue;
+use crate::control::execute;
+use crate::runtime::AttentionRuntime;
 use dione_attention::config::AttentionBrief;
 use dione_attention::config::AttentionConfig;
 use dione_attention::config::AttentionMode;
@@ -382,7 +381,7 @@ impl Fixture {
         assert!(warning.is_none(), "{warning:?}");
         let attention = Arc::new(
             AttentionRuntime::new(
-                crate::attention::runtime::AttentionServices::new(
+                crate::runtime::AttentionServices::new(
                     network.http(),
                     dione_discord_state::new_state(),
                     path.clone(),
@@ -532,38 +531,31 @@ impl Fixture {
         Some(record)
     }
 
+    // Owner-control fixture, not root JSON-RPC dispatch coverage.
     async fn rpc(&self, arguments: Value) -> Value {
-        let (tx, _rx) = tokio::sync::mpsc::channel(4);
-        let mut server = super::DioneServer::new(
-            self.attention.notice.state.clone(),
-            Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&self.path))),
-            self.network.http(),
-            self.path.clone(),
-            tx,
-            dione_tracing_channel::TraceLevelController::noop(),
-            test_connection_for_queue(self.queue.clone()),
-            Arc::new(dione_outbound_consent::consent::ConsentGate::new(
-                &self.path,
-            )),
-            self.attention.resolver.ledger().clone(),
-            dione_contracts::ModuleInstanceId::new(
-                dione_contracts::ProviderId::new("discord").unwrap(),
-                dione_contracts::ModuleSlotId::new("primary").unwrap(),
-            ),
-            None,
-        )
-        .await
-        .expect("Discord reply registration");
-        server.attention = self.attention.clone();
-        super::test_helpers::dispatch_request(
-            &server,
-            json!({
-                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                "params": {"name": "attention", "arguments": arguments},
-            }),
-        )
-        .await
-        .unwrap()
+        let result = match serde_json::from_value::<AttentionCommand>(arguments) {
+            Ok(command) => {
+                execute(
+                    self.attention.clone(),
+                    command,
+                    !dione_config::load_config(&self.path)
+                        .access
+                        .admin_only_mutations,
+                )
+                .await
+            }
+            Err(error) => Err(format!("invalid attention command: {error}")),
+        };
+        match result {
+            Ok(value) => {
+                let mut result = json!({"content":[{"type":"text","text":value.to_string()}]});
+                if value.get("error").is_some() {
+                    result["isError"] = json!(true);
+                }
+                json!({"jsonrpc":"2.0","id":1,"result":result})
+            }
+            Err(error) => json!({"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":error}}),
+        }
     }
 
     async fn control(&self, command: AttentionCommand) -> Value {
@@ -1614,7 +1606,7 @@ fn recipient_workflow_promotes_only_evaluated_policy_and_recovers_only_unconfirm
         drop(fixture.attention);
         fixture.attention = Arc::new(
             AttentionRuntime::new(
-                crate::attention::runtime::AttentionServices::new(
+                crate::runtime::AttentionServices::new(
                     fixture.network.http(),
                     dione_discord_state::new_state(),
                     fixture.path.clone(),
@@ -1799,7 +1791,7 @@ fn fresh_ledger_disallowed_bot_ancestor_is_not_exported_or_derived() {
 #[test]
 fn native_bells_enrich_both_ordinary_and_attention_queue_deliveries() {
     scenario(|| async {
-        let provider = crate::discord_bells_tests::tests::McpFixture::value(json!({
+        let provider = crate::bell_test_support::McpFixture::value(json!({
             "recall_id":"r_combined", "results":[{"id":"native", "name":"memory", "scope":"fixture-orbit-27", "distance":0.1, "match_type":"semantic"}], "count":1
         })).await;
         use dione_attention::{
