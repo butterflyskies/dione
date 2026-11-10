@@ -29,7 +29,34 @@ pub(crate) mod tests {
         shutdown: tokio_util::sync::CancellationToken,
         server: tokio::task::JoinHandle<()>,
         observed: Arc<tokio::sync::Notify>,
-        completed: Arc<tokio::sync::Notify>,
+        completed: tokio::sync::watch::Receiver<ResponseCompletion>,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum ResponseCompletion {
+        Pending,
+        Produced,
+        Aborted,
+    }
+
+    struct ResponseGuard {
+        terminal: tokio::sync::watch::Sender<ResponseCompletion>,
+        produced: bool,
+    }
+
+    impl ResponseGuard {
+        fn produced(&mut self) {
+            self.produced = true;
+            self.terminal.send_replace(ResponseCompletion::Produced);
+        }
+    }
+
+    impl Drop for ResponseGuard {
+        fn drop(&mut self) {
+            if !self.produced {
+                self.terminal.send_replace(ResponseCompletion::Aborted);
+            }
+        }
     }
 
     #[derive(Clone)]
@@ -59,7 +86,8 @@ pub(crate) mod tests {
             let shutdown = tokio_util::sync::CancellationToken::new();
             let response = Arc::new(StdMutex::new(response));
             let observed = Arc::new(tokio::sync::Notify::new());
-            let completed = Arc::new(tokio::sync::Notify::new());
+            let (completion_tx, completed) =
+                tokio::sync::watch::channel(ResponseCompletion::Pending);
             let state = (
                 calls.clone(),
                 requests.clone(),
@@ -67,7 +95,7 @@ pub(crate) mod tests {
                 shutdown.clone(),
                 initializations.clone(),
                 observed.clone(),
-                completed.clone(),
+                completion_tx,
             );
             let router = axum::Router::new().route(
                 "/mcp",
@@ -77,6 +105,10 @@ pub(crate) mod tests {
                         let Some(id) = body.get("id") else {
                             return axum::http::StatusCode::ACCEPTED.into_response();
                         };
+                        let mut completion = (body["method"] == "tools/call").then(|| ResponseGuard {
+                            terminal: completed,
+                            produced: false,
+                        });
                         let result = match body["method"].as_str().unwrap() {
                             "initialize" => {
                                 initializations.fetch_add(1, Ordering::SeqCst);
@@ -125,7 +157,7 @@ pub(crate) mod tests {
                             }
                             other => panic!("unexpected fixture method {other}"),
                         };
-                        if body["method"] == "tools/call" { completed.notify_one(); }
+                        if let Some(completion) = &mut completion { completion.produced(); }
                         axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": result}))
                             .into_response()
                     }
@@ -792,12 +824,20 @@ pub(crate) mod tests {
         .expect("actual provider request");
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
         release.add_permits(1);
-        tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            provider.completed.notified(),
-        )
+        let mut completion = provider.completed.clone();
+        let terminal = tokio::time::timeout(std::time::Duration::from_secs(120), async {
+            *completion
+                .wait_for(|state| *state != ResponseCompletion::Pending)
+                .await
+                .expect("fixture completion sender retained")
+        })
         .await
-        .expect("fixture response produced");
+        .expect("fixture response terminal state observed");
+        assert_eq!(
+            terminal,
+            ResponseCompletion::Produced,
+            "fixture response must be produced, not aborted"
+        );
     }
 
     #[tokio::test]
