@@ -50,7 +50,7 @@ pub async fn run_notifications(
     let initial_tz = config.tz;
     let initial_evidence_markers_enabled = config.delivery.evidence_markers_enabled;
 
-    let state_dir_notif = attention.resolver.directory().clone();
+    let state_dir_notif = attention.resolver.directory().to_owned();
 
     let mut rx = event_rx;
     let mut events_since_prune: u64 = 0;
@@ -785,9 +785,9 @@ mod tests {
     use dione_config::ChannelConfig;
     use dione_config::Config;
     use dione_config::LoadedConfig;
+    use dione_contracts::{ModuleSlotId, ProviderId};
     use dione_discord_scheduling::DeliveryBuffer;
     use dione_messages::timestamp::Timestamp;
-    use dione_provider_delivery::ReplyHandle;
     use dione_rate_limiter::OverflowPolicy;
     use dione_rate_limiter::RateLimitConfig;
     use dione_rate_limiter::ScopeConfig;

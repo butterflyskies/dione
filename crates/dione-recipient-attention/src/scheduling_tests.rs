@@ -2,6 +2,7 @@
 
 use super::*;
 use dione_contracts::{MessageRef, ModuleInstanceId, ModuleSlotId, ProviderId};
+use dione_harness::ProtocolOutput;
 use futures_util::future::BoxFuture;
 use serenity::model::id::MessageId;
 use std::{io, sync::Mutex as StdMutex};
