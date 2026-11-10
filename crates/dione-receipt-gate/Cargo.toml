@@ -9,6 +9,7 @@ repository = "https://github.com/butterflyskies/dione"
 readme = "README.md"
 
 [dependencies]
+native-tls.workspace = true
 serenity.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
