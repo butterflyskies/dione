@@ -3243,7 +3243,9 @@ mod tests {
                 {
                     let state = ctx.state.read().await;
                     assert!(
-                        sent.message_ids.iter().all(|id| state.is_own_send(id.get())),
+                        sent.message_ids
+                            .iter()
+                            .all(|id| state.is_own_send(id.get())),
                         "each confirmed publication must be recorded before the next operation"
                     );
                 }
