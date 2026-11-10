@@ -27,6 +27,10 @@ def main():
     principal = re.search(rb'    const ([A-Z]+): UserId = UserId::new\(([0-9]{15,})\);', old)
     assert principal and hashlib.sha256(principal.group()).hexdigest() == 'c9ace5b9616ac0772fa037c215a4a10e0f3ff54ea64ed7f23c55be37349aed99'
     sanitized = old.replace(b'#[non_exhaustive]\n', b'').replace(principal[1], b'LANTERN').replace(principal[2], b'424242')
+    sanitized = sanitized.replace(
+        b'        let wrong_policy =\n            PolicyAuthorization::allow_react(LANTERN, ChannelId::new(999), "discord-role-policy", 7);',
+        b'        let wrong_policy = PolicyAuthorization::allow_react(\n            LANTERN,\n            ChannelId::new(999),\n            "discord-role-policy",\n            7,\n        );',
+    )
     assert current == sanitized
     assert not (ROOT / 'src/receipt_gate').exists()
     assert 'receipt_gate' not in (ROOT / 'src/lib.rs').read_text()

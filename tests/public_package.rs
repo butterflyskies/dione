@@ -1926,7 +1926,9 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         "needs: [verify-dione, reconcile-harness, reconcile-config, reconcile-attention, reconcile-codex, reconcile-omp, reconcile-claude, reconcile-discord-events, publish-harness-runtime]"
     );
     assert!(publish_harness_runtime.contains("needs.reconcile-discord-events.result == 'success'"));
-    assert!(reconcile_harness_runtime.contains("needs.reconcile-discord-events.result == 'success'"));
+    assert!(
+        reconcile_harness_runtime.contains("needs.reconcile-discord-events.result == 'success'")
+    );
     assert!(workflow.contains("scripts/workspace-package-version.sh dione-harness-runtime"));
     assert!(verify.contains("echo \"harness-runtime-version=${harness_runtime_version}\""));
     assert!(

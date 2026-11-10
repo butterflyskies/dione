@@ -629,8 +629,12 @@ mod tests {
     #[test]
     fn policy_for_different_channel_cannot_mint() {
         let store = ReceiptStore::new();
-        let wrong_policy =
-            PolicyAuthorization::allow_react(LANTERN, ChannelId::new(999), "discord-role-policy", 7);
+        let wrong_policy = PolicyAuthorization::allow_react(
+            LANTERN,
+            ChannelId::new(999),
+            "discord-role-policy",
+            7,
+        );
 
         assert!(matches!(
             store.mint(&test_source_event(), &wrong_policy),
