@@ -1,6 +1,5 @@
 use crate::teams_test_process::{AdmissionResult, FixtureProcess, ReplyResult};
 use camino::Utf8PathBuf;
-use dione_attention::delivery::OwnedAttentionDescriptor;
 use dione_harness::{
     AttentionPolicy, HarnessConnection, HarnessDelivery, HarnessError, HarnessProtocol,
     ProtocolOutput,
@@ -183,14 +182,6 @@ impl OwnerProcess {
     }
     pub(crate) async fn command(&self, request: Value) -> Value {
         self.proxy.command(request).await
-    }
-    pub(crate) async fn decoded_attention(
-        &self,
-        payload: &Value,
-        scope: &dione_contracts::ModuleInstanceId,
-    ) -> OwnedAttentionDescriptor {
-        let response=self.command(json!({"command":"decode_attention","payload":payload,"provider":scope.provider().as_str(),"slot":scope.slot().as_str()})).await;
-        crate::codex_test_wire::decode_descriptor(&response)
     }
     pub(crate) fn teams_delivery(&self) -> TeamsDelivery {
         TeamsDelivery::new(TeamsProxy(self.proxy.clone()))

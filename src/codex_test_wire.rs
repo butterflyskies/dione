@@ -1,11 +1,4 @@
-use dione_attention::{
-    delivery::{AttentionDirective, OwnedAttentionDescriptor},
-    types::RecordId,
-};
-use dione_contracts::{
-    ActorId, ActorRef, ConversationId, ConversationRef, LocalIdentityRef, MessageId, MessageRef,
-    ModuleInstanceId, ModuleSlotId, ProviderId,
-};
+use dione_contracts::{ActorRef, ConversationRef, LocalIdentityRef, MessageRef};
 use dione_messages::{
     delivery::{Delivery, DeliveryKind, EvidenceVisibility},
     events::{AuthorOrigin, BellStatus, OrdinaryEvent, Targeting},
@@ -71,49 +64,4 @@ fn encode_actor(value: &ActorRef) -> Value {
 }
 fn encode_message(value: &MessageRef) -> Value {
     json!({"conversation":encode_conversation(value.conversation()),"local":encode_local(value.local().identity())})
-}
-fn module(value: &Value) -> ModuleInstanceId {
-    ModuleInstanceId::new(
-        ProviderId::new(value["provider"].as_str().unwrap()).unwrap(),
-        ModuleSlotId::new(value["slot"].as_str().unwrap()).unwrap(),
-    )
-}
-fn decode_conversation(value: &Value) -> ConversationRef {
-    let local = if let Some(numeric) = value["local"]["numeric"].as_u64() {
-        ConversationId::numeric(numeric.try_into().unwrap())
-    } else {
-        ConversationId::opaque(value["local"]["opaque"].as_str().unwrap()).unwrap()
-    };
-    ConversationRef::new(module(value), local)
-}
-fn decode_actor(value: &Value) -> ActorRef {
-    let local = if let Some(numeric) = value["local"]["numeric"].as_u64() {
-        ActorId::numeric(numeric.try_into().unwrap())
-    } else {
-        ActorId::opaque(value["local"]["opaque"].as_str().unwrap()).unwrap()
-    };
-    ActorRef::new(module(value), local)
-}
-fn decode_message(value: &Value) -> MessageRef {
-    let local = if let Some(numeric) = value["local"]["numeric"].as_u64() {
-        MessageId::numeric(numeric.try_into().unwrap())
-    } else {
-        MessageId::opaque(value["local"]["opaque"].as_str().unwrap()).unwrap()
-    };
-    MessageRef::new(decode_conversation(&value["conversation"]), local)
-}
-
-pub(super) fn decode_descriptor(value: &Value) -> OwnedAttentionDescriptor {
-    let directive = match value["directive"].as_str().unwrap() {
-        "prompt" => AttentionDirective::Prompt,
-        "next_turn" => AttentionDirective::NextTurn,
-        other => panic!("unexpected decoded attention directive {other}"),
-    };
-    OwnedAttentionDescriptor::new(
-        RecordId::new(value["record"].as_str().unwrap()).unwrap(),
-        directive,
-        decode_message(&value["source"]),
-        decode_actor(&value["author"]),
-        value["text"].as_str().unwrap().to_owned(),
-    )
 }

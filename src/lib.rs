@@ -42,9 +42,6 @@ mod codex_test_process;
 mod codex_test_wire;
 
 #[cfg(test)]
-mod gateway_test_support;
-
-#[cfg(test)]
 #[path = "discord_operations_tests/management.rs"]
 mod discord_management_registration_tests;
 #[cfg(test)]
