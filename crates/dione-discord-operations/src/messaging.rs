@@ -5186,7 +5186,7 @@ mod tests {
             id: "42".to_owned(),
             ..Default::default()
         });
-        raw.pre_send.construct_id = "Fixture-Nebula-61".to_owned();
+        raw.pre_send.construct_id = "fixture-nebula-61".to_owned();
         raw.pre_send.author_id = Some(UserId::new(61));
         let captured = Arc::new(std::sync::Mutex::new(None));
         let pipeline =
@@ -5206,7 +5206,7 @@ mod tests {
             .expect("context lock")
             .clone()
             .expect("context");
-        assert_eq!(captured.construct_id(), "Fixture-Nebula-61");
+        assert_eq!(captured.construct_id(), "fixture-nebula-61");
         assert_eq!(captured.author_id(), Some(UserId::new(61)));
         assert_eq!(captured.guild_id(), None);
     }
