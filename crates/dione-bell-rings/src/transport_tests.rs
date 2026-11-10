@@ -217,7 +217,18 @@ async fn under_limit_real_service_stays_live_without_reconnect() {
     tokio::time::sleep(Duration::from_millis(250)).await;
     assert_eq!(fixture.gets.load(Ordering::SeqCst), 1);
     assert!(!service.is_closed());
-    service.cancel().await.unwrap();
+    assert!(
+        !service.peer().is_transport_closed(),
+        "positive control requires a live peer before cleanup"
+    );
+    let reason = service
+        .cancel()
+        .await
+        .expect("explicit cleanup must join the live service");
+    assert!(
+        matches!(reason, rmcp::service::QuitReason::Cancelled),
+        "explicit cleanup of a live service returned {reason:?}"
+    );
 }
 #[tokio::test]
 async fn ordinary_get_interruption_reconnects_with_event_id() {
@@ -227,7 +238,18 @@ async fn ordinary_get_interruption_reconnects_with_event_id() {
     assert_eq!(fixture.gets.load(Ordering::SeqCst), 2);
     assert_eq!(*fixture.resumptions.lock().unwrap(), vec!["fixture-get"]);
     assert!(!service.is_closed());
-    service.cancel().await.unwrap();
+    assert!(
+        !service.peer().is_transport_closed(),
+        "positive control requires a live peer before cleanup"
+    );
+    let reason = service
+        .cancel()
+        .await
+        .expect("explicit cleanup must join the live service");
+    assert!(
+        matches!(reason, rmcp::service::QuitReason::Cancelled),
+        "explicit cleanup of a live service returned {reason:?}"
+    );
 }
 #[tokio::test]
 async fn oversized_post_after_event_id_terminates_without_resumption_get() {
@@ -283,6 +305,17 @@ async fn ordinary_post_interruption_resumes_with_event_id() {
         assert_eq!(fixture.gets.load(Ordering::SeqCst), 2);
         assert_eq!(*fixture.resumptions.lock().unwrap(), vec!["fixture-post"]);
         assert!(!service.is_closed());
+        assert!(
+            !service.peer().is_transport_closed(),
+            "positive control requires a live peer before cleanup"
+        );
     }
-    service.cancel().await.unwrap();
+    let reason = service
+        .cancel()
+        .await
+        .expect("explicit cleanup must join the live service");
+    assert!(
+        matches!(reason, rmcp::service::QuitReason::Cancelled),
+        "explicit cleanup of a live service returned {reason:?}"
+    );
 }
