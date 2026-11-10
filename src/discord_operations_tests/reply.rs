@@ -1,5 +1,7 @@
 //! Actual root registry integration for the extracted Discord operation owner.
 use camino::Utf8PathBuf;
+use serenity::model::channel::MessageFlags;
+const MESSAGE_FLAG_NOT_IN_SDK: u64 = 1 << 14;
 use dione_access_requests::AccessQueue;
 use dione_discord_runtime::IngressLedger;
 use dione_discord_state::new_state;
@@ -489,4 +491,38 @@ async fn registered_reply_reloads_discovery_and_policy_and_preserves_options() {
     assert_eq!(denied["result"]["isError"], true);
     assert_eq!(requests.lock().unwrap().len(), before_denial);
     peer.abort();
+}
+
+fn wire_message(
+    id: u64,
+    content: &str,
+    timestamp: &str,
+    attachments: Value,
+) -> Value {
+    json!({
+        "id": id.to_string(),
+        "type": 0,
+        "channel_id": "1080000000000000001",
+        "author": {
+            "id": "210987654321098765",
+            "username": "example-user",
+            "global_name": "Example User",
+            "avatar": null,
+            "discriminator": "0",
+            "public_flags": 0,
+            "bot": false
+        },
+        "content": content,
+        "timestamp": timestamp,
+        "edited_timestamp": null,
+        "tts": false,
+        "mention_everyone": false,
+        "mentions": [],
+        "mention_roles": [],
+        "attachments": attachments,
+        "embeds": [],
+        "pinned": false,
+        "flags": 0,
+        "components": []
+    })
 }
