@@ -2692,7 +2692,7 @@ mod tests {
         if std::env::var_os(CHILD).is_none() {
             let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
                 .arg("--exact")
-                .arg("discord::messaging::tests::reply_and_react_respect_global_mute_on_old_canonical_targets")
+                .arg("messaging::tests::reply_and_react_respect_global_mute_on_old_canonical_targets")
                 .env(CHILD, "1")
                 .output()
                 .expect("run isolated mute regression");
