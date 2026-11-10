@@ -9,7 +9,7 @@ use dione_tracing_channel::TraceLevelController;
 #[path = "support/codex_projection.rs"]
 mod codex_projection;
 
-use dione::mcp::server::{DioneServer, test_helpers};
+use crate::mcp::server::{DioneServer, test_helpers};
 use dione_access_requests::AccessQueue;
 use dione_discord_events::{AttachmentMeta, MessageEvent, NotificationEvent};
 use dione_discord_state::new_state;
@@ -191,6 +191,7 @@ async fn make_server_with_connection(
     let queue = Arc::new(Mutex::new(AccessQueue::load(state_dir)));
     let (tx, _rx) = mpsc::channel(4);
     DioneServer::new(
+        crate::TEST_APPLICATION_VERSION,
         state,
         queue,
         http,
@@ -1505,6 +1506,10 @@ async fn test_permission_deny_uses_deny_behavior() {
 
 #[tokio::test]
 async fn test_notification_message_snapshot() {
+    let mut snapshot_settings = insta::Settings::clone_current();
+    snapshot_settings.set_prepend_module_to_snapshot(false);
+    let _snapshot_scope = snapshot_settings.bind_to_scope();
+
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1000),
         message_id: MessageId::new(2000),
@@ -1525,11 +1530,15 @@ async fn test_notification_message_snapshot() {
         bells_status: None,
     });
     let notif = codex_projection::make_notification(event).await.unwrap();
-    insta::assert_json_snapshot!(notif);
+    insta::assert_json_snapshot!("mcp_protocol__notification_message_snapshot", notif);
 }
 
 #[tokio::test]
 async fn test_notification_reaction_snapshot() {
+    let mut snapshot_settings = insta::Settings::clone_current();
+    snapshot_settings.set_prepend_module_to_snapshot(false);
+    let _snapshot_scope = snapshot_settings.bind_to_scope();
+
     let event = NotificationEvent::Reaction {
         chat_id: ChannelId::new(1001),
         message_id: MessageId::new(2001),
@@ -1539,7 +1548,7 @@ async fn test_notification_reaction_snapshot() {
         self_react: false,
     };
     let notif = codex_projection::make_notification(event).await.unwrap();
-    insta::assert_json_snapshot!(notif);
+    insta::assert_json_snapshot!("mcp_protocol__notification_reaction_snapshot", notif);
 }
 
 /// Tool-initiated self-reacts (contradictionary celebrate) must carry
@@ -1547,6 +1556,10 @@ async fn test_notification_reaction_snapshot() {
 /// own reinforcement signal apart from other users' reactions.
 #[tokio::test]
 async fn test_notification_self_react_snapshot() {
+    let mut snapshot_settings = insta::Settings::clone_current();
+    snapshot_settings.set_prepend_module_to_snapshot(false);
+    let _snapshot_scope = snapshot_settings.bind_to_scope();
+
     let event = NotificationEvent::Reaction {
         chat_id: ChannelId::new(1001),
         message_id: MessageId::new(2001),
@@ -1556,21 +1569,32 @@ async fn test_notification_self_react_snapshot() {
         self_react: true,
     };
     let notif = codex_projection::make_notification(event).await.unwrap();
-    insta::assert_json_snapshot!(notif);
+    insta::assert_json_snapshot!("mcp_protocol__notification_self_react_snapshot", notif);
 }
 
 #[tokio::test]
 async fn test_notification_permission_response_snapshot() {
+    let mut snapshot_settings = insta::Settings::clone_current();
+    snapshot_settings.set_prepend_module_to_snapshot(false);
+    let _snapshot_scope = snapshot_settings.bind_to_scope();
+
     let event = NotificationEvent::PermissionResponse {
         request_id: "snap-req-42".to_string(),
         granted: true,
     };
     let notif = codex_projection::make_notification(event).await.unwrap();
-    insta::assert_json_snapshot!(notif);
+    insta::assert_json_snapshot!(
+        "mcp_protocol__notification_permission_response_snapshot",
+        notif
+    );
 }
 
 #[tokio::test]
 async fn test_notification_message_edit_snapshot() {
+    let mut snapshot_settings = insta::Settings::clone_current();
+    snapshot_settings.set_prepend_module_to_snapshot(false);
+    let _snapshot_scope = snapshot_settings.bind_to_scope();
+
     let event = NotificationEvent::MessageEdit {
         chat_id: ChannelId::new(1002),
         message_id: MessageId::new(2002),
@@ -1582,11 +1606,15 @@ async fn test_notification_message_edit_snapshot() {
         reply_to_message_id: None,
     };
     let notif = codex_projection::make_notification(event).await.unwrap();
-    insta::assert_json_snapshot!(notif);
+    insta::assert_json_snapshot!("mcp_protocol__notification_message_edit_snapshot", notif);
 }
 
 #[tokio::test]
 async fn test_notification_message_edit_reply_snapshot() {
+    let mut snapshot_settings = insta::Settings::clone_current();
+    snapshot_settings.set_prepend_module_to_snapshot(false);
+    let _snapshot_scope = snapshot_settings.bind_to_scope();
+
     let event = NotificationEvent::MessageEdit {
         chat_id: ChannelId::new(1002),
         message_id: MessageId::new(2002),
@@ -1598,22 +1626,33 @@ async fn test_notification_message_edit_reply_snapshot() {
         reply_to_message_id: Some(MessageId::new(8888)),
     };
     let notif = codex_projection::make_notification(event).await.unwrap();
-    insta::assert_json_snapshot!(notif);
+    insta::assert_json_snapshot!(
+        "mcp_protocol__notification_message_edit_reply_snapshot",
+        notif
+    );
 }
 
 #[tokio::test]
 async fn test_notification_message_delete_snapshot() {
+    let mut snapshot_settings = insta::Settings::clone_current();
+    snapshot_settings.set_prepend_module_to_snapshot(false);
+    let _snapshot_scope = snapshot_settings.bind_to_scope();
+
     let event = NotificationEvent::MessageDelete {
         chat_id: ChannelId::new(1003),
         message_id: MessageId::new(2003),
         thread_parent_id: None,
     };
     let notif = codex_projection::make_notification(event).await.unwrap();
-    insta::assert_json_snapshot!(notif);
+    insta::assert_json_snapshot!("mcp_protocol__notification_message_delete_snapshot", notif);
 }
 
 #[tokio::test]
 async fn test_notification_message_in_thread_snapshot() {
+    let mut snapshot_settings = insta::Settings::clone_current();
+    snapshot_settings.set_prepend_module_to_snapshot(false);
+    let _snapshot_scope = snapshot_settings.bind_to_scope();
+
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1000),
         message_id: MessageId::new(2000),
@@ -1634,11 +1673,18 @@ async fn test_notification_message_in_thread_snapshot() {
         bells_status: None,
     });
     let notif = codex_projection::make_notification(event).await.unwrap();
-    insta::assert_json_snapshot!(notif);
+    insta::assert_json_snapshot!(
+        "mcp_protocol__notification_message_in_thread_snapshot",
+        notif
+    );
 }
 
 #[tokio::test]
 async fn test_notification_message_reply_snapshot() {
+    let mut snapshot_settings = insta::Settings::clone_current();
+    snapshot_settings.set_prepend_module_to_snapshot(false);
+    let _snapshot_scope = snapshot_settings.bind_to_scope();
+
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1000),
         message_id: MessageId::new(2000),
@@ -1659,11 +1705,15 @@ async fn test_notification_message_reply_snapshot() {
         bells_status: None,
     });
     let notif = codex_projection::make_notification(event).await.unwrap();
-    insta::assert_json_snapshot!(notif);
+    insta::assert_json_snapshot!("mcp_protocol__notification_message_reply_snapshot", notif);
 }
 
 #[tokio::test]
 async fn test_notification_message_reply_in_thread_snapshot() {
+    let mut snapshot_settings = insta::Settings::clone_current();
+    snapshot_settings.set_prepend_module_to_snapshot(false);
+    let _snapshot_scope = snapshot_settings.bind_to_scope();
+
     let event = NotificationEvent::Message(MessageEvent {
         chat_id: ChannelId::new(1000),
         message_id: MessageId::new(2000),
@@ -1684,7 +1734,10 @@ async fn test_notification_message_reply_in_thread_snapshot() {
         bells_status: None,
     });
     let notif = codex_projection::make_notification(event).await.unwrap();
-    insta::assert_json_snapshot!(notif);
+    insta::assert_json_snapshot!(
+        "mcp_protocol__notification_message_reply_in_thread_snapshot",
+        notif
+    );
 }
 
 #[tokio::test]
@@ -1724,6 +1777,10 @@ async fn test_trace_notification_no_fields() {
 
 #[tokio::test]
 async fn test_trace_notification_snapshot() {
+    let mut snapshot_settings = insta::Settings::clone_current();
+    snapshot_settings.set_prepend_module_to_snapshot(false);
+    let _snapshot_scope = snapshot_settings.bind_to_scope();
+
     let event = NotificationEvent::Trace {
         level: tracing::Level::WARN,
         target: "dione::mcp".to_string(),
@@ -1731,7 +1788,7 @@ async fn test_trace_notification_snapshot() {
         fields: vec![("key".to_string(), "value".to_string())],
     };
     let notif = codex_projection::make_notification(event).await.unwrap();
-    insta::assert_json_snapshot!(notif);
+    insta::assert_json_snapshot!("mcp_protocol__trace_notification_snapshot", notif);
 }
 
 #[tokio::test]
@@ -1748,7 +1805,8 @@ async fn test_get_version_returns_current_version() {
     let text = resp["result"]["content"][0]["text"].as_str().unwrap();
     let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
     assert_eq!(parsed["name"], "dione");
-    assert_eq!(parsed["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(parsed["version"], crate::TEST_APPLICATION_VERSION);
+    assert_ne!(parsed["version"], env!("CARGO_PKG_VERSION"));
 }
 
 #[tokio::test]
@@ -2014,6 +2072,10 @@ async fn test_no_rly_condense_and_vacuum_empty_journal() {
 
 #[test]
 fn test_reply_tool_schema_includes_suppress_ping() {
+    let mut snapshot_settings = insta::Settings::clone_current();
+    snapshot_settings.set_prepend_module_to_snapshot(false);
+    let _snapshot_scope = snapshot_settings.bind_to_scope();
+
     let list = test_helpers::get_tools_list();
     let tools = list["tools"].as_array().expect("tools must be an array");
 
@@ -2027,7 +2089,10 @@ fn test_reply_tool_schema_includes_suppress_ping() {
         props.get("suppress_ping").is_some(),
         "reply tool schema must include suppress_ping property"
     );
-    insta::assert_json_snapshot!(props["suppress_ping"]);
+    insta::assert_json_snapshot!(
+        "mcp_protocol__reply_tool_schema_includes_suppress_ping",
+        props["suppress_ping"]
+    );
 }
 
 #[test]
@@ -2186,6 +2251,10 @@ async fn disabled_evidence_markers_reject_present_handle_fields_even_when_empty(
 
 #[tokio::test]
 async fn test_reply_suppress_ping_defaults_to_false_gate_rejection() {
+    let mut snapshot_settings = insta::Settings::clone_current();
+    snapshot_settings.set_prepend_module_to_snapshot(false);
+    let _snapshot_scope = snapshot_settings.bind_to_scope();
+
     let (_dir, state_dir) = temp_state_dir();
     let server = make_server(&state_dir).await;
 
@@ -2204,11 +2273,18 @@ async fn test_reply_suppress_ping_defaults_to_false_gate_rejection() {
         }
     });
     let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
-    insta::assert_json_snapshot!(resp["result"]);
+    insta::assert_json_snapshot!(
+        "mcp_protocol__reply_suppress_ping_defaults_to_false_gate_rejection",
+        resp["result"]
+    );
 }
 
 #[tokio::test]
 async fn test_reply_suppress_ping_true_gate_rejection() {
+    let mut snapshot_settings = insta::Settings::clone_current();
+    snapshot_settings.set_prepend_module_to_snapshot(false);
+    let _snapshot_scope = snapshot_settings.bind_to_scope();
+
     let (_dir, state_dir) = temp_state_dir();
     let server = make_server(&state_dir).await;
 
@@ -2229,11 +2305,18 @@ async fn test_reply_suppress_ping_true_gate_rejection() {
         }
     });
     let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
-    insta::assert_json_snapshot!(resp["result"]);
+    insta::assert_json_snapshot!(
+        "mcp_protocol__reply_suppress_ping_true_gate_rejection",
+        resp["result"]
+    );
 }
 
 #[tokio::test]
 async fn test_reply_suppress_ping_false_explicit_gate_rejection() {
+    let mut snapshot_settings = insta::Settings::clone_current();
+    snapshot_settings.set_prepend_module_to_snapshot(false);
+    let _snapshot_scope = snapshot_settings.bind_to_scope();
+
     let (_dir, state_dir) = temp_state_dir();
     let server = make_server(&state_dir).await;
 
@@ -2251,11 +2334,18 @@ async fn test_reply_suppress_ping_false_explicit_gate_rejection() {
         }
     });
     let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
-    insta::assert_json_snapshot!(resp["result"]);
+    insta::assert_json_snapshot!(
+        "mcp_protocol__reply_suppress_ping_false_explicit_gate_rejection",
+        resp["result"]
+    );
 }
 
 #[tokio::test]
 async fn test_reply_suppress_ping_true_passes_gate_with_configured_channel() {
+    let mut snapshot_settings = insta::Settings::clone_current();
+    snapshot_settings.set_prepend_module_to_snapshot(false);
+    let _snapshot_scope = snapshot_settings.bind_to_scope();
+
     let (_dir, state_dir) = temp_state_dir();
 
     // Configure a channel so the outbound gate allows it.
@@ -2288,11 +2378,18 @@ async fn test_reply_suppress_ping_true_passes_gate_with_configured_channel() {
         !text.contains("not a permitted outbound target"),
         "reply should have passed the outbound gate, got: {text}"
     );
-    insta::assert_json_snapshot!(resp["result"]);
+    insta::assert_json_snapshot!(
+        "mcp_protocol__reply_suppress_ping_true_passes_gate_with_configured_channel",
+        resp["result"]
+    );
 }
 
 #[tokio::test]
 async fn test_reply_suppress_ping_false_passes_gate_with_configured_channel() {
+    let mut snapshot_settings = insta::Settings::clone_current();
+    snapshot_settings.set_prepend_module_to_snapshot(false);
+    let _snapshot_scope = snapshot_settings.bind_to_scope();
+
     let (_dir, state_dir) = temp_state_dir();
 
     // Configure a channel so the outbound gate allows it.
@@ -2325,7 +2422,10 @@ async fn test_reply_suppress_ping_false_passes_gate_with_configured_channel() {
         !text.contains("not a permitted outbound target"),
         "reply should have passed the outbound gate, got: {text}"
     );
-    insta::assert_json_snapshot!(resp["result"]);
+    insta::assert_json_snapshot!(
+        "mcp_protocol__reply_suppress_ping_false_passes_gate_with_configured_channel",
+        resp["result"]
+    );
 }
 
 /// A blocking config with channel 42 permitted and "straightforward" as a

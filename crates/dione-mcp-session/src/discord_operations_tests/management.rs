@@ -131,6 +131,7 @@ async fn registered_management_preserves_http_and_reloads_authority() {
     let path = camino::Utf8PathBuf::from_path_buf(dir.path().to_owned()).unwrap();
     ctx.state.write().await.note_sent(9001);
     let server = crate::mcp::server::DioneServer::new(
+        crate::TEST_APPLICATION_VERSION,
         ctx.state.clone(),
         Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&path))),
         ctx.http.clone(),

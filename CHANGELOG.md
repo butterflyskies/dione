@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.150.6] - 2026-11-10
+
+### Changed
+- Move complete MCP session registration, request dispatch and stdio/resident lifecycle into its own library while retaining process composition and the application version.
+
 ## [0.150.5] - 2026-11-10
 
 - Require real peer transport liveness in Bell under-limit and interruption controls before explicit cleanup.

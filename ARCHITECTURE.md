@@ -467,3 +467,7 @@ Discord message read, search, attachment and native observation ownership reside
 The registered Discord gateway runtime owns its verification producers and policy/lifecycle enforcers together. Root composition supplies concrete services and shares the enforcing ledger with MCP and Attention; proof constructors remain private inside the runtime. Process-global mute installation has one registry in `dione-mutes`. Observation remains disabled at startup.
 
 [Discord operations](crates/dione-discord-operations/src/lib.rs) own complete authorized SDK effects and their actual shared tool registrations. Root assembles the same concrete services, immutable tool registry and Attention notice caller; private prepared outbound and target policy stay inside the operation owner. The [pre-send registry](crates/dione-pre-send/src/registry.rs) is the single installed pipeline used by startup and newly constructed operation contexts. No production Rook provider or observation registration is added.
+
+### MCP session ownership
+
+`dione-mcp-session` owns immutable owner registrations, JSON-RPC request dispatch, private resident admission and stdio/resident task lifetimes. Process startup supplies the application version and concrete capabilities, starts the harness and transports, and retains process signal and final drain ordering. Request origins, registry mutation and test helpers stay private to the session library.

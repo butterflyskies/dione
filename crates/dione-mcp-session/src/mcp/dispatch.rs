@@ -406,7 +406,7 @@ pub(crate) async fn call_tool(
                     None => json!({ "ok": true }),
                 }
             }
-            "get_version" => get_version().await,
+            "get_version" => get_version(server.application_version).await,
 
             // Guild mute management (admin-gated)
             "mute_server" => {
@@ -1382,6 +1382,7 @@ mod tests {
             camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf-8 path");
         let (notification_tx, _notification_rx) = tokio::sync::mpsc::channel(1);
         let server = DioneServer::new(
+            crate::TEST_APPLICATION_VERSION,
             dione_discord_state::new_state(),
             std::sync::Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&state_dir))),
             http,
@@ -1627,6 +1628,7 @@ mod tests {
         };
         assert!(gateway_handle.is_same_authority(server_handle));
         let server = DioneServer::new(
+            crate::TEST_APPLICATION_VERSION,
             dione_discord_state::new_state(),
             std::sync::Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&state_dir))),
             std::sync::Arc::new(serenity::http::Http::new("fake")),

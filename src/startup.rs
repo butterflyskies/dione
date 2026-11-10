@@ -32,7 +32,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{EnvFilter, prelude::*, reload};
-use {crate::mcp::server::DioneServer, dione_harness::AttentionPolicy};
+use {dione_harness::AttentionPolicy, dione_mcp_session::DioneServer};
 
 /// Discord MCP channel server for Claude Code, Codex, and Oh My Pi.
 #[derive(Parser)]
@@ -242,6 +242,7 @@ pub async fn run() -> Result<(), StartupError> {
 
     let trace_controller = TraceLevelController::new(stderr_reload_handle, channel_reload_handle);
     let server = DioneServer::new(
+        env!("CARGO_PKG_VERSION"),
         state.clone(),
         queue.clone(),
         http,
@@ -261,7 +262,11 @@ pub async fn run() -> Result<(), StartupError> {
     .with_presence(server_presence);
 
     let running_session = session
-        .start(&config.delivery, server.attention.clone(), cancel.clone())
+        .start(
+            &config.delivery,
+            server.attention_runtime().clone(),
+            cancel.clone(),
+        )
         .await?;
     let teams_reply = teams.as_ref().map(|prepared| {
         let authority: Arc<dyn TeamsReplyAuthority> = prepared.bridge.clone();
@@ -296,7 +301,7 @@ pub async fn run() -> Result<(), StartupError> {
         let control_server = server.clone();
         let control_cancel = cancel.clone();
         Some(tokio::spawn(async move {
-            if let Err(error) = crate::mcp::server::run_resident_control(
+            if let Err(error) = dione_mcp_session::run_resident_control(
                 control_server,
                 socket_path,
                 control_cancel.clone(),
@@ -365,7 +370,7 @@ pub async fn run() -> Result<(), StartupError> {
     let cancel_mcp = cancel.clone();
     let mcp_handle = tokio::spawn(async move {
         if let Err(e) =
-            crate::mcp::server::run(server, event_rx, cancel_mcp, stdio_exit_policy).await
+            dione_mcp_session::run(server, event_rx, cancel_mcp, stdio_exit_policy).await
         {
             tracing::error!(error = ?e, "MCP server exited with error");
         }

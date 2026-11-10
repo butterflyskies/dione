@@ -1,6 +1,6 @@
+use crate::mcp::server::DioneServer;
+use crate::mcp::server::test_helpers;
 use camino::Utf8PathBuf;
-use dione::mcp::server::DioneServer;
-use dione::mcp::server::test_helpers;
 use dione_access_requests::AccessQueue;
 use dione_config::Config;
 use dione_config::DmPolicy;
@@ -41,6 +41,7 @@ fn load_config_from_disk(state_dir: &Utf8PathBuf) -> LoadedConfig {
 async fn make_server(state_dir: &Utf8PathBuf) -> DioneServer {
     let (notification_tx, _notification_rx) = mpsc::channel(1);
     DioneServer::new(
+        crate::TEST_APPLICATION_VERSION,
         new_state(),
         Arc::new(Mutex::new(AccessQueue::load(state_dir))),
         Arc::new(Http::new("fake-token-for-tests")),

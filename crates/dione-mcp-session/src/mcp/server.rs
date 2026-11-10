@@ -34,8 +34,8 @@ use dione_mcp_tools::RegisteredTool;
 use dione_mcp_tools::RegistrationError;
 use dione_mcp_tools::ToolNameError;
 use dione_mcp_tools::ToolRegistry;
-use dione_messages::delivery::EvidenceVisibility;
-use dione_messages::delivery::PresentationContext;
+#[cfg(test)]
+use dione_messages::delivery::{EvidenceVisibility, PresentationContext};
 use dione_outbound_consent::consent::ConsentGate;
 use dione_tracing_channel::TraceLevelController;
 use serde_json::{Value, json};
@@ -90,12 +90,13 @@ impl ServerConstructionError {
 /// Runtime context for the MCP server.
 #[derive(Clone)]
 pub struct DioneServer {
-    pub queue: Arc<Mutex<AccessQueue>>,
-    pub notification_tx: mpsc::Sender<Value>,
-    pub presence: PresenceCapability,
-    pub trace_controller: TraceLevelController,
+    pub(crate) application_version: &'static str,
+    pub(crate) queue: Arc<Mutex<AccessQueue>>,
+    _notification_tx: mpsc::Sender<Value>,
+    pub(crate) presence: PresenceCapability,
+    pub(crate) trace_controller: TraceLevelController,
     harness: HarnessConnection,
-    pub attention: Arc<dione_recipient_attention::AttentionRuntime>,
+    pub(crate) attention: Arc<dione_recipient_attention::AttentionRuntime>,
     pub(super) module_tools: ToolRegistry,
     discord_tools: Vec<RegisteredTool>,
     discord: Arc<dione_discord_operations::reply_tool::ReplyServices>,
@@ -124,28 +125,33 @@ pub(crate) fn reserved_tool_names(harness: &HarnessConnection) -> BTreeSet<Strin
 }
 
 impl DioneServer {
+    /// Borrows the single recipient runtime used to start the concrete harness session.
+    pub fn attention_runtime(&self) -> &Arc<dione_recipient_attention::AttentionRuntime> {
+        &self.attention
+    }
+
     /// Borrows the Discord HTTP service shared by registered and legacy tools.
-    pub fn http(&self) -> &Arc<serenity::http::Http> {
+    pub(crate) fn http(&self) -> &Arc<serenity::http::Http> {
         self.discord.http()
     }
     /// Borrows the shared Discord state.
-    pub fn state(&self) -> &dione_discord_state::State {
+    pub(crate) fn state(&self) -> &dione_discord_state::State {
         self.discord.state()
     }
     /// Borrows the state directory shared by every tool.
-    pub fn state_dir(&self) -> &Utf8PathBuf {
+    pub(crate) fn state_dir(&self) -> &Utf8PathBuf {
         self.discord.state_dir()
     }
     /// Borrows the consent authority used by reply and release tools.
-    pub fn no_rly(&self) -> &Arc<ConsentGate> {
+    pub(crate) fn no_rly(&self) -> &Arc<ConsentGate> {
         self.discord.no_rly()
     }
     /// Borrows the ingress authority shared by Discord tools.
-    pub fn ingress_ledger(&self) -> &Arc<dione_discord_runtime::IngressLedger> {
+    pub(crate) fn ingress_ledger(&self) -> &Arc<dione_discord_runtime::IngressLedger> {
         self.discord.ingress_ledger()
     }
     /// Borrows the configured gateway event sender.
-    pub fn event_tx(&self) -> &Option<mpsc::Sender<NotificationEvent>> {
+    pub(crate) fn event_tx(&self) -> &Option<mpsc::Sender<NotificationEvent>> {
         self.discord.event_tx()
     }
     /// Builds the core server and awaits attention state initialization.
@@ -156,6 +162,7 @@ impl DioneServer {
         reason = "composition supplies the shared services and event sender together so registered and legacy tools use one authority"
     )]
     pub async fn new(
+        application_version: &'static str,
         state: dione_discord_state::State,
         queue: Arc<Mutex<AccessQueue>>,
         http: Arc<serenity::http::Http>,
@@ -210,8 +217,9 @@ impl DioneServer {
         let module_tools = ToolRegistry::new(&reserved_tool_names(&harness), discord_tools.clone())
             .map_err(ServerConstructionError::registration)?;
         Ok(Self {
+            application_version,
             queue,
-            notification_tx,
+            _notification_tx: notification_tx,
             presence: PresenceCapability::Unavailable,
             trace_controller,
             harness,
@@ -669,7 +677,7 @@ async fn dispatch(
 ) -> Result<Value, String> {
     match method {
         "initialize" => Ok(initialize_response(
-            env!("CARGO_PKG_VERSION"),
+            server.application_version,
             server.harness.protocol().capabilities(),
             params.get("protocolVersion").and_then(Value::as_str),
         )),
@@ -770,7 +778,8 @@ async fn dispatch(
 }
 
 /// Test helpers that expose internal functions through the crate's public API.
-pub mod test_helpers {
+#[cfg(test)]
+pub(crate) mod test_helpers {
     use super::*;
 
     fn presentation(tz: Option<chrono_tz::Tz>, evidence: bool) -> PresentationContext {
@@ -870,7 +879,7 @@ pub mod test_helpers {
     /// Exposes `initialize_response` for unit testing the handshake.
     pub fn get_initialize_response() -> Value {
         initialize_response(
-            env!("CARGO_PKG_VERSION"),
+            crate::TEST_APPLICATION_VERSION,
             dione_claude::connect(
                 dione_harness::ProtocolOutput::new(tokio::io::stdout()),
                 dione_codex::TOOL_NAMES,
@@ -884,7 +893,7 @@ pub mod test_helpers {
     /// Exposes the Codex initialize response for protocol tests.
     pub fn get_codex_initialize_response(harness: &HarnessConnection) -> Value {
         initialize_response(
-            env!("CARGO_PKG_VERSION"),
+            crate::TEST_APPLICATION_VERSION,
             harness.protocol().capabilities(),
             None,
         )
@@ -1054,6 +1063,7 @@ mod tests {
         let (notification_tx, _notification_rx) = mpsc::channel(1);
         let (_queue_dir, harness) = test_codex_connection();
         let server = DioneServer::new(
+            crate::TEST_APPLICATION_VERSION,
             dione_discord_state::new_state(),
             Arc::new(Mutex::new(AccessQueue::load(&state_dir))),
             Arc::new(serenity::http::Http::new("fake")),
@@ -1143,6 +1153,7 @@ mod tests {
             camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("utf-8 path");
         let (notification_tx, _notification_rx) = mpsc::channel(1);
         let server = DioneServer::new(
+            crate::TEST_APPLICATION_VERSION,
             dione_discord_state::new_state(),
             Arc::new(Mutex::new(AccessQueue::load(&state_dir))),
             Arc::new(serenity::http::Http::new("fake")),

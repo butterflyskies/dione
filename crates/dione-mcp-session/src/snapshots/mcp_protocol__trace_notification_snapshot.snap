@@ -1,0 +1,16 @@
+---
+source: tests/mcp_protocol.rs
+expression: notif
+---
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/claude/channel",
+  "params": {
+    "content": "something happened { key=value }",
+    "meta": {
+      "level": "WARN",
+      "target": "dione::mcp",
+      "type": "trace"
+    }
+  }
+}

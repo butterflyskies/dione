@@ -1,9 +1,6 @@
 use crate::teams_test_process::{AdmissionResult, FixtureProcess, ReplyResult};
 use camino::Utf8PathBuf;
-use dione_harness::{
-    AttentionPolicy, HarnessConnection, HarnessDelivery, HarnessError, HarnessProtocol,
-    ProtocolOutput,
-};
+use dione_harness::{AttentionPolicy, HarnessDelivery, HarnessError, HarnessProtocol};
 use dione_provider_delivery::{
     ReplyHandle, TeamsAdmissionOutcome, TeamsDelivery, TeamsDeliveryError, TeamsDeliveryErrorKind,
 };
@@ -127,7 +124,7 @@ impl HarnessProtocol for Proxy {
 
 pub(crate) struct OwnerProcess {
     child: ChildGuard,
-    directory: tempfile::TempDir,
+    _directory: tempfile::TempDir,
     proxy: Proxy,
 }
 impl OwnerProcess {
@@ -176,7 +173,7 @@ impl OwnerProcess {
             serde_json::from_value(proxy.command(json!({"command":"tools"})).await).unwrap();
         Self {
             child,
-            directory,
+            _directory: directory,
             proxy,
         }
     }
@@ -203,34 +200,6 @@ impl OwnerProcess {
                 .await,
             true
         );
-    }
-    pub(crate) fn connection(&self) -> HarnessConnection {
-        HarnessConnection::from_adapter(self.proxy.clone(), ProtocolOutput::new(tokio::io::sink()))
-    }
-    pub(crate) async fn server(&self) -> crate::mcp::server::DioneServer {
-        let path = Utf8PathBuf::from_path_buf(self.directory.path().to_owned()).unwrap();
-        let connection = self.connection();
-        let (notification_tx, _notification_rx) = tokio::sync::mpsc::channel(1);
-        crate::mcp::server::DioneServer::new(
-            dione_discord_state::new_state(),
-            std::sync::Arc::new(tokio::sync::Mutex::new(
-                dione_access_requests::AccessQueue::load(&path),
-            )),
-            std::sync::Arc::new(serenity::http::Http::new("fake")),
-            path.clone(),
-            notification_tx,
-            dione_tracing_channel::TraceLevelController::noop(),
-            connection,
-            std::sync::Arc::new(dione_outbound_consent::consent::ConsentGate::new(&path)),
-            std::sync::Arc::new(dione_discord_runtime::IngressLedger::new()),
-            dione_contracts::ModuleInstanceId::new(
-                dione_contracts::ProviderId::new("discord").unwrap(),
-                dione_contracts::ModuleSlotId::new("primary").unwrap(),
-            ),
-            None,
-        )
-        .await
-        .unwrap()
     }
     pub(crate) async fn shutdown(&mut self) {
         self.command(json!({"command":"shutdown"})).await;

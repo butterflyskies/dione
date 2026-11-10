@@ -34,10 +34,10 @@ pub async fn set_stderr_level(ctx: &DiagnosticsCtx<'_>, filter: &str) -> Value {
     }
 }
 
-/// Returns the dione version (from Cargo.toml at compile time).
-pub async fn get_version() -> Value {
+/// Returns the application version supplied by process composition.
+pub async fn get_version(application_version: &str) -> Value {
     json!({
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": application_version,
         "name": "dione",
     })
 }

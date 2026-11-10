@@ -25,5 +25,17 @@ pub async fn snapshot(delivery: &Delivery) -> Result<Value, Error> {
         .event)
 }
 pub async fn make_notification(event: NotificationEvent) -> Result<Value, Error> {
-    snapshot(&dione::mcp::server::test_helpers::make_notification(event)?).await
+    let module = dione_contracts::ModuleInstanceId::new(
+        dione_contracts::ProviderId::new("discord")?,
+        dione_contracts::ModuleSlotId::new("fixture")?,
+    );
+    let delivery = dione_discord_events::single(
+        &module,
+        event,
+        dione_messages::delivery::PresentationContext::new(
+            None,
+            dione_messages::delivery::EvidenceVisibility::Enabled,
+        ),
+    )?;
+    snapshot(&delivery).await
 }

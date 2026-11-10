@@ -60,6 +60,7 @@ async fn try_server_with_http(
     let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("UTF-8 path");
     let (tx, _rx) = mpsc::channel(1);
     let server = DioneServer::new(
+        crate::TEST_APPLICATION_VERSION,
         dione_discord_state::new_state(),
         Arc::new(Mutex::new(AccessQueue::load(&path))),
         http,

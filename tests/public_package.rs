@@ -964,13 +964,114 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         .split_once("\n  reconcile-recipient-attention:")
         .unwrap();
     let (reconcile_recipient_attention, remaining) =
-        remaining.split_once("\n  publish-crate:").unwrap();
+        remaining.split_once("\n  publish-mcp-session:").unwrap();
+    let (publish_mcp_session, remaining) =
+        remaining.split_once("\n  reconcile-mcp-session:").unwrap();
+    let (reconcile_mcp_session, remaining) = remaining.split_once("\n  publish-crate:").unwrap();
     let (publish_dione, reconcile_dione) = remaining.split_once("\n  reconcile-dione:").unwrap();
 
+    assert!(publish_mcp_session.contains("needs.reconcile-access-requests.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-access-requests.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-attention.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-attention.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-bell-rings.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-bell-rings.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-claude.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-claude.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-codex.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-codex.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-config.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-config.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-contracts.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-contracts.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-discord-events.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-discord-events.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-discord-gate.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-discord-gate.result == 'success'"));
+    assert!(
+        publish_mcp_session.contains("needs.reconcile-discord-introspection.result == 'success'")
+    );
+    assert!(
+        reconcile_mcp_session.contains("needs.reconcile-discord-introspection.result == 'success'")
+    );
+    assert!(
+        publish_mcp_session
+            .contains("needs.reconcile-discord-messaging-contracts.result == 'success'")
+    );
+    assert!(
+        reconcile_mcp_session
+            .contains("needs.reconcile-discord-messaging-contracts.result == 'success'")
+    );
+    assert!(publish_mcp_session.contains("needs.reconcile-discord-operations.result == 'success'"));
+    assert!(
+        reconcile_mcp_session.contains("needs.reconcile-discord-operations.result == 'success'")
+    );
+    assert!(publish_mcp_session.contains("needs.reconcile-discord-presence.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-discord-presence.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-discord-runtime.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-discord-runtime.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-discord-state.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-discord-state.result == 'success'"));
+    assert!(
+        publish_mcp_session.contains("needs.reconcile-discord-tool-arguments.result == 'success'")
+    );
+    assert!(
+        reconcile_mcp_session
+            .contains("needs.reconcile-discord-tool-arguments.result == 'success'")
+    );
+    assert!(
+        publish_mcp_session.contains("needs.reconcile-discord-tool-contracts.result == 'success'")
+    );
+    assert!(
+        reconcile_mcp_session
+            .contains("needs.reconcile-discord-tool-contracts.result == 'success'")
+    );
+    assert!(publish_mcp_session.contains("needs.reconcile-discord-typing.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-discord-typing.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-evidence.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-evidence.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-harness.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-harness.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-harness-runtime.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-harness-runtime.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-mcp-protocol.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-mcp-protocol.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-mcp-tools.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-mcp-tools.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-messages.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-messages.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-mutes.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-mutes.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-omp.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-omp.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-outbound-consent.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-outbound-consent.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-permissions.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-permissions.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-pre-send.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-pre-send.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-provider-delivery.result == 'success'"));
+    assert!(
+        reconcile_mcp_session.contains("needs.reconcile-provider-delivery.result == 'success'")
+    );
+    assert!(
+        publish_mcp_session.contains("needs.reconcile-recipient-attention.result == 'success'")
+    );
+    assert!(
+        reconcile_mcp_session.contains("needs.reconcile-recipient-attention.result == 'success'")
+    );
+    assert!(publish_mcp_session.contains("needs.reconcile-rendering.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-rendering.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-teams.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-teams.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-teams-identities.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-teams-identities.result == 'success'"));
+    assert!(publish_mcp_session.contains("needs.reconcile-tracing-channel.result == 'success'"));
+    assert!(reconcile_mcp_session.contains("needs.reconcile-tracing-channel.result == 'success'"));
     assert_eq!(
         workflow.matches("scripts/package-preflight.sh").count(),
         workflow.matches("cargo package -p").count()
-            + 57 * workflow.matches("cargo package --workspace").count(),
+            + 58 * workflow.matches("cargo package --workspace").count(),
         "every workspace archive must cross the privacy verifier"
     );
     for job in [
@@ -1031,6 +1132,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         reconcile_discord_runtime,
         reconcile_discord_operations,
         reconcile_recipient_attention,
+        reconcile_mcp_session,
         reconcile_dione,
     ] {
         assert!(!job.contains("CARGO_REGISTRY_TOKEN"));
@@ -1042,11 +1144,11 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
     assert!(workflow.contains("github:butterflyskies:lacuna-blinkers"));
     assert!(workflow.contains("github:butterflyskies:superadmins"));
     assert!(publish_dione.contains(
-        "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime, reconcile-discord-scheduling, reconcile-discord-typing, reconcile-discord-introspection, reconcile-discord-queries, reconcile-attention-admission, reconcile-discord-context, reconcile-discord-tool-arguments, reconcile-discord-messaging-contracts, reconcile-discord-tool-contracts, reconcile-pluralkit-resolver, reconcile-mcp-protocol, reconcile-discord-runtime, reconcile-discord-operations, reconcile-recipient-attention]"
+        "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime, reconcile-discord-scheduling, reconcile-discord-typing, reconcile-discord-introspection, reconcile-discord-queries, reconcile-attention-admission, reconcile-discord-context, reconcile-discord-tool-arguments, reconcile-discord-messaging-contracts, reconcile-discord-tool-contracts, reconcile-pluralkit-resolver, reconcile-mcp-protocol, reconcile-discord-runtime, reconcile-discord-operations, reconcile-recipient-attention, reconcile-mcp-session]"
     ));
     assert!(
         reconcile_dione.contains(
-            "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime, reconcile-discord-scheduling, reconcile-discord-typing, reconcile-discord-introspection, reconcile-discord-queries, reconcile-attention-admission, reconcile-discord-context, reconcile-discord-tool-arguments, reconcile-discord-messaging-contracts, reconcile-discord-tool-contracts, reconcile-pluralkit-resolver, reconcile-mcp-protocol, publish-crate, reconcile-discord-runtime, reconcile-discord-operations, reconcile-recipient-attention]"
+            "needs: [verify-dione, reconcile-rendering, reconcile-durable, reconcile-contracts, reconcile-rook, reconcile-attention, reconcile-evidence, reconcile-messages, reconcile-rate-limiter, reconcile-vaelii, reconcile-gaie, reconcile-identity-display, reconcile-harness, reconcile-presentation, reconcile-contradictionary, reconcile-bell-rings, reconcile-delivery-scheduler, reconcile-access-requests, reconcile-mutes, reconcile-coordination, reconcile-pre-send, reconcile-teams-identities, reconcile-discord-identities, reconcile-pluralkit-identities, reconcile-config, reconcile-outbound-consent, reconcile-mcp-tools, reconcile-provider-delivery, reconcile-teams, reconcile-omp, reconcile-codex, reconcile-claude, reconcile-discord-presence, reconcile-discord-state, reconcile-discord-events, reconcile-tracing-channel, reconcile-config-watcher, reconcile-drop-ledger, reconcile-permissions, reconcile-discord-bells, reconcile-discord-gate, reconcile-oneshot, reconcile-harness-runtime, reconcile-discord-scheduling, reconcile-discord-typing, reconcile-discord-introspection, reconcile-discord-queries, reconcile-attention-admission, reconcile-discord-context, reconcile-discord-tool-arguments, reconcile-discord-messaging-contracts, reconcile-discord-tool-contracts, reconcile-pluralkit-resolver, reconcile-mcp-protocol, publish-crate, reconcile-discord-runtime, reconcile-discord-operations, reconcile-recipient-attention, reconcile-mcp-session]"
         )
     );
     assert!(reconcile_dione.contains("needs.reconcile-rendering.result == 'success'"));

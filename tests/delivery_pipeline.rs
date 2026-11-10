@@ -7,7 +7,6 @@
 #[path = "support/codex_projection.rs"]
 mod codex_projection;
 
-use dione::mcp::server::test_helpers;
 use dione_config::ChannelConfig;
 use dione_config::Config;
 use dione_config::DeliveryConfig;
@@ -1772,8 +1771,28 @@ async fn make_batch(
     events: Vec<NotificationEvent>,
     timezone: Option<chrono_tz::Tz>,
 ) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
-    match test_helpers::make_batch(events, timezone)? {
+    match typed_batch(events, timezone)? {
         Some(delivery) => Ok(Some(codex_projection::snapshot(&delivery).await?)),
         None => Ok(None),
     }
+}
+
+fn typed_batch(
+    events: Vec<NotificationEvent>,
+    timezone: Option<chrono_tz::Tz>,
+) -> Result<Option<dione_messages::delivery::Delivery>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut events = events.into_iter();
+    let Some(first) = events.next() else {
+        return Ok(None);
+    };
+    let module = ModuleInstanceId::new(ProviderId::new("discord")?, ModuleSlotId::new("fixture")?);
+    Ok(Some(dione_discord_events::batch(
+        &module,
+        first,
+        events.collect(),
+        dione_messages::delivery::PresentationContext::new(
+            timezone,
+            dione_messages::delivery::EvidenceVisibility::Enabled,
+        ),
+    )?))
 }

@@ -278,6 +278,7 @@ async fn registered_reply_reloads_discovery_and_policy_and_preserves_options() {
     let (http, requests, peer) = fake_discord_http().await;
     let (notifications, _rx) = tokio::sync::mpsc::channel(4);
     let server = crate::mcp::server::DioneServer::new(
+        crate::TEST_APPLICATION_VERSION,
         new_state(),
         Arc::new(tokio::sync::Mutex::new(AccessQueue::load(&path))),
         http,
