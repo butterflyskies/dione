@@ -964,7 +964,14 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         .split_once("\n  reconcile-recipient-attention:")
         .unwrap();
     let (reconcile_recipient_attention, remaining) =
+        remaining.split_once("\n  publish-receipt-gate:").unwrap();
+    let (publish_receipt_gate, remaining) =
+        remaining.split_once("\n  reconcile-receipt-gate:").unwrap();
+    let (reconcile_receipt_gate, remaining) =
         remaining.split_once("\n  publish-mcp-session:").unwrap();
+    assert!(publish_receipt_gate.contains("needs: verify-dione"));
+    assert!(reconcile_receipt_gate.contains("needs: [verify-dione, publish-receipt-gate]"));
+    assert!(reconcile_receipt_gate.contains("needs.verify-dione.result == 'success'"));
     let (publish_mcp_session, remaining) =
         remaining.split_once("\n  reconcile-mcp-session:").unwrap();
     let (reconcile_mcp_session, remaining) = remaining.split_once("\n  publish-crate:").unwrap();
@@ -1132,6 +1139,7 @@ fn release_preserves_tokenless_dione_verification_and_reconciliation() {
         reconcile_discord_runtime,
         reconcile_discord_operations,
         reconcile_recipient_attention,
+        reconcile_receipt_gate,
         reconcile_mcp_session,
         reconcile_dione,
     ] {
