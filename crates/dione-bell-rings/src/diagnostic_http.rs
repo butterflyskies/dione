@@ -3,10 +3,14 @@
 // https://github.com/modelcontextprotocol/rust-sdk
 // crates/rmcp/src/transport/common/reqwest/streamable_http_client.rs
 // and crates/rmcp/src/transport/common/http_header.rs
-// Preserve upstream protocol behavior when updating this version-pinned copy.
+// Response bounds and optional-session/SSE-size hooks follow rmcp 3.9.0.
+// Preserve under-limit protocol behavior and diagnostic privacy when updating this copy.
 // Intentional diagnostic-only changes: omit raw decode errors and reflected
 // non-protocol error bodies, strip request URLs from client errors.
-use futures_util::StreamExt;
+use crate::http_bounds::{
+    DEFAULT_MAX_SSE_EVENT_SIZE, MAX_ERROR_RESPONSE_SIZE, MAX_JSON_RESPONSE_SIZE,
+    bounded_sse_response, read_bounded_body,
+};
 use reqwest::header::{ACCEPT, HeaderName, HeaderValue, WWW_AUTHENTICATE};
 use reqwest_mcp as reqwest;
 use rmcp::{
@@ -25,7 +29,6 @@ use rmcp::{
         },
     },
 };
-use sse_stream::SseStream;
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 /// Reserved headers that must not be overridden by user-supplied custom headers.
@@ -146,9 +149,37 @@ impl StreamableHttpClient for DiagnosticHttpClient {
         auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
-        self.post_message_inner(uri, message, session_id, auth_token, custom_headers)
-            .await
-            .map_err(without_request_url)
+        self.post_message_inner(
+            uri,
+            message,
+            session_id,
+            auth_token,
+            custom_headers,
+            DEFAULT_MAX_SSE_EVENT_SIZE,
+        )
+        .await
+        .map_err(without_request_url)
+    }
+
+    async fn post_message_with_max_sse_event_size(
+        &self,
+        uri: Arc<str>,
+        message: ClientJsonRpcMessage,
+        session_id: Option<Arc<str>>,
+        auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        max_sse_event_size: usize,
+    ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        self.post_message_inner(
+            uri,
+            message,
+            session_id,
+            auth_token,
+            custom_headers,
+            max_sse_event_size,
+        )
+        .await
+        .map_err(without_request_url)
     }
 
     async fn delete_session(
@@ -167,19 +198,115 @@ impl StreamableHttpClient for DiagnosticHttpClient {
     async fn get_stream(
         &self,
         uri: Arc<str>,
-        session_id: Arc<str>,
+        session_id: Option<Arc<str>>,
         last_event_id: Option<String>,
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<BoxedSseResponse, StreamableHttpError<Self::Error>> {
-        self.0
-            .get_stream(uri, session_id, last_event_id, auth_header, custom_headers)
-            .await
-            .map_err(without_request_url)
+        self.get_stream_with_max_sse_event_size(
+            uri,
+            session_id,
+            last_event_id,
+            auth_header,
+            custom_headers,
+            DEFAULT_MAX_SSE_EVENT_SIZE,
+        )
+        .await
+    }
+
+    async fn get_stream_with_max_sse_event_size(
+        &self,
+        uri: Arc<str>,
+        session_id: Option<Arc<str>>,
+        last_event_id: Option<String>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        max_sse_event_size: usize,
+    ) -> Result<BoxedSseResponse, StreamableHttpError<Self::Error>> {
+        self.get_stream_inner(
+            uri,
+            session_id,
+            last_event_id,
+            auth_header,
+            custom_headers,
+            max_sse_event_size,
+        )
+        .await
+        .map_err(without_request_url)
     }
 }
 
 impl DiagnosticHttpClient {
+    // Preserve the existing reqwest status-error category rather than adopting
+    // upstream3.9's new HttpStatus variant for GET failures. SSE accounting is
+    // bounded and session-less resumption follows the3.9 trait contract.
+    async fn get_stream_inner(
+        &self,
+        uri: Arc<str>,
+        session_id: Option<Arc<str>>,
+        last_event_id: Option<String>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        max_sse_event_size: usize,
+    ) -> Result<BoxedSseResponse, StreamableHttpError<reqwest::Error>> {
+        let mut request = self
+            .0
+            .get(uri.as_ref())
+            .header(ACCEPT, [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "));
+        if let Some(session) = session_id {
+            request = request.header(HEADER_SESSION_ID, session.as_ref());
+        }
+        if let Some(event) = last_event_id {
+            request = request.header(HEADER_LAST_EVENT_ID, event);
+        }
+        if let Some(auth) = auth_header {
+            request = request.bearer_auth(auth);
+        }
+        request = apply_custom_headers(request, custom_headers)?;
+        let response = request.send().await?;
+        if response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
+            return Err(StreamableHttpError::ServerDoesNotSupportSse);
+        }
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED
+            && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
+        {
+            let header = header.to_str().map_err(|_| {
+                StreamableHttpError::UnexpectedServerResponse(Cow::Borrowed(
+                    "invalid www-authenticate header value",
+                ))
+            })?;
+            return Err(StreamableHttpError::AuthRequired(AuthRequiredError::new(
+                header.to_owned(),
+            )));
+        }
+        if response.status() == reqwest::StatusCode::FORBIDDEN
+            && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
+        {
+            let header = header.to_str().map_err(|_| {
+                StreamableHttpError::UnexpectedServerResponse(Cow::Borrowed(
+                    "invalid www-authenticate header value",
+                ))
+            })?;
+            return Err(StreamableHttpError::InsufficientScope(
+                InsufficientScopeError::new(header.to_owned(), extract_scope_from_header(header)),
+            ));
+        }
+        let response = response.error_for_status()?;
+        match response.headers().get(reqwest::header::CONTENT_TYPE) {
+            Some(value)
+                if value
+                    .as_bytes()
+                    .starts_with(EVENT_STREAM_MIME_TYPE.as_bytes())
+                    || value.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {}
+            value => {
+                return Err(StreamableHttpError::UnexpectedContentType(value.map(
+                    |value| String::from_utf8_lossy(value.as_bytes()).into_owned(),
+                )));
+            }
+        }
+        Ok(bounded_sse_response(response, max_sse_event_size))
+    }
+
     async fn post_message_inner(
         &self,
         uri: Arc<str>,
@@ -187,6 +314,7 @@ impl DiagnosticHttpClient {
         session_id: Option<Arc<str>>,
         auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
+        max_sse_event_size: usize,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<reqwest::Error>> {
         let mut request = self
             .0
@@ -266,10 +394,11 @@ impl DiagnosticHttpClient {
         // Non-success responses may carry valid JSON-RPC error payloads that
         // should be surfaced as McpError rather than lost in TransportSend.
         if !status.is_success() {
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "<failed to read response body>".to_owned());
+            let body = match read_bounded_body(response, MAX_ERROR_RESPONSE_SIZE).await {
+                Ok(body) => String::from_utf8_lossy(&body).into_owned(),
+                Err(error @ StreamableHttpError::ResponseBodyTooLarge { .. }) => return Err(error),
+                Err(_) => "<failed to read response body>".to_owned(),
+            };
             if content_type
                 .as_deref()
                 .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()))
@@ -289,14 +418,15 @@ impl DiagnosticHttpClient {
         }
         match content_type.as_deref() {
             Some(ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
-                let event_stream = SseStream::from_bytes_stream(response.bytes_stream()).boxed();
+                let event_stream = bounded_sse_response(response, max_sse_event_size);
                 Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
             }
             Some(ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
                 // Try to parse as a valid JSON-RPC message. If the body is
                 // malformed (e.g. a 200 response to a notification that lacks
                 // an `id` field), treat it as accepted rather than failing.
-                match response.json::<ServerJsonRpcMessage>().await {
+                let body = read_bounded_body(response, MAX_JSON_RESPONSE_SIZE).await?;
+                match serde_json::from_slice::<ServerJsonRpcMessage>(&body) {
                     Ok(message) => Ok(StreamableHttpPostResponse::Json(message, session_id)),
                     Err(_) => {
                         tracing::warn!(

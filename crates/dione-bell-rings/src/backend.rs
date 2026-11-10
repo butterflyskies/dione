@@ -817,7 +817,7 @@ mod tests {
                 "GET" => client
                     .get_stream(
                         uri,
-                        session,
+                        Some(session),
                         Some("event-control".to_owned()),
                         auth,
                         headers,
@@ -908,6 +908,41 @@ mod tests {
             "HTTP/1.1 {status} Fixture\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n{extra}\r\n{body}",
             body.len()
         )
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn diagnostic_post_rejects_oversized_json_and_error_bodies_without_reflection() {
+        use crate::http_bounds::{MAX_ERROR_RESPONSE_SIZE, MAX_JSON_RESPONSE_SIZE};
+        let (_capture, diagnostics) = capture_diagnostics();
+        for (status, limit) in [
+            (200, MAX_JSON_RESPONSE_SIZE),
+            (500, MAX_ERROR_RESPONSE_SIZE),
+        ] {
+            let raw = format!(
+                "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                limit + 1
+            );
+            let (url, server) = diagnostic_http_fixture(raw).await;
+            let client = DiagnosticHttpClient(reqwest_mcp::Client::new());
+            let error = client
+                .post_message(
+                    url.as_str().into(),
+                    serde_json::from_value(json!({"jsonrpc":"2.0","id":1,"method":"ping"}))
+                        .unwrap(),
+                    None,
+                    None,
+                    HashMap::new(),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, StreamableHttpError::ResponseBodyTooLarge { max_size } if max_size == limit)
+            );
+            assert!(!format!("{error:?} {error}").contains("SYNTHETIC_"));
+            server.await.unwrap();
+        }
+        let diagnostics = diagnostics.0.lock().unwrap();
+        assert!(!String::from_utf8_lossy(&diagnostics).contains("SYNTHETIC_"));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1085,7 +1120,7 @@ mod tests {
                 client
                     .get_stream(
                         url.as_str().into(),
-                        "fixture-session".into(),
+                        Some("fixture-session".into()),
                         None,
                         None,
                         HashMap::new(),
@@ -1221,7 +1256,7 @@ mod tests {
         let error = client
             .get_stream(
                 url.as_str().into(),
-                "fixture-session".into(),
+                Some("fixture-session".into()),
                 None,
                 None,
                 HashMap::new(),

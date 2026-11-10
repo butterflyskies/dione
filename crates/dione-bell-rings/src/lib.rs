@@ -3,6 +3,7 @@
 
 mod backend;
 mod diagnostic_http;
+mod http_bounds;
 mod rendering;
 mod values;
 
