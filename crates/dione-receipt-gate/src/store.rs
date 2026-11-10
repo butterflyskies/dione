@@ -493,7 +493,7 @@ mod tests {
         thread,
     };
 
-    const PACE: UserId = UserId::new(437002871280631808);
+    const LANTERN: UserId = UserId::new(424242);
     const GUEST: UserId = UserId::new(999999);
     const CHANNEL: ChannelId = ChannelId::new(100);
 
@@ -508,20 +508,20 @@ mod tests {
     fn test_source_event() -> AuthenticatedSourceEvent {
         AuthenticatedSourceEvent::from_dione_gateway(
             MessageId::new(456),
-            PACE,
+            LANTERN,
             CHANNEL,
             "/react 🎯 123".into(),
         )
     }
 
     fn test_policy() -> PolicyAuthorization {
-        PolicyAuthorization::allow_react(PACE, CHANNEL, "discord-role-policy", 7)
+        PolicyAuthorization::allow_react(LANTERN, CHANNEL, "discord-role-policy", 7)
     }
 
     fn test_action_receipt(expires: Instant) -> ActionReceipt {
         ActionReceipt {
             source_event_id: MessageId::new(456),
-            principal: PACE,
+            principal: LANTERN,
             scope: test_scope(),
             expires,
             verifier: VerifierKind::DioneGateway,
@@ -577,7 +577,7 @@ mod tests {
         let store = ReceiptStore::new();
         let source = AuthenticatedSourceEvent::from_dione_gateway(
             MessageId::new(456),
-            PACE,
+            LANTERN,
             CHANNEL,
             "/react 👍 789".into(),
         );
@@ -603,7 +603,7 @@ mod tests {
         let store = ReceiptStore::new();
         let source = AuthenticatedSourceEvent::from_dione_gateway(
             MessageId::new(456),
-            PACE,
+            LANTERN,
             CHANNEL,
             "please react 🎯 to 123".into(),
         );
@@ -630,7 +630,7 @@ mod tests {
     fn policy_for_different_channel_cannot_mint() {
         let store = ReceiptStore::new();
         let wrong_policy =
-            PolicyAuthorization::allow_react(PACE, ChannelId::new(999), "discord-role-policy", 7);
+            PolicyAuthorization::allow_react(LANTERN, ChannelId::new(999), "discord-role-policy", 7);
 
         assert!(matches!(
             store.mint(&test_source_event(), &wrong_policy),
@@ -650,7 +650,7 @@ mod tests {
         assert_eq!(receipt.policy_snapshot.policy_id, "discord-role-policy");
         assert_eq!(receipt.policy_snapshot.version, 7);
         assert_eq!(receipt.source_event_id, MessageId::new(456));
-        assert_eq!(receipt.principal, PACE);
+        assert_eq!(receipt.principal, LANTERN);
         assert_eq!(receipt.verifier, VerifierKind::DioneGateway);
         assert_eq!(
             receipt.source_assurance,
@@ -763,7 +763,7 @@ mod tests {
                 authority_id,
                 ActionReceipt {
                     source_event_id: MessageId::new(1),
-                    principal: PACE,
+                    principal: LANTERN,
                     scope: test_scope(),
                     expires: Instant::now() - Duration::from_secs(1),
                     verifier: VerifierKind::DioneGateway,

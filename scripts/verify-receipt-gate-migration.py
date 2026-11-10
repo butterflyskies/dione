@@ -24,7 +24,8 @@ def main():
     args = parser.parse_args()
     old = predecessor('src/receipt_gate/store.rs')
     current = (ROOT / 'crates/dione-receipt-gate/src/store.rs').read_bytes()
-    assert current == old.replace(b'#[non_exhaustive]\n', b'')
+    sanitized = old.replace(b'#[non_exhaustive]\n', b'').replace(b'PACE', b'LANTERN').replace(b'437002871280631808', b'424242')
+    assert current == sanitized
     assert not (ROOT / 'src/receipt_gate').exists()
     assert 'receipt_gate' not in (ROOT / 'src/lib.rs').read_text()
     facade = (ROOT / 'crates/dione-receipt-gate/src/lib.rs').read_text()
@@ -76,7 +77,7 @@ def main():
         assert "needs.reconcile-receipt-gate.result == 'success'" in jobs[name]['if']
     tests = re.findall(r'#\[test\]\s*fn (\w+)', current.decode())
     result = {'baseline': BASE, 'store_sha256': hashlib.sha256(current).hexdigest(),
-              'store_exact_except_inherited_non_exhaustive_removal': True,
+              'store_exact_except_declared_marker_removal_and_targeted_fixture_principal_sanitization': True,
               'private_proof_constructors_and_no_public_runtime_interface': True,
               'original_test_names': tests, 'source_test_count': len(tests),
               'normal_packages': len(docs), 'normal_graph_acyclic': True,
