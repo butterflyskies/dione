@@ -3240,6 +3240,13 @@ mod tests {
                 );
                 let sent = release_held(&ctx, &ticket.handle).await.unwrap();
                 assert_eq!(sent.message_ids.len(), if prefix { 2 } else { 1 });
+                {
+                    let state = ctx.state.read().await;
+                    assert!(
+                        sent.message_ids.iter().all(|id| state.is_own_send(id.get())),
+                        "each confirmed publication must be recorded before the next operation"
+                    );
+                }
                 let posts = posted_contents(&requests);
                 assert_eq!(posts.len(), if prefix { 3 } else { 2 });
                 assert_eq!(
