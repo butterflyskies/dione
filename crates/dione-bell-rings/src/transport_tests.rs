@@ -189,6 +189,12 @@ async fn oversized_get_terminates_real_service_without_second_get() {
         "overflow must not reconnect GET through the real SDK"
     );
     wait_for(|| service.is_closed()).await;
+    assert_eq!(
+        fixture.gets.load(Ordering::SeqCst),
+        1,
+        "no extra GET may occur before service closure"
+    );
+    assert!(fixture.resumptions.lock().unwrap().is_empty());
 }
 #[tokio::test]
 async fn under_limit_real_service_stays_live_without_reconnect() {
@@ -221,6 +227,11 @@ async fn oversized_post_after_event_id_terminates_without_resumption_get() {
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(250)).await;
+    eprintln!(
+        "POST_OVERFLOW_OBSERVATION gets={} resumptions={:?}",
+        fixture.gets.load(Ordering::SeqCst),
+        *fixture.resumptions.lock().unwrap()
+    );
     assert_eq!(
         fixture.gets.load(Ordering::SeqCst),
         1,
@@ -228,6 +239,12 @@ async fn oversized_post_after_event_id_terminates_without_resumption_get() {
     );
     assert!(fixture.resumptions.lock().unwrap().is_empty());
     wait_for(|| service.is_closed()).await;
+    assert_eq!(
+        fixture.gets.load(Ordering::SeqCst),
+        1,
+        "no extra GET may occur before service closure"
+    );
+    assert!(fixture.resumptions.lock().unwrap().is_empty());
 }
 #[tokio::test]
 async fn ordinary_post_interruption_resumes_with_event_id() {
