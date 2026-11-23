@@ -23,11 +23,17 @@ pub fn replace<E>(
     rename: impl FnOnce() -> Result<(), E>,
     sync_directory: impl FnOnce() -> Result<(), E>,
 ) -> Result<(), ReplaceError<E>> {
+    #[cfg(any(test, feature = "test-support"))]
+    crate::queue::bind_diagnostic("snapshot.write_sync.begin");
     temporary
         .write_all(bytes)
         .and_then(|()| temporary.sync_all())
         .map_err(|error| ReplaceError::BeforeCommit(write_error(error)))?;
+    #[cfg(any(test, feature = "test-support"))]
+    crate::queue::bind_diagnostic("snapshot.write_sync.return");
     rename().map_err(ReplaceError::BeforeCommit)?;
+    #[cfg(any(test, feature = "test-support"))]
+    crate::queue::bind_diagnostic("snapshot.rename.return");
     sync_directory().map_err(ReplaceError::VisibleDurabilityUncertain)
 }
 

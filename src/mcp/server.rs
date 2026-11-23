@@ -798,6 +798,11 @@ async fn serve_resident_connection(
     stream: UnixStream,
     cancel: CancellationToken,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    #[cfg(test)]
+    let diagnostic_connection = {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    };
     let (mut reader, writer) = stream.into_split();
     let writer = ProtocolOutput::new(writer);
     let mut input = Vec::new();
@@ -828,6 +833,12 @@ async fn serve_resident_connection(
                 continue;
             }
         };
+        #[cfg(test)]
+        let diagnostic_id = request.get("id").and_then(Value::as_u64).unwrap_or(0);
+        #[cfg(test)]
+        crate::bind_diagnostics::mark(&format!(
+            "socket.accepted conn={diagnostic_connection} request={diagnostic_id}"
+        ));
         if !resident_request_allowed(&server.module_tools, &request) {
             let id = request.get("id").cloned().unwrap_or(Value::Null);
             writer.write(
@@ -840,10 +851,22 @@ async fn serve_resident_connection(
                 .await?;
             continue;
         }
+        #[cfg(test)]
+        crate::bind_diagnostics::mark(&format!(
+            "socket.dispatch.begin conn={diagnostic_connection} request={diagnostic_id}"
+        ));
         if let Some(response) =
             handle_request_from(&server, request, RequestOrigin::ResidentControl).await
         {
+            #[cfg(test)]
+            crate::bind_diagnostics::mark(&format!(
+                "socket.write.begin conn={diagnostic_connection} request={diagnostic_id}"
+            ));
             writer.write(&response).await?;
+            #[cfg(test)]
+            crate::bind_diagnostics::mark(&format!(
+                "socket.write.end conn={diagnostic_connection} request={diagnostic_id}"
+            ));
         }
     }
     Ok(())

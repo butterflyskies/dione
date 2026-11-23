@@ -88,7 +88,11 @@ impl<P, K> OwnedOperation<P, K> {
         wakes: impl FnOnce(&R) -> bool,
         changed: Arc<Notify>,
     ) -> R {
+        #[cfg(any(test, feature = "test-support"))]
+        bind_diagnostic("durable.operation.begin");
         let result = operation(&mut self.store);
+        #[cfg(any(test, feature = "test-support"))]
+        bind_diagnostic("durable.operation.return");
         if wakes(&result) {
             changed.notify_waiters();
         }
@@ -212,8 +216,14 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
         operation: impl FnOnce(&mut DurableStore<P, K>) -> R + Send + 'static,
         wakes: impl FnOnce(&R) -> bool + Send + 'static,
     ) -> Result<R, JoinError> {
+        #[cfg(any(test, feature = "test-support"))]
+        bind_diagnostic("durable.completion_lock.begin");
         let completion = Arc::clone(&self.completion).lock_owned().await;
+        #[cfg(any(test, feature = "test-support"))]
+        bind_diagnostic("durable.completion_lock.acquired");
         let store = Arc::clone(&self.store).lock_owned().await;
+        #[cfg(any(test, feature = "test-support"))]
+        bind_diagnostic("durable.store_lock.acquired");
         let changed = Arc::clone(&self.changed);
         #[cfg(any(test, feature = "test-support"))]
         let completion_gate = self
@@ -239,7 +249,17 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> DurableQu
             completion_gate,
             _completion: completion,
         };
-        spawn_blocking(move || owned.run(operation, wakes, changed)).await
+        #[cfg(any(test, feature = "test-support"))]
+        bind_diagnostic("durable.blocking.submitted");
+        spawn_blocking(move || {
+            #[cfg(any(test, feature = "test-support"))]
+            bind_diagnostic("durable.blocking.entered");
+            let result = owned.run(operation, wakes, changed);
+            #[cfg(any(test, feature = "test-support"))]
+            bind_diagnostic("durable.blocking.return");
+            result
+        })
+        .await
     }
     fn now(&self) -> DateTime<Utc> {
         #[cfg(any(test, feature = "test-support"))]
@@ -880,5 +900,19 @@ impl<P: Clone + Send + 'static, K: Clone + Eq + Hash + Send + 'static> BindingCo
             )
             .await
             .map_err(completion_error)?
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(super) fn bind_diagnostic(stage: &str) {
+    static COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    if std::env::var_os("DIONE_BIND_DIAGNOSTICS").is_some()
+        && COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 384
+    {
+        eprintln!(
+            "BIND_DIAG pid={} mono={:?} stage={stage}",
+            std::process::id(),
+            std::time::Instant::now()
+        );
     }
 }

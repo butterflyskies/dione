@@ -183,6 +183,8 @@ impl<P: Clone, K: Clone + Eq + Hash> DurableStore<P, K> {
         &mut self,
         mutate: impl FnOnce(&mut QueueSnapshot<P, K>, &QueueOptions<K>) -> Result<T, QueueError>,
     ) -> Result<T, QueueError> {
+        #[cfg(any(test, feature = "test-support"))]
+        super::queue::bind_diagnostic("store.transaction.begin");
         self.sync_prior()?;
         let previous = self.state.clone();
         let result = match mutate(&mut self.state, &self.options) {
@@ -192,8 +194,14 @@ impl<P: Clone, K: Clone + Eq + Hash> DurableStore<P, K> {
                 return Err(error);
             }
         };
+        #[cfg(any(test, feature = "test-support"))]
+        super::queue::bind_diagnostic("store.persist.begin");
         match self.persist() {
-            Ok(()) => Ok(result),
+            Ok(()) => {
+                #[cfg(any(test, feature = "test-support"))]
+                super::queue::bind_diagnostic("store.persist.return");
+                Ok(result)
+            }
             Err(error) => {
                 if !matches!(&error.kind, QueueErrorKind::DurabilityUncertain(_)) {
                     self.state = previous;
@@ -302,7 +310,11 @@ impl<P: Clone, K: Clone + Eq + Hash> DurableStore<P, K> {
             self.directory_sync_attempts += 1;
             self.fail_persist_at(PersistFailure::AfterRename)?;
         }
+        #[cfg(any(test, feature = "test-support"))]
+        super::queue::bind_diagnostic("store.directory_sync.begin");
         File::open(&self.directory)?.sync_all()?;
+        #[cfg(any(test, feature = "test-support"))]
+        super::queue::bind_diagnostic("store.directory_sync.return");
         self.directory_sync_pending = false;
         Ok(())
     }

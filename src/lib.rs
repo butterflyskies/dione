@@ -1,5 +1,7 @@
 pub mod attention;
 pub mod bell_rings;
+#[cfg(test)]
+pub(crate) mod bind_diagnostics;
 pub mod codex;
 pub mod config;
 pub(crate) mod config_candidate;

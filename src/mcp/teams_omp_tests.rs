@@ -605,6 +605,7 @@ async fn actual_child_stdin_close_stops_socket_releases_lock_and_preserves_backl
         .await
         .unwrap();
         evidence.stage = "bind_and_event";
+        crate::bind_diagnostics::mark(&format!("parent.bind.begin pass={pass}"));
         stream
             .write_all(
                 format!(
@@ -619,13 +620,21 @@ async fn actual_child_stdin_close_stops_socket_releases_lock_and_preserves_backl
             .await
             .unwrap();
         let mut line = String::new();
-        tokio::time::timeout(
+        crate::bind_diagnostics::mark(&format!("parent.bind.written pass={pass}"));
+        let response = tokio::time::timeout(
             Duration::from_secs(5),
             BufReader::new(stream).read_line(&mut line),
         )
-        .await
-        .unwrap()
-        .unwrap();
+        .await;
+        if response.is_err() {
+            evidence.child_status = Some(format!("{:?}", child.try_wait()));
+            crate::bind_diagnostics::mark(&format!(
+                "parent.bind.timeout pass={pass} child_status={:?}",
+                evidence.child_status
+            ));
+        }
+        response.unwrap().unwrap();
+        crate::bind_diagnostics::mark(&format!("parent.bind.response pass={pass}"));
         let bound: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(result_value(&bound)["bound"], true);
         let frame = child_json(&mut stdout).await;
@@ -682,6 +691,16 @@ async fn actual_child_stdin_close_stops_socket_releases_lock_and_preserves_backl
             }
         };
         evidence.child_status = Some(status.to_string());
+        if std::env::var_os("DIONE_BIND_DIAGNOSTICS").is_some() {
+            for line in std::fs::read_to_string(&stderr_path)
+                .unwrap()
+                .lines()
+                .filter(|line| line.starts_with("BIND_DIAG"))
+                .take(640)
+            {
+                eprintln!("{line}");
+            }
+        }
         evidence.stage = "exit_socket_lock_checks";
         // The signal pass cannot borrow EOF as a second shutdown trigger.
         drop(retained_stdin);

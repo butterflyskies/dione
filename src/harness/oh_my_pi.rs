@@ -173,7 +173,11 @@ impl HarnessProtocol for OhMyPiAdapter {
             Some(match name {
                 "teams_bind_session" => async {
                     let args: BindArguments = control_arguments(args)?;
+                    #[cfg(test)]
+                    crate::bind_diagnostics::mark("adapter.bind.begin");
                     let binding = control.bind(args.session_id).await.map_err(HarnessError::source)?;
+                    #[cfg(test)]
+                    crate::bind_diagnostics::mark("adapter.bind.return");
                     Ok(json!({"bound":true,"session_id":binding.session_id,"binding_id":binding.binding_id}))
                 }.await,
                 "teams_check_session" => async {

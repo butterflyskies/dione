@@ -76,13 +76,29 @@ async fn request<T>(
     make: impl FnOnce(Reply<T>) -> Command,
 ) -> Result<T, OmpSessionError> {
     let (reply, received) = oneshot::channel();
+    let command = make(reply);
+    #[cfg(test)]
+    let diagnostic_bind = matches!(&command, Command::Bind(..));
+    #[cfg(test)]
+    if diagnostic_bind {
+        crate::bind_diagnostics::mark("control.bind.mpsc.begin");
+    }
     sender
-        .send(make(reply))
+        .send(command)
         .await
         .map_err(|_| OmpSessionErrorKind::Unavailable)?;
-    received
+    #[cfg(test)]
+    if diagnostic_bind {
+        crate::bind_diagnostics::mark("control.bind.mpsc.sent");
+    }
+    let result = received
         .await
-        .map_err(OmpSessionErrorKind::CompletionUnknown)?
+        .map_err(OmpSessionErrorKind::CompletionUnknown)?;
+    #[cfg(test)]
+    if diagnostic_bind {
+        crate::bind_diagnostics::mark("control.bind.oneshot.return");
+    }
+    result
 }
 impl OmpAdmission {
     pub(crate) async fn enqueue(
@@ -329,12 +345,16 @@ impl Owner {
             self.recovery_predecessor = None;
             self.recovery_receipt = None;
         }
+        #[cfg(test)]
+        crate::bind_diagnostics::mark("actor.bind.durable.begin");
         match self
             .controller
             .rebind_resident(session_id.endpoint().clone())
             .await
         {
             Ok(resident) => {
+                #[cfg(test)]
+                crate::bind_diagnostics::mark("actor.bind.durable.return");
                 self.resident = Some(resident);
                 let binding = OmpBinding {
                     session_id,
@@ -343,6 +363,8 @@ impl Owner {
                 self.recovery_predecessor = None;
                 self.recovery_receipt = None;
                 self.publish(State::Bound(binding.clone()));
+                #[cfg(test)]
+                crate::bind_diagnostics::mark("actor.bind.published");
                 Ok(binding)
             }
             Err(error) => {
@@ -478,8 +500,18 @@ impl Owner {
                 let _ = reply.send(Ok(()));
             }
             Command::Bind(session, reply) => {
+                #[cfg(test)]
+                crate::bind_diagnostics::mark("actor.bind.received");
                 let result = self.bind(session).await;
+                #[cfg(test)]
+                crate::bind_diagnostics::mark(if result.is_ok() {
+                    "actor.bind.return.ok"
+                } else {
+                    "actor.bind.return.error"
+                });
                 let _ = reply.send(result);
+                #[cfg(test)]
+                crate::bind_diagnostics::mark("actor.bind.oneshot.sent");
             }
             Command::Check(session_id, binding_id, reply) => {
                 let _ = reply.send(Ok(self.check(&OmpBinding {
@@ -497,7 +529,11 @@ impl Owner {
                 let _ = reply.send(result);
             }
             Command::Admit(event, reply) => {
+                #[cfg(test)]
+                crate::bind_diagnostics::sample("actor.admit.begin");
                 let result = self.admit(*event).await;
+                #[cfg(test)]
+                crate::bind_diagnostics::sample("actor.admit.return");
                 let _ = reply.send(result);
             }
             Command::Ack(binding, token, reply) => {
@@ -609,10 +645,14 @@ impl Owner {
                 _ = stop.cancelled() => break,
                 _ = process_shutdown.cancelled() => break,
                 _ = pump.tick() => {
+                    #[cfg(test)]
+                    crate::bind_diagnostics::sample("actor.poll.begin");
                     if let Err(error) = self.poll().await {
                         self.revoke_if_uncertain(&error);
                         tracing::warn!(error = %error, "OMP inbox delivery remains pending");
                     }
+                    #[cfg(test)]
+                    crate::bind_diagnostics::sample("actor.poll.return");
                     pump.reset();
                 },
                 command = self.receiver.recv() => match command { Some(command) => self.handle(command).await, None => break },
