@@ -17,6 +17,8 @@ ignore = [
     { id = "RUSTSEC-2026-0194", reason = "quick-xml: transitive via typst → citationberg/syntect, pinned by typst, no control" },
     { id = "RUSTSEC-2026-0195", reason = "quick-xml: transitive via typst → citationberg/syntect, pinned by typst, no control" },
     { id = "RUSTSEC-2026-0206", reason = "rustybuzz: unmaintained, transitive via typst/usvg, no safe upgrade currently available" },
+    { id = "RUSTSEC-2026-0543", reason = "chrono: unmaintained with no patched release; used across timestamp, delivery and config code; migration tracked in docs/dependency-maintenance.md (#765)" },
+    { id = "RUSTSEC-2026-0555", reason = "chrono-tz: unmaintained with no patched release; parses configured IANA zones; migration tracked in docs/dependency-maintenance.md (#765)" },
     { id = "RUSTSEC-2026-0235", reason = "rkyv 0.7: transitive via mitex's embedded specification; Dione accepts LaTeX text, not untrusted rkyv archives, and mitex has no newer release" },
 ]
 

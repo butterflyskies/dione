@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.87.1]
+
+### Security
+
+- Update `rmcp` to 3.11 to address the unbounded response buffering in its
+  Streamable HTTP client (RUSTSEC-2026-0462), which the bell memory provider
+  uses. Update `url` to 2.5.9 to address RUSTSEC-2026-0592.
+- Record exact advisory exceptions for the unmaintained `chrono` and `chrono-tz`
+  crates (RUSTSEC-2026-0543, RUSTSEC-2026-0555), which have no patched release.
+  The migration is tracked in the dependency maintenance record.
+
 ## [0.87.0]
 
 ### Added

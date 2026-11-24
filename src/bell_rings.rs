@@ -12,7 +12,7 @@ use crate::{
 use futures_util::future::join_all;
 use rmcp::{
     ServiceExt,
-    model::{CallToolRequestParams, ClientInfo, RawContent},
+    model::{CallToolRequestParams, ClientConfig},
     service::{RoleClient, RunningService},
     transport::StreamableHttpClientTransport,
 };
@@ -148,7 +148,7 @@ pub trait BellProvider: Send + Sync {
 /// initialization is never repeated per successful message.
 struct MemoryMcpProvider {
     endpoint: String,
-    client: Mutex<Option<RunningService<RoleClient, ClientInfo>>>,
+    client: Mutex<Option<RunningService<RoleClient, ClientConfig>>>,
 }
 
 impl MemoryMcpProvider {
@@ -165,7 +165,7 @@ impl MemoryMcpProvider {
         let mut client = self.client.lock().await;
         if client.as_ref().is_none_or(RunningService::is_closed) {
             let transport = StreamableHttpClientTransport::from_uri(self.endpoint.clone());
-            match ClientInfo::default().serve(transport).await {
+            match ClientConfig::default().serve(transport).await {
                 Ok(connected) => {
                     *client = Some(connected);
                     ConnectOutcome::Ready
@@ -216,10 +216,7 @@ impl MemoryMcpProvider {
         let text = result
             .content
             .iter()
-            .find_map(|content| match &content.raw {
-                RawContent::Text(text) => Some(text.text.as_str()),
-                _ => None,
-            })
+            .find_map(|content| content.as_text().map(|text| text.text.as_str()))
             .ok_or(BellProviderError::MalformedResponse)?;
         serde_json::from_str(text).map_err(|_| BellProviderError::MalformedResponse)
     }
