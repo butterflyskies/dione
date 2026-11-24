@@ -3,7 +3,7 @@ members = ["."]
 
 [package]
 name = "dione"
-version = "0.87.0"
+version = "0.87.1"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -55,7 +55,7 @@ secrecy = { version = "0.8", features = ["serde"] }
 url = "2"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
-rmcp = { version = "1.1", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
+rmcp = { version = "3.9", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
 tokio-tungstenite = { version = "0.21", default-features = false, features = ["handshake"] }
 typst = "0.14.2"
 typst-render = "0.14.2"

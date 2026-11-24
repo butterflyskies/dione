@@ -7,10 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.87.1]
+
 ### Security
 
 - Update Tokio to 1.53.3 to address the Unix `AsyncFd` I/O-safety advisory
   RUSTSEC-2026-0386.
+- Update `rmcp` to 3.11 to address the unbounded response buffering in its
+  Streamable HTTP client (RUSTSEC-2026-0462), which the bell memory provider
+  uses. Update `url` to 2.5.9 to address RUSTSEC-2026-0592.
+- Record exact advisory exceptions for the unmaintained `chrono` and `chrono-tz`
+  crates (RUSTSEC-2026-0543, RUSTSEC-2026-0555), which have no patched release.
+  The migration is tracked in the dependency maintenance record.
 
 ### Changed
 

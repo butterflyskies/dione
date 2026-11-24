@@ -29,3 +29,22 @@ This exception does not suppress or remediate it.
 - [ ] Inspect the yank reason and parent constraints, then update through the
   dependency chain to a compatible non-yanked release. Run the dependency audit
   and behavior checks for affected consumers.
+
+## chrono and chrono-tz
+
+[RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543) and
+[RUSTSEC-2026-0555](https://rustsec.org/advisories/RUSTSEC-2026-0555) identify
+`chrono` 0.4.45 and `chrono-tz` 0.10.4 as unmaintained, with no patched release.
+The exact advisory exceptions in `deny.toml` retain this risk while migration
+work is pending (#765). They do not report a known vulnerability.
+
+Dione uses `chrono` for message timestamps, delivery scheduling, and
+configuration parsing throughout the crate. It parses `chrono-tz` zones from
+operator configuration only, not from Discord or agent input.
+
+- [ ] Choose a maintained replacement (`jiff` or `time` with a zone database)
+  and confirm that it covers IANA zone parsing and the current output formats.
+- [ ] Migrate timestamp, delivery, and configuration code. Verify the rendered
+  timestamps and configured-zone behavior against the current tests.
+- [ ] Remove both exceptions after `cargo tree` confirms that the crates are
+  gone. Run the dependency audit without the exceptions.
