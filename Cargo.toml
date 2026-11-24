@@ -12,6 +12,10 @@ repository = "https://github.com/butterflyskies/dione"
 readme = "README.md"
 keywords = ["discord", "mcp", "claude-code", "codex", "bot"]
 categories = ["command-line-utilities"]
+# Publish only what builds the crate. Tests, fixtures, docs, audit logs and CI
+# scripts stay in the repository; test modules under src/ that read from
+# tests/fixtures are cfg(test) and are not compiled from the published crate.
+include = ["/src/**/*", "/README.md"]
 
 [workspace.dependencies]
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
