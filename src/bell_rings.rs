@@ -1311,6 +1311,83 @@ mod tests {
         );
     }
 
+    /// Minimal Streamable HTTP MCP endpoint that answers with plain JSON
+    /// responses and records every `tools/call` request it receives.
+    async fn spawn_memory_mcp(recall_result: Value) -> (String, Arc<StdMutex<Vec<Value>>>) {
+        use axum::{Json, Router, http::StatusCode, response::IntoResponse, routing::post};
+
+        let calls = Arc::new(StdMutex::new(Vec::new()));
+        let seen = Arc::clone(&calls);
+        let handler = move |Json(request): Json<Value>| {
+            let seen = Arc::clone(&seen);
+            let recall_result = recall_result.clone();
+            async move {
+                let Some(id) = request.get("id").cloned() else {
+                    return StatusCode::ACCEPTED.into_response();
+                };
+                let result = match request["method"].as_str() {
+                    Some("initialize") => json!({
+                        "protocolVersion": request["params"]["protocolVersion"],
+                        "capabilities": { "tools": {} },
+                        "serverInfo": { "name": "memory-mcp-fixture", "version": "0" },
+                    }),
+                    Some("tools/call") => {
+                        seen.lock().unwrap().push(request["params"].clone());
+                        json!({
+                            "content": [{ "type": "text", "text": recall_result.to_string() }],
+                            "isError": false,
+                        })
+                    }
+                    _ => return StatusCode::NOT_FOUND.into_response(),
+                };
+                Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })).into_response()
+            }
+        };
+        let app = Router::new().route(
+            "/mcp",
+            post(handler).get(|| async { StatusCode::METHOD_NOT_ALLOWED }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{addr}/mcp"), calls)
+    }
+
+    #[tokio::test]
+    async fn multi_provider_recalls_over_streamable_http() {
+        let (url, calls) =
+            spawn_memory_mcp(envelope(vec![hit("m_1", "bridge notes", 0.1, "semantic")])).await;
+        let registry = BellEvaluator::default();
+        let cfg = BellRingsConfig {
+            enabled: true,
+            mode: crate::config::BellMode::Live,
+            providers: vec![BellProviderConfig {
+                url: BellProviderUrl::parse(url).unwrap(),
+                scope: BellScope::parse("syne").unwrap(),
+                alias: None,
+            }],
+            trigger: crate::config::BellTrigger::Directed,
+            channel_overrides: vec![],
+            max_semantic_distance: 0.3,
+            max_bells: 3,
+            deadline_ms: 5_000,
+        };
+        let providers = registry.providers_for(&cfg).await;
+        let event = NotificationEvent::Message(message(MessageTargeting::GuildDirected(
+            MentionKind::DirectMention,
+        )));
+
+        let (_, bells, status) = evaluate_multi_provider(event, &cfg, &providers).await;
+
+        assert_eq!(status, Some(BellStatus::Ok));
+        let names: Vec<_> = bells.iter().map(|bell| bell.memory_name.as_str()).collect();
+        assert_eq!(names, ["bridge notes"]);
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["name"], "recall");
+        assert_eq!(calls[0]["arguments"]["scope"], "syne");
+    }
+
     #[tokio::test]
     async fn multi_provider_connect_error_reports_error_not_timeout() {
         // A provider pointing at a refused port produces Error, not Timeout.
