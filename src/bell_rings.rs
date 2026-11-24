@@ -249,7 +249,7 @@ struct ProviderSlot {
 
 /// Render admitted bells into the compact wire format with full provenance.
 ///
-/// Format: `"3s lain/person-pace@personal d=0.12 id=a rid=r_test;1l shared/foo@cc d=-1.00 id=b rid=r_test2"`
+/// Format: `"3s scope-b/person-pace@personal d=0.12 id=a rid=r_test;1l shared/foo@cc d=-1.00 id=b rid=r_test2"`
 /// — `{loudness}{timbre} {scope}/{name}@{provider_alias} d={distance} id={memory_id} rid={recall_id}`.
 pub fn render_bells(bells: &[Bell]) -> String {
     bells
@@ -776,7 +776,7 @@ mod tests {
             mode: crate::config::BellMode::Live,
             providers: vec![BellProviderConfig {
                 url: BellProviderUrl::parse("http://memory.example/mcp").unwrap(),
-                scope: BellScope::parse("syne").unwrap(),
+                scope: BellScope::parse("scope-a").unwrap(),
                 alias: None,
             }],
             trigger: crate::config::BellTrigger::Directed,
@@ -813,7 +813,7 @@ mod tests {
         json!({
             "id": id,
             "name": name,
-            "scope": "syne",
+            "scope": "scope-a",
             "distance": distance,
             "match_type": match_type,
         })
@@ -836,7 +836,7 @@ mod tests {
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
         let requests = provider.requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].scope, "syne");
+        assert_eq!(requests[0].scope, "scope-a");
         assert_eq!(requests[0].limit, 3);
     }
 
@@ -904,8 +904,8 @@ mod tests {
             "[bell_rings]\ndeadline_ms=0",
             "[bell_rings]\ndeadline_ms=2001",
             "[bell_rings]\nenabled=true",
-            "[bell_rings.provider]\nurl='file:///tmp/memory'\nscope='syne'",
-            "[bell_rings.provider]\nurl='https://user:pass@memory/mcp'\nscope='syne'",
+            "[bell_rings.provider]\nurl='file:///tmp/memory'\nscope='scope-a'",
+            "[bell_rings.provider]\nurl='https://user:pass@memory/mcp'\nscope='scope-a'",
         ] {
             assert!(toml::from_str::<Config>(invalid).is_err(), "{invalid}");
         }
@@ -1011,7 +1011,7 @@ mod tests {
             Bell {
                 provider_url: "http://memory/mcp".to_owned(),
                 provider_alias: "personal".to_owned(),
-                scope: "lain".to_owned(),
+                scope: "scope-b".to_owned(),
                 recall_id: "r_test".to_owned(),
                 memory_id: "a".to_owned(),
                 memory_name: "person-pace".to_owned(),
@@ -1035,7 +1035,7 @@ mod tests {
         ];
         assert_eq!(
             render_bells(&bells),
-            "3s lain/person-pace@personal d=0.12 id=a rid=r_test;2b shared/construct-cosmology@cc d=0.25 id=b rid=r_test2"
+            "3s scope-b/person-pace@personal d=0.12 id=a rid=r_test;2b shared/construct-cosmology@cc d=0.25 id=b rid=r_test2"
         );
     }
 
@@ -1128,7 +1128,7 @@ mod tests {
     fn zero_channel_id_is_rejected() {
         let parsed = toml::from_str::<Config>(
             "[bell_rings]\nenabled=true\ntrigger='all'\n\
-            [bell_rings.provider]\nurl='http://memory/mcp'\nscope='syne'\n\
+            [bell_rings.provider]\nurl='http://memory/mcp'\nscope='scope-a'\n\
             [[bell_rings.channel_overrides]]\nchannel_id='0'\ntrigger='directed'",
         );
         assert!(parsed.is_err(), "channel_id=0 must be rejected");
@@ -1160,7 +1160,7 @@ mod tests {
     fn duplicate_provider_aliases_are_rejected() {
         let parsed = toml::from_str::<Config>(
             "[bell_rings]\nenabled=true\n\
-            [[bell_rings.providers]]\nurl='http://personal/mcp'\nscope='lain'\nalias='same'\n\
+            [[bell_rings.providers]]\nurl='http://personal/mcp'\nscope='scope-b'\nalias='same'\n\
             [[bell_rings.providers]]\nurl='http://shared/mcp'\nscope='shared'\nalias='same'",
         );
         assert!(parsed.is_err(), "duplicate aliases must be rejected");
@@ -1170,7 +1170,7 @@ mod tests {
     fn whitespace_only_alias_is_rejected() {
         let parsed = toml::from_str::<Config>(
             "[bell_rings]\nenabled=true\n\
-            [[bell_rings.providers]]\nurl='http://personal/mcp'\nscope='lain'\nalias='   '",
+            [[bell_rings.providers]]\nurl='http://personal/mcp'\nscope='scope-b'\nalias='   '",
         );
         assert!(parsed.is_err(), "whitespace-only alias must be rejected");
     }
@@ -1179,7 +1179,7 @@ mod tests {
     fn case_insensitive_alias_collision_is_rejected() {
         let parsed = toml::from_str::<Config>(
             "[bell_rings]\nenabled=true\n\
-            [[bell_rings.providers]]\nurl='http://personal/mcp'\nscope='lain'\nalias='cc'\n\
+            [[bell_rings.providers]]\nurl='http://personal/mcp'\nscope='scope-b'\nalias='cc'\n\
             [[bell_rings.providers]]\nurl='http://shared/mcp'\nscope='shared'\nalias=' CC '",
         );
         assert!(
@@ -1192,7 +1192,7 @@ mod tests {
     fn alias_whitespace_is_trimmed_at_parse_time() {
         let cfg: Config = toml::from_str(
             "[bell_rings]\nenabled=true\n\
-            [[bell_rings.providers]]\nurl='http://personal/mcp'\nscope='lain'\nalias='  personal  '",
+            [[bell_rings.providers]]\nurl='http://personal/mcp'\nscope='scope-b'\nalias='  personal  '",
         )
         .unwrap();
         assert_eq!(
@@ -1207,7 +1207,7 @@ mod tests {
         let bells = vec![Bell {
             loudness: 1,
             timbre: BellTimbre::Semantic,
-            scope: "lain".to_owned(),
+            scope: "scope-b".to_owned(),
             memory_name: "test".to_owned(),
             provider_alias: "personal".to_owned(),
             provider_url: "http://localhost/mcp".to_owned(),
@@ -1226,23 +1226,23 @@ mod tests {
     #[test]
     fn legacy_singular_provider_config_still_works() {
         let cfg: Config = toml::from_str(
-            "[bell_rings]\nenabled=true\n[bell_rings.provider]\nurl='http://memory/mcp'\nscope='syne'",
+            "[bell_rings]\nenabled=true\n[bell_rings.provider]\nurl='http://memory/mcp'\nscope='scope-a'",
         )
         .unwrap();
         assert_eq!(cfg.bell_rings.providers.len(), 1);
-        assert_eq!(cfg.bell_rings.providers[0].scope.as_str(), "syne");
+        assert_eq!(cfg.bell_rings.providers[0].scope.as_str(), "scope-a");
     }
 
     #[test]
     fn multi_provider_config_works() {
         let cfg: Config = toml::from_str(
             "[bell_rings]\nenabled=true\n\
-            [[bell_rings.providers]]\nurl='http://personal/mcp'\nscope='lain'\n\
+            [[bell_rings.providers]]\nurl='http://personal/mcp'\nscope='scope-b'\n\
             [[bell_rings.providers]]\nurl='http://shared/mcp'\nscope='shared'",
         )
         .unwrap();
         assert_eq!(cfg.bell_rings.providers.len(), 2);
-        assert_eq!(cfg.bell_rings.providers[0].scope.as_str(), "lain");
+        assert_eq!(cfg.bell_rings.providers[0].scope.as_str(), "scope-b");
         assert_eq!(cfg.bell_rings.providers[1].scope.as_str(), "shared");
     }
 
@@ -1250,7 +1250,7 @@ mod tests {
     fn trigger_all_config_parses() {
         let cfg: Config = toml::from_str(
             "[bell_rings]\nenabled=true\ntrigger='all'\n\
-            [bell_rings.provider]\nurl='http://memory/mcp'\nscope='syne'",
+            [bell_rings.provider]\nurl='http://memory/mcp'\nscope='scope-a'",
         )
         .unwrap();
         assert_eq!(cfg.bell_rings.trigger, crate::config::BellTrigger::All);
@@ -1355,22 +1355,18 @@ mod tests {
 
     #[tokio::test]
     async fn multi_provider_recalls_over_streamable_http() {
-        let (url, calls) =
-            spawn_memory_mcp(envelope(vec![hit("m_1", "bridge notes", 0.1, "semantic")])).await;
+        let mut memory = hit("m_1", "bridge notes", 0.1, "semantic");
+        memory["scope"] = json!("fixture-scope");
+        let (url, calls) = spawn_memory_mcp(envelope(vec![memory])).await;
         let registry = BellEvaluator::default();
         let cfg = BellRingsConfig {
-            enabled: true,
-            mode: crate::config::BellMode::Live,
             providers: vec![BellProviderConfig {
                 url: BellProviderUrl::parse(url).unwrap(),
-                scope: BellScope::parse("syne").unwrap(),
+                scope: BellScope::parse("fixture-scope").unwrap(),
                 alias: None,
             }],
-            trigger: crate::config::BellTrigger::Directed,
-            channel_overrides: vec![],
-            max_semantic_distance: 0.3,
-            max_bells: 3,
             deadline_ms: 5_000,
+            ..config()
         };
         let providers = registry.providers_for(&cfg).await;
         let event = NotificationEvent::Message(message(MessageTargeting::GuildDirected(
@@ -1385,7 +1381,10 @@ mod tests {
         let calls = calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0]["name"], "recall");
-        assert_eq!(calls[0]["arguments"]["scope"], "syne");
+        assert_eq!(
+            calls[0]["arguments"],
+            json!({ "query": "query text", "scope": "fixture-scope", "limit": cfg.max_bells })
+        );
     }
 
     #[tokio::test]

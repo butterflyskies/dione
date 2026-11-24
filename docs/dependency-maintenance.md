@@ -38,9 +38,9 @@ This exception does not suppress or remediate it.
 The exact advisory exceptions in `deny.toml` retain this risk while migration
 work is pending (#765). They do not report a known vulnerability.
 
-Dione formats message timestamps and delivery times with `chrono` across about
-60 source files. It parses `chrono-tz` zones from operator configuration only,
-not from Discord or agent input.
+Dione uses `chrono` for message timestamps, delivery scheduling, and
+configuration parsing throughout the crate. It parses `chrono-tz` zones from
+operator configuration only, not from Discord or agent input.
 
 - [ ] Choose a maintained replacement (`jiff` or `time` with a zone database)
   and confirm that it covers IANA zone parsing and the current output formats.
