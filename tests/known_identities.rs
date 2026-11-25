@@ -298,14 +298,38 @@ fn a_symlink_target_is_scanned_without_following_it() {
 }
 
 #[test]
+fn an_occurrence_exemption_applies_to_a_symlink_target_too() {
+    let repo = repository(&[("src/a.rs", "fn f() {}\n")]);
+    std::os::unix::fs::symlink("../quillon-works/project", repo.path().join("public-link"))
+        .expect("fixture link must be created");
+    std::os::unix::fs::symlink("../quillon-works/other", repo.path().join("other-link"))
+        .expect("fixture link must be created");
+    commit_all(repo.path());
+    let allow = "public-link\t../quillon-works/project\n";
+    let (status, stderr) = scan(repo.path(), "quillon-works\n", Some(allow));
+    assert_eq!(status, Some(1), "{stderr}");
+    // The exact exempt target is not a hit; the link that lists no exemption still is.
+    assert!(!stderr.contains("public-link"), "{stderr}");
+    assert!(
+        stderr.contains("known identity: other-link (symlink target)\n"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("1 hit(s)"), "{stderr}");
+}
+
+#[test]
 fn a_tracked_path_that_could_break_record_framing_is_refused() {
-    for name in ["approved.txt\u{1}suffix", "split\nname.txt"] {
+    for name in [
+        "approved.txt\u{1}suffix",
+        "split\nname.txt",
+        "trailing-tab\t",
+    ] {
         let repo = repository(&[("approved.txt", "Quillon\n")]);
         fs::write(repo.path().join(name), "fn f() {}\n").expect("fixture file must be written");
         commit_all(repo.path());
         let (status, stderr) = scan(repo.path(), "quillon\n", Some("approved.txt\n"));
         assert_eq!(status, Some(2), "{name:?}: {stderr}");
-        assert!(stderr.contains("newline or SOH"), "{name:?}: {stderr}");
+        assert!(stderr.contains("newline, tab or SOH"), "{name:?}: {stderr}");
     }
 }
 
