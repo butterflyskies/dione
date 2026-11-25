@@ -4833,7 +4833,7 @@ mod tests {
             ..Default::default()
         });
         raw.pre_send.construct_id = "nyx".to_owned();
-        raw.pre_send.author_id = Some(UserId::new(1522260806975099030));
+        raw.pre_send.author_id = Some(UserId::new(100000000000000002));
         let captured = Arc::new(std::sync::Mutex::new(None));
         let pipeline =
             PreSendPipeline::new(vec![Box::new(ContextCaptureHook(Arc::clone(&captured)))])
@@ -4853,7 +4853,7 @@ mod tests {
             .clone()
             .expect("context");
         assert_eq!(captured.construct_id(), "nyx");
-        assert_eq!(captured.author_id(), Some(UserId::new(1522260806975099030)));
+        assert_eq!(captured.author_id(), Some(UserId::new(100000000000000002)));
         assert_eq!(captured.guild_id(), None);
     }
 
