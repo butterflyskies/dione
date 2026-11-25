@@ -227,7 +227,7 @@ not newly established guarantees.
 ## Complete source-candidate gate
 
 The clean native command
-`CARGO_TARGET_DIR=<linux-host>/dione-vertical-native/target sh scripts/pr-ready.sh cc7ee6adc46d6dc898da69737a826f12cbd8c0b8`
+`CARGO_TARGET_DIR="$HOME"/dione-vertical-native/target sh scripts/pr-ready.sh cc7ee6adc46d6dc898da69737a826f12cbd8c0b8`
 passed at `10051036b2514420a95369ec7668cecddd0d4670`. Its log is
 `<linux-host>/dione-management-pr-ready-1005103.log`.
 

@@ -54,7 +54,7 @@ Logs are `<linux-host>/dione-access-retention-proof-r4.log`, `<linux-host>/dione
 
 ## Final submission gate
 
-Run `CARGO_TARGET_DIR=<linux-host>/dione-vertical-native/target sh scripts/pr-ready.sh 07baad4c667c15967574395c19670de48deb4fbd` from the clean native Linux checkout at the final commit. The final PR body records the submitted head, gate completion, and any remaining limitations. The gate log is `<linux-host>/dione-access-pr-ready.log`. It covers formatting, both feature configurations, test suites, package/privacy checks, dependency policy, release build, and binary launch. Source and dependency changes after `bc8b98a` require renewed review.
+Run `CARGO_TARGET_DIR="$HOME"/dione-vertical-native/target sh scripts/pr-ready.sh 07baad4c667c15967574395c19670de48deb4fbd` from the clean native Linux checkout at the final commit. The final PR body records the submitted head, gate completion, and any remaining limitations. The gate log is `<linux-host>/dione-access-pr-ready.log`. It covers formatting, both feature configurations, test suites, package/privacy checks, dependency policy, release build, and binary launch. Source and dependency changes after `bc8b98a` require renewed review.
 
 The final trail review checks this record against the scoped T3 thread after user request position3831, run47. It is separate from source review and official approval. Reports remain outside the repository in the temporary review directory.
 ## Trail audit dispositions
