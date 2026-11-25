@@ -12,11 +12,11 @@ Persisted queue records allow a zero user ID. Listing must preserve it without c
 
 ## Baseline
 
-The unchanged base passed `cargo nextest run --workspace --locked --features oneshot-test-seam -E "test(access) | test(queue::tests)"` in the native Linux checkout. The selection ran 32 tests, all passed, with 1605 skipped. This broad name filter also selects tests outside access requests. The log is `/home/syn/code/dione-access-baseline.log`.
+The unchanged base passed `cargo nextest run --workspace --locked --features oneshot-test-seam -E "test(access) | test(queue::tests)"` in the native Linux checkout. The selection ran 32 tests, all passed, with 1605 skipped. This broad name filter also selects tests outside access requests. The log is `<linux-host>/dione-access-baseline.log`.
 
 ## Characterization
 
-Signed commit `83a630eb2838d041e26430c2ac0465306b2e592d` contains seven characterization tests and the literal historical queue fixture. Production code before each test module was compared to the base and was unchanged. The final run passed all seven tests with 1406 skipped, followed by all-target feature Clippy with warnings denied. Logs: `/home/syn/code/dione-access-characterization-r3.log` and `/home/syn/code/dione-access-characterization-clippy.log`.
+Signed commit `83a630eb2838d041e26430c2ac0465306b2e592d` contains seven characterization tests and the literal historical queue fixture. Production code before each test module was compared to the base and was unchanged. The final run passed all seven tests with 1406 skipped, followed by all-target feature Clippy with warnings denied. Logs: `<linux-host>/dione-access-characterization-r3.log` and `<linux-host>/dione-access-characterization-clippy.log`.
 
 The first compile could not find the new fixture because the parent copied only the two Rust files. The complete manifest fixed this. The next run passed six tests but failed the dispatch gate fixture: direct file writes did not refresh Dione's cached configuration. The fixture now explicitly reloads configuration before each gate mode. No production behavior changed. Earlier logs are `dione-access-characterization.log` and `dione-access-characterization-r2.log` in the same native log directory.
 
@@ -24,11 +24,11 @@ The literal expectations cover historical zero and maximum IDs, mismatched store
 
 ## Selected design
 
-Three same-model independent sketches compared a Discord owner, operations beside the queue, and context methods. The parent tied A/C at24 and preferred A initially; the blind judge preferred C25 over A24 and B22. The parent selected C's complete context methods and flat private receipts after considering both rationales. Queue storage remains separate, with no forwarding service. The review artifacts are under `C:/Users/Jaycee/AppData/Local/Temp/dione-access-design/`.
+Three same-model independent sketches compared a Discord owner, operations beside the queue, and context methods. The parent tied A/C at24 and preferred A initially; the blind judge preferred C25 over A24 and B22. The parent selected C's complete context methods and flat private receipts after considering both rationales. Queue storage remains separate, with no forwarding service. The review artifacts are under `<windows-temp>/dione-access-design/`.
 
 ## Migrated implementation
 
-Signed source candidate `bc8b98ae809ed3e8466d1710e9bcf9de203f7c94` moves the three operations into `discord::access`. The seven original behavioral tests now exercise the typed owner and pure projector. An eighth test checks the retained concrete error through the source chain. All eight passed with 1406 skipped in `/home/syn/code/dione-access-migrated.log`, run `1171f40d-91b9-4537-8e70-426e57e08e3a`. The native checkout was an uncommitted source copy during that run; the production and test text matches this signed source commit after CRLF normalization. Documentation edits after copying do not affect the tested source.
+Signed source candidate `bc8b98ae809ed3e8466d1710e9bcf9de203f7c94` moves the three operations into `discord::access`. The seven original behavioral tests now exercise the typed owner and pure projector. An eighth test checks the retained concrete error through the source chain. All eight passed with 1406 skipped in `<linux-host>/dione-access-migrated.log`, run `1171f40d-91b9-4537-8e70-426e57e08e3a`. The native checkout was an uncommitted source copy during that run; the production and test text matches this signed source commit after CRLF normalization. Documentation edits after copying do not affect the tested source.
 
 `python .audit/compare-access-fixtures.py 83a630e` checks that the seven tests retain their 23 JSON expressions and that the historical queue fixture is unchanged. It checks literal expressions, not complete semantic equivalence by itself. Real before/after test runs provide the behavior evidence. The source-chain test constructs a synthetic error; the config-failure test separately executes a real ConfigRuntime failure.
 
@@ -38,7 +38,7 @@ The scoped comment review found no deletion candidates, no actionable constraint
 
 ## Source review
 
-Three separately scoped GPT-6-Astra reviewers checked source candidate `bc8b98ae809ed3e8466d1710e9bcf9de203f7c94` against the full base. Safety, Tests, Design, Idiomacy, Security, and Privacy each passed without an introduced P1-P3 finding. Reports are `review-safety-tests.md`, `review-design-idiomacy.md`, and `review-security-privacy.md` in the temporary review directory. These are source verdicts, not official approvals or runtime results. The complete migrated source also passed feature all-target Clippy in `/home/syn/code/dione-access-clippy.log`.
+Three separately scoped GPT-6-Astra reviewers checked source candidate `bc8b98ae809ed3e8466d1710e9bcf9de203f7c94` against the full base. Safety, Tests, Design, Idiomacy, Security, and Privacy each passed without an introduced P1-P3 finding. Reports are `review-safety-tests.md`, `review-design-idiomacy.md`, and `review-security-privacy.md` in the temporary review directory. These are source verdicts, not official approvals or runtime results. The complete migrated source also passed feature all-target Clippy in `<linux-host>/dione-access-clippy.log`.
 
 ## Verification limits
 
@@ -50,11 +50,11 @@ No remote CI, official review, live Discord, or construct test result is claimed
 
 `.audit/prove-access-retention.py` temporarily removes the request in the unknown-durability branch. The targeted retry test fails because `peek(42).is_some()` is false. The script restores exact original bytes in `finally`, checks the SHA256 and clean tree, then reruns the target successfully. The restored run passed one test with 1413 skipped, run `311880a2-ce58-4e17-bda4-c54a0d31c7b2`. This experiment used clean candidate `fe45d24fe7cf604399712d48a73cee13c7ca2b22`, whose source is unchanged from the reviewed implementation.
 
-Logs are `/home/syn/code/dione-access-retention-proof-r4.log`, `/home/syn/code/dione-access-retention-mutant.log`, and `/home/syn/code/dione-access-retention-restored.log`. Earlier proof attempts stopped before mutation: the copied source had CRLF bytes instead of Git's canonical LF, a normal restore left those bytes unchanged, and explicit normalization required refreshing the index metadata. The parent verified the difference was only line endings, wrote the committed bytes, staged the unchanged blob to refresh metadata, and checked the tree clean. The script's exact-byte and clean-tree guards remained intact.
+Logs are `<linux-host>/dione-access-retention-proof-r4.log`, `<linux-host>/dione-access-retention-mutant.log`, and `<linux-host>/dione-access-retention-restored.log`. Earlier proof attempts stopped before mutation: the copied source had CRLF bytes instead of Git's canonical LF, a normal restore left those bytes unchanged, and explicit normalization required refreshing the index metadata. The parent verified the difference was only line endings, wrote the committed bytes, staged the unchanged blob to refresh metadata, and checked the tree clean. The script's exact-byte and clean-tree guards remained intact.
 
 ## Final submission gate
 
-Run `CARGO_TARGET_DIR=/home/syn/code/dione-vertical-native/target sh scripts/pr-ready.sh 07baad4c667c15967574395c19670de48deb4fbd` from the clean native Linux checkout at the final commit. The final PR body records the submitted head, gate completion, and any remaining limitations. The gate log is `/home/syn/code/dione-access-pr-ready.log`. It covers formatting, both feature configurations, test suites, package/privacy checks, dependency policy, release build, and binary launch. Source and dependency changes after `bc8b98a` require renewed review.
+Run `CARGO_TARGET_DIR=<linux-host>/dione-vertical-native/target sh scripts/pr-ready.sh 07baad4c667c15967574395c19670de48deb4fbd` from the clean native Linux checkout at the final commit. The final PR body records the submitted head, gate completion, and any remaining limitations. The gate log is `<linux-host>/dione-access-pr-ready.log`. It covers formatting, both feature configurations, test suites, package/privacy checks, dependency policy, release build, and binary launch. Source and dependency changes after `bc8b98a` require renewed review.
 
 The final trail review checks this record against the scoped T3 thread after user request position3831, run47. It is separate from source review and official approval. Reports remain outside the repository in the temporary review directory.
 ## Trail audit dispositions

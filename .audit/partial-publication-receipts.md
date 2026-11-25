@@ -21,7 +21,7 @@ file with a copy.
 
 ## Verification evidence
 
-The native checkout is `/home/syn/code/dione-partial-receipts`, using its own
+The native checkout is `<linux-host>/dione-partial-receipts`, using its own
 `target` directory. The baseline applied only the new and updated tests to the
 exact a6c50ab production source. Its ten projector tests produced four intended
 assertion failures for missing partial fields and six passing controls. The
@@ -41,8 +41,8 @@ does not substitute for official Forgejo approval or executed verification.
 
 Local evidence files:
 
-- `/home/syn/code/dione-partial-receipts-baseline.log`
-- `/home/syn/code/dione-partial-receipts-clippy.log`
-- `/home/syn/code/dione-partial-receipts-focused.log`
+- `<linux-host>/dione-partial-receipts-baseline.log`
+- `<linux-host>/dione-partial-receipts-clippy.log`
+- `<linux-host>/dione-partial-receipts-focused.log`
 
 Complete required checks on the clean signed head and PR publication remain pending. No full-gate or completion claim is made here.

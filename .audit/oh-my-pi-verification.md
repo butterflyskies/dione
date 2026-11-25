@@ -4,7 +4,7 @@
 
 R7 adds an explicit Oh My Pi adapter and an original opt-in extension. The user
 was notified before research. Upstream source and docs were inspected in
-C:/Users/Jaycee/code/references/oh-my-pi-dione-r7-20261012 at commit
+<windows-host>/references/oh-my-pi-dione-r7-20261012 at commit
 b83200eb866821f02625332025b453f06ce4e12a. Published OMP 18.10.0 was installed in a
 separate proof directory, with package scripts disabled. No upstream source,
 documentation, dependencies, or active user configuration is added to Dione.
@@ -68,7 +68,7 @@ The parent reran all seven tests and strict typechecking against the integrated 
 Authored Rust fixtures cover real rendered messages, reactions, config and trace
 events, evidence metadata, coalescing, malformed/permission rejection, concurrent
 complete output lines, MCP initialize/list/ordinary tool calls, explicit mode,
-unchanged default, and inert session ownership. The native focused run passed all 27 selected tests, including the subprocess CLI suite. Feature Clippy passed with warnings denied. Logs are /home/syn/code/dione-r7-clippy.log and /home/syn/code/dione-r7-focused.log. The PR records the full gate at the signed commit.
+unchanged default, and inert session ownership. The native focused run passed all 27 selected tests, including the subprocess CLI suite. Feature Clippy passed with warnings denied. Logs are <linux-host>/dione-r7-clippy.log and <linux-host>/dione-r7-focused.log. The PR records the full gate at the signed commit.
 
 Two separately scoped same-model Rust source reviews covered all six lenses and found no actionable
 P1-P3 issue. A separate extension review covered all six as applicable and kept
@@ -147,11 +147,11 @@ These limits do not change the existing shared delivery contract.
 The first signed gate at ee89a264b959cdfe190e621f7b9d9ea2ba21b9c7 passed
 1,673 feature tests, four default-feature tests, 34 Python tests, formatting,
 both Clippy configurations, MSRV, and package checks. It then failed cargo-deny
-on RUSTSEC-2024-0449. The log is /home/syn/code/dione-r7-pr-ready.log. The release
+on RUSTSEC-2024-0449. The log is <linux-host>/dione-r7-pr-ready.log. The release
 step in that gate was not reached. A separate release build passed before this
 gate. Its log was overwritten during the later exact-head release run. No earlier
 log file is retained. Only the exit-zero terminal result survives in the transcript.
-The later log is /home/syn/code/dione-r7-release-ee89a26.log.
+The later log is <linux-host>/dione-r7-release-ee89a26.log.
 
 RustSec advisory-db commit 25a288f assigned the advisory on 2026-10-12 at
 11:18:57 UTC, after R6's completed gate. The advisory describes unsafe-libyaml

@@ -3,7 +3,7 @@
 The initial source review split Safety, Security, and Privacy from Design,
 Idiomacy, and Tests. Both reviewers used the composition owner based on R5.
 Reports are retained locally as r6-review-semantics.md and r6-review-design.md
-under C:/Users/Jaycee/code/dione/.git/codex-handoffs/dione-r4-r7.
+under <windows-host>/dione/.git/codex-handoffs/dione-r4-r7.
 These are local agent reviews, not official Forgejo approvals.
 
 The security/privacy reviewer found that propagating a non-Unicode Teams client
@@ -36,7 +36,7 @@ Report r6-final-review.md is retained with the other external review artifacts.
 Parent then reordered the canary cases so malformed data is tested before the
 missing-value type assertion. The first mutant failed only at the missing-value
 source-type check; that run does not prove disclosure detection. Its log remains
-/home/syn/code/dione-r6-secret-mutant-first.log. The corrected mutant run is pending.
+<linux-host>/dione-r6-secret-mutant-first.log. The corrected mutant run is pending.
 The corrected mutation failed specifically on leaked canary text in Debug.
 The original implementation bytes were restored. This closes the pending
 mutation item above; the final clean committed-head gate remains pending.
@@ -65,7 +65,7 @@ candidate and will be stashed before the clean bundle gate.
 
 After this audit, the retained R5 release binary reproduced the old invalid-filter
 panic with exit101 and the message "--log-level validated by clap". Evidence is
-/home/syn/code/dione-r6-invalid-filter-baseline.log, including its version and hash.
+<linux-host>/dione-r6-invalid-filter-baseline.log, including its version and hash.
 This baseline was captured after R6 implementation, not before. The initial probe
 expected the new message and rejected that mismatch; the corrected probe checks
 the actual old diagnostic. The seventh CLI test asserts the intentional new

@@ -28,7 +28,7 @@ debt are recorded in the changelog and `docs/design/vertical-slices.md`.
 | --- | --- | --- |
 | Existing baseline | Nextest `0e0912df-2cf3-4e0e-bcb7-9add66bfd87d` | 12 passed. |
 | Added characterization before production edits | Nextest `64e96f33-6f4f-4e45-a196-8326f296ba9f` | 12 existing tests plus 3 new characterization tests passed. |
-| Literal fixture comparison | `C:/Users/Jaycee/AppData/Local/Temp/dione-presence-design/compare_wire_fixtures.py` | All 49 JSON expressions in the 3 new tests match the baseline byte for byte. |
+| Literal fixture comparison | `<windows-temp>/dione-presence-design/compare_wire_fixtures.py` | All 49 JSON expressions in the 3 new tests match the baseline byte for byte. |
 | Final focused suite | Nextest `f6e7a2d0-72f5-4048-8a91-46f1a4b42595` | 17 passed. |
 | Remove reconnect replay | Nextest `79ad3a74-7d3d-4e78-a8a0-052006fbe94d` | Failed the intended empty replacement-sink assertion. |
 | Restore reconnect replay | Nextest `0e6d62b5-2f25-4c89-8cde-d02bc65497bd` | Passed; source restored. |
@@ -50,8 +50,8 @@ The initial Clippy log is partial because a queued retry reused its output
 file. `clippy-final.log` is the clean successful run before the final test-only
 error-source correction. Final lint evidence must come from the submission gate.
 
-Logs are under `/home/syn/code/` with the `dione-presence-` prefix. The native
-verification checkout is `/home/syn/code/dione-pr-presence`.
+Logs are under `<linux-host>/` with the `dione-presence-` prefix. The native
+verification checkout is `<linux-host>/dione-pr-presence`.
 
 ## Independent review
 
@@ -68,7 +68,7 @@ Claude Sonnet 5.5. The committed [review summary](presence-reviews.md) records
 their findings and limits.
 
 Detailed review reports and the design comparison are retained locally in
-`C:/Users/Jaycee/AppData/Local/Temp/dione-presence-design/`. The optional queue
+`<windows-temp>/dione-presence-design/`. The optional queue
 consumer keeps its existing detached lifecycle; production now creates no such
 consumer. Future queue-only integration needs an explicit shutdown owner.
 
