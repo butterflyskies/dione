@@ -28,10 +28,16 @@ if [ -z "${KNOWN_IDENTITIES:-}" ]; then
 fi
 
 umask 077
-list=$(mktemp)
+if ! list=$(mktemp); then
+    echo "identity scan failed: cannot create a private roster file" >&2
+    exit 2
+fi
 trap 'rm -f "${list}"' EXIT
 trap 'exit 2' HUP INT TERM
-printf '%s\n' "${KNOWN_IDENTITIES}" > "${list}"
+if ! printf '%s\n' "${KNOWN_IDENTITIES}" > "${list}"; then
+    echo "identity scan failed: cannot write the roster file" >&2
+    exit 2
+fi
 set +e
 sh "$(dirname "$0")/scan-known-identities.sh" --markers "${list}"
 status=$?

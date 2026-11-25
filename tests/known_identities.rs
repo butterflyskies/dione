@@ -392,3 +392,90 @@ fn a_roster_step_that_fails_partway_is_an_error_not_a_partial_scan() {
     );
     assert!(!String::from_utf8_lossy(&output.stdout).contains("clean"));
 }
+
+#[test]
+fn files_git_treats_as_binary_are_still_searched() {
+    let repo = repository(&[
+        (".gitattributes", "fixture.txt -diff\n"),
+        ("fixture.txt", "user Quillon here\n"),
+        ("blob.bin", "abc\0def Quillon\n"),
+        ("clean.bin", "abc\0nothing to see\n"),
+    ]);
+    let (status, stderr) = scan(repo.path(), MARKERS, None);
+    assert_eq!(status, Some(1), "{stderr}");
+    assert!(
+        stderr.contains("known identity: fixture.txt:1\n"),
+        "-diff text: {stderr}"
+    );
+    assert!(
+        stderr.contains("known identity: blob.bin:1\n"),
+        "after a NUL: {stderr}"
+    );
+    assert!(
+        !stderr.contains("clean.bin"),
+        "binary without a name: {stderr}"
+    );
+    assert!(stderr.contains("2 hit(s)"), "{stderr}");
+}
+
+#[test]
+fn a_setup_failure_is_an_error_in_both_entrypoints() {
+    let repo = repository(&[("src/a.rs", "let user = \"Quillon\";\n")]);
+    let list = tempfile::NamedTempFile::new().expect("identity list must be created");
+    fs::write(list.path(), MARKERS).expect("identity list must be written");
+    let scan_status = Command::new("sh")
+        .arg(SCRIPT)
+        .arg("--markers")
+        .arg(list.path())
+        .current_dir(repo.path())
+        .env("TMPDIR", "/nonexistent-known-identities-tmp")
+        .status()
+        .expect("scan must execute");
+    assert_eq!(
+        scan_status.code(),
+        Some(2),
+        "scanner without a scratch directory"
+    );
+    let admit_status = Command::new("sh")
+        .arg(ADMIT)
+        .arg("publish")
+        .current_dir(repo.path())
+        .env("TMPDIR", "/nonexistent-known-identities-tmp")
+        .env("KNOWN_IDENTITIES", MARKERS)
+        .status()
+        .expect("admission helper must execute");
+    assert_eq!(admit_status.code(), Some(2), "helper without a roster file");
+}
+
+#[test]
+fn a_failed_report_formatting_step_is_an_error() {
+    let repo = repository(&[("src/a.rs", "let user = \"Quillon\";\n")]);
+    let bin = tempfile::tempdir().expect("shim directory must be created");
+    let shim = bin.path().join("sort");
+    fs::write(&shim, "#!/bin/sh\nexit 3\n").expect("failing sort shim must be written");
+    fs::set_permissions(&shim, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("shim must be executable");
+    let list = tempfile::NamedTempFile::new().expect("identity list must be created");
+    fs::write(list.path(), MARKERS).expect("identity list must be written");
+    let output = Command::new("sh")
+        .arg(SCRIPT)
+        .arg("--markers")
+        .arg(list.path())
+        .current_dir(repo.path())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin.path().display(),
+                std::env::var("PATH").unwrap()
+            ),
+        )
+        .output()
+        .expect("scan must execute");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

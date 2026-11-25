@@ -47,7 +47,10 @@ if [ ! -f "${markers}" ] || [ ! -r "${markers}" ]; then
     finish 2
 fi
 
-scratch=$(mktemp -d "${TMPDIR:-/tmp}/known-identities.XXXXXX")
+if ! scratch=$(mktemp -d "${TMPDIR:-/tmp}/known-identities.XXXXXX"); then
+    echo "known-identity scan failed: cannot create a scratch directory" >&2
+    finish 2
+fi
 trap 'status=$?; rm -rf "${scratch}"; if [ -z "${outcome}" ] && [ "${status}" -ne 0 ]; then echo "known-identity scan failed: a step exited ${status}" >&2; exit 2; fi' EXIT
 trap 'exit 2' HUP INT TERM
 patterns=${scratch}/patterns
@@ -98,7 +101,9 @@ fi
 # path, line number and text with NUL, so a path containing `:` cannot shift the fields.
 raw=${scratch}/raw
 set +e
-LC_ALL=C.UTF-8 git grep -z -n -I -i -E -f "${regex}" -- "$@" > "${raw}"
+# --text: a file Git treats as binary (`-diff` in .gitattributes, or a NUL byte) is still searched;
+# without it such a file would silently scan clean. --no-textconv searches the stored bytes.
+LC_ALL=C.UTF-8 git grep -z -n --text --no-textconv -i -E -f "${regex}" -- "$@" > "${raw}"
 status=$?
 set -e
 if [ "${status}" -ne 0 ] && [ "${status}" -ne 1 ]; then
@@ -132,8 +137,11 @@ fi
 sed 's/$/ (path)/' "${scratch}/paths" >> "${hits}"
 
 if [ -s "${hits}" ]; then
-    count=$(wc -l < "${hits}" | tr -d ' ')
-    LC_ALL=C sort -u "${hits}" | sed 's/^/known identity: /' >&2
+    LC_ALL=C sort -u "${hits}" > "${scratch}/sorted"
+    sed 's/^/known identity: /' "${scratch}/sorted" > "${scratch}/report"
+    count=$(wc -l < "${hits}")
+    count=$((count + 0))
+    cat "${scratch}/report" >&2
     echo "known-identity scan: ${count} hit(s); replace each with an invented name, handle or ID" >&2
     finish 1
 fi
