@@ -5,7 +5,7 @@ Observed 2026-09-21. This is a local design receipt, not implementation or deplo
 ## Repository identity and base
 
 - Standard Dione: existing `origin` is `ssh://git@forgejo-ssh.svc.echoes:2222/lacuna/dione.git`.
-- Feature branch: `callisto/typesafe-attention`.
+- Feature branch: `<agent>/typesafe-attention`.
 - Isolated worktree: `/opt/data/work/dione-typesafe-attention`.
 - Initial cached base: `8917d4aad2bc0564dbb1a55cd3cd71cdc96a1849`.
 - Authenticated upstream SSH ref advertisement returned HEAD and `refs/heads/main` at **`2d52a986fd8c715182e9de1104921ecbd40f246a`**, with HEAD pointing to main.
@@ -17,23 +17,23 @@ The first shell probes encountered process-creation errors and one timeout. They
 
 ## Current coding route
 
-The inspected seat contract is `/opt/data/dione-seat/state/pipeline/SPEC.md`, locked/amended 2026-09-18. It identifies Janus's seat copy as canonical; that remote copy was not contacted. Relevant local requirements:
+The inspected seat contract is `/opt/data/dione-seat/state/pipeline/SPEC.md`, locked/amended 2026-09-18. It identifies another seat's copy as canonical; that remote copy was not contacted. Relevant local requirements:
 
 - Q7: objective, mechanically checkable acceptance, boundary, and evidence; thin integrated vertical slices with actual dependencies.
-- Q14: contract draft, separate different-family validation, then syn approves one contract before code.
+- Q14: contract draft, separate different-family validation, then the maintainer approves one contract before code.
 - Q15/Q11: implement, different-family verify, different-family review, close approval, human-triggered PR, retro. A second OpenAI model is not a different family.
 - Q8: evidence artifacts SHA-256 bound at verify and rechecked at close.
 - Q9/Q13: bounded retries, digest-stall detection, terminal blocked-run disposition; no automatic relaunch of unchanged failure.
 - Q19: capability-scoped fresh contexts, no messaging from implementation workers, read-only review, standards supplied to reviewers.
-- Q4 limits the original proving scope to owned repositories. Syn explicitly selected standard Dione for this feature. Local branch work is authorized; this is not permission to alter shared deployment or publish.
+- Q4 limits the original proving scope to owned repositories. The maintainer explicitly selected standard Dione for this feature. Local branch work is authorized; this is not permission to alter shared deployment or publish.
 
 Actual route evidence, not a claim that a new run has executed:
 
-- `state/pipeline/runs/run-2-2026-09-18/audit/RUN.md` and `RETRO.md`: DeepSeek implementation and GLM verification/review, recorded gate chain, syn close approval, and artifact-presence lesson.
+- `state/pipeline/runs/run-2-2026-09-18/audit/RUN.md` and `RETRO.md`: DeepSeek implementation and GLM verification/review, recorded gate chain, maintainer close approval, and artifact-presence lesson.
 - `state/pipeline/runs/run-3-2026-09-18/CONTRACT.md` and `gate-log.jsonl`: draft and GLM validation recorded; subsequent transport block recorded. The old transport block belongs to that run, not this feature.
 - `state/pipeline/tools/gate_log.py`: `GateLog.record`, `bind`, and `verify` provide existing JSONL gate/evidence records. Reuse rather than create a second scheduler or ledger.
 - `/opt/data/work/turnstile/docs/omp-edit-gate.md`: Turnstile's prepared edit/write check is specifically a scoped Rust quality gate. Its existence does not prove the whole contract/verify/review pipeline is active in this session.
-- Current resident roles inspected at `/home/core/.omp/agent/config.yml` are OpenAI Codex general models and a TypeSafe judge, with Nous disabled. No different-family contract validation has been run for this draft. Do not substitute Jev's classification for a capable independent code/contract reviewer or claim a credential is absent from this configuration alone.
+- Current resident roles inspected at `<resident-home>/.omp/agent/config.yml` are OpenAI Codex general models and a TypeSafe judge, with Nous disabled. No different-family contract validation has been run for this draft. Do not substitute Jev's classification for a capable independent code/contract reviewer or claim a credential is absent from this configuration alone.
 
 For the next phase, select an actually available different-family validator through the established credential/provider route, record the family and findings, reconcile them, then obtain contract approval. This is a requirement on implementation admission, not a reason to withhold the local draft. This preparation does not publish to an issue tracker.
 

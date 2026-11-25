@@ -11,7 +11,7 @@ Teams canary was run.
 The third live launcher attempt did not start the Dione candidate. The operator
 transcript contains only the hidden credential prompt and the successful
 `devtunnel user show` line before the launcher returned. Afterward,
-`/srv/janus-seat/state/teams-resident-live-proof/` contained neither candidate
+`<seat-root>/state/teams-resident-live-proof/` contained neither candidate
 nor tunnel logs or PID receipts. The launcher creates all four only after it
 stops and verifies the incumbent transport.
 
@@ -39,7 +39,7 @@ a loopback listener, and no HTTP, Azure, or Teams traffic.
 - Wait status: `143` (signal-driven termination)
 - Panic/stderr output: empty
 - Local evidence directory:
-  `/srv/janus-seat/state/codex/teams-lifetime-logproof.6eKG1S`
+  `<seat-root>/state/codex/teams-lifetime-logproof.6eKG1S`
 
 A separate pre-instrumentation run observed the same listener alive at 1, 5,
 and 10 seconds, then deliberately terminated it with `SIGTERM`/143. No
@@ -74,7 +74,7 @@ the third launcher failure.
 
 The next live canary remains barred until a launcher records every pre-candidate
 transition and preserves its failure status. Repository review can proceed on
-the frozen code candidate without access to the Janus host, credentials,
+the frozen code candidate without access to the seat host, credentials,
 launcher runtime, or Teams-connected environment.
 
 ## Fourth-attempt follow-up
@@ -86,7 +86,7 @@ remained empty because the Dev Tunnel host was never started.
 
 The mismatch was compositional rather than a Teams, Tokio, credential, or Dev
 Tunnel failure. `feat/teams-rust-transport` contains the Teams resident bridge,
-while the deployed Janus resident-control socket was maintained as a separate
+while the deployed resident-control socket was maintained as a separate
 reviewed patch and was not present in Forgejo `main`. The launcher incorrectly
 assumed both surfaces existed in one binary.
 
@@ -117,7 +117,7 @@ Process-level proofs used the rebuilt candidate and no Teams/Azure traffic:
   172 ms, and the incumbent transport was restored.
 
 The same attempt also showed the launcher omitted `DIONE_STATE_DIR` and fell
-back to `/srv/janus-seat/.claude/channels/dione`. That separate launcher defect
+back to `<seat-root>/.claude/channels/dione`. That separate launcher defect
 is not part of this lifecycle-only repository change and remains a live-canary
 blocker.
 
