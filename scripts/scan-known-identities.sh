@@ -15,7 +15,12 @@
 # Choose roster entries that only name people: an entry that is also an ordinary identifier (a crate,
 # keyword or common word) matches code that has nothing to do with the person. Prefer full handles and
 # Discord IDs over short names that collide.
-# The allow file lists tracked paths exempt from the scan, one per line; `#` lines are ignored.
+# The allow file lists exemptions, one per line; blank and `#` lines are ignored. A line `path`
+# exempts that whole tracked file. A line `path<TAB>text` exempts only the exact, case-sensitive
+# `text` inside that one file: it is removed from each matched line there before the line is
+# checked again, so any other identity on the same line, the same text in another file, or the
+# text in different case is still reported. Use it for public identifiers that must stay, such as a
+# repository URL or organisation slug, never to excuse a person's name.
 # Exit status: 0 clean, 1 identities found, 2 usage or input error.
 set -eu
 
@@ -79,8 +84,11 @@ fi
 regex=${scratch}/regex
 sed -e 's/[][\\.*^$+?(){}|]/\\&/g' -e 's/^/(^|[^[:alnum:]])(/' -e 's/$/)([^[:alnum:]]|$)/' "${patterns}" > "${regex}"
 
-# Pathspecs: the whole tree minus allowed paths, passed as arguments.
+# Pathspecs: the whole tree minus whole-file exemptions, passed as arguments. Occurrence exemptions
+# (`path<TAB>text`) go to their own file and are applied to the content hits below.
+tab=$(printf '\t')
 set -- .
+: > "${scratch}/allow-occurrences"
 if [ -f "${allow}" ]; then
     tr -d '\r' < "${allow}" > "${scratch}/allow-unix"
     set +e
@@ -91,9 +99,26 @@ if [ -f "${allow}" ]; then
         echo "known-identity scan failed: allow list read error" >&2
         finish 2
     fi
+    set +e
+    grep -v -e "${tab}" "${scratch}/allow" > "${scratch}/allow-paths"
+    paths_status=$?
+    grep -e "${tab}" "${scratch}/allow" > "${scratch}/allow-occurrences"
+    occurrences_status=$?
+    set -e
+    if [ "${paths_status}" -gt 1 ] || [ "${occurrences_status}" -gt 1 ]; then
+        echo "known-identity scan failed: allow list read error" >&2
+        finish 2
+    fi
+    # An occurrence entry is exactly a non-empty path, one tab and non-empty text. Anything else
+    # (an empty side, a second tab) is refused rather than guessed at.
+    if ! LC_ALL=C awk -F "${tab}" 'NF != 2 || $1 == "" || $2 == "" { bad = 1 } END { exit bad }' \
+        "${scratch}/allow-occurrences"; then
+        echo "allow list has a malformed path<TAB>text entry" >&2
+        finish 2
+    fi
     while IFS= read -r path; do
         set -- "$@" ":(exclude,literal)${path}"
-    done < "${scratch}/allow"
+    done < "${scratch}/allow-paths"
 fi
 
 # Contents. Each command writes to a file and its status is checked on its own; a pipeline would
@@ -112,10 +137,48 @@ if [ "${status}" -ne 0 ] && [ "${status}" -ne 1 ]; then
 fi
 # Post-processing runs one command per step, each into its own file, so `set -e` sees every
 # failure; a failed step in a pipeline would leave an empty hit list that reads as "clean".
+sep=$(printf '\001')
 LC_ALL=C tr '\000' '\001' < "${raw}" > "${scratch}/fields"
-LC_ALL=C cut -d "$(printf '\001')" -f 1,2 "${scratch}/fields" > "${scratch}/located"
+if [ -s "${scratch}/allow-occurrences" ] && [ -s "${scratch}/fields" ]; then
+    # Remove every exempt text from the hit lines of its own file (byte-exact, so case-sensitive),
+    # replacing it with a space so neighbouring text cannot fuse into a new word, then search the
+    # remainders again. Only lines where an identity remains stay hits.
+    LC_ALL=C awk -v sep="${sep}" -v tab="${tab}" -v stripped="${scratch}/stripped" '
+        NR == FNR {
+            i = index($0, tab); p = substr($0, 1, i - 1)
+            n[p]++; text[p, n[p]] = substr($0, i + 1); next
+        }
+        {
+            i = index($0, sep); p = substr($0, 1, i - 1); rest = substr($0, i + 1)
+            j = index(rest, sep); line = substr(rest, j + 1)
+            for (k = 1; k <= n[p]; k++) {
+                t = text[p, k]
+                while ((x = index(line, t)) > 0)
+                    line = substr(line, 1, x - 1) " " substr(line, x + length(t))
+            }
+            print line > stripped
+        }
+    ' "${scratch}/allow-occurrences" "${scratch}/fields"
+    set +e
+    LC_ALL=C.UTF-8 grep -n -i -E -f "${regex}" "${scratch}/stripped" > "${scratch}/remaining"
+    status=$?
+    set -e
+    if [ "${status}" -gt 1 ]; then
+        echo "known-identity scan failed: occurrence re-check error" >&2
+        finish 2
+    fi
+    LC_ALL=C cut -d : -f 1 "${scratch}/remaining" > "${scratch}/remaining-lines"
+    LC_ALL=C awk 'NR == FNR { keep[$1]; next } FNR in keep' "${scratch}/remaining-lines" \
+        "${scratch}/fields" > "${scratch}/kept"
+    mv "${scratch}/kept" "${scratch}/fields"
+    if [ -s "${scratch}/remaining" ] && [ ! -s "${scratch}/fields" ]; then
+        echo "known-identity scan failed: remaining matches lost" >&2
+        finish 2
+    fi
+fi
+LC_ALL=C cut -d "${sep}" -f 1,2 "${scratch}/fields" > "${scratch}/located"
 LC_ALL=C tr '\001' ':' < "${scratch}/located" > "${hits}"
-if [ -s "${raw}" ] && [ ! -s "${hits}" ]; then
+if [ -s "${scratch}/fields" ] && [ ! -s "${hits}" ]; then
     echo "known-identity scan failed: matches found but not reported" >&2
     finish 2
 fi

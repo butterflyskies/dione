@@ -1,5 +1,11 @@
-# Tracked paths exempt from scripts/scan-known-identities.sh, one per line.
-# Keep this list to generated files that cannot hold fixtures or prose.
+# Exemptions for scripts/scan-known-identities.sh, one per line.
+#
+# `path` exempts a whole tracked file. Keep these to generated files that cannot hold fixtures or prose.
+#
+# `path<TAB>text` exempts only that exact, case-sensitive text inside that one file; every other
+# identity in the file, and the same text anywhere else, is still reported. Use it for public
+# identifiers that must stay, such as a repository URL or organisation slug, never for a person's name.
+#
 # Cargo.lock lists dependency crate names only; a roster entry that is also a crate name (bare `syn`)
 # would otherwise produce hits no source change can clear.
 Cargo.lock

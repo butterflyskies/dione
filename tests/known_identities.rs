@@ -133,6 +133,68 @@ fn allow_list_exempts_only_the_listed_paths() {
 }
 
 #[test]
+fn an_occurrence_entry_exempts_only_that_exact_text_in_that_file() {
+    // An invented organisation slug that is also a roster entry, as a real org name can be.
+    let markers = "quillon-works\nQuillon Vey\n";
+    let url = "https://forge.invalid/quillon-works/dione";
+    let repo = repository(&[
+        ("Cargo.toml", &format!("repository = \"{url}\"\n")),
+        (
+            "README.md",
+            &format!("Source: {url}\nMaintained by Quillon Vey at {url}\n"),
+        ),
+        ("docs/a.md", &format!("See {url}\n")),
+        (
+            "src/a.rs",
+            "// see HTTPS://FORGE.INVALID/QUILLON-WORKS/DIONE\n",
+        ),
+    ]);
+    let allow = format!("Cargo.toml\t{url}\nREADME.md\t{url}\nsrc/a.rs\t{url}\n");
+    let (status, stderr) = scan(repo.path(), markers, Some(&allow));
+    assert_eq!(status, Some(1), "{stderr}");
+    // The exempt text alone, in a file that lists it, is not a hit.
+    assert!(!stderr.contains("Cargo.toml"), "{stderr}");
+    assert!(
+        !stderr.contains("known identity: README.md:1\n"),
+        "{stderr}"
+    );
+    // Another identity on a line that also holds the exempt text is still a hit.
+    assert!(stderr.contains("known identity: README.md:2\n"), "{stderr}");
+    // The same text in a file that does not list it is still a hit.
+    assert!(stderr.contains("known identity: docs/a.md:1\n"), "{stderr}");
+    // The exemption is exact: the text in different case is still a hit.
+    assert!(stderr.contains("known identity: src/a.rs:1\n"), "{stderr}");
+    assert!(stderr.contains("3 hit(s)"), "{stderr}");
+}
+
+#[test]
+fn exempting_every_occurrence_scans_clean() {
+    let url = "https://forge.invalid/quillon-works/dione";
+    let repo = repository(&[("Cargo.toml", &format!("repository = \"{url}\"\n"))]);
+    let (status, stderr) = scan(
+        repo.path(),
+        "quillon-works\n",
+        Some(&format!("Cargo.toml\t{url}\n")),
+    );
+    assert_eq!(status, Some(0), "{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
+fn a_malformed_occurrence_entry_is_an_error() {
+    let repo = repository(&[("src/a.rs", "fn f() {}\n")]);
+    for allow in [
+        "src/a.rs\t\n",
+        "\tquillon-works\n",
+        "src/a.rs\tquillon\textra\n",
+    ] {
+        let (status, stderr) = scan(repo.path(), MARKERS, Some(allow));
+        assert_eq!(status, Some(2), "{allow:?}: {stderr}");
+        assert!(stderr.contains("malformed"), "{allow:?}: {stderr}");
+    }
+}
+
+#[test]
 fn clean_tree_passes() {
     let repo = repository(&[("src/a.rs", "let user = \"fixture-person\";\n")]);
     assert_eq!(scan(repo.path(), MARKERS, None).0, Some(0));
