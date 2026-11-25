@@ -6,7 +6,8 @@
 # case-insensitive, against file contents and tracked paths, and bounded by any character that is
 # not a letter or digit, so `quillon_scope` and `quillon-construct` match `quillon` but `quillonish`
 # does not. Output names only
-# `path:line` (or `path` for a path hit) and a count. The matched entry is never printed.
+# `path:line` (or `path` for a path hit) and a count. Matched line text and roster entries are never
+# printed; a path hit prints the path, which is repository text and may itself contain the entry.
 #
 # usage: scan-known-identities.sh --markers <file> [--allow <file>]
 # Choose roster entries that only name people: an entry that is also an ordinary identifier (a crate,
