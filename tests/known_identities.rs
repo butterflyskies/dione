@@ -343,3 +343,52 @@ fn case_folding_does_not_depend_on_the_callers_locale() {
         assert!(stderr.contains("2 hit(s)"), "LC_ALL={locale}: {stderr}");
     }
 }
+
+fn real_sed() -> String {
+    let out = Command::new("sh")
+        .args(["-c", "command -v sed"])
+        .output()
+        .expect("sh must run");
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
+}
+
+#[test]
+fn a_roster_step_that_fails_partway_is_an_error_not_a_partial_scan() {
+    // The roster's first entry matches nothing; the second names the fixture. A `sed` that writes
+    // one line and then fails would leave a one-entry roster that scans clean.
+    let repo = repository(&[("src/a.rs", "let user = \"Quillon\";\n")]);
+    let bin = tempfile::tempdir().expect("shim directory must be created");
+    let shim = bin.path().join("sed");
+    fs::write(
+        &shim,
+        "#!/bin/sh\ncase \"$*\" in *'[[:space:]]*$'*) ;; *) exec \"$REAL_SED\" \"$@\" ;; esac\nfor last; do :; done\nif [ -f \"$last\" ]; then head -n 1 \"$last\"; else head -n 1; fi\nexit 1\n",
+    )
+    .expect("partial sed shim must be written");
+    fs::set_permissions(&shim, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("shim must be executable");
+    let list = tempfile::NamedTempFile::new().expect("identity list must be created");
+    fs::write(list.path(), "fixture-nobody\nquillon\n").expect("identity list must be written");
+    let output = Command::new("sh")
+        .arg(SCRIPT)
+        .arg("--markers")
+        .arg(list.path())
+        .current_dir(repo.path())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin.path().display(),
+                std::env::var("PATH").unwrap()
+            ),
+        )
+        .env("REAL_SED", real_sed())
+        .output()
+        .expect("scan must execute");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("clean"));
+}

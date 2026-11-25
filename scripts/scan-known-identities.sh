@@ -55,7 +55,18 @@ hits=${scratch}/hits
 
 # Trim each entry and drop blank lines: a pasted secret often pads entries with spaces, and an
 # untrimmed `name ` would silently match nothing, while an empty line would match everything.
-tr -d '\r' < "${markers}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' > "${patterns}" || true
+# One command per step, checked by `set -e`: a failed step in a pipeline could keep only part of the
+# roster and report clean. grep exits 1 when every line was blank, which the empty check reports.
+tr -d '\r' < "${markers}" > "${scratch}/unix"
+sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "${scratch}/unix" > "${scratch}/trimmed"
+set +e
+grep -v '^$' "${scratch}/trimmed" > "${patterns}"
+status=$?
+set -e
+if [ "${status}" -gt 1 ]; then
+    echo "known-identity scan failed: roster read error" >&2
+    finish 2
+fi
 if [ ! -s "${patterns}" ]; then
     echo "identity list is empty" >&2
     finish 2
@@ -68,7 +79,15 @@ sed -e 's/[][\\.*^$+?(){}|]/\\&/g' -e 's/^/(^|[^[:alnum:]])(/' -e 's/$/)([^[:aln
 # Pathspecs: the whole tree minus allowed paths, passed as arguments.
 set -- .
 if [ -f "${allow}" ]; then
-    tr -d '\r' < "${allow}" | grep -v -e '^[[:space:]]*$' -e '^#' > "${scratch}/allow" || true
+    tr -d '\r' < "${allow}" > "${scratch}/allow-unix"
+    set +e
+    grep -v -e '^[[:space:]]*$' -e '^#' "${scratch}/allow-unix" > "${scratch}/allow"
+    status=$?
+    set -e
+    if [ "${status}" -gt 1 ]; then
+        echo "known-identity scan failed: allow list read error" >&2
+        finish 2
+    fi
     while IFS= read -r path; do
         set -- "$@" ":(exclude,literal)${path}"
     done < "${scratch}/allow"
