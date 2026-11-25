@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
 
+## [0.87.2]
+
+### Changed
+
+- Use an invented construct name in test fixtures and configuration examples
+  instead of a real one.
+
 ## [0.87.0]
 
 ### Added
