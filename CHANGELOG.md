@@ -5,10 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.87.3]
 
 ### Changed
 
+- Replace real people's names, account handles and private home-directory
+  paths in tests, fixtures, docs and audit logs with invented names, role
+  words and placeholders.
+- Let the known-identities scan exempt one exact public string in one named
+  file (`path<TAB>text`), and apply each such entry inside the allow file too.
 - Limit the published crate to `src/` and the README with an explicit
   `include` list. Tests, fixtures, docs, audit logs and CI scripts are no
   longer packaged; the crate drops from 436 files to 215.
