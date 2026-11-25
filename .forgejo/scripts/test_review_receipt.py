@@ -25,7 +25,7 @@ from review_receipt import ApprovalReceipt, PullRequest, ReviewAuthor, ReviewSel
 
 HEAD = "a" * 40
 BASE = "b" * 40
-REVIEWERS = {"lain-construct"}
+REVIEWERS = {"example-reviewer"}
 
 
 class CommentFixture(ApprovalReceipt):
@@ -61,7 +61,7 @@ def receipt(head: str = HEAD, base: str = BASE) -> str:
 
 
 def comment(
-    body: str | None = None, author: str = "lain-construct", number: int = 1,
+    body: str | None = None, author: str = "example-reviewer", number: int = 1,
 ) -> CommentFixture:
     return {
         "id": number,
@@ -72,7 +72,7 @@ def comment(
 
 
 def review(
-    author: str = "lain-construct",
+    author: str = "example-reviewer",
     number: int = 1,
     state: str = "APPROVED",
     official: bool = True,
@@ -392,20 +392,20 @@ class ReceiptTests(unittest.TestCase):
 
     def test_trusted_complete_receipt_passes(self) -> None:
         approved = review()
-        self.assertEqual((None, approved["html_url"]), evaluate(pr(), {"lain-construct": approved}))
+        self.assertEqual((None, approved["html_url"]), evaluate(pr(), {"example-reviewer": approved}))
 
     def test_untrusted_and_self_review_do_not_pass(self) -> None:
         error = evaluate(pr(), {})[0]
         assert error is not None
         self.assertIn("no current official approval", error)
         own = pr()
-        own["user"]["login"] = "lain-construct"
-        error = evaluate(own, {"lain-construct": review()})[0]
+        own["user"]["login"] = "example-reviewer"
+        error = evaluate(own, {"example-reviewer": review()})[0]
         assert error is not None
         self.assertIn("author cannot", error)
 
     def test_official_reviewer_is_eligible_unless_pr_author(self) -> None:
-        for reviewer in ("human-blinker", "friend-of-lacuna", "lain-construct"):
+        for reviewer in ("human-blinker", "friend-of-lacuna", "example-reviewer"):
             with self.subTest(reviewer=reviewer), patch.object(review_receipt, "complete_list", return_value=[review(author=reviewer)]):
                 selected = review_receipt.official_reviewers(build_opener(), "base", "token", "lacuna/dione", 1, HEAD)
                 approvals = selected.approvals
@@ -419,7 +419,7 @@ class ReceiptTests(unittest.TestCase):
 
     def test_stale_or_incomplete_receipt_does_not_pass(self) -> None:
         def result(body: str) -> str:
-            error = evaluate(pr(), {"lain-construct": review(body=body)})[0]
+            error = evaluate(pr(), {"example-reviewer": review(body=body)})[0]
             assert error is not None
             return error
 
@@ -428,7 +428,7 @@ class ReceiptTests(unittest.TestCase):
         self.assertIn("PR base", result(receipt(base="c" * 40)))
         bad_pr = pr()
         bad_pr["base"]["sha"] = ""
-        error = evaluate(bad_pr, {"lain-construct": review(body=receipt(base=""))})[0]
+        error = evaluate(bad_pr, {"example-reviewer": review(body=receipt(base=""))})[0]
         assert error is not None
         self.assertIn("commit SHA", error)
         self.assertIn("Security", result(receipt().replace("Security:", "Secure:")))
@@ -491,7 +491,7 @@ class ReceiptTests(unittest.TestCase):
         self.assertIn("no current official approval", error)
 
     def test_duplicate_field_does_not_pass(self) -> None:
-        error = evaluate(pr(), {"lain-construct": review(body=receipt() + "\nSafety: pass - copied from above")})[0]
+        error = evaluate(pr(), {"example-reviewer": review(body=receipt() + "\nSafety: pass - copied from above")})[0]
         assert error is not None
         self.assertIn("duplicate", error)
 
@@ -515,7 +515,7 @@ class ReceiptTests(unittest.TestCase):
             )
         with patch.object(review_receipt, "api_request", side_effect=[(visible, 2), ([], 2)]):
             self.assertEqual(
-                ({"lain-construct": visible[0]}, set()),
+                ({"example-reviewer": visible[0]}, set()),
                 selected_snapshots(review_receipt.official_reviewers(build_opener(), "base", "token", "lacuna/dione", 1, HEAD)),
             )
         with patch.object(review_receipt, "api_request", side_effect=[([], 51), (visible, 51), ([], 51)]):
@@ -561,7 +561,7 @@ class ReceiptTests(unittest.TestCase):
     def test_only_current_official_reviews_count(self) -> None:
         reviews = [review(author="outsider", number=1, official=False), review(number=2)]
         with patch.object(review_receipt, "complete_list", return_value=reviews):
-            self.assertEqual(({"lain-construct": reviews[1]}, set()), selected_snapshots(review_receipt.official_reviewers(build_opener(), "base", "token", "lacuna/dione", 1, HEAD)))
+            self.assertEqual(({"example-reviewer": reviews[1]}, set()), selected_snapshots(review_receipt.official_reviewers(build_opener(), "base", "token", "lacuna/dione", 1, HEAD)))
         for change in ({"stale": True}, {"dismissed": True}, {"commit_id": "c" * 40}, {"state": "REQUEST_CHANGES"}, {"state": "PENDING"}, {"state": "REQUEST_REVIEW"}):
             with self.subTest(change=change):
                 candidate = review_receipt.object_fields(review(), "fixture")
@@ -575,16 +575,16 @@ class ReceiptTests(unittest.TestCase):
 
     def test_comment_review_does_not_erase_approval_but_request_changes_does(self) -> None:
         with patch.object(review_receipt, "complete_list", return_value=[review(number=1), review(number=2, state="COMMENT")]):
-            self.assertEqual(({"lain-construct": review(number=1)}, set()), selected_snapshots(review_receipt.official_reviewers(build_opener(), "base", "token", "lacuna/dione", 1, HEAD)))
+            self.assertEqual(({"example-reviewer": review(number=1)}, set()), selected_snapshots(review_receipt.official_reviewers(build_opener(), "base", "token", "lacuna/dione", 1, HEAD)))
         with patch.object(review_receipt, "complete_list", return_value=[review(number=1), review(number=2, state="REQUEST_CHANGES")]):
             self.assertEqual(({}, REVIEWERS), selected_snapshots(review_receipt.official_reviewers(build_opener(), "base", "token", "lacuna/dione", 1, HEAD)))
 
     def test_status_is_not_posted_when_pr_or_receipt_changes_mid_check(self) -> None:
         moved = pr()
         moved["head"]["sha"] = "c" * 40
-        for second_pr, decisions in ((moved, []), (pr(), [selection({"lain-construct": review(body=receipt().replace("Decision: approve", "Decision: comment"))})])):
+        for second_pr, decisions in ((moved, []), (pr(), [selection({"example-reviewer": review(body=receipt().replace("Decision: approve", "Decision: comment"))})])):
             with self.subTest(second_pr=second_pr["head"]["sha"]):
-                calls = iter([selection({"lain-construct": review()}), *decisions])
+                calls = iter([selection({"example-reviewer": review()}), *decisions])
                 with (
                     patch.object(review_receipt, "api_request", side_effect=[pr(), {}, second_pr]) as request,
                     patch.object(review_receipt, "official_reviewers", side_effect=lambda *_: next(calls)) as official,
@@ -686,8 +686,8 @@ class ReceiptTests(unittest.TestCase):
 
         def fake_reviews(*_args: object) -> ReviewSelection:
             if changed:
-                return selection({"lain-construct": review(body=receipt().replace("Decision: approve", "Decision: comment"))})
-            return selection({"lain-construct": review()})
+                return selection({"example-reviewer": review(body=receipt().replace("Decision: approve", "Decision: comment"))})
+            return selection({"example-reviewer": review()})
 
         with (
             patch.object(review_receipt, "api_request", side_effect=fake_api),
@@ -715,7 +715,7 @@ class ReceiptTests(unittest.TestCase):
 
         with (
             patch.object(review_receipt, "api_request", side_effect=fake_api),
-            patch.object(review_receipt, "official_reviewers", return_value=selection({"lain-construct": review()})),
+            patch.object(review_receipt, "official_reviewers", return_value=selection({"example-reviewer": review()})),
         ):
             with self.assertRaisesRegex(TimeoutError, "may have been accepted"):
                 review_receipt.check_pr(build_opener(), "base", "token", "lacuna/dione", 1)
@@ -738,7 +738,7 @@ class ReceiptTests(unittest.TestCase):
         def fake_reviews(*_args: object) -> ReviewSelection:
             if posted[-1]["state"] == "success":
                 raise IncompleteRead(b"truncated response", 100)
-            return selection({"lain-construct": review()})
+            return selection({"example-reviewer": review()})
 
         with (
             patch.object(review_receipt, "api_request", side_effect=fake_api),
@@ -772,8 +772,8 @@ class ReceiptTests(unittest.TestCase):
 
         def fake_reviews(*_args: object) -> ReviewSelection:
             if any(status["state"] == "success" for status in posted):
-                return selection({"lain-construct": review(body=receipt().replace("Decision: approve", "Decision: comment"))})
-            return selection({"lain-construct": review()})
+                return selection({"example-reviewer": review(body=receipt().replace("Decision: approve", "Decision: comment"))})
+            return selection({"example-reviewer": review()})
 
         with (
             patch.object(review_receipt, "api_request", side_effect=fake_api),
@@ -1063,7 +1063,7 @@ class ReceiptTests(unittest.TestCase):
             return {}
 
         with (patch.object(review_receipt, "api_request", side_effect=fake_api),
-              patch.object(review_receipt, "official_reviewers", return_value=selection({"lain-construct": review()}))):
+              patch.object(review_receipt, "official_reviewers", return_value=selection({"example-reviewer": review()}))):
             with self.assertRaisesRegex(OSError, "write failed"):
                 review_receipt.check_pr(build_opener(), "base", "token", "lacuna/dione", 1)
         self.assertEqual(["pending", "success", "pending", "pending", "pending"], [item["state"] for item in posted])
@@ -1086,7 +1086,7 @@ class ReceiptTests(unittest.TestCase):
             opener = Mock(spec=OpenerDirector)
             bodies = [json.dumps(pr()).encode(), b'{}', json.dumps(pr()).encode(), response, json.dumps(pr()).encode()]
             opener.open.side_effect = [io.BytesIO(body) for body in bodies]
-            with patch.object(review_receipt, "official_reviewers", return_value=selection({"lain-construct": review()})):
+            with patch.object(review_receipt, "official_reviewers", return_value=selection({"example-reviewer": review()})):
                 if response == b'not json':
                     with self.assertRaises(json.JSONDecodeError):
                         review_receipt.check_pr(opener, review_receipt.PUBLIC_API, "fake", "lacuna/dione", 1)
@@ -1103,7 +1103,7 @@ class ReceiptTests(unittest.TestCase):
         opener = Mock(spec=OpenerDirector)
         opener.open.side_effect = [io.BytesIO(json.dumps(pr()).encode()), io.BytesIO(b'{}'),
                                    io.BytesIO(json.dumps(pr()).encode()), InterruptedResponse(), io.BytesIO(b'{}')]
-        with patch.object(review_receipt, "official_reviewers", return_value=selection({"lain-construct": review()})):
+        with patch.object(review_receipt, "official_reviewers", return_value=selection({"example-reviewer": review()})):
             with self.assertRaises(IncompleteRead):
                 review_receipt.check_pr(opener, review_receipt.PUBLIC_API, "fake", "lacuna/dione", 1)
         statuses = [json.loads(call.args[0].data)["state"] for call in opener.open.call_args_list if call.args[0].data]
