@@ -905,7 +905,7 @@ fn forgejo_ci_gates_pull_requests_and_tags_only_qualified_trusted_main() {
     assert!(release_tag.contains("fetch-depth: 0"));
     assert!(release_tag.contains("ref: ${{ forgejo.sha }}"));
     assert_eq!(workflow.matches("persist-credentials: true").count(), 0);
-    assert_eq!(workflow.matches("persist-credentials: false").count(), 10);
+    assert_eq!(workflow.matches("persist-credentials: false").count(), 11);
     assert!(release_tag.contains("persist-credentials: false"));
     assert!(!release_tag.contains("token:"));
     assert!(!release_tag.contains("contents: write"));

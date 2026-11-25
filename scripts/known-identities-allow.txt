@@ -1,0 +1,2 @@
+# Tracked paths exempt from scripts/scan-known-identities.sh, one per line.
+# Keep this empty unless a maintainer decides a path may name real people.
