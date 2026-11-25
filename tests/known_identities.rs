@@ -231,6 +231,54 @@ fn a_malformed_occurrence_entry_is_an_error() {
 }
 
 #[test]
+fn occurrence_exemptions_keep_hits_on_lines_that_are_not_valid_utf8() {
+    // A Latin-1 byte (0xE9) on a hit line. One file lists no exemption; the other exempts a URL on
+    // the same line as a name. Both lines must stay hits: a re-check that treats such a line as
+    // binary would drop it and could report the whole scan clean.
+    let url = "https://forge.invalid/quillon-works/dione";
+    let repo = repository(&[("Cargo.toml", "placeholder\n")]);
+    fs::create_dir_all(repo.path().join("docs")).expect("fixture directory must be created");
+    fs::write(
+        repo.path().join("docs/notes.md"),
+        b"caf\xe9 with Quillon Vey\n",
+    )
+    .expect("fixture file must be written");
+    let mut readme = format!("See {url} and Quillon Vey ").into_bytes();
+    readme.extend_from_slice(b"caf\xe9\n");
+    fs::write(repo.path().join("README.md"), readme).expect("fixture file must be written");
+    for args in [
+        &["add", "-A"][..],
+        &[
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-qm",
+            "latin-1 fixtures",
+        ],
+    ] {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(repo.path())
+            .status()
+            .expect("git must execute");
+        assert!(status.success(), "git {args:?} must succeed");
+    }
+    let (status, stderr) = scan(
+        repo.path(),
+        "quillon-works\nQuillon Vey\n",
+        Some(&format!("README.md\t{url}\n")),
+    );
+    assert_eq!(status, Some(1), "{stderr}");
+    assert!(
+        stderr.contains("known identity: docs/notes.md:1\n"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("known identity: README.md:1\n"), "{stderr}");
+}
+
+#[test]
 fn clean_tree_passes() {
     let repo = repository(&[("src/a.rs", "let user = \"fixture-person\";\n")]);
     assert_eq!(scan(repo.path(), MARKERS, None).0, Some(0));

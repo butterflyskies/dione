@@ -73,7 +73,7 @@ hits=${scratch}/hits
 tr -d '\r' < "${markers}" > "${scratch}/unix"
 sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "${scratch}/unix" > "${scratch}/trimmed"
 set +e
-grep -v '^$' "${scratch}/trimmed" > "${patterns}"
+grep -a -v '^$' "${scratch}/trimmed" > "${patterns}"
 status=$?
 set -e
 if [ "${status}" -gt 1 ]; then
@@ -97,7 +97,7 @@ set -- .
 if [ -f "${allow}" ]; then
     tr -d '\r' < "${allow}" > "${scratch}/allow-unix"
     set +e
-    grep -v -e '^[[:space:]]*$' -e '^#' "${scratch}/allow-unix" > "${scratch}/allow"
+    grep -a -v -e '^[[:space:]]*$' -e '^#' "${scratch}/allow-unix" > "${scratch}/allow"
     status=$?
     set -e
     if [ "${status}" -gt 1 ]; then
@@ -105,9 +105,9 @@ if [ -f "${allow}" ]; then
         finish 2
     fi
     set +e
-    grep -v -e "${tab}" "${scratch}/allow" > "${scratch}/allow-paths"
+    grep -a -v -e "${tab}" "${scratch}/allow" > "${scratch}/allow-paths"
     paths_status=$?
-    grep -e "${tab}" "${scratch}/allow" > "${scratch}/allow-occurrences"
+    grep -a -e "${tab}" "${scratch}/allow" > "${scratch}/allow-occurrences"
     occurrences_status=$?
     set -e
     if [ "${paths_status}" -gt 1 ] || [ "${occurrences_status}" -gt 1 ]; then
@@ -151,26 +151,32 @@ sep=$(printf '\001')
 LC_ALL=C tr '\000' '\001' < "${raw}" > "${scratch}/fields"
 if [ -s "${scratch}/allow-occurrences" ] && [ -s "${scratch}/fields" ]; then
     # Remove every exempt text from the hit lines of its own file (byte-exact, so case-sensitive),
-    # replacing it with a space so neighbouring text cannot fuse into a new word, then search the
-    # remainders again. Only lines where an identity remains stay hits.
-    LC_ALL=C awk -v sep="${sep}" -v tab="${tab}" -v stripped="${scratch}/stripped" '
+    # replacing it with a space so neighbouring text cannot fuse into a new word. A line nothing was
+    # removed from stays a hit as the first search found it. Only changed lines are searched again,
+    # and they stay hits when an identity remains, so the re-check can never drop an untouched hit.
+    LC_ALL=C awk -v sep="${sep}" -v tab="${tab}" -v stripped="${scratch}/stripped" \
+        -v changed="${scratch}/changed" -v kept="${scratch}/kept-records" '
         NR == FNR {
             i = index($0, tab); p = substr($0, 1, i - 1)
             n[p]++; text[p, n[p]] = substr($0, i + 1); next
         }
         {
             i = index($0, sep); p = substr($0, 1, i - 1); rest = substr($0, i + 1)
-            j = index(rest, sep); line = substr(rest, j + 1)
+            j = index(rest, sep); line = substr(rest, j + 1); original = line
             for (k = 1; k <= n[p]; k++) {
                 t = text[p, k]
                 while ((x = index(line, t)) > 0)
                     line = substr(line, 1, x - 1) " " substr(line, x + length(t))
             }
-            print line > stripped
+            if (line == original) { print FNR > kept }
+            else { print line > stripped; print FNR > changed }
         }
+        END { printf "" > kept; printf "" > stripped; printf "" > changed }
     ' "${scratch}/allow-occurrences" "${scratch}/fields"
     set +e
-    LC_ALL=C.UTF-8 grep -n -i -E -f "${regex}" "${scratch}/stripped" > "${scratch}/remaining"
+    # -a: a hit line with a byte that is not valid UTF-8 must stay a line to search, not be dropped
+    # as "binary file matches" (GNU grep).
+    LC_ALL=C.UTF-8 grep -a -n -i -E -f "${regex}" "${scratch}/stripped" > "${scratch}/remaining"
     status=$?
     set -e
     if [ "${status}" -gt 1 ]; then
@@ -178,13 +184,12 @@ if [ -s "${scratch}/allow-occurrences" ] && [ -s "${scratch}/fields" ]; then
         finish 2
     fi
     LC_ALL=C cut -d : -f 1 "${scratch}/remaining" > "${scratch}/remaining-lines"
-    LC_ALL=C awk 'NR == FNR { keep[$1]; next } FNR in keep' "${scratch}/remaining-lines" \
+    # Map each still-matching changed line back to its record number, and add it to the kept ones.
+    LC_ALL=C awk 'NR == FNR { still[$1]; next } FNR in still' "${scratch}/remaining-lines" \
+        "${scratch}/changed" >> "${scratch}/kept-records"
+    LC_ALL=C awk 'NR == FNR { keep[$1]; next } FNR in keep' "${scratch}/kept-records" \
         "${scratch}/fields" > "${scratch}/kept"
     mv "${scratch}/kept" "${scratch}/fields"
-    if [ -s "${scratch}/remaining" ] && [ ! -s "${scratch}/fields" ]; then
-        echo "known-identity scan failed: remaining matches lost" >&2
-        finish 2
-    fi
 fi
 LC_ALL=C cut -d "${sep}" -f 1,2 "${scratch}/fields" > "${scratch}/located"
 LC_ALL=C tr '\001' ':' < "${scratch}/located" > "${hits}"
@@ -200,7 +205,7 @@ if ! git ls-files -z -- "$@" > "${raw}"; then
 fi
 LC_ALL=C tr '\000' '\n' < "${raw}" > "${scratch}/listed"
 set +e
-LC_ALL=C.UTF-8 grep -i -E -f "${regex}" "${scratch}/listed" > "${scratch}/paths"
+LC_ALL=C.UTF-8 grep -a -i -E -f "${regex}" "${scratch}/listed" > "${scratch}/paths"
 status=$?
 set -e
 if [ "${status}" -gt 1 ]; then

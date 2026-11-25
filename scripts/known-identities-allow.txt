@@ -21,9 +21,8 @@ CHANGELOG.md	butterflyskies/construct-nameplates
 scripts/public-package-structural-patterns.txt	github\.com/butterflyskies/
 .github/workflows/publish-crate.yml	github:butterflyskies:lacuna-blinkers
 .github/workflows/publish-crate.yml	github:butterflyskies:superadmins
-.github/workflows/publish-crate.yml	butterflysky
+.github/workflows/publish-crate.yml	butterflysky \
 scripts/tag-qualified-release.sh	pale.clock3926@butterflysky.dev
-src/config.rs	butterflyskies repo
 src/config_template.toml	https://github.com/butterflyskies/dione
 src/nameplates.rs	https://raw.githubusercontent.com/butterflyskies/construct-nameplates
 src/nameplates.rs	https://github.com/butterflyskies/dione
