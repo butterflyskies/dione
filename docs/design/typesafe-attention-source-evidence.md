@@ -6,7 +6,7 @@ Observed 2026-09-21. This is a local design receipt, not implementation or deplo
 
 - Standard Dione: existing `origin` is `ssh://git@forgejo-ssh.svc.echoes:2222/lacuna/dione.git`.
 - Feature branch: `<agent>/typesafe-attention`.
-- Isolated worktree: `/opt/data/work/dione-typesafe-attention`.
+- Isolated worktree: a dedicated local checkout of this branch.
 - Initial cached base: `8917d4aad2bc0564dbb1a55cd3cd71cdc96a1849`.
 - Authenticated upstream SSH ref advertisement returned HEAD and `refs/heads/main` at **`2d52a986fd8c715182e9de1104921ecbd40f246a`**, with HEAD pointing to main.
 - `git fetch origin main` then advanced `origin/main` from `8917d4a` to `2d52a98`; `git merge --ff-only origin/main` fast-forwarded the new branch. No feature implementation existed to replay or discard.
@@ -17,7 +17,7 @@ The first shell probes encountered process-creation errors and one timeout. They
 
 ## Current coding route
 
-The inspected seat contract is `/opt/data/dione-seat/state/pipeline/SPEC.md`, locked/amended 2026-09-18. It identifies another seat's copy as canonical; that remote copy was not contacted. Relevant local requirements:
+The inspected seat contract is the authoring seat's local pipeline specification, locked/amended 2026-09-18. It identifies another seat's copy as canonical; that remote copy was not contacted. Relevant local requirements:
 
 - Q7: objective, mechanically checkable acceptance, boundary, and evidence; thin integrated vertical slices with actual dependencies.
 - Q14: contract draft, separate different-family validation, then the maintainer approves one contract before code.
@@ -32,7 +32,7 @@ Actual route evidence, not a claim that a new run has executed:
 - `state/pipeline/runs/run-2-2026-09-18/audit/RUN.md` and `RETRO.md`: DeepSeek implementation and GLM verification/review, recorded gate chain, maintainer close approval, and artifact-presence lesson.
 - `state/pipeline/runs/run-3-2026-09-18/CONTRACT.md` and `gate-log.jsonl`: draft and GLM validation recorded; subsequent transport block recorded. The old transport block belongs to that run, not this feature.
 - `state/pipeline/tools/gate_log.py`: `GateLog.record`, `bind`, and `verify` provide existing JSONL gate/evidence records. Reuse rather than create a second scheduler or ledger.
-- `/opt/data/work/turnstile/docs/omp-edit-gate.md`: Turnstile's prepared edit/write check is specifically a scoped Rust quality gate. Its existence does not prove the whole contract/verify/review pipeline is active in this session.
+- Turnstile's edit-gate documentation (`docs/omp-edit-gate.md` in the Turnstile repository): Turnstile's prepared edit/write check is specifically a scoped Rust quality gate. Its existence does not prove the whole contract/verify/review pipeline is active in this session.
 - Current resident roles inspected at `<resident-home>/.omp/agent/config.yml` are OpenAI Codex general models and a TypeSafe judge, with Nous disabled. No different-family contract validation has been run for this draft. Do not substitute Jev's classification for a capable independent code/contract reviewer or claim a credential is absent from this configuration alone.
 
 For the next phase, select an actually available different-family validator through the established credential/provider route, record the family and findings, reconcile them, then obtain contract approval. This is a requirement on implementation admission, not a reason to withhold the local draft. This preparation does not publish to an issue tracker.

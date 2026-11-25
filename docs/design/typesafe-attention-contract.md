@@ -195,4 +195,4 @@ For contract approval, the proposed test boundary is **normalized, access-admitt
 | Q18 authored brief; Q19 unknown fallback; Q20 revalidation | Sections 2 and 5; A07, A16 |
 | Standard Dione/new branch; no implementation/publication in preparation | Header; boundary; evidence requirements |
 
-The private attributed interview record remains `/opt/data/dione-seat/discussion/dione-attention/design-session.md`. This contract summarizes requirements without reproducing private room conversations or credentials. Neither this local file nor its presence on a feature branch is a publication receipt.
+The private attributed interview record remains in the authoring seat's local design notes, outside this repository. This contract summarizes requirements without reproducing private room conversations or credentials. Neither that local file nor its presence on a feature branch is a publication receipt.
