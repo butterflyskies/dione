@@ -36,18 +36,7 @@ jobs:
       - name: Reject names of known people, agents and constructs
         env:
           KNOWN_IDENTITIES: ${{ secrets.KNOWN_IDENTITIES }}
-        run: |
-          set -euo pipefail
-          if [ -z "${KNOWN_IDENTITIES}" ]; then
-            echo "KNOWN_IDENTITIES secret is required to publish" >&2
-            exit 1
-          fi
-          umask 077
-          list=$(mktemp)
-          trap 'rm -f "${list}"' EXIT
-          trap 'exit 1' HUP INT TERM
-          printf '%s\n' "${KNOWN_IDENTITIES}" > "${list}"
-          sh scripts/scan-known-identities.sh --markers "${list}"
+        run: sh scripts/run-known-identities-scan.sh publish
       - name: Verify Dione package and namespace
         id: package
         run: |

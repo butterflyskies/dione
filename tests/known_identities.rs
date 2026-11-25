@@ -208,3 +208,138 @@ fn accented_names_fold_the_same_in_contents_and_paths() {
         "{stderr}"
     );
 }
+
+const ADMIT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/scripts/run-known-identities-scan.sh"
+);
+
+/// Runs the CI admission helper as a workflow step would, with `roster` as the secret.
+fn admit(
+    dir: &Path,
+    mode: &str,
+    roster: Option<&str>,
+    from_fork: bool,
+) -> (Option<i32>, String, usize) {
+    let tmp = tempfile::tempdir().expect("private TMPDIR must be created");
+    let mut command = Command::new("sh");
+    command
+        .arg(ADMIT)
+        .arg(mode)
+        .current_dir(dir)
+        .env("TMPDIR", tmp.path())
+        .env_remove("KNOWN_IDENTITIES")
+        .env_remove("FROM_FORK");
+    if let Some(roster) = roster {
+        command.env("KNOWN_IDENTITIES", roster);
+    }
+    if from_fork {
+        command.env("FROM_FORK", "true");
+    }
+    let output = command.output().expect("admission helper must execute");
+    let left = fs::read_dir(tmp.path()).unwrap().count();
+    let text = String::from_utf8_lossy(&output.stdout).into_owned()
+        + &String::from_utf8_lossy(&output.stderr);
+    (output.status.code(), text, left)
+}
+
+#[test]
+fn a_missing_roster_fails_except_on_fork_pull_requests() {
+    let repo = repository(&[("src/a.rs", "fn f() {}\n")]);
+    assert_eq!(
+        admit(repo.path(), "pull-request", None, false).0,
+        Some(2),
+        "same-repo PR or push"
+    );
+    let (status, text, _) = admit(repo.path(), "pull-request", None, true);
+    assert_eq!(status, Some(0));
+    assert!(text.contains("skipped"), "{text}");
+    assert_eq!(
+        admit(repo.path(), "publish", None, true).0,
+        Some(2),
+        "publishing never skips"
+    );
+    assert_eq!(admit(repo.path(), "publish", Some(""), false).0, Some(2));
+    assert_eq!(
+        admit(repo.path(), "release", Some("quillon"), false).0,
+        Some(2),
+        "unknown mode"
+    );
+}
+
+#[test]
+fn a_present_roster_reaches_the_scan_and_its_result_propagates() {
+    let named = repository(&[("src/a.rs", "let user = \"Quillon\";\n")]);
+    let clean = repository(&[("src/a.rs", "let user = \"fixture-person\";\n")]);
+    for mode in ["pull-request", "publish"] {
+        let (status, text, _) = admit(named.path(), mode, Some(MARKERS), false);
+        assert_eq!(status, Some(1), "{mode}: {text}");
+        assert!(
+            text.contains("known identity: src/a.rs:1"),
+            "{mode}: {text}"
+        );
+        assert_eq!(
+            admit(clean.path(), mode, Some(MARKERS), false).0,
+            Some(0),
+            "{mode}"
+        );
+    }
+    let outside = tempfile::tempdir().expect("temporary directory must be created");
+    assert_eq!(
+        admit(outside.path(), "publish", Some(MARKERS), false).0,
+        Some(2),
+        "scan errors propagate"
+    );
+}
+
+#[test]
+fn the_roster_file_is_removed_after_every_outcome() {
+    let named = repository(&[("src/a.rs", "let user = \"Quillon\";\n")]);
+    let clean = repository(&[("src/a.rs", "fn f() {}\n")]);
+    let outside = tempfile::tempdir().expect("temporary directory must be created");
+    for (dir, expected) in [(clean.path(), 0), (named.path(), 1), (outside.path(), 2)] {
+        let (status, _, left) = admit(dir, "publish", Some(MARKERS), false);
+        assert_eq!(status, Some(expected));
+        assert_eq!(
+            left, 0,
+            "roster and scratch files must not outlive exit {expected}"
+        );
+    }
+}
+
+#[test]
+fn both_workflows_admit_the_roster_only_through_the_helper() {
+    let ci = include_str!("../.forgejo/workflows/linux.yml");
+    let publish = include_str!("../.github/workflows/publish-crate.yml");
+    assert!(ci.contains("run: sh scripts/run-known-identities-scan.sh pull-request\n"));
+    assert!(publish.contains("run: sh scripts/run-known-identities-scan.sh publish\n"));
+    for workflow in [ci, publish] {
+        assert_eq!(
+            workflow.matches("${{ secrets.KNOWN_IDENTITIES }}").count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn case_folding_does_not_depend_on_the_callers_locale() {
+    let repo = repository(&[
+        ("src/a.rs", "let user = \"ZÉPHYRINE\";\n"),
+        ("src/ZÉPHYRINE_fixture.rs", "fn f() {}\n"),
+    ]);
+    let list = tempfile::NamedTempFile::new().expect("identity list must be created");
+    fs::write(list.path(), "zéphyrine\n").expect("identity list must be written");
+    for locale in ["C", "POSIX", "C.UTF-8"] {
+        let output = Command::new("sh")
+            .arg(SCRIPT)
+            .args(["--markers"])
+            .arg(list.path())
+            .args(["--allow", "/dev/null"])
+            .current_dir(repo.path())
+            .env("LC_ALL", locale)
+            .output()
+            .expect("scan must execute");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("2 hit(s)"), "LC_ALL={locale}: {stderr}");
+    }
+}
