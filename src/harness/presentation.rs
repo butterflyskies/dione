@@ -794,14 +794,14 @@ mod single_tests {
             reply_to_user_id: None,
             reply_to_user: None,
             reply_to_content_preview: None,
-            bells: Some("3s lain/person-pace;2b lain/feedback-no-platitudes".into()),
+            bells: Some("3s scope-b/person-example;2b scope-b/feedback-example".into()),
             bells_status: Some(BellStatus::Ok),
         });
         let json = event.fixture_notification();
         let meta = &json["params"]["meta"];
         assert_eq!(
             meta["bells"],
-            "3s lain/person-pace;2b lain/feedback-no-platitudes"
+            "3s scope-b/person-example;2b scope-b/feedback-example"
         );
         assert_eq!(meta["bells_status"], "ok");
     }

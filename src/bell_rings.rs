@@ -249,7 +249,7 @@ struct ProviderSlot {
 
 /// Render admitted bells into the compact wire format with full provenance.
 ///
-/// Format: `"3s scope-b/person-pace@personal d=0.12 id=a rid=r_test;1l shared/foo@cc d=-1.00 id=b rid=r_test2"`
+/// Format: `"3s scope-b/person-example@personal d=0.12 id=a rid=r_test;1l shared/foo@cc d=-1.00 id=b rid=r_test2"`
 /// — `{loudness}{timbre} {scope}/{name}@{provider_alias} d={distance} id={memory_id} rid={recall_id}`.
 pub fn render_bells(bells: &[Bell]) -> String {
     bells
@@ -1014,7 +1014,7 @@ mod tests {
                 scope: "scope-b".to_owned(),
                 recall_id: "r_test".to_owned(),
                 memory_id: "a".to_owned(),
-                memory_name: "person-pace".to_owned(),
+                memory_name: "person-example".to_owned(),
                 timbre: BellTimbre::Semantic,
                 distance: 0.12,
                 loudness: 3,
@@ -1035,7 +1035,7 @@ mod tests {
         ];
         assert_eq!(
             render_bells(&bells),
-            "3s scope-b/person-pace@personal d=0.12 id=a rid=r_test;2b shared/construct-cosmology@cc d=0.25 id=b rid=r_test2"
+            "3s scope-b/person-example@personal d=0.12 id=a rid=r_test;2b shared/construct-cosmology@cc d=0.25 id=b rid=r_test2"
         );
     }
 

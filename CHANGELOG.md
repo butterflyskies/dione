@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.87.2]
+
+### Changed
+
+- Use an invented construct name and invented Discord IDs in test fixtures and
+  configuration examples instead of real ones.
+
 ## [0.87.1]
 
 ### Security
@@ -25,13 +32,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Reorganize the README around first-time setup, move detailed configuration
   and delivery contracts to the operator reference, and use locked dependencies
   in the source-install quick start.
-
-## [0.87.2]
-
-### Changed
-
-- Use an invented construct name and invented Discord IDs in test fixtures and
-  configuration examples instead of real ones.
 
 ## [0.87.0]
 
