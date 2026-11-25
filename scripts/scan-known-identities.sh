@@ -17,9 +17,17 @@
 # Exit status: 0 clean, 1 identities found, 2 usage or input error.
 set -eu
 
+# Deliberate outcomes go through finish(). Any other exit is a failed step under `set -e`, whose own
+# status (often 1) would read as "identities found", so the EXIT trap turns it into 2.
+outcome=
+finish() {
+    outcome=$1
+    exit "$1"
+}
+
 usage() {
     echo "usage: $0 --markers <file> [--allow <file>]" >&2
-    exit 2
+    finish 2
 }
 
 markers=
@@ -34,11 +42,12 @@ done
 [ -n "${markers}" ] || usage
 if [ ! -f "${markers}" ] || [ ! -r "${markers}" ]; then
     echo "identity list must be a readable file" >&2
-    exit 2
+    finish 2
 fi
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/known-identities.XXXXXX")
-trap 'rm -rf "${scratch}"' EXIT HUP INT TERM
+trap 'status=$?; rm -rf "${scratch}"; if [ -z "${outcome}" ] && [ "${status}" -ne 0 ]; then echo "known-identity scan failed: a step exited ${status}" >&2; exit 2; fi' EXIT
+trap 'exit 2' HUP INT TERM
 patterns=${scratch}/patterns
 hits=${scratch}/hits
 
@@ -47,7 +56,7 @@ hits=${scratch}/hits
 tr -d '\r' < "${markers}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' > "${patterns}" || true
 if [ ! -s "${patterns}" ]; then
     echo "identity list is empty" >&2
-    exit 2
+    finish 2
 fi
 # Escape each entry for ERE and wrap it in letter-or-digit boundaries. Underscore counts as a
 # boundary (unlike grep -w) because names appear inside snake_case identifiers.
@@ -73,22 +82,31 @@ status=$?
 set -e
 if [ "${status}" -ne 0 ] && [ "${status}" -ne 1 ]; then
     echo "known-identity scan failed: content search error" >&2
-    exit 2
+    finish 2
 fi
-LC_ALL=C tr '\000' '\001' < "${raw}" | LC_ALL=C cut -d "$(printf '\001')" -f 1,2 | LC_ALL=C tr '\001' ':' > "${hits}"
+# Post-processing runs one command per step, each into its own file, so `set -e` sees every
+# failure; a failed step in a pipeline would leave an empty hit list that reads as "clean".
+LC_ALL=C tr '\000' '\001' < "${raw}" > "${scratch}/fields"
+LC_ALL=C cut -d "$(printf '\001')" -f 1,2 "${scratch}/fields" > "${scratch}/located"
+LC_ALL=C tr '\001' ':' < "${scratch}/located" > "${hits}"
+if [ -s "${raw}" ] && [ ! -s "${hits}" ]; then
+    echo "known-identity scan failed: matches found but not reported" >&2
+    finish 2
+fi
 
 # Paths: a tracked file whose own name carries an identity.
 if ! git ls-files -z -- "$@" > "${raw}"; then
     echo "known-identity scan failed: path listing error" >&2
-    exit 2
+    finish 2
 fi
+LC_ALL=C tr '\000' '\n' < "${raw}" > "${scratch}/listed"
 set +e
-LC_ALL=C tr '\000' '\n' < "${raw}" | LC_ALL=C grep -i -E -f "${regex}" > "${scratch}/paths"
+LC_ALL=C grep -i -E -f "${regex}" "${scratch}/listed" > "${scratch}/paths"
 status=$?
 set -e
 if [ "${status}" -gt 1 ]; then
     echo "known-identity scan failed: path search error" >&2
-    exit 2
+    finish 2
 fi
 sed 's/$/ (path)/' "${scratch}/paths" >> "${hits}"
 
@@ -96,6 +114,7 @@ if [ -s "${hits}" ]; then
     count=$(wc -l < "${hits}" | tr -d ' ')
     LC_ALL=C sort -u "${hits}" | sed 's/^/known identity: /' >&2
     echo "known-identity scan: ${count} hit(s); replace each with an invented name, handle or ID" >&2
-    exit 1
+    finish 1
 fi
 echo "known-identity scan: clean"
+finish 0

@@ -163,3 +163,33 @@ fn padded_entries_still_match() {
         assert_eq!(status, Some(1), "{markers:?} must still match: {stderr}");
     }
 }
+
+#[test]
+fn a_failed_report_step_is_an_error_not_a_clean_result() {
+    let repo = repository(&[("src/a.rs", "let user = \"Quillon\";\n")]);
+    let bin = tempfile::tempdir().expect("shim directory must be created");
+    let shim = bin.path().join("cut");
+    fs::write(&shim, "#!/bin/sh\nexit 1\n").expect("failing cut shim must be written");
+    fs::set_permissions(&shim, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("shim must be executable");
+    let list = tempfile::NamedTempFile::new().expect("identity list must be created");
+    fs::write(list.path(), MARKERS).expect("identity list must be written");
+    let output = Command::new("sh")
+        .arg(SCRIPT)
+        .arg("--markers")
+        .arg(list.path())
+        .current_dir(repo.path())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin.path().display(),
+                std::env::var("PATH").unwrap()
+            ),
+        )
+        .output()
+        .expect("scan must execute");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("clean"));
+}
