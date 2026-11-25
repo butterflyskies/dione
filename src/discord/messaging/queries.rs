@@ -1475,7 +1475,7 @@ mod tests {
             ..Default::default()
         });
         raw.vaelii.server_url = Some(server_url);
-        raw.vaelii.actor_term = Some("Syne".to_owned());
+        raw.vaelii.actor_term = Some("Nyx".to_owned());
         let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), discord_http);
 
         let retrieved = get_message(&ctx, ChannelId::new(42), MessageId::new(9001))
@@ -1510,7 +1510,7 @@ mod tests {
             ..Default::default()
         });
         raw.vaelii.server_url = Some(server_url);
-        raw.vaelii.actor_term = Some("Syne".to_owned());
+        raw.vaelii.actor_term = Some("Nyx".to_owned());
         let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), discord_http);
 
         let retrieved = get_message(&ctx, ChannelId::new(42), MessageId::new(9001))
@@ -1546,7 +1546,7 @@ mod tests {
             ..Default::default()
         });
         raw.vaelii.server_url = Some(format!("http://{vaelii_address}"));
-        raw.vaelii.actor_term = Some("Syne".to_owned());
+        raw.vaelii.actor_term = Some("Nyx".to_owned());
         let ctx = messaging_ctx_with_http(LoadedConfig::from_raw(raw), discord_http);
 
         let projected =

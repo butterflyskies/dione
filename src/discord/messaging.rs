@@ -4832,7 +4832,7 @@ mod tests {
             id: "42".to_owned(),
             ..Default::default()
         });
-        raw.pre_send.construct_id = "syne".to_owned();
+        raw.pre_send.construct_id = "nyx".to_owned();
         raw.pre_send.author_id = Some(UserId::new(1522260806975099030));
         let captured = Arc::new(std::sync::Mutex::new(None));
         let pipeline =
@@ -4852,7 +4852,7 @@ mod tests {
             .expect("context lock")
             .clone()
             .expect("context");
-        assert_eq!(captured.construct_id(), "syne");
+        assert_eq!(captured.construct_id(), "nyx");
         assert_eq!(captured.author_id(), Some(UserId::new(1522260806975099030)));
         assert_eq!(captured.guild_id(), None);
     }

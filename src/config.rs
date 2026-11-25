@@ -5694,10 +5694,10 @@ action = "celebrate"
     #[test]
     fn pre_send_construct_id_is_validated_once_when_config_is_loaded() {
         let mut raw = Config::default();
-        raw.pre_send.construct_id = "syne".to_owned();
+        raw.pre_send.construct_id = "nyx".to_owned();
         assert_eq!(
             LoadedConfig::from_raw(raw).pre_send_construct_id.as_str(),
-            "syne"
+            "nyx"
         );
     }
 

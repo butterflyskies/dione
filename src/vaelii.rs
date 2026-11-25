@@ -368,7 +368,7 @@ mod tests {
             invocation: "Check1546542838244843671".to_owned(),
             receipt: "Receipt1546542838244843671".to_owned(),
         };
-        let sentexes = get_message_sentexes(1546542838244843671, "Syne", &receipt);
+        let sentexes = get_message_sentexes(1546542838244843671, "Nyx", &receipt);
         assert_eq!(sentexes.len(), 6);
         assert_eq!(
             edit_body(&sentexes),
@@ -377,7 +377,7 @@ mod tests {
                 "[(tool_invocation Check1546542838244843671) CxWell] ",
                 "[(invokesTool Check1546542838244843671 DioneGetMessageTool) CxWell] ",
                 "[(toolInvocationArg Check1546542838244843671 \"message_id\" \"1546542838244843671\") CxWell] ",
-                "[(performedBy Check1546542838244843671 Syne) CxWell] ",
+                "[(performedBy Check1546542838244843671 Nyx) CxWell] ",
                 "[(tool_receipt Receipt1546542838244843671) CxWell] ",
                 "[(receipt Check1546542838244843671 Receipt1546542838244843671) CxWell]",
                 "]}]}"
@@ -419,15 +419,15 @@ mod tests {
 
     #[test]
     fn actor_term_must_serialize_as_an_unambiguous_symbol() {
-        assert!(validate_symbol("actor_term", "Syne").is_ok());
-        assert!(validate_symbol("actor_term", "mnemosyne-2").is_ok());
+        assert!(validate_symbol("actor_term", "Nyx").is_ok());
+        assert!(validate_symbol("actor_term", "nyx-2").is_ok());
         assert!(validate_symbol("actor_term", "123").is_err());
         assert!(validate_symbol("actor_term", "not a symbol").is_err());
     }
 
     #[tokio::test]
     async fn no_configured_url_means_no_receipt_write() {
-        let result = write_get_message_receipt(&VaeliiConfig::default(), 42, "Syne")
+        let result = write_get_message_receipt(&VaeliiConfig::default(), 42, "Nyx")
             .await
             .unwrap();
         assert_eq!(result, None);
@@ -438,7 +438,7 @@ mod tests {
         let (server_url, captured, server) = one_shot_server("200 OK").await;
         let config = VaeliiConfig {
             server_url: Some(server_url),
-            actor_term: Some("Syne".to_owned()),
+            actor_term: Some("Nyx".to_owned()),
             ..VaeliiConfig::default()
         };
 
@@ -469,7 +469,7 @@ mod tests {
                 "[(tool_invocation Check42) CxWell] ",
                 "[(invokesTool Check42 DioneGetMessageTool) CxWell] ",
                 "[(toolInvocationArg Check42 \"message_id\" \"42\") CxWell] ",
-                "[(performedBy Check42 Syne) CxWell] ",
+                "[(performedBy Check42 Nyx) CxWell] ",
                 "[(tool_receipt Receipt42) CxWell] ",
                 "[(receipt Check42 Receipt42) CxWell]",
                 "]}]}"
@@ -482,7 +482,7 @@ mod tests {
         let (server_url, _captured, server) = one_shot_server("503 Service Unavailable").await;
         let config = VaeliiConfig {
             server_url: Some(server_url),
-            actor_term: Some("Syne".to_owned()),
+            actor_term: Some("Nyx".to_owned()),
             ..VaeliiConfig::default()
         };
 
