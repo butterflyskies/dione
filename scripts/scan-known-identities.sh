@@ -250,8 +250,14 @@ while IFS="${tab}" read -r oid path; do
         echo "known-identity scan failed: link target read error" >&2
         finish 2
     fi
-    # A target is one record however it is written: its own newlines become spaces.
-    LC_ALL=C tr '\n' ' ' < "${scratch}/target" >> "${scratch}/targets"
+    # A stored target is one record of its exact bytes. A newline would have to be rewritten to fit
+    # one line, and an exemption could then match bytes the target does not hold, so it is refused.
+    LC_ALL=C tr -cd '\n' < "${scratch}/target" > "${scratch}/target-newlines"
+    if [ -s "${scratch}/target-newlines" ]; then
+        echo "a tracked symlink target contains a newline; rewrite the link before scanning" >&2
+        finish 2
+    fi
+    cat "${scratch}/target" >> "${scratch}/targets"
     echo >> "${scratch}/targets"
     printf '%s\n' "${path}" >> "${scratch}/link-paths"
 done < "${scratch}/links"

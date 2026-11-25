@@ -318,6 +318,23 @@ fn an_occurrence_exemption_applies_to_a_symlink_target_too() {
 }
 
 #[test]
+fn a_symlink_target_with_a_newline_is_refused_not_rewritten() {
+    // An exemption for "../quillon-works project" must not clear a target whose stored bytes hold
+    // a newline there instead: rewriting the newline to a space would match bytes not in the link.
+    let repo = repository(&[("src/a.rs", "fn f() {}\n")]);
+    std::os::unix::fs::symlink("../quillon-works\nproject", repo.path().join("odd-link"))
+        .expect("fixture link must be created");
+    commit_all(repo.path());
+    let allow = "odd-link\t../quillon-works project\n";
+    let (status, stderr) = scan(repo.path(), "quillon-works\n", Some(allow));
+    assert_eq!(status, Some(2), "{stderr}");
+    assert!(
+        stderr.contains("symlink target contains a newline"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn a_tracked_path_that_could_break_record_framing_is_refused() {
     for name in [
         "approved.txt\u{1}suffix",
