@@ -193,3 +193,18 @@ fn a_failed_report_step_is_an_error_not_a_clean_result() {
     assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(!String::from_utf8_lossy(&output.stdout).contains("clean"));
 }
+
+#[test]
+fn accented_names_fold_the_same_in_contents_and_paths() {
+    let repo = repository(&[
+        ("src/a.rs", "let user = \"ZÉPHYRINE\";\n"),
+        ("src/ZÉPHYRINE_fixture.rs", "fn f() {}\n"),
+    ]);
+    let (status, stderr) = scan(repo.path(), "zéphyrine\n", None);
+    assert_eq!(status, Some(1), "{stderr}");
+    assert!(stderr.contains("known identity: src/a.rs:1\n"), "{stderr}");
+    assert!(
+        stderr.contains("known identity: src/ZÉPHYRINE_fixture.rs (path)\n"),
+        "{stderr}"
+    );
+}

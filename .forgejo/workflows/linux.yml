@@ -232,6 +232,8 @@ jobs:
           fi
           umask 077
           list=$(mktemp)
+          trap 'rm -f "${list}"' EXIT
+          trap 'exit 1' HUP INT TERM
           printf '%s\n' "${KNOWN_IDENTITIES}" > "${list}"
           sh scripts/scan-known-identities.sh --markers "${list}"
 

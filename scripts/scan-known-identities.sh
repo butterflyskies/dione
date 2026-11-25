@@ -10,6 +10,8 @@
 # printed; a path hit prints the path, which is repository text and may itself contain the entry.
 #
 # usage: scan-known-identities.sh --markers <file> [--allow <file>]
+# Both searches run under LC_ALL=C.UTF-8, so case folding (including accented letters) is the same
+# for file contents and for file paths.
 # Choose roster entries that only name people: an entry that is also an ordinary identifier (a crate,
 # keyword or common word) matches code that has nothing to do with the person. Prefer full handles and
 # Discord IDs over short names that collide.
@@ -77,7 +79,7 @@ fi
 # path, line number and text with NUL, so a path containing `:` cannot shift the fields.
 raw=${scratch}/raw
 set +e
-git grep -z -n -I -i -E -f "${regex}" -- "$@" > "${raw}"
+LC_ALL=C.UTF-8 git grep -z -n -I -i -E -f "${regex}" -- "$@" > "${raw}"
 status=$?
 set -e
 if [ "${status}" -ne 0 ] && [ "${status}" -ne 1 ]; then
@@ -101,7 +103,7 @@ if ! git ls-files -z -- "$@" > "${raw}"; then
 fi
 LC_ALL=C tr '\000' '\n' < "${raw}" > "${scratch}/listed"
 set +e
-LC_ALL=C grep -i -E -f "${regex}" "${scratch}/listed" > "${scratch}/paths"
+LC_ALL=C.UTF-8 grep -i -E -f "${regex}" "${scratch}/listed" > "${scratch}/paths"
 status=$?
 set -e
 if [ "${status}" -gt 1 ]; then
