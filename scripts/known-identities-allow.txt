@@ -23,3 +23,14 @@ scripts/public-package-structural-patterns.txt	github\.com/butterflyskies/
 .github/workflows/publish-crate.yml	github:butterflyskies:superadmins
 .github/workflows/publish-crate.yml	butterflysky
 scripts/tag-qualified-release.sh	pale.clock3926@butterflysky.dev
+src/config.rs	butterflyskies repo
+src/config_template.toml	https://github.com/butterflyskies/dione
+src/nameplates.rs	https://raw.githubusercontent.com/butterflyskies/construct-nameplates
+src/nameplates.rs	https://github.com/butterflyskies/dione
+src/pronouns.rs	https://github.com/butterflyskies/dione
+src/pluralkit.rs	https://github.com/butterflyskies/dione
+tests/public_package.rs	https://github.com/butterflyskies/
+tests/public_package.rs	github:butterflyskies:lacuna-blinkers
+tests/public_package.rs	github:butterflyskies:superadmins
+tests/release_tag.rs	pale.clock3926@butterflysky.dev
+tests/fixtures/gaie-v11/README.md	butterflyskies/gaoie
