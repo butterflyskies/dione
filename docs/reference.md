@@ -146,7 +146,7 @@ claim that the message is true.
 ```toml
 [vaelii]
 server_url = "http://127.0.0.1:4200"
-actor_term = "Syne"   # defaults to pre_send.construct_id
+actor_term = "Nyx"   # defaults to pre_send.construct_id
 timeout_ms = 3000
 ```
 

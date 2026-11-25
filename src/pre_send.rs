@@ -1187,8 +1187,8 @@ mod tests {
 
     #[test]
     fn construct_id_rejects_empty_and_noncanonical_values() {
-        assert_eq!(ConstructId::parse("syne").unwrap().as_str(), "syne");
-        for invalid in ["", "Syne", "syne_2", "-syne", "syne-"] {
+        assert_eq!(ConstructId::parse("nyx").unwrap().as_str(), "nyx");
+        for invalid in ["", "Nyx", "nyx_2", "-nyx", "nyx-"] {
             assert!(ConstructId::parse(invalid).is_err());
         }
     }

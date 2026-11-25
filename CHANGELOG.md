@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.87.2]
+
+### Changed
+
+- Use an invented construct name and invented Discord IDs in test fixtures and
+  configuration examples instead of real ones.
+
 ## [0.87.1]
 
 ### Security

@@ -227,7 +227,7 @@ mod tests {
     fn test_parse_nameplates_yaml() {
         let yaml = r#"
 nameplates:
-  "1517387857839390800":
+  "100000000000000001":
     name: Lain
     pronouns:
       - she/her
@@ -237,7 +237,7 @@ nameplates:
         let file: NameplatesFile = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(file.nameplates.len(), 1);
 
-        let plate = file.nameplates.get("1517387857839390800").unwrap();
+        let plate = file.nameplates.get("100000000000000001").unwrap();
         assert_eq!(plate.name, "Lain");
         assert_eq!(plate.pronouns, vec!["she/her"]);
         assert!(plate.bio.as_ref().unwrap().contains("House Lacuna"));
