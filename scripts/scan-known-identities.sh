@@ -20,7 +20,9 @@
 # `text` inside that one file: it is removed from each matched line there before the line is
 # checked again, so any other identity on the same line, the same text in another file, or the
 # text in different case is still reported. Use it for public identifiers that must stay, such as a
-# repository URL or organisation slug, never to excuse a person's name.
+# repository URL or organisation slug, never to excuse a person's name. Each such `text` is also
+# exempt inside scripts/known-identities-allow.txt, which has to spell it out; the rest of that
+# file, its comments included, is still scanned.
 # Exit status: 0 clean, 1 identities found, 2 usage or input error.
 set -eu
 
@@ -39,6 +41,9 @@ usage() {
 
 markers=
 allow=scripts/known-identities-allow.txt
+# Tracked path of the repository's allow file. Each `path<TAB>text` entry's text is also exempt
+# inside this file, which must spell it out; nothing else in the file is exempt.
+allow_tracked=scripts/known-identities-allow.txt
 while [ "$#" -gt 0 ]; do
     case $1 in
         --markers) [ "$#" -ge 2 ] || usage; markers=$2; shift 2 ;;
@@ -116,6 +121,11 @@ if [ -f "${allow}" ]; then
         echo "allow list has a malformed path<TAB>text entry" >&2
         finish 2
     fi
+    # The tracked allow file necessarily holds each exempt text too. Exempt exactly those texts
+    # inside it, never the whole file, so a name in one of its comments is still reported.
+    LC_ALL=C awk -F "${tab}" -v tab="${tab}" -v self="${allow_tracked}" '{ print self tab $2 }' \
+        "${scratch}/allow-occurrences" > "${scratch}/allow-self"
+    cat "${scratch}/allow-self" >> "${scratch}/allow-occurrences"
     while IFS= read -r path; do
         set -- "$@" ":(exclude,literal)${path}"
     done < "${scratch}/allow-paths"

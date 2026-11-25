@@ -180,6 +180,42 @@ fn exempting_every_occurrence_scans_clean() {
     assert!(stderr.is_empty(), "{stderr}");
 }
 
+const ALLOW_PATH: &str = "scripts/known-identities-allow.txt";
+
+#[test]
+fn a_name_in_an_allow_file_comment_is_still_a_hit() {
+    let url = "https://forge.invalid/quillon-works/dione";
+    let allow = format!("# Quillon Vey chose these.\nCargo.toml\t{url}\n");
+    let repo = repository(&[
+        ("Cargo.toml", &format!("repository = \"{url}\"\n")),
+        (ALLOW_PATH, &allow),
+    ]);
+    let (status, stderr) = scan(repo.path(), "quillon-works\nQuillon Vey\n", Some(&allow));
+    assert_eq!(status, Some(1), "{stderr}");
+    assert!(
+        stderr.contains(&format!("known identity: {ALLOW_PATH}:1\n")),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!("known identity: {ALLOW_PATH}:2\n")),
+        "{stderr}"
+    );
+    assert!(stderr.contains("1 hit(s)"), "{stderr}");
+}
+
+#[test]
+fn an_allowed_slug_inside_the_allow_file_is_not_a_hit() {
+    let url = "https://forge.invalid/quillon-works/dione";
+    let allow = format!("# Public repository URL.\nCargo.toml\t{url}\n");
+    let repo = repository(&[
+        ("Cargo.toml", &format!("repository = \"{url}\"\n")),
+        (ALLOW_PATH, &allow),
+    ]);
+    let (status, stderr) = scan(repo.path(), "quillon-works\n", Some(&allow));
+    assert_eq!(status, Some(0), "{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
 #[test]
 fn a_malformed_occurrence_entry_is_an_error() {
     let repo = repository(&[("src/a.rs", "fn f() {}\n")]);
