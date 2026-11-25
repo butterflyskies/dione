@@ -9,6 +9,9 @@
 # `path:line` (or `path` for a path hit) and a count. The matched entry is never printed.
 #
 # usage: scan-known-identities.sh --markers <file> [--allow <file>]
+# Choose roster entries that only name people: an entry that is also an ordinary identifier (a crate,
+# keyword or common word) matches code that has nothing to do with the person. Prefer full handles and
+# Discord IDs over short names that collide.
 # The allow file lists tracked paths exempt from the scan, one per line; `#` lines are ignored.
 # Exit status: 0 clean, 1 identities found, 2 usage or input error.
 set -eu

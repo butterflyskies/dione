@@ -1,2 +1,5 @@
 # Tracked paths exempt from scripts/scan-known-identities.sh, one per line.
-# Keep this empty unless a maintainer decides a path may name real people.
+# Keep this list to generated files that cannot hold fixtures or prose.
+# Cargo.lock lists dependency crate names only; a roster entry that is also a crate name (bare `syn`)
+# would otherwise produce hits no source change can clear.
+Cargo.lock
