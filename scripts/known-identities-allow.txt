@@ -6,6 +6,20 @@
 # identity in the file, and the same text anywhere else, is still reported. Use it for public
 # identifiers that must stay, such as a repository URL or organisation slug, never for a person's name.
 #
-# Cargo.lock lists dependency crate names only; a roster entry that is also a crate name (bare `syn`)
+# Cargo.lock lists dependency crate names only; a roster entry that is also a crate name
 # would otherwise produce hits no source change can clear.
 Cargo.lock
+#
+# Public repository URLs and organisation slugs the project publishes from or fetches at run time.
+Cargo.toml	https://github.com/butterflyskies/dione
+README.md	https://github.com/butterflyskies/dione
+docs/hermes-to-dione.md	https://github.com/butterflyskies/dione
+scripts/crates-io-package-state.sh	https://github.com/butterflyskies/dione
+scripts/verify-crates-io-owners.sh	https://github.com/butterflyskies/dione
+CHANGELOG.md	butterflyskies/dione#341
+CHANGELOG.md	butterflyskies/construct-nameplates
+scripts/public-package-structural-patterns.txt	github\.com/butterflyskies/
+.github/workflows/publish-crate.yml	github:butterflyskies:lacuna-blinkers
+.github/workflows/publish-crate.yml	github:butterflyskies:superadmins
+.github/workflows/publish-crate.yml	butterflysky
+scripts/tag-qualified-release.sh	pale.clock3926@butterflysky.dev
