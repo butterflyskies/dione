@@ -5815,7 +5815,7 @@ action = "celebrate"
             enabled = true
             [[bell_rings.providers]]
             url = "http://localhost:8080/mcp"
-            scope = "lain"
+            scope = "alice"
             alias = "personal"
         "#;
         let config: Config = toml::from_str(toml).expect("valid config");

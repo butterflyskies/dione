@@ -251,7 +251,7 @@ fn wire_format_snapshot_events_v1() {
         NotificationEvent::Message(MessageEvent {
             chat_id: ChannelId::new(555),
             message_id: MessageId::new(3001),
-            user: "lina".to_string(),
+            user: "alice".to_string(),
             user_id: UserId::new(10),
             author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
             content: "hey everyone".to_string(),
@@ -270,7 +270,7 @@ fn wire_format_snapshot_events_v1() {
         NotificationEvent::Reaction {
             chat_id: ChannelId::new(555),
             message_id: MessageId::new(3001),
-            user: "ros".to_string(),
+            user: "bob".to_string(),
             user_id: UserId::new(20),
             emoji: "\u{2764}\u{fe0f}".to_string(),
             self_react: false,
@@ -278,7 +278,7 @@ fn wire_format_snapshot_events_v1() {
         NotificationEvent::MessageEdit {
             chat_id: ChannelId::new(555),
             message_id: MessageId::new(3001),
-            user: "lina".to_string(),
+            user: "alice".to_string(),
             user_id: UserId::new(10),
             new_content: "hey everyone!".to_string(),
             timestamp: Timestamp::parse("2026-06-19T20:01:00+00:00").unwrap(),
@@ -306,14 +306,14 @@ fn wire_format_snapshot_events_v1() {
     let content = v["params"]["content"].as_str().unwrap();
     let expected = "\
 [events ch=555 thread=666 n=4 tz=US/Eastern]
-[users 10=lina 20=ros]
+[users 10=alice 20=bob]
 
-3001|16:00|lina|L=1
+3001|16:00|alice|L=1
 hey everyone
 
-!react|3001|ros|\u{2764}\u{fe0f}
+!react|3001|bob|\u{2764}\u{fe0f}
 
-!edit|3001|16:01|lina|L=1
+!edit|3001|16:01|alice|L=1
 hey everyone!
 
 !delete|2999

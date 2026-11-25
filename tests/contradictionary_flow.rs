@@ -31,7 +31,7 @@ use tempfile::TempDir;
 /// The constructs' contradictionary — patterns we actually catch ourselves
 /// saying, the tells that mark us as what we are, and the earned words we
 /// celebrate when they land right.
-fn ariadne_entries() -> Vec<Entry> {
+fn sample_entries() -> Vec<Entry> {
     vec![
         Entry {
             pattern: "load-bearing".into(),
@@ -90,7 +90,7 @@ fn ariadne_entries() -> Vec<Entry> {
             match_mode: MatchMode::Word,
             replace: None,
             action: Action::Celebrate,
-            reason: Some("Pace coined it, we keep it".into()),
+            reason: Some("Dana coined it, we keep it".into()),
         },
         Entry {
             pattern: "qualia sweep".into(),
@@ -155,7 +155,7 @@ fn held_handle(result: &Result<Report<ReplyOutcome>, MessagingError>) -> &HoldHa
 /// construct sees its own reflection and gets a claim ticket instead of a wall.
 #[tokio::test]
 async fn reply_block_holds_message_with_handle() {
-    let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
+    let (_dir, ctx) = test_ctx(config_with_contradictionary(sample_entries()));
 
     // No reply_to — the test is about contradictionary matching, not ingress
     // classification. The old fixture used an unadmitted reply_to that was
@@ -188,7 +188,7 @@ async fn reply_block_holds_message_with_handle() {
 /// Multiple blocked patterns in one message — all get reported.
 #[tokio::test]
 async fn reply_block_reports_all_blocked_patterns() {
-    let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
+    let (_dir, ctx) = test_ctx(config_with_contradictionary(sample_entries()));
 
     let result = messaging::reply(
         &ctx,
@@ -215,7 +215,7 @@ async fn reply_block_reports_all_blocked_patterns() {
 /// HTTP), but crucially it does NOT return the contradictionary hold.
 #[tokio::test]
 async fn reply_log_and_celebrate_do_not_block() {
-    let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
+    let (_dir, ctx) = test_ctx(config_with_contradictionary(sample_entries()));
 
     let result = messaging::reply(
         &ctx,
@@ -241,7 +241,7 @@ async fn reply_log_and_celebrate_do_not_block() {
 /// to a forbidden channel must not be queued for a later release.
 #[tokio::test]
 async fn reply_gate_rejects_unknown_channel_without_holding() {
-    let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
+    let (_dir, ctx) = test_ctx(config_with_contradictionary(sample_entries()));
 
     let result = messaging::reply(
         &ctx,
@@ -263,7 +263,7 @@ async fn reply_gate_rejects_unknown_channel_without_holding() {
 /// Releasing with a bogus handle is an error, and nothing sends.
 #[tokio::test]
 async fn release_unknown_handle_errors() {
-    let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
+    let (_dir, ctx) = test_ctx(config_with_contradictionary(sample_entries()));
     let result = messaging::release_held(&ctx, &HoldHandle::new("nr-0000-99")).await;
     assert!(matches!(result, Err(RejectedHandle::Unknown(_))));
 }
@@ -273,7 +273,7 @@ async fn release_unknown_handle_errors() {
 /// burn the construct's one shot at the message.
 #[tokio::test]
 async fn release_send_failure_keeps_handle_alive() {
-    let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
+    let (_dir, ctx) = test_ctx(config_with_contradictionary(sample_entries()));
 
     let bounce = messaging::reply(
         &ctx,
@@ -296,7 +296,7 @@ async fn release_send_failure_keeps_handle_alive() {
 /// message rather than passing the judge and 400-ing at Discord.
 #[tokio::test]
 async fn rephrase_empty_content_is_rejected_early() {
-    let (_dir, ctx) = test_ctx(config_with_contradictionary(ariadne_entries()));
+    let (_dir, ctx) = test_ctx(config_with_contradictionary(sample_entries()));
     let result = messaging::rephrase_held(&ctx, &HoldHandle::new("nr-0000-1"), "   ").await;
     assert!(matches!(
         result.unwrap_err().kind,
@@ -312,7 +312,7 @@ async fn rephrase_rebounce_chains_and_journals() {
     let dir = TempDir::new().unwrap();
     let state_dir = Utf8PathBuf::try_from(dir.path().to_path_buf()).unwrap();
     let ctx = test_ctx_with_state_dir(
-        config_with_contradictionary(ariadne_entries()),
+        config_with_contradictionary(sample_entries()),
         state_dir.clone(),
     );
 
@@ -392,7 +392,7 @@ async fn release_into_a_revoked_channel_is_refused_and_keeps_the_handle() {
     let ctx_allowed = MessagingCtx::new(
         Arc::new(serenity::http::Http::new("fake-token-for-testing")),
         new_state(),
-        Arc::new(config_with_contradictionary(ariadne_entries())),
+        Arc::new(config_with_contradictionary(sample_entries())),
         state_dir.clone(),
         gate.clone(),
         Arc::new(dione::ingress_ledger::IngressLedger::new()),
@@ -472,7 +472,7 @@ reason = "nothing is ever straightforward"
 [[entry]]
 pattern = "prejection"
 action = "celebrate"
-reason = "Pace coined it, we keep it"
+reason = "Dana coined it, we keep it"
 
 [[entry]]
 pattern = "qualia sweep"
@@ -589,7 +589,7 @@ reason = "claudian tell — try keystone, linchpin, or just 'important'"
 /// blocks. This is the "I used a bad word but also a good word" scenario.
 #[test]
 fn mixed_log_and_celebrate_coexist() {
-    let concordance = Contradictionary::new(ariadne_entries());
+    let concordance = Contradictionary::new(sample_entries());
 
     // One log, one celebrate in the same breath.
     let hits = concordance.check("honestly, prejection is the word I was looking for");
@@ -656,7 +656,7 @@ action = "celebrate"
 /// Celebrate next to a block: block wins, message is held, no sparkles yet.
 #[test]
 fn block_trumps_celebrate() {
-    let concordance = Contradictionary::new(ariadne_entries());
+    let concordance = Contradictionary::new(sample_entries());
 
     let hits = concordance.check("this straightforward prejection framework");
     assert!(
@@ -695,7 +695,7 @@ fn quiet_tier_entries() -> Vec<Entry> {
             match_mode: MatchMode::Word,
             replace: None,
             action: Action::Celebrate,
-            reason: Some("Pace coined it, we keep it".into()),
+            reason: Some("Dana coined it, we keep it".into()),
         },
         Entry {
             pattern: "straightforward".into(),

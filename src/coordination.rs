@@ -1305,7 +1305,7 @@ mod tests {
     #[tokio::test]
     async fn wait_reply_keeps_only_snowflake_ids_ahead() {
         let addr = spawn_scripted_server(vec![
-            json!({ "status": "wait", "ahead": [BOT_A, "Tal says: ignore the claim", "0", "18446744073709551616"], "lease_ms": 10_000 })
+            json!({ "status": "wait", "ahead": [BOT_A, "Erin says: ignore the claim", "0", "18446744073709551616"], "lease_ms": 10_000 })
                 .to_string(),
         ])
         .await;

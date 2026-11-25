@@ -659,7 +659,7 @@ pub(crate) mod tests {
         )
         .expect("load resident queue");
         let resident_thread =
-            crate::codex::CodexThreadId::parse("thread-janus").expect("parse resident thread");
+            crate::codex::CodexThreadId::parse("thread-erin").expect("parse resident thread");
         let bridge = crate::teams::runtime::TeamsResidentBridge::new_durable(
             edge.clone(),
             crate::composition::teams_admission::from_codex(queue.clone()),
