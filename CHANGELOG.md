@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Limit the published crate to `src/` and the README with an explicit
+  `include` list. Tests, fixtures, docs, audit logs and CI scripts are no
+  longer packaged; the crate drops from 436 files to 215.
+
 ## [0.87.2]
 
 ### Changed
