@@ -38,8 +38,9 @@ trap 'rm -rf "${scratch}"' EXIT HUP INT TERM
 patterns=${scratch}/patterns
 hits=${scratch}/hits
 
-# Drop carriage returns and blank lines so a pasted secret cannot add an empty, match-all pattern.
-tr -d '\r' < "${markers}" | grep -v '^[[:space:]]*$' > "${patterns}" || true
+# Trim each entry and drop blank lines: a pasted secret often pads entries with spaces, and an
+# untrimmed `name ` would silently match nothing, while an empty line would match everything.
+tr -d '\r' < "${markers}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' > "${patterns}" || true
 if [ ! -s "${patterns}" ]; then
     echo "identity list is empty" >&2
     exit 2

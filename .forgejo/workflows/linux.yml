@@ -218,10 +218,17 @@ jobs:
       - name: Reject names of known people, agents and constructs
         env:
           KNOWN_IDENTITIES: ${{ secrets.KNOWN_IDENTITIES }}
+          FROM_FORK: ${{ forgejo.event.pull_request.head.repo.fork }}
         run: |
           if [ -z "${KNOWN_IDENTITIES}" ]; then
-            echo "KNOWN_IDENTITIES secret unavailable (fork or unconfigured); identity scan skipped"
-            exit 0
+            # Fork PRs never receive secrets, so they skip. Anywhere else a missing secret is a
+            # configuration fault, and passing would hide it once this check is required.
+            if [ "${FROM_FORK}" = "true" ]; then
+              echo "KNOWN_IDENTITIES is not available to fork pull requests; identity scan skipped"
+              exit 0
+            fi
+            echo "KNOWN_IDENTITIES secret is not configured; identity scan cannot run" >&2
+            exit 1
           fi
           umask 077
           list=$(mktemp)

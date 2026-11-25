@@ -154,3 +154,12 @@ fn a_failed_search_is_an_error_not_a_clean_result() {
     assert_eq!(status, Some(2), "{stderr}");
     assert!(!stderr.contains("clean"), "{stderr}");
 }
+
+#[test]
+fn padded_entries_still_match() {
+    let repo = repository(&[("src/a.rs", "let quillon_scope = 1;\n")]);
+    for markers in ["quillon \n", "  quillon\t\n", "\tquillon \r\n"] {
+        let (status, stderr) = scan(repo.path(), markers, None);
+        assert_eq!(status, Some(1), "{markers:?} must still match: {stderr}");
+    }
+}
