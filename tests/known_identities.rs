@@ -246,25 +246,7 @@ fn occurrence_exemptions_keep_hits_on_lines_that_are_not_valid_utf8() {
     let mut readme = format!("See {url} and Quillon Vey ").into_bytes();
     readme.extend_from_slice(b"caf\xe9\n");
     fs::write(repo.path().join("README.md"), readme).expect("fixture file must be written");
-    for args in [
-        &["add", "-A"][..],
-        &[
-            "-c",
-            "user.name=fixture",
-            "-c",
-            "user.email=fixture@example.invalid",
-            "commit",
-            "-qm",
-            "latin-1 fixtures",
-        ],
-    ] {
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(repo.path())
-            .status()
-            .expect("git must execute");
-        assert!(status.success(), "git {args:?} must succeed");
-    }
+    commit_all(repo.path());
     let (status, stderr) = scan(
         repo.path(),
         "quillon-works\nQuillon Vey\n",
@@ -276,6 +258,79 @@ fn occurrence_exemptions_keep_hits_on_lines_that_are_not_valid_utf8() {
         "{stderr}"
     );
     assert!(stderr.contains("known identity: README.md:1\n"), "{stderr}");
+}
+
+/// Stages and commits everything in `dir`, for fixtures `repository` cannot express.
+fn commit_all(dir: &Path) {
+    for args in [
+        &["add", "-A"][..],
+        &[
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-qm",
+            "fixture update",
+        ],
+    ] {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .expect("git must execute");
+        assert!(status.success(), "git {args:?} must succeed");
+    }
+}
+
+#[test]
+fn a_symlink_target_is_scanned_without_following_it() {
+    let repo = repository(&[("src/a.rs", "fn f() {}\n")]);
+    std::os::unix::fs::symlink("/home/quillon/private/source", repo.path().join("vendor"))
+        .expect("fixture link must be created");
+    commit_all(repo.path());
+    let (status, stderr) = scan(repo.path(), "quillon\n", None);
+    assert_eq!(status, Some(1), "{stderr}");
+    assert!(
+        stderr.contains("known identity: vendor (symlink target)\n"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_tracked_path_that_could_break_record_framing_is_refused() {
+    for name in ["approved.txt\u{1}suffix", "split\nname.txt"] {
+        let repo = repository(&[("approved.txt", "Quillon\n")]);
+        fs::write(repo.path().join(name), "fn f() {}\n").expect("fixture file must be written");
+        commit_all(repo.path());
+        let (status, stderr) = scan(repo.path(), "quillon\n", Some("approved.txt\n"));
+        assert_eq!(status, Some(2), "{name:?}: {stderr}");
+        assert!(stderr.contains("newline or SOH"), "{name:?}: {stderr}");
+    }
+}
+
+#[test]
+fn exempt_text_that_is_blank_is_refused_within_a_bounded_time() {
+    // A one-space exemption once replaced a space with itself forever. `timeout` bounds each run,
+    // so a regression fails here (exit 124) instead of hanging the suite.
+    let repo = repository(&[("src/a.rs", "let x = \"a b Quillon\";\n")]);
+    let list = tempfile::NamedTempFile::new().expect("identity list must be created");
+    fs::write(list.path(), "quillon\n").expect("identity list must be written");
+    for blank in ["src/a.rs\t \n", "src/a.rs\t   \n"] {
+        let allow = tempfile::NamedTempFile::new().expect("allow list must be created");
+        fs::write(allow.path(), blank).expect("allow list must be written");
+        let output = Command::new("timeout")
+            .args(["20", "sh", SCRIPT, "--markers"])
+            .arg(list.path())
+            .arg("--allow")
+            .arg(allow.path())
+            .current_dir(repo.path())
+            .output()
+            .expect("scan must execute");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{blank:?}: {stderr}");
+        assert!(stderr.contains("malformed"), "{blank:?}: {stderr}");
+    }
 }
 
 #[test]

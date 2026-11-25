@@ -114,9 +114,9 @@ if [ -f "${allow}" ]; then
         echo "known-identity scan failed: allow list read error" >&2
         finish 2
     fi
-    # An occurrence entry is exactly a non-empty path, one tab and non-empty text. Anything else
-    # (an empty side, a second tab) is refused rather than guessed at.
-    if ! LC_ALL=C awk -F "${tab}" 'NF != 2 || $1 == "" || $2 == "" { bad = 1 } END { exit bad }' \
+    # An occurrence entry is exactly a non-empty path, one tab and text that is not only whitespace.
+    # Anything else (an empty or blank side, a second tab) is refused rather than guessed at.
+    if ! LC_ALL=C awk -F "${tab}" 'NF != 2 || $1 == "" || $2 ~ /^[[:space:]]*$/ { bad = 1 } END { exit bad }' \
         "${scratch}/allow-occurrences"; then
         echo "allow list has a malformed path<TAB>text entry" >&2
         finish 2
@@ -129,6 +129,18 @@ if [ -f "${allow}" ]; then
     while IFS= read -r path; do
         set -- "$@" ":(exclude,literal)${path}"
     done < "${scratch}/allow-paths"
+fi
+
+# Tracked paths are framed below by NUL from Git and then by SOH and newline; a path holding either
+# byte could borrow another path's exemption or split a record. Such names are refused, not guessed.
+if ! git ls-files -z > "${scratch}/tracked"; then
+    echo "known-identity scan failed: path listing error" >&2
+    finish 2
+fi
+LC_ALL=C tr -cd '\001\n' < "${scratch}/tracked" > "${scratch}/framing"
+if [ -s "${scratch}/framing" ]; then
+    echo "a tracked path contains a newline or SOH byte; rename it before scanning" >&2
+    finish 2
 fi
 
 # Contents. Each command writes to a file and its status is checked on its own; a pipeline would
@@ -164,9 +176,14 @@ if [ -s "${scratch}/allow-occurrences" ] && [ -s "${scratch}/fields" ]; then
             i = index($0, sep); p = substr($0, 1, i - 1); rest = substr($0, i + 1)
             j = index(rest, sep); line = substr(rest, j + 1); original = line
             for (k = 1; k <= n[p]; k++) {
-                t = text[p, k]
-                while ((x = index(line, t)) > 0)
-                    line = substr(line, 1, x - 1) " " substr(line, x + length(t))
+                # Copy the line forward, replacing each match and resuming after it, so a
+                # replacement can never recreate the text it replaced and loop.
+                t = text[p, k]; done_part = ""
+                while ((x = index(line, t)) > 0) {
+                    done_part = done_part substr(line, 1, x - 1) " "
+                    line = substr(line, x + length(t))
+                }
+                line = done_part line
             }
             if (line == original) { print FNR > kept }
             else { print line > stripped; print FNR > changed }
@@ -213,6 +230,44 @@ if [ "${status}" -gt 1 ]; then
     finish 2
 fi
 sed 's/$/ (path)/' "${scratch}/paths" >> "${hits}"
+
+# Symlinks: Git stores a link's target as its blob, and neither search above reads it. Read each
+# tracked link's stored target without following it, and report the link when the target names
+# someone. Paths cannot hold newlines (refused above), so one record per line is unambiguous.
+if ! git ls-files -s -z -- "$@" > "${raw}"; then
+    echo "known-identity scan failed: link listing error" >&2
+    finish 2
+fi
+LC_ALL=C tr '\000' '\n' < "${raw}" > "${scratch}/staged"
+LC_ALL=C awk -v tab="${tab}" '$1 == "120000" { i = index($0, tab); print $2 tab substr($0, i + 1) }' \
+    "${scratch}/staged" > "${scratch}/links"
+: > "${scratch}/targets"
+: > "${scratch}/link-paths"
+while IFS="${tab}" read -r oid path; do
+    if ! git cat-file blob "${oid}" > "${scratch}/target"; then
+        echo "known-identity scan failed: link target read error" >&2
+        finish 2
+    fi
+    # A target is one record however it is written: its own newlines become spaces.
+    LC_ALL=C tr '\n' ' ' < "${scratch}/target" >> "${scratch}/targets"
+    echo >> "${scratch}/targets"
+    printf '%s\n' "${path}" >> "${scratch}/link-paths"
+done < "${scratch}/links"
+set +e
+LC_ALL=C.UTF-8 grep -a -n -i -E -f "${regex}" "${scratch}/targets" > "${scratch}/target-hits"
+status=$?
+set -e
+if [ "${status}" -gt 1 ]; then
+    echo "known-identity scan failed: link target search error" >&2
+    finish 2
+fi
+LC_ALL=C cut -d : -f 1 "${scratch}/target-hits" > "${scratch}/target-lines"
+LC_ALL=C awk 'NR == FNR { hit[$1]; next } FNR in hit { print $0 " (symlink target)" }' \
+    "${scratch}/target-lines" "${scratch}/link-paths" >> "${hits}"
+if [ -s "${scratch}/target-hits" ] && ! grep -a -q ' (symlink target)$' "${hits}"; then
+    echo "known-identity scan failed: link target matches found but not reported" >&2
+    finish 2
+fi
 
 if [ -s "${hits}" ]; then
     LC_ALL=C sort -u "${hits}" > "${scratch}/sorted"
