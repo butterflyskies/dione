@@ -1331,7 +1331,7 @@ mod tests {
     fn resident_social_tools_are_the_exact_closed_bridge_surface() {
         assert_eq!(
             RESIDENT_SOCIAL_TOOLS,
-            &["react", "edit_message", "send_file",]
+            &["react", "edit_message", "send_file"]
         );
     }
 

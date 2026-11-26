@@ -444,7 +444,7 @@ pub(crate) async fn check_outbound(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum OutboundSurface {
+enum OutboundSurface {
     Reply,
     EditMessage,
     SendFileCaption,
