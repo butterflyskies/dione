@@ -15,7 +15,7 @@ The [current architecture map](../../ARCHITECTURE.md) describes runtime owners.
 | [Tool dispatch](../../src/mcp/dispatch.rs), [server](../../src/mcp/server.rs), and [tool registry](../../src/mcp/tool_registry.rs) | Invoke typed registrations and preserve remaining protocol schemas, decoding and wire results. |
 | [Discord messaging](../../src/discord/messaging.rs), [reply registration](../../src/discord/reply_tool.rs), and [messaging wire](../../src/discord/messaging_wire.rs) | Own operation decisions and typed outcomes, with protocol projection at the adapter. |
 | [Management](../../src/discord/management.rs) and [management registration](../../src/discord/management_tools.rs) | Own pin, unpin, delete and thread operations without importing policy from the removed MCP messaging module. |
-| [Queries](../../src/discord/messaging/queries.rs), [search](../../src/discord/messaging/search.rs), and [rendering](../../src/discord/rendering.rs) | Own their Discord behavior; [query wire](../../src/discord/query_wire.rs) and [search wire](../../src/discord/search_wire.rs) preserve protocol projection. |
+| [Queries](../../src/discord/messaging/queries.rs) and [search](../../src/discord/messaging/search.rs) | Own their Discord behavior; [query wire](../../src/discord/query_wire.rs) and [search wire](../../src/discord/search_wire.rs) preserve protocol projection. |
 | [Pre-send](../../src/pre_send.rs), [consent](../../src/no_rly/consent.rs), and [evidence](../../src/evidence.rs) | Retain distinct rules and state. A consent journal alone is not a durable pending-effect store. |
 
 The former `src/mcp/tools/messaging.rs`, `management.rs`, `render.rs` and
