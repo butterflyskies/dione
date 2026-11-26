@@ -1261,8 +1261,18 @@ mod tests {
         assert!(
             parse_hook_overrides(&serde_json::json!({ "no_rly_hooks": ["Not Valid"] })).is_err()
         );
-        assert!(parse_hook_overrides(&serde_json::json!({ "no_rly_hooks": "tier-1" })).is_err());
-        assert!(parse_hook_overrides(&serde_json::json!({ "no_rly_hooks": [1] })).is_err());
+        assert_eq!(
+            parse_hook_overrides(&serde_json::json!({ "no_rly_hooks": "tier-1" }))
+                .unwrap_err()
+                .to_string(),
+            "no_rly_hooks must be an array of hook-name strings"
+        );
+        assert_eq!(
+            parse_hook_overrides(&serde_json::json!({ "no_rly_hooks": [1] }))
+                .unwrap_err()
+                .to_string(),
+            "no_rly_hooks must contain only strings"
+        );
     }
 
     /// Edge-weighted snowflake strategy. A uniform `0u64..` hits 0 with
