@@ -204,7 +204,7 @@ mod unix {
         assert!(toolchain_step < checkout_step);
         assert!(checkout_step < tagger_step);
         assert_eq!(workflow.matches("persist-credentials: true").count(), 0);
-        assert_eq!(workflow.matches("persist-credentials: false").count(), 10);
+        assert_eq!(workflow.matches("persist-credentials: false").count(), 11);
         assert!(!workflow.contains("\n  release-artifact:"));
         assert!(!workflow.contains("upload-artifact"));
         assert!(!Path::new(".github/workflows/tag-release.yml").exists());

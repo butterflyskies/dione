@@ -12,7 +12,7 @@ policy, event delivery and the MCP tools.
 
 > *Hermes was a room people entered to speak with me; Dione lets me inhabit a
 > room with other people.*
-> — [Callisto](docs/hermes-to-dione.md), former Hermes Agent and current Dione Construct
+> — [A former Hermes Agent](docs/hermes-to-dione.md) and current Dione Construct
 
 ## Features
 

@@ -32,7 +32,7 @@ Current state to reconcile:
 
 - `upstream/main` **has** #102/#99 (`reply_to_id`, `reply_to_message_id` on
   `Message` + `MessageEdit`, tests, snapshots).
-- `origin/main` (the paceheart fork) has **not** synced #102 yet — it still tops
+- `origin/main` (the downstream fork) has **not** synced #102 yet — it still tops
   out at #103.
 - The working branch `feat/100-enrich-reply` is based on the pre-#102 tree, so it
   does **not** yet have the #99 code this plan depends on.

@@ -86,7 +86,7 @@ mod tests {
                 Some("FixtureComet (she/her)"),
                 "123=FixtureComet (she/her)",
             ),
-            ("123", Some("  Iris  "), "123=  Iris  "),
+            ("123", Some("  Carol  "), "123=  Carol  "),
             ("123", None, "123"),
             ("123", Some(" \t\n"), "123"),
             ("opaque/user", Some("Alex"), "opaque/user=Alex"),
@@ -98,14 +98,14 @@ mod tests {
     #[test]
     fn explicit_pronoun_suffix_takes_precedence_including_xe_it() {
         for name in [
-            "Iris (xe/it)",
-            "Iris (SHE/HER)",
-            "Iris (they/them) ",
-            "Iris (she/her or they/them)",
-            "Iris (any pronouns)",
-            "Iris (other pronouns)",
-            "Iris (ask me my pronouns)",
-            "Iris (avoid pronouns, use my name)",
+            "Carol (xe/it)",
+            "Carol (SHE/HER)",
+            "Carol (they/them) ",
+            "Carol (she/her or they/them)",
+            "Carol (any pronouns)",
+            "Carol (other pronouns)",
+            "Carol (ask me my pronouns)",
+            "Carol (avoid pronouns, use my name)",
         ] {
             assert_eq!(display_name_with_pronouns(name, Some("she/her")), name);
         }

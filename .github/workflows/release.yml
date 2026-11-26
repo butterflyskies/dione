@@ -92,6 +92,8 @@ jobs:
     uses: ./.github/workflows/publish-crate.yml
     with:
       tag: ${{ needs.create-release.outputs.tag_name }}
+    secrets:
+      KNOWN_IDENTITIES: ${{ secrets.KNOWN_IDENTITIES }}
     permissions:
       id-token: write
       contents: read

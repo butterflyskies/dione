@@ -205,6 +205,22 @@ jobs:
         with:
           command: check
 
+  # Not yet a required check: main still carries names until the cleanup PRs land. Add it to
+  # `required` and require-successful-checks.sh once this job is green on main.
+  identities:
+    name: Known identities
+    runs-on: docker
+    timeout-minutes: 10
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Reject names of known people, agents and constructs
+        env:
+          KNOWN_IDENTITIES: ${{ secrets.KNOWN_IDENTITIES }}
+          FROM_FORK: ${{ forgejo.event.pull_request.head.repo.fork }}
+        run: sh scripts/run-known-identities-scan.sh pull-request
+
   required:
     name: Required checks
     needs: [hygiene, format, lint, test, package, msrv, build, audit]

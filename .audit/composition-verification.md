@@ -50,12 +50,12 @@ integration. They cover both offline policies, successful configure persistence,
 held inbox ownership, no observed socket connection, command validation, missing
 source-validation token, held attention-store refusal, and recovery after release.
 The test-only native snapshot was stashed before R5's final gate.
-Evidence is /home/syn/code/dione-r6-cli-baseline.log.
+Evidence is <linux-host>/dione-r6-cli-baseline.log.
 
 An earlier standalone capture used the R5 focused debug binary, version 0.61.0,
 prior to its transparent-error correction. It is not an exact-commit binary claim.
 It captured help, metadata outputs and failure contexts outside the repository at
-/home/syn/code/dione-r6-baseline. The Rust baseline above uses the signed source.
+<linux-host>/dione-r6-baseline. The Rust baseline above uses the signed source.
 
 ## Reviews and verification
 
@@ -70,7 +70,7 @@ and architecture update without new P1-P3 findings.
 Feature Clippy passed with warnings denied, and 28 focused harness, startup,
 and CLI tests passed. The SocketAddr test parse needed an explicit type, and
 the large concrete Serenity cause is boxed. Logs are
-/home/syn/code/dione-r6-clippy.log and /home/syn/code/dione-r6-focused.log.
+<linux-host>/dione-r6-clippy.log and <linux-host>/dione-r6-focused.log.
 
 Release CLI comparison and the clean exact-commit gate remain
 pending. No full gate, live readiness, construct validation, official approval,
@@ -83,8 +83,8 @@ TeamsSecret source field with raw VarError reproduced the inherited disclosure
 and failed at the Debug canary assertion. The original error source file was
 restored byte-for-byte with SHA256
 fec533b34d149764f87133863a04f3c30c03db4a0ae1566178e508fa2baff71e.
-Logs are /home/syn/code/dione-r6-secret-baseline.log and
-/home/syn/code/dione-r6-secret-mutant.log. The first mutant attempt failed at a
+Logs are <linux-host>/dione-r6-secret-baseline.log and
+<linux-host>/dione-r6-secret-mutant.log. The first mutant attempt failed at a
 missing-value source-type assertion; its separate log is retained and is not
 counted as disclosure proof. The malformed case now runs first.
 
@@ -96,7 +96,7 @@ are retained in the handoff directory. Native cargo xfmt also regrouped unrelate
 imports; only the 25 declared source paths were copied back for integration.
 
 The later R5 release binary probe reproduced invalid-filter panic exit101;
-/home/syn/code/dione-r6-invalid-filter-baseline.log records the binary hash and
+<linux-host>/dione-r6-invalid-filter-baseline.log records the binary hash and
 old diagnostic. This was captured after R6 implementation. The seventh CLI test
 asserts the intentional new exit1 reported error. Debug CLI help exactly matches
 R5; release help will be compared after the committed-head gate.

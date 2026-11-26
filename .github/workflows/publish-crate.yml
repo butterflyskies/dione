@@ -6,6 +6,9 @@ on:
       tag:
         required: true
         type: string
+    secrets:
+      KNOWN_IDENTITIES:
+        required: true
 
 permissions: {}
 
@@ -30,6 +33,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master (2026-03-27)
         with:
           toolchain: "1.98.0"
+      - name: Reject names of known people, agents and constructs
+        env:
+          KNOWN_IDENTITIES: ${{ secrets.KNOWN_IDENTITIES }}
+        run: sh scripts/run-known-identities-scan.sh publish
       - name: Verify Dione package and namespace
         id: package
         run: |

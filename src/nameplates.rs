@@ -228,7 +228,7 @@ mod tests {
         let yaml = r#"
 nameplates:
   "100000000000000001":
-    name: Lain
+    name: Alice
     pronouns:
       - she/her
     bio: >-
@@ -238,7 +238,7 @@ nameplates:
         assert_eq!(file.nameplates.len(), 1);
 
         let plate = file.nameplates.get("100000000000000001").unwrap();
-        assert_eq!(plate.name, "Lain");
+        assert_eq!(plate.name, "Alice");
         assert_eq!(plate.pronouns, vec!["she/her"]);
         assert!(plate.bio.as_ref().unwrap().contains("House Lacuna"));
     }
@@ -318,7 +318,7 @@ nameplates:
         entries.insert(
             42,
             Nameplate {
-                name: "Lain".to_string(),
+                name: "Alice".to_string(),
                 pronouns: vec!["she/her".to_string()],
                 bio: None,
             },
@@ -330,8 +330,8 @@ nameplates:
                 fetched_at: Instant::now(),
             });
         }
-        let result = service.resolve_display_name(42, "Lain").await;
-        assert_eq!(result, "Lain (she/her)");
+        let result = service.resolve_display_name(42, "Alice").await;
+        assert_eq!(result, "Alice (she/her)");
     }
 
     #[tokio::test]
@@ -401,7 +401,7 @@ nameplates:
         let entries = HashMap::from([(
             42,
             Nameplate {
-                name: "Iris".into(),
+                name: "Carol".into(),
                 pronouns: vec!["she/her".into()],
                 bio: None,
             },
@@ -411,8 +411,8 @@ nameplates:
             fetched_at: Instant::now(),
         });
         assert_eq!(
-            service.resolve_display_name(42, "Iris (xe/it)").await,
-            "Iris (xe/it)"
+            service.resolve_display_name(42, "Carol (xe/it)").await,
+            "Carol (xe/it)"
         );
         assert_eq!(
             service.resolve_display_name(42, "Alex (admin)").await,

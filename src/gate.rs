@@ -18,7 +18,7 @@ pub enum GateDecision {
 
 // ── Identity-level ignore (#369) ──────────────────────────────────────────────
 
-/// FLAGGED DECISION — owned by Pace/Lain, see `SCOPE-369.md`.
+/// FLAGGED DECISION — owned by the maintainers, see `SCOPE-369.md`.
 ///
 /// When a message IS a reply but the parent author cannot be determined — the
 /// gateway did not inline `referenced_message` AND the bounded API fallback
@@ -33,7 +33,7 @@ pub enum GateDecision {
 /// * `true`  = fail **CLOSED** — drop the reply (favors victim protection; also
 ///   drops legitimate replies whose parent was merely deleted / un-fetchable).
 ///
-/// TODO(#369): confirm the fail direction with Pace/Lain before this ships.
+/// TODO(#369): confirm the fail direction with the maintainers before this ships.
 pub(crate) const IGNORE_REPLY_PARENT_FAIL_CLOSED: bool = false;
 
 /// How a reply's referenced parent resolved for the identity-ignore gate.
@@ -727,14 +727,14 @@ mod tests {
 
     /// Tripwire documenting the shipped provisional default via the const
     /// wrapper: an unresolvable reply parent is admitted (preview redacted),
-    /// not dropped. If Pace/Lain flip `IGNORE_REPLY_PARENT_FAIL_CLOSED`, this
+    /// not dropped. If the maintainers flip `IGNORE_REPLY_PARENT_FAIL_CLOSED`, this
     /// expectation is the intended place to update — see SCOPE-369.md.
     #[test]
     fn flagged_default_is_fail_open() {
         assert_eq!(
             classify_reply_parent_ignore_default(ReplyParentResolution::Unresolvable),
             ReplyParentAction::AdmitRedactPreview,
-            "provisional default is fail-OPEN pending the Pace/Lain decision"
+            "provisional default is fail-OPEN pending the maintainers' decision"
         );
         // And the const still matches the wrapper's behavior.
         assert_eq!(

@@ -866,7 +866,7 @@ mod tests {
     fn probe_discord_triple_quote_block_is_exempt() {
         // Discord's `>>>` quotes every following line, not just its own. The
         // marker here is on a CONTINUATION line carrying no `>` of its own —
-        // which is the case Ari reported. An earlier version of this probe put
+        // which is the case a reviewer reported. An earlier version of this probe put
         // the marker on the `>>>` line itself and passed for the wrong reason.
         let text = ">>> quoting the convention below\n\u{25B6}\u{FE0F} on it";
         assert!(categories(text).is_empty(), "{:?}", categories(text));
@@ -895,7 +895,7 @@ mod tests {
     /// The earlier `categories()`-based assertions shared an oracle with the
     /// code under test: they compared against `category::*`, discarded
     /// confidence entirely, and proved only that *some* stream was non-empty —
-    /// so deleting the construct stream left the suite green. Ari caught that.
+    /// so deleting the construct stream left the suite green. A reviewer caught that.
     #[test]
     fn the_output_pins_both_streams_with_literal_values() {
         let text = "\u{26A0}\u{FE0F} blocked on #375";
@@ -1200,7 +1200,7 @@ mod tests {
 
     #[test]
     fn an_indented_example_is_not_a_status_packet() {
-        // Ari's counterexample verbatim in shape: `item_body` trimmed the
+        // A reviewer's counterexample verbatim in shape: `item_body` trimmed the
         // indentation back to a marker, so the example activated the lint,
         // was faulted for its own `#375`, and was then told it carried no
         // link — while carrying a visible one.
@@ -1239,7 +1239,7 @@ mod tests {
         );
     }
 
-    /// The third shape Ari named. A quoted example must stay exempt *and* must
+    /// The third shape a reviewer named. A quoted example must stay exempt *and* must
     /// not reach forward: its unterminated backtick cannot mask the asserted
     /// status line after it.
     ///

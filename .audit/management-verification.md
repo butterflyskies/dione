@@ -39,7 +39,7 @@ tool results.
 ## Characterization sequence
 
 The untouched base passed six selected management tests, with 1588 skipped,
-in `/home/syn/code/dione-management-baseline.log`. The selection includes a
+in `<linux-host>/dione-management-baseline.log`. The selection includes a
 management-related test outside the management module. One old test merely
 imitated the thread-cache write. Six new contract tests replace that gap with
 real operation calls and literal results through Serenity's existing loopback
@@ -58,8 +58,8 @@ documentation requirement. Three additional narrative lines disappear with the
 replaced simulated test. No suppressions, MUST KILL flags, or reshape remain.
 
 Default all-target Clippy passed in
-`/home/syn/code/dione-management-characterization-clippy.log`.
-The characterization run passed all 11 selected tests, with 1588 skipped, in Nextest run `4e2caf9f-6558-421a-afc6-1d7652f51612`. Its log is `/home/syn/code/dione-management-characterization-r2.log`.
+`<linux-host>/dione-management-characterization-clippy.log`.
+The characterization run passed all 11 selected tests, with 1588 skipped, in Nextest run `4e2caf9f-6558-421a-afc6-1d7652f51612`. Its log is `<linux-host>/dione-management-characterization-r2.log`.
 
 Signed characterization commit `1589237d668e90dee4bddf109ad22c90440ab31a`
 preserves that state. Its management blob is
@@ -83,8 +83,8 @@ Oh My Pi support and testing on a construct are required later, before
 considering any merge to main. This slice does not implement those gates.
 
 Local artifacts are under
-`C:/Users/Jaycee/AppData/Local/Temp/dione-management-design/`.
-Native checks run in `/home/syn/code/dione-pr-queries`, with one parent build
+`<windows-temp>/dione-management-design/`.
+Native checks run in `<linux-host>/dione-pr-queries`, with one parent build
 owner. Design files, grounding, characterization, comment review, and the
 synthesis are separately named reports. Later sections record implementation
 and review results. Local agent review does not constitute official Forgejo approval.
@@ -99,8 +99,8 @@ is crate-private. External Rust source compatibility is intentionally not retain
 Initial migrated Clippy found redundant field names and a large SDK error variant.
 The fixes use field shorthand and boxed SDK error storage without changing the
 source or its wire display. Corrected Clippy passed in
-`/home/syn/code/dione-management-clippy-r2.log`. All 12 selected management tests
-passed, with 1588 skipped, in `/home/syn/code/dione-management-focused.log`.
+`<linux-host>/dione-management-clippy-r2.log`. All 12 selected management tests
+passed, with 1588 skipped, in `<linux-host>/dione-management-focused.log`.
 The committed fixture comparator retained all 36 JSON expressions across six tests.
 Two proposed module-doc deletions were rejected because repository standards
 require module purpose documentation.
@@ -115,8 +115,8 @@ pending at this checkpoint.
 A temporary native mutation removed the real thread-parent registration. The
 thread contract test failed at the literal expected mapping, reporting None
 instead of Some(Some(42)). Restoring the original bytes passed the same test.
-Evidence is `/home/syn/code/dione-management-mutation.log` and
-`/home/syn/code/dione-management-restored.log`. During this experiment the parent
+Evidence is `<linux-host>/dione-management-mutation.log` and
+`<linux-host>/dione-management-restored.log`. During this experiment the parent
 accidentally copied the mutated native file to the primary worktree. The diff
 exposed the missing production block immediately; it was restored before any
 commit. The mutation helper restored its native file in a finally block.
@@ -131,9 +131,9 @@ exercise incomplete headers followed by shutdown and an incomplete declared body
 held open. Separate ten-second watchdogs distinguish fixture failure from a hung
 helper, and assertions identify the expected panic causes.
 
-Clippy passed in `/home/syn/code/dione-management-clippy-r4.log`. The corrected
+Clippy passed in `<linux-host>/dione-management-clippy-r4.log`. The corrected
 focused run passed all 14 tests, with 1588 skipped, in
-`/home/syn/code/dione-management-focused-r2.log`. The stalled-body test completed
+`<linux-host>/dione-management-focused-r2.log`. The stalled-body test completed
 in 5.044 seconds; the whole selected run took 5.049 seconds. This measures the
 fixture deadline, not production Discord latency. The fixture comparator again
 confirmed six tests and 36 unchanged JSON expressions. The full native gate is
@@ -151,7 +151,7 @@ A fresh independent GPT-6-Astra reviewer inspected source candidate
 `10051036b2514420a95369ec7668cecddd0d4670` against base
 `cc7ee6adc46d6dc898da69737a826f12cbd8c0b8`. The reviewer confirmed that the
 production prefix matches efe50dc byte for byte. The report is
-`C:/Users/Jaycee/AppData/Local/Temp/dione-management-design/source-r2.md`.
+`<windows-temp>/dione-management-design/source-r2.md`.
 P3-1 is closed by the source correction and the parent's executed fault tests.
 No actionable P1, P2, or P3 source findings remain.
 
@@ -172,7 +172,7 @@ eligible independent reviewer must cover the submitted head before merge.
 Claude Sonnet 5.5 reviewed the scoped parent transcript through position 2967,
 resolved truncated items, inspected logs and commits, and reran the read-only
 fixture comparator. The report is
-`C:/Users/Jaycee/AppData/Local/Temp/dione-management-design/trail-r1.md`.
+`<windows-temp>/dione-management-design/trail-r1.md`.
 It found no false completion claims. Its flags and dispositions follow.
 
 1. Only thread registration had mutation evidence. A second experiment against
@@ -189,7 +189,7 @@ It found no false completion claims. Its flags and dispositions follow.
    status, committed source equality, and the original source hash before edits.
 3. Commit 1005103 was signed after Clippy r4 passed but before focused-r2 completed.
    The later 14-test pass verifies that same source. Signing was not presented as
-   a test result. Clippy evidence is `/home/syn/code/dione-management-clippy-r4.log`;
+   a test result. Clippy evidence is `<linux-host>/dione-management-clippy-r4.log`;
    fixture comparison is reproducible with the committed helper and was rerun by
    the trail reviewer. Earlier pending statements describe their checkpoints.
 4. The fixture helper extraction and two fault tests intentionally exercise the
@@ -227,9 +227,9 @@ not newly established guarantees.
 ## Complete source-candidate gate
 
 The clean native command
-`CARGO_TARGET_DIR=/home/syn/code/dione-vertical-native/target sh scripts/pr-ready.sh cc7ee6adc46d6dc898da69737a826f12cbd8c0b8`
+`CARGO_TARGET_DIR="$HOME"/dione-vertical-native/target sh scripts/pr-ready.sh cc7ee6adc46d6dc898da69737a826f12cbd8c0b8`
 passed at `10051036b2514420a95369ec7668cecddd0d4670`. Its log is
-`/home/syn/code/dione-management-pr-ready-1005103.log`.
+`<linux-host>/dione-management-pr-ready-1005103.log`.
 
 The gate passed release hygiene, formatting, both Clippy configurations, all
 1613 feature tests with one skipped, four default integration tests, 34 Python
@@ -256,9 +256,9 @@ fail on `{"ok":true}` versus the literal `ingress_required` payload. The helper
 restored the original bytes in a finally block. The same test then passed in
 Nextest run `0427875d-3a12-4775-8aac-17e74c566a93`, and Git status was clean.
 
-Logs are `/home/syn/code/dione-management-own-send-mutation.log` and
-`/home/syn/code/dione-management-own-send-restored.log`. The local reproducible
-helper is `C:/Users/Jaycee/AppData/Local/Temp/dione-management-design/prove-own-send.py`.
+Logs are `<linux-host>/dione-management-own-send-mutation.log` and
+`<linux-host>/dione-management-own-send-restored.log`. The local reproducible
+helper is `<windows-temp>/dione-management-design/prove-own-send.py`.
 This closes the trail review's primary mutation-evidence gap. No primary source
 copy or native sync occurred during this experiment.
 

@@ -11,7 +11,7 @@ The selected design is candidate C. The parent scored A/B/C as 22/22/23 out of
 25; an independently scoped same-model judge scored them 23/21/24. The final
 design incorporates A's source-preserving errors and B's complete constructors
 and structural check. The alternatives and scoring are retained locally under
-`C:/Users/Jaycee/code/dione/.git/codex-handoffs/dione-r4-r7/`.
+`<windows-host>/dione/.git/codex-handoffs/dione-r4-r7/`.
 
 The connection is publicly usable by the binary, with private fields and
 internal facets. Both facets come from the same adapter instance. The existing
@@ -31,7 +31,7 @@ cargo nextest run --workspace --locked --features oneshot-test-seam -E 'test(har
 ```
 
 Run `8a4b7d89-9e08-4e8e-8762-a1ddfac49287` passed 3 tests and skipped
-1644. Log: `/home/syn/code/dione-r4-characterization.log`.
+1644. Log: `<linux-host>/dione-r4-characterization.log`.
 The signed test-only commit is
 `f861c8bbc734aa7814ec7d5cc8713ce62177c98c`.
 The focused run used a copy of the test file over unchanged base production
@@ -85,7 +85,7 @@ is retained for R5/R6 composition review; R4 does not claim it was eliminated.
 
 Feature Clippy passed after fixing migration imports and redundant borrows.
 The affected queue, attention, evidence, adapter, and protocol selection passed
-156 tests with 1493 skipped. Log: `/home/syn/code/dione-r4-focused.log`.
+156 tests with 1493 skipped. Log: `<linux-host>/dione-r4-focused.log`.
 The fixture comparator confirmed all 17 JSON expressions across three baseline
 tests. The boundary checker passed its negative fixtures and six production files.
 It is a lexical check for the `codex` module token and removed routing names
@@ -98,8 +98,8 @@ event-order assertion when the adapter invalidation call was replaced by a
 successful no-op. Both edit and delete notifications still arrived, so the
 failure was not a timeout. The source was restored byte-for-byte with SHA256
 `184559521fd44a5d67e8dc062beb8acd89e3350774b25324dc795dbd40d5f90f`.
-Logs: `/home/syn/code/dione-r4-loop-baseline.log` and
-`/home/syn/code/dione-r4-loop-mutant.log`. The mutation driver is retained under
+Logs: `<linux-host>/dione-r4-loop-baseline.log` and
+`<linux-host>/dione-r4-loop-mutant.log`. The mutation driver is retained under
 the local handoff directory as `mutate-invalidation.py`.
 
 ### Review corrections
@@ -129,8 +129,8 @@ from a clean native Linux checkout. Record its exact head and outcome in the PR.
 The native migration snapshot was saved with `git stash push -u` before fetching
 the signed bundle and switching to the exact commit. The gate checks that the
 resulting checkout has no tracked or untracked changes. The CLI check compares
-`/home/syn/code/dione-r4-cli-baseline.txt` with
-`/home/syn/code/dione-r4-cli-final.txt`; the PR records its final result.
+`<linux-host>/dione-r4-cli-baseline.txt` with
+`<linux-host>/dione-r4-cli-final.txt`; the PR records its final result.
 
 The existing synchronous queue I/O and upstream erased errors are not claims
 of repository-wide type compliance. No construct or live Discord test is

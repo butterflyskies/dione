@@ -60,7 +60,7 @@ fn gateway_presence(request: &PresenceRequest) -> (Option<ActivityData>, OnlineS
     (activity, status)
 }
 
-/// A display name with pronouns already resolved and appended (e.g. "paceheart (she/her)").
+/// A display name with pronouns already resolved and appended (e.g. "alice (she/her)").
 pub struct PronounDisplayName(pub String);
 
 // ── Event types ───────────────────────────────────────────────────────────────
@@ -4411,17 +4411,14 @@ mod tests {
     #[test]
     fn resolve_user_identity_prefers_display_name() {
         assert_eq!(
-            resolve_user_identity(Some("Vesper"), Some("vesper_bot")),
-            "Vesper"
+            resolve_user_identity(Some("Erin"), Some("erin_bot")),
+            "Erin"
         );
     }
 
     #[test]
     fn resolve_user_identity_falls_back_to_username_when_display_name_unset() {
-        assert_eq!(
-            resolve_user_identity(None, Some("vesper_bot")),
-            "vesper_bot"
-        );
+        assert_eq!(resolve_user_identity(None, Some("erin_bot")), "erin_bot");
     }
 
     #[test]
@@ -4429,12 +4426,12 @@ mod tests {
         // An empty (or whitespace-only) display name must not leak through; it
         // is treated as absent so the Discord username is used instead.
         assert_eq!(
-            resolve_user_identity(Some(""), Some("vesper_bot")),
-            "vesper_bot"
+            resolve_user_identity(Some(""), Some("erin_bot")),
+            "erin_bot"
         );
         assert_eq!(
-            resolve_user_identity(Some("   "), Some("vesper_bot")),
-            "vesper_bot"
+            resolve_user_identity(Some("   "), Some("erin_bot")),
+            "erin_bot"
         );
     }
 

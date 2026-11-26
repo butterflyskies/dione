@@ -166,7 +166,7 @@ fn projects_real_evidence_metadata() {
 
 #[tokio::test]
 async fn identity_display_roundtrips_untrusted_names_without_changing_machine_ids() {
-    let name = "Iris \"quoted\" \\ [group]\n(xe/it)";
+    let name = "Carol \"quoted\" \\ [group]\n(xe/it)";
     let events = [
         NotificationEvent::Message(MessageEvent {
             chat_id: ChannelId::new(10),
@@ -222,7 +222,7 @@ async fn identity_display_roundtrips_untrusted_names_without_changing_machine_id
         let delivered: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(
             delivered["params"]["meta"]["user"],
-            "30=Iris \"quoted\" \\ [group]\n(xe/it)"
+            "30=Carol \"quoted\" \\ [group]\n(xe/it)"
         );
         assert_eq!(delivered["params"]["meta"]["user_id"], "30");
         assert_eq!(delivered["params"]["meta"]["chat_id"], "10");

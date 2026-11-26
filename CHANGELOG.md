@@ -5,10 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.87.3]
 
 ### Changed
 
+- Replace real people's names, account handles and private home-directory
+  paths in tests, fixtures, docs and audit logs with invented names, role
+  words and placeholders.
+- Let the known-identities scan exempt one exact public string in one named
+  file (`path<TAB>text`), and apply each such entry inside the allow file too.
 - Limit the published crate to `src/` and the README with an explicit
   `include` list. Tests, fixtures, docs, audit logs and CI scripts are no
   longer packaged; the crate drops from 436 files to 215.
@@ -993,8 +998,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   HTTP client had no HTTPS connector. Added rmcp's `reqwest` feature, which
   enables rustls + `rustls-platform-verifier` (webpki roots + native system
   CA store) on rmcp's reqwest 0.13. Also improved cold-start error logging
-  (`Err(_)` → `Err(e)` with debug format). (Ref: dione#313, diagnosed Lain
-  S119. Prior cert-trust attribution was incomplete — the actual failure was
+  (`Err(_)` → `Err(e)` with debug format). (Ref: dione#313, diagnosed in a
+  maintainer session. Prior cert-trust attribution was incomplete — the actual failure was
   absence of TLS, not distrust.)
 
 ## [0.33.1] - 2026-08-12
@@ -1086,7 +1091,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 - **Tier-1 Cingulate adapter.** Wires the classifier into the outbound
   message pipeline via `PreSendHook`. The classifier runs in observe mode by
-  default; enforce mode is configurable. Extracted from #184 (butterflysky-syne).
+  default; enforce mode is configurable. Extracted from #184.
 
 ## [0.29.1] - 2026-08-04
 

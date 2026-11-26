@@ -180,7 +180,7 @@ attention settings, in the top-level configuration:
 
 ```toml
 [attention_notice_route]
-recipient = "callisto"
+recipient = "example-agent"
 channel = "123456789012345678"
 ```
 

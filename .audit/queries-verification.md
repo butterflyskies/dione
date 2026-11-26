@@ -32,17 +32,17 @@ move with their tests. The slice introduces no new external mock seam.
 The existing baseline at the parent commit passed 124 selected tests.
 The command selected new-since, fetch and pin builders, pagination, reply
 projection, receipt, evidence projection, and search tests. Its log is
-`/home/syn/code/dione-queries-baseline.log`.
+`<linux-host>/dione-queries-baseline.log`.
 
 Before production edits, five new `query_contract_` tests passed in Nextest
 run `51209db7-c2fa-498f-92fa-dc0ca6902eb9`. They pin complete collection
 payloads, MIME field omission and nulls, independent reply metadata,
 authorization before cursor conflict rejection, and search filtering with
 transport ordering. Their log is
-`/home/syn/code/dione-queries-characterization.log`.
+`<linux-host>/dione-queries-characterization.log`.
 
 The characterization source copies and comparison script are retained under
-`C:/Users/Jaycee/AppData/Local/Temp/dione-queries-design/`. The script compares
+`<windows-temp>/dione-queries-design/`. The script compares
 29 JSON expressions across the five tests, ignoring formatting whitespace
 outside string literals. It verifies fixture preservation, not runtime output
 equivalence by itself. The before and after test runs supply that evidence.
@@ -86,12 +86,12 @@ all targets and warnings denied. The first run found three imports left in the
 production module after relocation. A second run found that two of those imports
 were unnecessary in tests too. The parent removed them and kept `Value` in the
 test module. Logs retain each attempt under `dione-queries-clippy` in
-`/home/syn/code/`; `dione-queries-clippy-final.log` is the successful run.
+`<linux-host>/`; `dione-queries-clippy-final.log` is the successful run.
 
 The focused suite passed 151 tests in Nextest run
 `a562288e-dca9-4a8b-806d-cdde60ce2e31`. The filter was
 `test(discord::messaging::queries) | test(search) | test(evidence) | test(sentex)`.
-The log is `/home/syn/code/dione-queries-focused.log`. The final test selector
+The log is `<linux-host>/dione-queries-focused.log`. The final test selector
 differs from the initial baseline selector, so these totals are not a count of
 tests added by this PR.
 
@@ -134,8 +134,8 @@ The authorization mutation moved cursor conflict rejection before the outbound
 permission check. Nextest run `722589af-9d00-4641-a5a3-0e8811de2758` failed the
 intended literal error assertion. The helper restored the original source bytes,
 and run `878bfe89-6518-4146-b71e-81dce8523a4b` passed the same test. Logs are
-`/home/syn/code/dione-queries-mutation.log` and
-`/home/syn/code/dione-queries-restored.log`. This proves the authorization
+`<linux-host>/dione-queries-mutation.log` and
+`<linux-host>/dione-queries-restored.log`. This proves the authorization
 precedence assertion detects that change; it is not mutation coverage of every
 preserved contract.
 
@@ -147,7 +147,7 @@ passed all four default-feature one-shot tests. All 34 Python checks, the Rust
 1.98 check, package verification, package privacy, and dependency policy passed.
 The release build was still running. Its complete result and the final-head
 rerun belong in the PR body. The implementation log is
-`/home/syn/code/dione-queries-pr-ready-c6320a4.log`.
+`<linux-host>/dione-queries-pr-ready-c6320a4.log`.
 
 Packaging retains the existing `yoke-derive 0.8.3` yanked-version warning and
 dependency policy retains duplicate-version warnings. This change updates only

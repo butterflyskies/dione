@@ -1,0 +1,35 @@
+# Exemptions for scripts/scan-known-identities.sh, one per line.
+#
+# `path` exempts a whole tracked file. Keep these to generated files that cannot hold fixtures or prose.
+#
+# `path<TAB>text` exempts only that exact, case-sensitive text inside that one file; every other
+# identity in the file, and the same text anywhere else, is still reported. Use it for public
+# identifiers that must stay, such as a repository URL or organisation slug, never for a person's name.
+#
+# Cargo.lock lists dependency crate names only; a roster entry that is also a crate name
+# would otherwise produce hits no source change can clear.
+Cargo.lock
+#
+# Public repository URLs and organisation slugs the project publishes from or fetches at run time.
+Cargo.toml	https://github.com/butterflyskies/dione
+README.md	https://github.com/butterflyskies/dione
+docs/hermes-to-dione.md	https://github.com/butterflyskies/dione
+scripts/crates-io-package-state.sh	https://github.com/butterflyskies/dione
+scripts/verify-crates-io-owners.sh	https://github.com/butterflyskies/dione
+CHANGELOG.md	butterflyskies/dione#341
+CHANGELOG.md	butterflyskies/construct-nameplates
+scripts/public-package-structural-patterns.txt	github\.com/butterflyskies/
+.github/workflows/publish-crate.yml	github:butterflyskies:lacuna-blinkers
+.github/workflows/publish-crate.yml	github:butterflyskies:superadmins
+.github/workflows/publish-crate.yml	butterflysky \
+scripts/tag-qualified-release.sh	pale.clock3926@butterflysky.dev
+src/config_template.toml	https://github.com/butterflyskies/dione
+src/nameplates.rs	https://raw.githubusercontent.com/butterflyskies/construct-nameplates
+src/nameplates.rs	https://github.com/butterflyskies/dione
+src/pronouns.rs	https://github.com/butterflyskies/dione
+src/pluralkit.rs	https://github.com/butterflyskies/dione
+tests/public_package.rs	https://github.com/butterflyskies/
+tests/public_package.rs	github:butterflyskies:lacuna-blinkers
+tests/public_package.rs	github:butterflyskies:superadmins
+tests/release_tag.rs	pale.clock3926@butterflysky.dev
+tests/fixtures/gaie-v11/README.md	butterflyskies/gaoie

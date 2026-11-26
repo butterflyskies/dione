@@ -31,7 +31,7 @@ far-future date conversion remain admitted behavior.
 
 The untouched parent passed 52 selected search tests, with 1533 skipped.
 The command was `cargo nextest run --workspace --locked -E 'test(search)'`.
-Its log is `/home/syn/code/dione-search-baseline.log`.
+Its log is `<linux-host>/dione-search-baseline.log`.
 
 The old pagination test calculated the pagination expression in its own body.
 It did not prove the operation's response. Before typed migration, the owner
@@ -44,7 +44,7 @@ and credential construction are separately source-inspected.
 
 Ten `search_contract_` tests passed in Nextest run
 `395586aa-aed8-42a9-a61a-f1fc528a23ad`, with 1584 tests skipped. The log is
-`/home/syn/code/dione-search-characterization.log`. They cover complete page
+`<linux-host>/dione-search-characterization.log`. They cover complete page
 payloads, raw group pagination, ordering and duplicates, first-member selection,
 numeric channel omission, missing/non-array envelopes, HTTP error branches,
 raw/missing/non-UTF8 retry headers, query order and repeated values, date
@@ -73,12 +73,12 @@ applied. No MUST KILL flag, suppression, restored comment, or reshape occurred.
 Default-feature Clippy passed with all targets and warnings denied after those
 deletions. The broader search run passed all 61 selected tests, with 1533 skipped,
 in Nextest run `fe8caddb-3bce-4d55-82a3-44855abeb330`. Its log is
-`/home/syn/code/dione-search-characterization-all.log`.
+`<linux-host>/dione-search-characterization-all.log`.
 
 One isolated writer owns the coupled migration. The parent owns integration,
 native Linux builds, signed commits, and Forgejo writes. Design and review
 reports have disjoint files under
-`C:/Users/Jaycee/AppData/Local/Temp/dione-search-design/`.
+`<windows-temp>/dione-search-design/`.
 
 ## Limits
 
@@ -100,8 +100,8 @@ run passed 61 tests (1533 skipped), Nextest run
 `16d0d4cc-9d2d-45a6-8e80-ad7b5e249a56`. Default all-target Clippy passed.
 The native focused run preceded the six repetitive test comment deletions.
 The full gate will establish the exact committed source. No suppression or reshape was
-needed. Logs are `/home/syn/code/dione-search-focused.log` and
-`/home/syn/code/dione-search-clippy.log`.
+needed. Logs are `<linux-host>/dione-search-focused.log` and
+`<linux-host>/dione-search-clippy.log`.
 
 Three independent GPT-6-Astra reviewers inspected the signed candidate against
 the exact parent. They used the same model as the implementer and inspected
@@ -124,15 +124,15 @@ continuation. Nextest run `9ea246ff-bb21-46bd-a9af-a98c3240251d` failed the
 literal response assertion: actual `has_more: false`, expected `true` with
 three visible messages from eight raw groups. After restoring the original
 bytes, run `ca33a4cc-d5cd-4c62-86ad-c9f9ae4b6d79` passed. Logs are
-`/home/syn/code/dione-search-mutation.log` and
-`/home/syn/code/dione-search-restored.log`. The helper restored bytes in a
+`<linux-host>/dione-search-mutation.log` and
+`<linux-host>/dione-search-restored.log`. The helper restored bytes in a
 finally block and checked equality. This mutation proves only the pagination
 continuation test's sensitivity. Other contracts have passing tests and source
 review, without mutation evidence. The cross-model auditor compared committed
 test bodies after whitespace normalization. Seven were identical; three changed
 only at adapter call sites, with assertions unchanged.
 
-Builds and mutation ran in `/home/syn/code/dione-pr-queries`, reused from the
+Builds and mutation ran in `<linux-host>/dione-pr-queries`, reused from the
 prior slice. The native index was compared with the candidate before moving
 native HEAD; it was clean before the gate. Git normalized CRLF working files
 to LF index blobs, so this is Git-tree equality, not working-file byte equality.
@@ -156,7 +156,7 @@ Log timestamps record when rows were written, not when earlier events occurred.
 
 The clean candidate passed `sh scripts/pr-ready.sh
 cbf141b7bf398e079c53945df3537469edc6ad93`. The log is
-`/home/syn/code/dione-search-pr-ready-1f0b6ca.log` and ends with the explicit
+`<linux-host>/dione-search-pr-ready-1f0b6ca.log` and ends with the explicit
 candidate-head pass message. Release hygiene, formatting, both Clippy feature
 sets, Rust 1.98, packaging, public package privacy, dependency policy, release
 binaries, and the `dione 0.55.0` launch check passed.

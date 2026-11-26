@@ -379,7 +379,7 @@ mod tests {
 
     #[test]
     fn a_fence_delimiter_does_not_open_an_inline_span() {
-        // The exact shape Ari found: a 3-backtick opener and a wider closer.
+        // The exact shape a reviewer found: a 3-backtick opener and a wider closer.
         // `advance_fence` accepted the close on width; an equal-width inline
         // delimiter did not, and swallowed the following line.
         let classes = classes("```\ncode\n````\nprose");

@@ -247,7 +247,7 @@ overflow = "drop"
 notify = true
 
 # Individual overrides -- keyed by ParticipantId. Highest priority.
-[rate_limit.individual."bot:vesper"]
+[rate_limit.individual."bot:example"]
 tokens = 10
 window_seconds = 7200
 cooldown_seconds = 3600

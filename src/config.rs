@@ -281,7 +281,7 @@ impl Default for PronounConfig {
 pub struct NameplateConfig {
     /// Enables nameplate lookups for bot users.
     pub enabled: bool,
-    /// URL to fetch nameplates.yaml from. Defaults to the butterflyskies repo.
+    /// URL to fetch nameplates.yaml from. Defaults to the project's nameplates repository.
     pub url: String,
     /// Bot user IDs excluded from nameplate enrichment.
     #[serde(deserialize_with = "deserialize_id_vec")]
@@ -5815,7 +5815,7 @@ action = "celebrate"
             enabled = true
             [[bell_rings.providers]]
             url = "http://localhost:8080/mcp"
-            scope = "lain"
+            scope = "alice"
             alias = "personal"
         "#;
         let config: Config = toml::from_str(toml).expect("valid config");

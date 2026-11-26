@@ -20,7 +20,7 @@ flowchart TB
         L3 -->|"consumer records decision"| L4
     end
 
-    subgraph incident["FIELD RECEIPT: Vesper's Incident"]
+    subgraph incident["FIELD RECEIPT: A Construct's Incident"]
         direction TB
         what["Dione claimed send ✓\nReply rendered on Discord ✓\nTurn never persisted to transcript ✗"]
         gap["L2 (transport accepted) said YES\nL4 (consumer disposition) was NEVER RECORDED\n\nThe gap between 2 and 4\nhid the failure with\nzero in-session signal"]
@@ -59,6 +59,6 @@ Each level answers a different question to a different audience:
 | 3. Harness injected | Did the runtime receive it? | Harness adapter |
 | 4. Consumer disposition | Did the consumer act? | Consumer itself |
 
-Collapsing any two creates a blind spot. Vesper's incident is the proof: levels 2 and 4 diverged silently. The system had no way to detect the gap because it trusted transport acceptance as proof of consumer processing.
+Collapsing any two creates a blind spot. One construct's incident is the proof: levels 2 and 4 diverged silently. The system had no way to detect the gap because it trusted transport acceptance as proof of consumer processing.
 
 The fix is structural, not operational. ConsumerDisposition is a separate record type precisely so that "the check lives outside the thing it checks."

@@ -84,7 +84,7 @@ concurrent append and condense.
 Run `sh scripts/pr-ready.sh f8f19ed5c7a30db7226fd9955b321f4ca4329d09`
 from a clean native Linux checkout at the final candidate. Record its exact
 commit and outcome in the PR after completion. The local log is
-`/home/syn/code/dione-journal-diagnostics-pr-ready.log`.
+`<linux-host>/dione-journal-diagnostics-pr-ready.log`.
 Check `git diff --exit-code f8f19ed -- src tests Cargo.toml Cargo.lock` to
 confirm that this audit introduces no executable changes.
 

@@ -286,14 +286,14 @@ StateView == <<buckets, clock, delivered>>
 \*     inside ~> formulas)
 \*   - Fixed TypeOK: timer fields now allow 0..(MaxTime + CooldownLen/WindowLen)
 \*     since timers set near MaxTime can exceed it
-\* Revised 2026-06-08 -- ariadne (review fix round 2):
+\* Revised 2026-06-08 -- reviewer (review fix round 2):
 \*   - Added StateView (VIEW) to exclude history from state comparison (fixes
 \*     infinite state space caused by unbounded history sequences)
 \*   - Added EnterCooldown action: Exhausted -> Cooldown transition (fixes
 \*     unreachable Cooldown state / vacuously true CooldownResolves)
 \*   - CooldownExpires now only matches Cooldown (not Exhausted)
 \*   - Added MC.tla and RateLimiter.cfg for model checking
-\* Revised 2026-06-08 -- ariadne review:
+\* Revised 2026-06-08 -- reviewer review:
 \*   - Added WindowLen, CooldownLen constants (cooldown was implicitly 1 tick)
 \*   - Added window_expires field and WindowExpires action for partial-consumption reset
 \*   - Merged duplicate Idle/Active cases into ConsumeToken

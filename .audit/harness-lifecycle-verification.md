@@ -14,7 +14,7 @@ session. Parent comparison scored A/B/C as 22/24/21; the separate judge scored
 the judge summary was visible, so these are not two independent rankings. The running owner retains the complete
 connection, incorporating A's lock-lifetime constraint. The design rejects an
 additional lifecycle trait and a worker-file relocation. Artifacts are retained
-under `C:/Users/Jaycee/code/dione/.git/codex-handoffs/dione-r4-r7/r5-*`.
+under `<windows-host>/dione/.git/codex-handoffs/dione-r4-r7/r5-*`.
 
 Preparation opens one queue and allocates matching binding endpoints. MCP,
 Teams delivery, and the worker use clones of that owner. Startup requires the
@@ -77,10 +77,10 @@ The cancellation baseline passed one test. Replacing the independent token with
 assertion. The driver restored exact source bytes with SHA256
 `0e64935fa183055f5bbdd01f04d37899e6be8d0627bcbc1f67bfa02985a3bde4`.
 
-Evidence lives in `/home/syn/code/dione-r5-focused.log`,
-`/home/syn/code/dione-r5-checkpoint.log`,
-`/home/syn/code/dione-r5-cancel-baseline.log`, and
-`/home/syn/code/dione-r5-cancel-mutant.log`. The rerunnable mutation driver is
+Evidence lives in `<linux-host>/dione-r5-focused.log`,
+`<linux-host>/dione-r5-checkpoint.log`,
+`<linux-host>/dione-r5-cancel-baseline.log`, and
+`<linux-host>/dione-r5-cancel-mutant.log`. The rerunnable mutation driver is
 retained beside the design artifacts as `mutate-session-cancel.py`.
 The lexical boundary checker passed on six shared files and main's named
 lifecycle ownership tokens. Full exact-commit gate and CLI comparison are still
@@ -102,8 +102,8 @@ The trail audit's duplicated-context finding was reproduced by a new assertion
 on the capability error's source chain. It failed before the correction and
 passed after making the outer session error transparent. The same test checks
 that queue-open context occurs once and retains the concrete lock-conflict source.
-Logs are `/home/syn/code/dione-r5-error-before.log` and
-`/home/syn/code/dione-r5-error-after.log`. The focused lifecycle run predates this
+Logs are `<linux-host>/dione-r5-error-before.log` and
+`<linux-host>/dione-r5-error-after.log`. The focused lifecycle run predates this
 small diagnostic correction; the final gate must cover the corrected source.
 
 ## Full-gate scheduling correction
@@ -123,5 +123,5 @@ reserves all runner slots for two other timing-sensitive worker tests. Productio
 code and the assertion are unchanged. This reduces suite contention but does not
 promise immunity to external load. The full gate must pass on the new commit.
 
-The failed gate log is retained as `/home/syn/code/dione-r5-pr-ready.log`.
-The isolated check is `/home/syn/code/dione-r5-backoff-isolated.log`.
+The failed gate log is retained as `<linux-host>/dione-r5-pr-ready.log`.
+The isolated check is `<linux-host>/dione-r5-backoff-isolated.log`.

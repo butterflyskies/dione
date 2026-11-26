@@ -1189,7 +1189,7 @@ mod tests {
                 action: Action::Celebrate,
                 match_mode: MatchMode::Word,
                 replace: None,
-                reason: Some("Pace coined it, we keep it".into()),
+                reason: Some("Dana coined it, we keep it".into()),
             },
         ]
     }

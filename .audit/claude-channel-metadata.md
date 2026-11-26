@@ -4,7 +4,7 @@ Claude channel notifications require string-valued metadata. Shared notification
 
 ## Evidence
 
-Baseline a6c50ab356564de8220624f0b593c991d0073b56 with the new writer-level regression produced one metadata assertion failure and one passing permission test. The failure compared actual serialized booleans and objects against required strings. After the correction, native Linux Clippy passed and 39 harness/notification tests passed. Logs are /home/syn/code/dione-claude-metadata-baseline.log, /home/syn/code/dione-claude-metadata-clippy.log, and /home/syn/code/dione-claude-metadata-focused.log. These checks preceded the version-only change to 0.63.1. The final committed-head gate is recorded in the PR.
+Baseline a6c50ab356564de8220624f0b593c991d0073b56 with the new writer-level regression produced one metadata assertion failure and one passing permission test. The failure compared actual serialized booleans and objects against required strings. After the correction, native Linux Clippy passed and 39 harness/notification tests passed. Logs are <linux-host>/dione-claude-metadata-baseline.log, <linux-host>/dione-claude-metadata-clippy.log, and <linux-host>/dione-claude-metadata-focused.log. These checks preceded the version-only change to 0.63.1. The final committed-head gate is recorded in the PR.
 
 The test covers strings, booleans, numbers, objects, arrays, null, original input preservation, optional metadata, allow/deny permission notifications, and a different method sharing the channel prefix. Output is read through the actual protocol writer. Existing Codex and Oh My Pi tests run in the focused set.
 

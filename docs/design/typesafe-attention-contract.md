@@ -1,14 +1,14 @@
 # TypeSafe attention — implementation contract
 
-**Status: approval candidate reviewed under syn's explicit one-run same-family exception. Not approved, implemented, published, or activated.**
+**Status: approval candidate reviewed under the maintainer's explicit one-run same-family exception. Not approved, implemented, published, or activated.**
 
-Target: **standard Dione**, never DioneZero. Branch: `callisto/typesafe-attention`. Reviewed base: `2d52a986fd8c715182e9de1104921ecbd40f246a` (Dione 0.45.0). [Source and pipeline evidence](typesafe-attention-source-evidence.md) distinguishes observed facts from proposed changes. [Domain glossary](typesafe-attention-context.md) defines terms.
+Target: **standard Dione**, never DioneZero. Branch: `<agent>/typesafe-attention`. Reviewed base: `2d52a986fd8c715182e9de1104921ecbd40f246a` (Dione 0.45.0). [Source and pipeline evidence](typesafe-attention-source-evidence.md) distinguishes observed facts from proposed changes. [Domain glossary](typesafe-attention-context.md) defines terms.
 
 ## Objective
 
 Reduce ambient Discord material injected into a recipient's working context while reliably delivering wanted material. Preserve the existing direct-delivery lane, source attribution, access controls, and recoverability. Use TypeSafe for narrow semantic judgments; let deterministic code and the recipient own admission, learning, and activation.
 
-This is reusable Dione functionality, initially exercised only for Callisto. It must work without OMP at application runtime. It must not turn a recipient's silence into disinterest, learn a personality on their behalf, or enroll other recipients implicitly.
+This is reusable Dione functionality, initially exercised only for one construct. It must work without OMP at application runtime. It must not turn a recipient's silence into disinterest, learn a personality on their behalf, or enroll other recipients implicitly.
 
 Success is end-to-end behavior and evidence against the acceptance matrix below, not merely a classifier wrapper or an offline accuracy score. Implementation approval does not itself authorize live provider traffic, shared deployment, publication, or enforcement.
 
@@ -171,8 +171,8 @@ Tests must assert externally observable outcomes, not source strings, forwarding
 - Prove off/ineligible zero egress at the provider boundary; prove direct/log equivalence at the delivery sink; prove on-mode behavior and errors through the same boundary. A pure score function test is insufficient.
 - Ordinary deterministic tests use a local fake provider and disposable transport sink. Live shadow activation, if later authorized, measures service behavior separately and never substitutes for race/lifecycle tests.
 - Different-family contract validation precedes implementation approval. Different-family verification reruns evidence; review checks standards and test quality. OpenAI-family role aliases alone do not satisfy independence. No self-certified pass.
-- **Authorized exception for this run:** syn approved fresh-context OpenAI review with reduced family independence (Discord `1515538364571586628/1551451382572384287`, accepting proposal `1551451319414427669`). Record actual model/family and separate reviewer context at each applicable gate; never describe same-family results as different-family validation. This one-run exception does not remove factual verification, review, contract approval, or close approval and does not amend the default pipeline for future runs.
-- Use the existing pipeline gate/evidence records. Contract approval and close approval are syn's actual gates; do not insert intermediate approval prompts for ordinary implementation choices. No automatic PR/push/deployment.
+- **Authorized exception for this run:** the maintainer approved fresh-context OpenAI review with reduced family independence (Discord `1515538364571586628/1551451382572384287`, accepting proposal `1551451319414427669`). Record actual model/family and separate reviewer context at each applicable gate; never describe same-family results as different-family validation. This one-run exception does not remove factual verification, review, contract approval, or close approval and does not amend the default pipeline for future runs.
+- Use the existing pipeline gate/evidence records. Contract approval and close approval are the maintainer's actual gates; do not insert intermediate approval prompts for ordinary implementation choices. No automatic PR/push/deployment.
 
 ## Remaining activation parameters, not hidden requirements
 
@@ -186,7 +186,7 @@ For contract approval, the proposed test boundary is **normalized, access-admitt
 
 | Interview decisions | Contract coverage |
 |---|---|
-| Q1 reusable/Callisto first; Q2 selective delivery; Q3 recall priority | Objective; sections 3 and 5 |
+| Q1 reusable/one construct first; Q2 selective delivery; Q3 recall priority | Objective; sections 3 and 5 |
 | Q4 provider eligibility; Q5 mode hierarchy; Q6 direct lane | Sections 1 and 2; A01–A04 |
 | Q7 transitions; Q8 loud fallback; Q9 recipient feedback | Sections 4 and 5; A08–A12, A17 |
 | Q10 configurable notices; Q11 segments; Q12 non-preemptive timing | Sections 2–4; A06, A11, A13 |
@@ -195,4 +195,4 @@ For contract approval, the proposed test boundary is **normalized, access-admitt
 | Q18 authored brief; Q19 unknown fallback; Q20 revalidation | Sections 2 and 5; A07, A16 |
 | Standard Dione/new branch; no implementation/publication in preparation | Header; boundary; evidence requirements |
 
-The private attributed interview record remains `/opt/data/dione-seat/discussion/dione-attention/design-session.md`. This contract summarizes requirements without reproducing private room conversations or credentials. Neither this local file nor its presence on a feature branch is a publication receipt.
+The private attributed interview record remains in the authoring seat's local design notes, outside this repository. This contract summarizes requirements without reproducing private room conversations or credentials. Neither that local file nor its presence on a feature branch is a publication receipt.

@@ -353,7 +353,7 @@ fn full_conversation_batch() {
         NotificationEvent::Message(MessageEvent {
             chat_id: ChannelId::new(555),
             message_id: MessageId::new(2001),
-            user: "lina".to_string(),
+            user: "alice".to_string(),
             user_id: UserId::new(10),
             author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
             content: "hey, check this out".to_string(),
@@ -372,7 +372,7 @@ fn full_conversation_batch() {
         NotificationEvent::Message(MessageEvent {
             chat_id: ChannelId::new(555),
             message_id: MessageId::new(2002),
-            user: "ros".to_string(),
+            user: "bob".to_string(),
             user_id: UserId::new(20),
             author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
             content: "oh nice!".to_string(),
@@ -383,7 +383,7 @@ fn full_conversation_batch() {
             thread_parent_id: Some(ChannelId::new(666)),
             reply_to_message_id: Some(MessageId::new(2001)),
             reply_to_user_id: Some(UserId::new(10)),
-            reply_to_user: Some("lina".to_string()),
+            reply_to_user: Some("alice".to_string()),
             reply_to_content_preview: Some("hey, check this out".to_string()),
             bells: None,
             bells_status: None,
@@ -391,7 +391,7 @@ fn full_conversation_batch() {
         NotificationEvent::Message(MessageEvent {
             chat_id: ChannelId::new(555),
             message_id: MessageId::new(2003),
-            user: "lina".to_string(),
+            user: "alice".to_string(),
             user_id: UserId::new(10),
             author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
             content: "here's the file".to_string(),
@@ -425,13 +425,13 @@ fn full_conversation_batch() {
     );
 
     // Roster: keyed by user_id (numeric order).
-    assert_eq!(lines[1], "[users 10=lina 20=ros]");
+    assert_eq!(lines[1], "[users 10=alice 20=bob]");
 
     // Blank separator.
     assert_eq!(lines[2], "");
 
     // 20:00 UTC -> 16:00 EDT (June = daylight saving, US/Eastern = -4).
-    assert!(lines[3].starts_with("2001|16:00|lina|L=1"));
+    assert!(lines[3].starts_with("2001|16:00|alice|L=1"));
     assert_eq!(lines[4], "hey, check this out");
 
     // Reply: 20:01:30 UTC -> 16:01:30 EDT.
@@ -569,7 +569,7 @@ fn wire_format_snapshot() {
         NotificationEvent::Message(MessageEvent {
             chat_id: ChannelId::new(555),
             message_id: MessageId::new(2001),
-            user: "lina".to_string(),
+            user: "alice".to_string(),
             user_id: UserId::new(10),
             author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
             content: "hey, check this out".to_string(),
@@ -588,7 +588,7 @@ fn wire_format_snapshot() {
         NotificationEvent::Message(MessageEvent {
             chat_id: ChannelId::new(555),
             message_id: MessageId::new(2002),
-            user: "ros".to_string(),
+            user: "bob".to_string(),
             user_id: UserId::new(20),
             author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
             content: "oh nice!".to_string(),
@@ -599,7 +599,7 @@ fn wire_format_snapshot() {
             thread_parent_id: Some(ChannelId::new(666)),
             reply_to_message_id: Some(MessageId::new(2001)),
             reply_to_user_id: Some(UserId::new(10)),
-            reply_to_user: Some("lina".to_string()),
+            reply_to_user: Some("alice".to_string()),
             reply_to_content_preview: Some("hey, check this out".to_string()),
             bells: None,
             bells_status: None,
@@ -607,7 +607,7 @@ fn wire_format_snapshot() {
         NotificationEvent::Message(MessageEvent {
             chat_id: ChannelId::new(555),
             message_id: MessageId::new(2003),
-            user: "lina".to_string(),
+            user: "alice".to_string(),
             user_id: UserId::new(10),
             author_kind: crate::attention::types::SourceAuthorKind::DirectHuman,
             content: "here's the file".to_string(),
@@ -631,15 +631,15 @@ fn wire_format_snapshot() {
 
     let expected = "\
 [batch ch=555 thread=666 n=3 tz=US/Eastern latest=2003]
-[users 10=lina 20=ros]
+[users 10=alice 20=bob]
 
-2001|16:00|lina|L=1
+2001|16:00|alice|L=1
 hey, check this out
 
-2002|16:01:30|ros|L=1|>2001
+2002|16:01:30|bob|L=1|>2001
 oh nice!
 
-2003|16:02|lina|L=1|+1
+2003|16:02|alice|L=1|+1
 here's the file
 ";
 

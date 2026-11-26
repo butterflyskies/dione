@@ -294,8 +294,8 @@ mod tests {
             .insert(42, Some("she/her".to_owned()))
             .await;
         assert_eq!(
-            service.resolve_display_name(42, "Iris (xe/it)").await,
-            "Iris (xe/it)"
+            service.resolve_display_name(42, "Carol (xe/it)").await,
+            "Carol (xe/it)"
         );
         assert_eq!(
             service.resolve_display_name(42, "Alex (admin)").await,

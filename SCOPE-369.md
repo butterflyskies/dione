@@ -1,13 +1,13 @@
 # SCOPE-369 — Identity-level ignore (per-user ignore list + stateless reply filtering)
 
-Reviewer note for issue #369. Pace authorized the scope; the ceiling is FIRM.
+Reviewer note for issue #369. The maintainer authorized the scope; the ceiling is FIRM.
 
 ## What this delivers
 
 A user can ignore a specific person (e.g. an abuser) so that person's content is
 filtered everywhere — every channel and DM, a message of any age, restart-proof.
 
-Pace's victim-test: *"if I reply to an ignored person's message from last year, it
+The maintainer's victim-test: *"if I reply to an ignored person's message from last year, it
 should still filter — any age, any channel, restart-proof."*
 
 ### Piece 1 — config primitive (mirrors `allow_from`)
@@ -21,7 +21,7 @@ should still filter — any age, any channel, restart-proof."*
 
 ### Piece 2 — stateless ignore enforcement (v2)
 
-**v2 semantics (Pace-ratified 2026-09-01, supersedes the v1 note below):** only
+**v2 semantics (maintainer-ratified 2026-09-01, supersedes the v1 note below):** only
 an ignored **author** drops the whole message. A **reply whose parent author is
 ignored** is now **ADMITTED with the quoted preview redacted**
 (`reply_to_content_preview = None`) — not dropped. The preview is the sole
@@ -65,7 +65,7 @@ variant that is deliberately **NOT** recorded as a #361 reply-inheritance root �
 otherwise a stale ledger entry would survive an un-ignore. (Test:
 `identity_ignore_drops_without_polluting_the_ledger`.)
 
-## FLAGGED DECISION for Pace/Lain — fail-open vs fail-closed
+## FLAGGED DECISION for the maintainer and scope author — fail-open vs fail-closed
 
 When a message IS a reply but the parent author cannot be determined — the
 gateway did not inline `referenced_message` AND the single bounded API fallback
@@ -83,7 +83,7 @@ This is encoded as a single constant, `IGNORE_REPLY_PARENT_FAIL_CLOSED` in
 either way (`classify_unresolved_reply_hits_flagged_path`,
 `flagged_default_is_fail_open`).
 
-**Recommendation:** genuinely open — Pace/Lain to decide. The primary victim-test
+**Recommendation:** genuinely open — the maintainer and scope author to decide. The primary victim-test
 (year-old reply) is already covered by the reliable inlined-parent path, so this
 constant only governs a narrow residual case. Security posture (protecting an
 abuse victim) leans fail-CLOSED; the cost is dropping legitimate replies to a
