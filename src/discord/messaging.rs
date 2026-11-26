@@ -448,7 +448,6 @@ pub(crate) enum OutboundSurface {
     Reply,
     EditMessage,
     SendFileCaption,
-    RenderLatexCaption,
     SendDm,
     VoiceBeforeTts,
 }
@@ -467,7 +466,6 @@ impl OutboundSurface {
             Self::Reply => "reply",
             Self::EditMessage => "edit-message",
             Self::SendFileCaption => "send-file-caption",
-            Self::RenderLatexCaption => "render-latex-caption",
             Self::SendDm => "send-dm",
             Self::VoiceBeforeTts => "voice-before-tts",
         }
@@ -482,10 +480,9 @@ struct SurfacePolicy {
 impl SurfacePolicy {
     const fn for_surface(surface: OutboundSurface) -> Self {
         let redirect_error = match surface {
-            OutboundSurface::Reply
-            | OutboundSurface::SendFileCaption
-            | OutboundSurface::RenderLatexCaption
-            | OutboundSurface::SendDm => None,
+            OutboundSurface::Reply | OutboundSurface::SendFileCaption | OutboundSurface::SendDm => {
+                None
+            }
             OutboundSurface::EditMessage => Some(RedirectRestrictedSurface::Edit),
             OutboundSurface::VoiceBeforeTts => Some(RedirectRestrictedSurface::Voice),
         };
@@ -2001,10 +1998,6 @@ mod tests {
         assert_eq!(
             OutboundSurface::SendFileCaption.as_str(),
             "send-file-caption"
-        );
-        assert_eq!(
-            OutboundSurface::RenderLatexCaption.as_str(),
-            "render-latex-caption"
         );
         assert_eq!(OutboundSurface::SendDm.as_str(), "send-dm");
         assert_eq!(OutboundSurface::VoiceBeforeTts.as_str(), "voice-before-tts");

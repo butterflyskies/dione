@@ -164,23 +164,6 @@ pub(crate) fn tools_list(
                     }
                 }
             })),
-            tool("render_latex", "Render a LaTeX math expression to a PNG image file", json!({
-                "type": "object",
-                "required": ["latex"],
-                "properties": {
-                    "latex": { "type": "string", "description": "LaTeX math expression (without $ delimiters)" }
-                }
-            })),
-            tool("render_latex_to_channel", "Render a LaTeX math expression and post it as an image to a Discord channel", json!({
-                "type": "object",
-                "required": ["channel_id", "latex"],
-                "properties": {
-                    "channel_id": { "type": "string", "description": "Discord channel ID" },
-                    "latex": { "type": "string", "description": "LaTeX math expression (without $ delimiters)" },
-                    "caption": { "type": "string", "description": "Optional message text to accompany the image" },
-                    "no_rly_hooks": { "type": "array", "items": { "type": "string" }, "description": "Names individual pre-send hooks to bypass for the caption; every bypass is audited." }
-                }
-            })),
             tool("send_typing", "Send a typing indicator to a channel", json!({
                 "type": "object",
                 "required": ["channel_id"],

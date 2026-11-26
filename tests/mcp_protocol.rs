@@ -656,15 +656,13 @@ async fn test_tools_list_contains_expected_tools() {
         "tools/list must include send_typing"
     );
 
-    // Rendering tools.
-    assert!(
-        names.contains(&"render_latex"),
-        "tools/list must include render_latex"
-    );
-    assert!(
-        names.contains(&"render_latex_to_channel"),
-        "tools/list must include render_latex_to_channel"
-    );
+    // LaTeX rendering was removed (#776).
+    for removed in ["render_latex", "render_latex_to_channel"] {
+        assert!(
+            !names.contains(&removed),
+            "tools/list must not include removed tool {removed}"
+        );
+    }
 
     // File tools.
     assert!(
@@ -1160,47 +1158,6 @@ async fn test_tools_call_send_file_rejects_captionless_hook_override() {
             "arguments": {
                 "channel_id": "999999",
                 "file_path": "/does/not/exist",
-                "no_rly_hooks": ["tier-1"]
-            }
-        }
-    });
-
-    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
-    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("no_rly_hooks cannot be used when no caption is sent"));
-}
-
-#[tokio::test]
-async fn test_tools_call_render_latex_to_channel_rejected_unknown_channel() {
-    let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir).await;
-
-    let req = json!({
-        "jsonrpc": "2.0",
-        "id": 32,
-        "method": "tools/call",
-        "params": {
-            "name": "render_latex_to_channel",
-            "arguments": { "channel_id": "999999", "latex": "x^2" }
-        }
-    });
-    let resp = test_helpers::dispatch_request(&server, req).await.unwrap();
-    assert_eq!(resp["result"]["isError"], json!(true));
-}
-
-#[tokio::test]
-async fn test_tools_call_render_rejects_captionless_hook_override() {
-    let (_dir, state_dir) = temp_state_dir();
-    let server = make_server(&state_dir).await;
-    let req = json!({
-        "jsonrpc": "2.0",
-        "id": 321,
-        "method": "tools/call",
-        "params": {
-            "name": "render_latex_to_channel",
-            "arguments": {
-                "channel_id": "999999",
-                "latex": "deliberately invalid",
                 "no_rly_hooks": ["tier-1"]
             }
         }
