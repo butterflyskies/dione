@@ -34,9 +34,8 @@ gate files.
 This is a focused pass, not certification of every test. Future changes should
 state the failure each test is expected to catch, pair rejection with an allowed
 case, and deliberately break high-risk behavior once to check that the targeted
-test fails. The renderer's dollar-output guard still needs a deterministic
-trigger or a separately testable sanitizer boundary before it can be counted as
-covered.
+test fails. The renderer's dollar-output guard was never counted as covered;
+it was removed with LaTeX rendering in #776.
 
 The next pass added `tests/codex_inbox_upgrade.rs` with an inbox file written by
 the tagged `v0.48.0` code. The test opens it in a child process under a ten

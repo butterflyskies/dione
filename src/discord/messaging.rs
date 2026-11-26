@@ -452,7 +452,7 @@ pub(crate) enum OutboundSurface {
     VoiceBeforeTts,
 }
 
-pub(crate) fn reject_captionless_hook_overrides(
+fn reject_captionless_hook_overrides(
     caption: Option<&str>,
     no_rly_hooks: &[HookName],
 ) -> Option<MessagingError> {
@@ -1701,9 +1701,9 @@ pub(crate) async fn edit_message_with_embed_control(
     }
 }
 
-// ── send_attachment (shared helper) ──────────────────────────────────────────
+// ── send_attachment ──────────────────────────────────────────────────────────
 
-pub(crate) async fn send_attachment_with_hook_overrides(
+async fn send_attachment_with_hook_overrides(
     ctx: &MessagingCtx,
     channel_id: ChannelId,
     attachment: CreateAttachment,

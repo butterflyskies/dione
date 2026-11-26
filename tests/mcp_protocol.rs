@@ -656,7 +656,7 @@ async fn test_tools_list_contains_expected_tools() {
         "tools/list must include send_typing"
     );
 
-    // LaTeX rendering was removed (#776).
+    // The LaTeX rendering tools must stay unregistered.
     for removed in ["render_latex", "render_latex_to_channel"] {
         assert!(
             !names.contains(&removed),
