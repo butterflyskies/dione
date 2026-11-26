@@ -10,7 +10,7 @@ by macros and does not measure assertion quality.
 
 | Test area | False pass before this pass | Change |
 | --- | --- | --- |
-| LaTeX rendering | Two tests accepted either result; a third only wrote image files for later viewing. | Removed the three tests. Existing PNG and error tests remain. |
+| LaTeX rendering | Two tests accepted either result; a third only wrote image files for later viewing. | Removed the three tests. Existing PNG and error tests remained until LaTeX rendering was removed in #776. |
 | Public package privacy | The CRLF regression only checked rejection, so rejecting every package would pass. | Runs an allowed and a forbidden archive through the same CRLF rules and checks the specific private-use rule. |
 | Permission request relay | Missing-ID tests only checked that notifications returned no response, which is true even when a request is sent. | Checks zero outbound Discord requests for missing and empty IDs, then one request for a valid ID. |
 | Access queue persistence | An atomic-write test only checked absence of a temporary file; removal tests only checked absence after removal. | Reloads and checks exact saved data before checking cleanup or removal. |

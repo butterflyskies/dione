@@ -10,15 +10,13 @@ Other advisory checks retain their existing policy.
 
 Dione's nameplate loader reaches the parser through `serde_yaml_ng` and accepts
 YAML from a configured remote URL. Size checks and output sanitization do not
-prove parser memory safety. Typst also retains it through `serde_yaml` in the
-dependency graph; this record does not claim a traced Typst execution path.
-Replacing only the nameplate parser would leave the Typst dependency path.
+prove parser memory safety. The Typst path through `serde_yaml` left the
+dependency graph when LaTeX rendering was removed (#776); the nameplate loader
+is now the only path.
 
 - [ ] Replace the nameplate YAML parser with a maintained implementation. Verify
   current remote fixtures and malformed-input behavior.
-- [ ] Upgrade or replace the Typst dependency path retaining `serde_yaml` and
-  `unsafe-libyaml`. Verify rendering and bibliography behavior.
-- [ ] Remove the exception after `cargo tree` confirms both paths are gone.
+- [ ] Remove the exception after `cargo tree` confirms the path is gone.
   Run the dependency audit and full local gate without the exception.
 
 ## yoke-derive
