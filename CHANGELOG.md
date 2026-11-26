@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   grey on white and some commands, such as `\pmod`, did not render. Post
   pre-rendered images with `send_file` instead. Earlier versions kept each
   `render_latex` image as `dione-latex-*.png` in the Dione process's temporary
-  directory (`$TMPDIR`, or `/tmp` when unset) and never deleted it. These files
+  directory (`$TMPDIR`; when unset, `/tmp` on Linux or the per-user temporary
+  directory on macOS) and never deleted it. These files
   reproduce caller-supplied text and Dione no longer uses them; delete them.
 - Drop the `typst`, `typst-render`, `typst-assets`, `typst-as-lib`, `mitex` and
   `png` dependencies, removing 225 packages from `Cargo.lock`. Remove the
