@@ -22,7 +22,7 @@ on:
 
 concurrency:
   group: release-hygiene-${{ forgejo.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ forgejo.ref_name != 'main' }}
 
 jobs:
   hygiene:

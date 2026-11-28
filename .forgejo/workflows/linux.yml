@@ -27,7 +27,7 @@ on:
 
 concurrency:
   group: forgejo-linux-${{ forgejo.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ forgejo.ref_name != 'main' }}
 
 env:
   CARGO_TERM_COLOR: always
