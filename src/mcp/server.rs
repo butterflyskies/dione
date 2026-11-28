@@ -733,13 +733,7 @@ const RESIDENT_QUEUE_TOOLS: &[&str] = &[
     "ack_event",
     "event_queue_status",
 ];
-const RESIDENT_SOCIAL_TOOLS: &[&str] = &[
-    "react",
-    "edit_message",
-    "send_file",
-    "render_latex",
-    "render_latex_to_channel",
-];
+const RESIDENT_SOCIAL_TOOLS: &[&str] = &["react", "edit_message", "send_file"];
 const RESIDENT_MAX_FRAME_BYTES: usize = 1024 * 1024;
 const RESIDENT_MAX_CONNECTIONS: usize = 4;
 const RESIDENT_READ_TIMEOUT: Duration = Duration::from_secs(15);
@@ -1337,13 +1331,7 @@ mod tests {
     fn resident_social_tools_are_the_exact_closed_bridge_surface() {
         assert_eq!(
             RESIDENT_SOCIAL_TOOLS,
-            &[
-                "react",
-                "edit_message",
-                "send_file",
-                "render_latex",
-                "render_latex_to_channel",
-            ]
+            &["react", "edit_message", "send_file"]
         );
     }
 

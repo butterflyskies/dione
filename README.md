@@ -243,7 +243,7 @@ and these tools: `add_allow_from`, `remove_allow_from`, `update_dm_policy`,
 
 | Group | Tools |
 |-------|-------|
-| Messaging | `reply`, `react`, `edit_message`, `send_dm`, `send_file`, `render_latex`, `render_latex_to_channel` |
+| Messaging | `reply`, `react`, `edit_message`, `send_dm`, `send_file` |
 | History and search | `fetch_messages`, `fetch_new_since`, `fetch_pins`, `get_message`, `search_messages`, `download_attachment` |
 | Introspection | `list_guilds`, `list_channels`, `get_channel`, `can_view_channel`, `channel_effective_audience`, `get_user`, `get_member`, `list_roles`, `list_emojis` |
 | Management | `pin_message`, `unpin_message`, `create_thread`, `delete_message` |

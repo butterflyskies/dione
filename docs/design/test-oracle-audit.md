@@ -10,7 +10,7 @@ by macros and does not measure assertion quality.
 
 | Test area | False pass before this pass | Change |
 | --- | --- | --- |
-| LaTeX rendering | Two tests accepted either result; a third only wrote image files for later viewing. | Removed the three tests. Existing PNG and error tests remain. |
+| LaTeX rendering | Two tests accepted either result; a third only wrote image files for later viewing. | Removed the three tests. Existing PNG and error tests remained until LaTeX rendering was removed in #776. |
 | Public package privacy | The CRLF regression only checked rejection, so rejecting every package would pass. | Runs an allowed and a forbidden archive through the same CRLF rules and checks the specific private-use rule. |
 | Permission request relay | Missing-ID tests only checked that notifications returned no response, which is true even when a request is sent. | Checks zero outbound Discord requests for missing and empty IDs, then one request for a valid ID. |
 | Access queue persistence | An atomic-write test only checked absence of a temporary file; removal tests only checked absence after removal. | Reloads and checks exact saved data before checking cleanup or removal. |
@@ -34,9 +34,8 @@ gate files.
 This is a focused pass, not certification of every test. Future changes should
 state the failure each test is expected to catch, pair rejection with an allowed
 case, and deliberately break high-risk behavior once to check that the targeted
-test fails. The renderer's dollar-output guard still needs a deterministic
-trigger or a separately testable sanitizer boundary before it can be counted as
-covered.
+test fails. The renderer's dollar-output guard was never counted as covered;
+it was removed with LaTeX rendering in #776.
 
 The next pass added `tests/codex_inbox_upgrade.rs` with an inbox file written by
 the tagged `v0.48.0` code. The test opens it in a child process under a ten

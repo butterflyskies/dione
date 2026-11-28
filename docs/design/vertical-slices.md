@@ -228,11 +228,9 @@ adapters when a concrete use case supplies the requirements.
 
 ## Rendering ownership
 
-LaTeX compilation and retained PNG creation belong to `src/rendering.rs`. Only successful encoding constructs a PNG value, and only successful tempfile persistence constructs a retained-file receipt. Their private fields prevent callers from fabricating either artifact. Native paths and concrete compiler, encoder, I/O, and persistence causes remain typed until MCP projects them.
-
-`src/discord/rendering.rs` owns the complete authorized render-and-send operation. Captionless overrides and outbound permission are checked before compilation. The existing attachment helper handles caption hooks, redirects, transport, and successful sent-ID registration. Channel errors retain the requested channel and the full messaging error.
-
-`src/mcp/render_wire.rs` preserves the existing JSON fields, error capitalization, and structured hook feedback. Compiler and literal PNG fixture tests now live with the neutral owner; wire and loopback transport tests live with the projector. Version 0.58.0 removes the former public `mcp::tools::render` API without compatibility aliases. Compilation and file I/O remain synchronous, an inherited exception to the async I/O standard retained for this behavior-preserving change.
+LaTeX rendering was removed in #776. R1 separated it into `src/rendering.rs`,
+`src/discord/rendering.rs` and `src/mcp/render_wire.rs`; those modules and the
+`render_latex` and `render_latex_to_channel` tools no longer exist.
 
 ## Access-request ownership
 
@@ -307,8 +305,8 @@ construct validation, required fixes, and stack review remain before main.
 The user requested eventual resolution of both retained package issues. These
 follow-ups are outside the fixed R1-R7 implementation list.
 
-- [ ] Remove `unsafe-libyaml` through both the nameplate YAML parser and Typst's
-  YAML dependency path, then remove its advisory exception.
+- [ ] Remove `unsafe-libyaml` through the nameplate YAML parser, then remove its
+  advisory exception. The Typst YAML path left with LaTeX rendering (#776).
 - [ ] Replace the yanked `yoke-derive` 0.8.3 through a compatible dependency update.
 
 See the [dependency maintenance record](../../.audit/oh-my-pi-verification.md#dependency-maintenance-after-the-fixed-refactor)

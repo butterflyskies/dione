@@ -444,16 +444,15 @@ pub(crate) async fn check_outbound(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum OutboundSurface {
+enum OutboundSurface {
     Reply,
     EditMessage,
     SendFileCaption,
-    RenderLatexCaption,
     SendDm,
     VoiceBeforeTts,
 }
 
-pub(crate) fn reject_captionless_hook_overrides(
+fn reject_captionless_hook_overrides(
     caption: Option<&str>,
     no_rly_hooks: &[HookName],
 ) -> Option<MessagingError> {
@@ -467,7 +466,6 @@ impl OutboundSurface {
             Self::Reply => "reply",
             Self::EditMessage => "edit-message",
             Self::SendFileCaption => "send-file-caption",
-            Self::RenderLatexCaption => "render-latex-caption",
             Self::SendDm => "send-dm",
             Self::VoiceBeforeTts => "voice-before-tts",
         }
@@ -482,10 +480,9 @@ struct SurfacePolicy {
 impl SurfacePolicy {
     const fn for_surface(surface: OutboundSurface) -> Self {
         let redirect_error = match surface {
-            OutboundSurface::Reply
-            | OutboundSurface::SendFileCaption
-            | OutboundSurface::RenderLatexCaption
-            | OutboundSurface::SendDm => None,
+            OutboundSurface::Reply | OutboundSurface::SendFileCaption | OutboundSurface::SendDm => {
+                None
+            }
             OutboundSurface::EditMessage => Some(RedirectRestrictedSurface::Edit),
             OutboundSurface::VoiceBeforeTts => Some(RedirectRestrictedSurface::Voice),
         };
@@ -1704,9 +1701,9 @@ pub(crate) async fn edit_message_with_embed_control(
     }
 }
 
-// ── send_attachment (shared helper) ──────────────────────────────────────────
+// ── send_attachment ──────────────────────────────────────────────────────────
 
-pub(crate) async fn send_attachment_with_hook_overrides(
+async fn send_attachment_with_hook_overrides(
     ctx: &MessagingCtx,
     channel_id: ChannelId,
     attachment: CreateAttachment,
@@ -2001,10 +1998,6 @@ mod tests {
         assert_eq!(
             OutboundSurface::SendFileCaption.as_str(),
             "send-file-caption"
-        );
-        assert_eq!(
-            OutboundSurface::RenderLatexCaption.as_str(),
-            "render-latex-caption"
         );
         assert_eq!(OutboundSurface::SendDm.as_str(), "send-dm");
         assert_eq!(OutboundSurface::VoiceBeforeTts.as_str(), "voice-before-tts");
@@ -4767,6 +4760,155 @@ mod tests {
             result["error"],
             "no_rly_hooks cannot be used when no caption is sent"
         );
+    }
+
+    /// A context for channel 42 whose state directory holds one permitted
+    /// inbox file with `contents`.
+    fn send_file_fixture(
+        http: Arc<serenity::http::Http>,
+        contents: &[u8],
+    ) -> (MessagingCtx, tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().expect("state dir");
+        let state_dir =
+            camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("UTF-8 state dir");
+        let inbox = dir.path().join("inbox");
+        std::fs::create_dir(&inbox).expect("create inbox");
+        let file = inbox.join("attachment.txt");
+        std::fs::write(&file, contents).expect("write attachment");
+        let mut raw = Config::default();
+        raw.channels.push(ChannelConfig {
+            id: "42".to_owned(),
+            ..Default::default()
+        });
+        let ctx = MessagingCtx::new(
+            http,
+            new_state(),
+            Arc::new(LoadedConfig::from_raw(raw)),
+            state_dir.clone(),
+            Arc::new(ConsentGate::new(&state_dir)),
+            Arc::new(crate::ingress_ledger::IngressLedger::new()),
+        );
+        let file = file.to_str().expect("UTF-8 attachment path").to_owned();
+        (ctx, dir, file)
+    }
+
+    fn message_posts(requests: &std::sync::Mutex<Vec<(String, String)>>) -> Vec<String> {
+        requests
+            .lock()
+            .expect("request capture lock")
+            .iter()
+            .filter(|(path, _)| path.ends_with("/channels/42/messages"))
+            .map(|(_, body)| body.clone())
+            .collect()
+    }
+
+    fn multipart_payload(body: &str) -> Value {
+        let start = body
+            .find("name=\"payload_json\"")
+            .expect("multipart payload_json part");
+        let payload = body[start..]
+            .split_once("\r\n\r\n")
+            .expect("payload_json part body")
+            .1
+            .split("\r\n")
+            .next()
+            .expect("payload_json line");
+        serde_json::from_str(payload).expect("payload_json is JSON")
+    }
+
+    #[tokio::test]
+    async fn send_file_uploads_caption_and_records_own_send() {
+        for caption in [None, Some("original caption"), Some("")] {
+            let (http, requests, server) = fake_discord_http().await;
+            let (ctx, _dir, file) = send_file_fixture(http, b"attachment body");
+
+            let result = crate::discord::messaging_wire::message(
+                send_file(&ctx, ChannelId::new(42), &file, caption).await,
+            );
+
+            assert_eq!(
+                result,
+                json!({"ok":true,"message_id":"9001"}),
+                "{caption:?}"
+            );
+            assert!(ctx.state.read().await.is_own_send(9001), "{caption:?}");
+            let posts = message_posts(&requests);
+            assert_eq!(posts.len(), 1, "{caption:?}");
+            assert!(
+                posts[0].contains("filename=\"attachment.txt\""),
+                "{}",
+                posts[0]
+            );
+            assert!(posts[0].contains("attachment body"), "{}", posts[0]);
+            let payload = multipart_payload(&posts[0]);
+            assert_eq!(payload.get("content").and_then(Value::as_str), caption);
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn send_file_failed_upload_does_not_record_own_send() {
+        let (http, requests, server) = fake_discord_http().await;
+        let (ctx, _dir, file) = send_file_fixture(http, b"force-delivery-failure");
+
+        let result = crate::discord::messaging_wire::message(
+            send_file(&ctx, ChannelId::new(42), &file, None).await,
+        );
+
+        assert_eq!(
+            result,
+            json!({"error":"failed to send: Missing Permissions"})
+        );
+        assert_eq!(message_posts(&requests).len(), 1);
+        assert!(!ctx.state.read().await.is_own_send(9001));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn send_file_caption_hooks_gate_transport_and_honor_overrides() {
+        let halt = HookName::parse("surface-halt").unwrap();
+        for (caption, overrides, delivered, expected_surfaces) in [
+            (None, &[][..], true, &[][..]),
+            (Some(""), std::slice::from_ref(&halt), true, &[][..]),
+            (Some("caption"), &[][..], false, &["send-file-caption"][..]),
+        ] {
+            let (http, requests, server) = fake_discord_http().await;
+            let (ctx, _dir, file) = send_file_fixture(http, b"attachment body");
+            let surfaces = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pipeline = PreSendPipeline::new(vec![Box::new(SurfaceHaltHook {
+                surfaces: Arc::clone(&surfaces),
+            })])
+            .expect("valid pipeline")
+            .with_mode(PipelineMode::Enforce);
+            let ctx = ctx.with_pre_send_pipeline(Arc::new(pipeline));
+
+            let result = crate::discord::messaging_wire::message(
+                send_file_with_hook_overrides(&ctx, ChannelId::new(42), &file, caption, overrides)
+                    .await,
+            );
+
+            if delivered {
+                assert_eq!(
+                    result,
+                    json!({"ok":true,"message_id":"9001"}),
+                    "{caption:?}"
+                );
+            } else {
+                assert_eq!(result["error"], "blocked by test hook", "{caption:?}");
+            }
+            assert_eq!(
+                *surfaces.lock().expect("surface lock"),
+                expected_surfaces,
+                "{caption:?}"
+            );
+            assert_eq!(
+                message_posts(&requests).len(),
+                usize::from(delivered),
+                "{caption:?}"
+            );
+            assert_eq!(ctx.state.read().await.is_own_send(9001), delivered);
+            server.abort();
+        }
     }
 
     #[tokio::test]

@@ -7,14 +7,13 @@ use crate::{
             rephrase_held, send_dm_with_evidence_and_hook_overrides, send_file_with_hook_overrides,
         },
         messaging_wire,
-        rendering::render_to_channel,
         tool_arguments::{
             parse_enabled_sentex_handles, parse_hook_overrides, parse_id, parse_optional_bool,
         },
         typing::send_typing,
     },
     mcp::{
-        access_wire, presence_wire, render_wire,
+        access_wire, presence_wire,
         server::DioneServer,
         tools::{
             diagnostics::{get_version, set_stderr_level, set_trace_level},
@@ -22,7 +21,6 @@ use crate::{
         },
     },
     no_rly::queue::HoldHandle,
-    rendering,
 };
 use serde_json::{Value, json};
 
@@ -367,28 +365,6 @@ pub(crate) async fn call_tool(
                 Err(error) => json!({ "error": error.to_string() }),
             },
 
-            // Rendering
-            "render_latex" => {
-                let latex = args
-                    .get("latex")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| "missing latex".to_string())?;
-                render_wire::file(rendering::render_file(latex))
-            }
-            "render_latex_to_channel" => {
-                let ctx = server.messaging_ctx(config.clone());
-                let channel_id = parse_id(&args, "channel_id")?.channel();
-                let latex = args
-                    .get("latex")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| "missing latex".to_string())?;
-                let caption = args.get("caption").and_then(Value::as_str);
-                let no_rly_hooks = parse_hook_overrides(&args)?;
-                render_wire::channel(
-                    render_to_channel(&ctx, channel_id, latex, caption, &no_rly_hooks).await,
-                )
-            }
-
             // Diagnostics
             "reload_config" => {
                 check_admin_gate(&config)?;
@@ -625,113 +601,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[tokio::test]
-    async fn render_contract_dispatch_argument_order_and_error_envelopes() {
-        let (_dir, server) = presence_test_server().await;
-        for latex in [Value::Null, json!(false), json!(3), json!([]), json!({})] {
-            assert_eq!(
-                call_tool(&server, "render_latex", json!({"latex":latex}))
-                    .await
-                    .unwrap_err(),
-                "missing latex"
-            );
-        }
-        for (tool, args, expected) in [
-            ("render_latex", json!({}), "missing latex"),
-            (
-                "render_latex_to_channel",
-                json!({"no_rly_hooks":false}),
-                "missing channel_id",
-            ),
-            (
-                "render_latex_to_channel",
-                json!({"channel_id":0,"latex":false}),
-                "invalid channel_id: must be a nonzero Discord snowflake",
-            ),
-            (
-                "render_latex_to_channel",
-                json!({"channel_id":"bad","latex":"x"}),
-                "invalid channel_id: not a valid u64",
-            ),
-            (
-                "render_latex_to_channel",
-                json!({"channel_id":42,"no_rly_hooks":false}),
-                "missing latex",
-            ),
-            (
-                "render_latex_to_channel",
-                json!({"channel_id":42,"latex":"x","no_rly_hooks":false}),
-                "no_rly_hooks must be an array of hook-name strings",
-            ),
-            (
-                "render_latex_to_channel",
-                json!({"channel_id":42,"latex":"x","no_rly_hooks":[3]}),
-                "no_rly_hooks must contain only strings",
-            ),
-        ] {
-            assert_eq!(call_tool(&server, tool, args).await.unwrap_err(), expected);
-        }
-        assert_presence_tool_result(
-            call_tool(
-                &server,
-                "render_latex",
-                json!({"latex":"\\iftypst","ignored":true}),
-            )
-            .await
-            .unwrap(),
-            json!({"error":"\\iftypst is not supported"}),
-            true,
-        );
-        for caption in [Value::Null, json!(false), json!(8), json!([]), json!({})] {
-            assert_presence_tool_result(
-                call_tool(
-                    &server,
-                    "render_latex_to_channel",
-                    json!({
-                        "channel_id":"+42",
-                        "latex":"\\iftypst",
-                        "caption":caption,
-                        "no_rly_hooks":["tier-1"]
-                    }),
-                )
-                .await
-                .unwrap(),
-                json!({"error":"no_rly_hooks cannot be used when no caption is sent"}),
-                true,
-            );
-        }
-        assert_presence_tool_result(
-            call_tool(
-                &server,
-                "render_latex_to_channel",
-                json!({"channel_id":42,"latex":"\\iftypst","caption":"","no_rly_hooks":["tier-1"]}),
-            )
-            .await
-            .unwrap(),
-            json!({"error":"channel 42 is not a permitted outbound target"}),
-            true,
-        );
-    }
-
-    #[tokio::test]
-    async fn render_contract_dispatch_file_success_envelope() {
-        let (_dir, server) = presence_test_server().await;
-        let response = call_tool(&server, "render_latex", json!({"latex":"x","ignored":true}))
-            .await
-            .unwrap();
-        let result: Value =
-            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
-        let path = result["path"].as_str().unwrap();
-        let bytes = std::fs::read(path).unwrap();
-        std::fs::remove_file(path).unwrap();
-        assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
-        assert_presence_tool_result(
-            response,
-            json!({"ok":true,"path":path,"size_bytes":bytes.len()}),
-            false,
-        );
     }
 
     #[tokio::test]
@@ -1392,8 +1261,18 @@ mod tests {
         assert!(
             parse_hook_overrides(&serde_json::json!({ "no_rly_hooks": ["Not Valid"] })).is_err()
         );
-        assert!(parse_hook_overrides(&serde_json::json!({ "no_rly_hooks": "tier-1" })).is_err());
-        assert!(parse_hook_overrides(&serde_json::json!({ "no_rly_hooks": [1] })).is_err());
+        assert_eq!(
+            parse_hook_overrides(&serde_json::json!({ "no_rly_hooks": "tier-1" }))
+                .unwrap_err()
+                .to_string(),
+            "no_rly_hooks must be an array of hook-name strings"
+        );
+        assert_eq!(
+            parse_hook_overrides(&serde_json::json!({ "no_rly_hooks": [1] }))
+                .unwrap_err()
+                .to_string(),
+            "no_rly_hooks must contain only strings"
+        );
     }
 
     /// Edge-weighted snowflake strategy. A uniform `0u64..` hits 0 with

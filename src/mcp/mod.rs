@@ -4,7 +4,6 @@ pub(crate) mod access_wire;
 pub mod dispatch;
 pub(crate) mod presence_wire;
 pub mod protocol;
-pub(crate) mod render_wire;
 pub mod server;
 pub mod tools;
 
